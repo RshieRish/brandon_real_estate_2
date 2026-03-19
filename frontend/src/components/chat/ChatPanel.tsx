@@ -25,6 +25,14 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const handleSend = () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
@@ -87,8 +95,9 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
               {QUICK_REPLIES.map(reply => (
                 <button
                   key={reply}
-                  onClick={() => sendMessage(reply)}
-                  className="text-xs text-white/60 border border-dark-border rounded-full px-3 py-1.5 hover:border-gold/50 hover:text-white/80 transition-colors text-left"
+                  onClick={() => { if (!isLoading) sendMessage(reply); }}
+                  disabled={isLoading}
+                  className="text-xs text-white/60 border border-dark-border rounded-full px-3 py-1.5 hover:border-gold/50 hover:text-white/80 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {reply}
                 </button>
