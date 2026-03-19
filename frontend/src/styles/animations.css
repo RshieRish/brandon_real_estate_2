@@ -23,3 +23,4 @@
 .animate-slide-up { animation: slide-up-spring 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .animate-slide-in-left { animation: slide-in-left 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .animate-scale-in { animation: scale-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-draw-line { animation: draw-line 1s cubic-bezier(0.16, 1, 0.3, 1) forwards; }

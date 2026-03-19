@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import '../styles/animations.css';
 
 export const metadata: Metadata = {
   title: "Sold With Sweeney & Co. | Brandon Sweeney, REALTOR\u00ae",

@@ -19,7 +19,7 @@ export const apiPut = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 export const apiPatch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
-export const apiDelete = (path: string) => request<void>(path, { method: 'DELETE' });
+export const apiDelete = <T = void>(path: string) => request<T>(path, { method: 'DELETE' });
 
 export function apiPostAuth<T>(path: string, body: unknown, token: string) {
   return request<T>(path, {
@@ -31,4 +31,27 @@ export function apiPostAuth<T>(path: string, body: unknown, token: string) {
 
 export function apiGetAuth<T>(path: string, token: string) {
   return request<T>(path, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+export function apiPutAuth<T>(path: string, body: unknown, token: string) {
+  return request<T>(path, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function apiPatchAuth<T>(path: string, body: unknown, token: string) {
+  return request<T>(path, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function apiDeleteAuth<T = void>(path: string, token: string) {
+  return request<T>(path, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
