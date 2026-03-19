@@ -66,7 +66,7 @@ async def seed():
 
         await db.commit()
 
-    print("Seed complete. Admin: brandon@soldwithsweeney.com / changeme123!")
+    print("Seed complete. Admin account created: brandon@soldwithsweeney.com — change the password immediately.")
 
 
 if __name__ == "__main__":

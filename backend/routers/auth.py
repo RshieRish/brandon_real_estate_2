@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from jose import jwt
@@ -22,7 +22,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
     if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    expire = datetime.utcnow() + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
     token = jwt.encode(
         {"sub": str(user.id), "exp": expire},
         settings.JWT_SECRET,
