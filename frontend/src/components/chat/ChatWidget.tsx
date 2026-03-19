@@ -18,6 +18,7 @@ export default function ChatWidget() {
         onClick={() => setIsOpen(prev => !prev)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
+        transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
         className="relative w-14 h-14 rounded-full bg-gold shadow-lg flex items-center justify-center"
         aria-label={isOpen ? 'Close chat' : 'Open chat'}
       >
