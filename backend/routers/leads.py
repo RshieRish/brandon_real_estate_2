@@ -60,7 +60,7 @@ async def update_lead(
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(404, "Lead not found")
-    if data.routing_status:
+    if data.routing_status is not None:
         lead.routing_status = data.routing_status
     if data.notes is not None:
         lead.notes = data.notes

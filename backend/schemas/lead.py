@@ -9,7 +9,7 @@ class LeadCreate(BaseModel):
     phone: Optional[str] = None
     source: Optional[str] = "website"
     lead_type: Optional[str] = "general"
-    metadata_: Optional[dict] = {}
+    metadata_: Optional[dict] = None
 
 
 class LeadUpdate(BaseModel):
@@ -24,8 +24,8 @@ class LeadOut(BaseModel):
     phone: Optional[str]
     source: Optional[str]
     lead_type: Optional[str]
-    routing_status: str
-    notes: str
+    routing_status: Optional[str] = None
+    notes: Optional[str] = None
     created_at: datetime
 
     class Config:
