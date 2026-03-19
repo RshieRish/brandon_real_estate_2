@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
+import json
 from database import get_db
 from models.lead import Lead
 from services.evaluator_service import evaluate_property, geocode_address
@@ -30,7 +31,8 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
 
     # Capture lead if contact info provided
     if req.email:
-        lead = Lead(name=req.name or "", email=req.email, phone=req.phone, source="evaluator", lead_type="seller", metadata_json="{}")
+        property_meta = {k: data[k] for k in ["property_type", "bedrooms", "bathrooms", "sqft", "year_built", "condition", "upgrades"] if k in data}
+        lead = Lead(name=req.name or "", email=req.email, phone=req.phone, source="evaluator", lead_type="seller", metadata_json=json.dumps(property_meta))
         db.add(lead)
 
     geo = {}

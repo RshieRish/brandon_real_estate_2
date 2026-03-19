@@ -1,3 +1,5 @@
+import re
+import json
 from services.gemini import generate_text
 import httpx
 
@@ -47,7 +49,6 @@ Respond in this exact JSON format:
 Important: This is an AI estimate, not a formal appraisal. Be conservative and honest about uncertainty."""
 
     text = await generate_text(prompt, use_pro=True)
-    import re, json
     match = re.search(r'\{[\s\S]*\}', text)
     if match:
         return json.loads(match.group())
