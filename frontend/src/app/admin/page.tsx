@@ -10,6 +10,7 @@ import {
   TextT,
   FunnelSimple,
   ArrowRight,
+  WarningCircle,
 } from '@phosphor-icons/react';
 
 interface DashboardStats {
@@ -119,7 +120,13 @@ export default function AdminDashboardPage() {
             </motion.div>
           ))
         ) : (
-          <div className="text-white/30 text-sm py-4">Stats unavailable</div>
+          <div className="col-span-4 flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded">
+            <WarningCircle weight="fill" className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <div>
+              <p className="text-red-400 text-sm font-medium">Unable to load stats</p>
+              <p className="text-white/40 text-xs mt-0.5">Check your connection or try refreshing.</p>
+            </div>
+          </div>
         )}
       </div>
 
