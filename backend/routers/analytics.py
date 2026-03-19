@@ -42,7 +42,7 @@ async def dashboard_stats(
 ):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
-        select(func.count()).where(
+        select(func.count(AnalyticsEvent.id)).where(
             AnalyticsEvent.created_at >= since,
             AnalyticsEvent.event_type == "page_view",
         )
