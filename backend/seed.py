@@ -1,0 +1,73 @@
+import asyncio
+
+from passlib.context import CryptContext
+from sqlalchemy import select
+
+import models.admin_user
+import models.analytics_event
+import models.booking
+import models.content_block
+import models.funnel
+import models.lead
+import models.setting
+from database import AsyncSessionLocal
+from models.admin_user import AdminUser
+from models.content_block import ContentBlock
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+DEFAULT_CONTENT = [
+    {
+        "block_id": "home_hero_headline",
+        "content": "NOT your AVERAGE, award winning, philanthropic REALTOR\u00ae OF THE YEAR \u201925",
+        "page": "home",
+    },
+    {
+        "block_id": "home_hero_subtext",
+        "content": "Serving MA & NH | Keller Williams Realty Success",
+        "page": "home",
+    },
+    {"block_id": "home_cta_buy", "content": "Find Your Home", "page": "home"},
+    {"block_id": "home_cta_sell", "content": "Sell With Confidence", "page": "home"},
+    {"block_id": "home_cta_invest", "content": "Analyze a Deal", "page": "home"},
+    {
+        "block_id": "market_update",
+        "content": (
+            "Current market conditions in the Merrimack Valley remain competitive. "
+            "Inventory is limited and well-priced homes move quickly. "
+            "Contact Brandon for a personalized market analysis."
+        ),
+        "page": "buyer",
+    },
+]
+
+
+async def seed():
+    async with AsyncSessionLocal() as db:
+        # Admin user
+        result = await db.execute(
+            select(AdminUser).where(AdminUser.email == "brandon@soldwithsweeney.com")
+        )
+        if not result.scalar_one_or_none():
+            db.add(
+                AdminUser(
+                    email="brandon@soldwithsweeney.com",
+                    hashed_password=pwd_context.hash("changeme123!"),
+                )
+            )
+
+        # Content blocks
+        for item in DEFAULT_CONTENT:
+            result = await db.execute(
+                select(ContentBlock).where(ContentBlock.block_id == item["block_id"])
+            )
+            if not result.scalar_one_or_none():
+                db.add(ContentBlock(**item, content_type="text"))
+
+        await db.commit()
+
+    print("Seed complete. Admin: brandon@soldwithsweeney.com / changeme123!")
+
+
+if __name__ == "__main__":
+    asyncio.run(seed())
