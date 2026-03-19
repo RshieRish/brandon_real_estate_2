@@ -39,21 +39,26 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
     downPaymentPct, interestRate, loanTermYears,
   } = inputs;
 
+  // Prevent division by zero / NaN from zero inputs
+  const safeDivide = (n: number, d: number) => (d === 0 ? 0 : n / d);
+
   const totalInvested = purchasePrice + rehabCost;
   const downPayment = purchasePrice * downPaymentPct;
   const loanAmount = purchasePrice - downPayment;
   const monthlyRate = interestRate / 12;
   const numPayments = loanTermYears * 12;
   const monthlyMortgage =
-    loanAmount *
-    (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) /
-    (Math.pow(1 + monthlyRate, numPayments) - 1);
+    monthlyRate === 0
+      ? safeDivide(loanAmount, numPayments)
+      : loanAmount *
+        (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) /
+        (Math.pow(1 + monthlyRate, numPayments) - 1);
 
   // Flip
   const holdingCosts = monthlyMortgage * holdMonths;
   const flipProfit = arv - totalInvested - holdingCosts;
   const cashInvestedFlip = downPayment + rehabCost + holdingCosts;
-  const flipROI = (flipProfit / cashInvestedFlip) * 100;
+  const flipROI = safeDivide(flipProfit, cashInvestedFlip) * 100;
   const flipAnnualizedROI = (flipROI / holdMonths) * 12;
   const maxAllowableOffer = arv * 0.7 - rehabCost;
 
@@ -65,13 +70,13 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   const monthlyCashFlow = monthlyNOI - monthlyMortgage;
   const annualCashFlow = monthlyCashFlow * 12;
   const cashInvestedRental = downPayment + rehabCost;
-  const cashOnCashReturn = (annualCashFlow / cashInvestedRental) * 100;
-  const capRate = (noi / purchasePrice) * 100;
-  const grm = purchasePrice / (rentalIncome * 12);
+  const cashOnCashReturn = safeDivide(annualCashFlow, cashInvestedRental) * 100;
+  const capRate = safeDivide(noi, purchasePrice) * 100;
+  const grm = safeDivide(purchasePrice, rentalIncome * 12);
 
   // Equity
   const totalEquity = arv - loanAmount;
-  const equityMultiple = arv / cashInvestedRental;
+  const equityMultiple = safeDivide(arv, cashInvestedRental);
 
   return {
     flipProfit, flipROI, flipAnnualizedROI, maxAllowableOffer,

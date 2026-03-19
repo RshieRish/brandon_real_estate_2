@@ -9,11 +9,10 @@ import AnalysisResults from './AnalysisResults';
 interface MeetingGateProps {
   isUnlocked: boolean;
   onUnlock: (email: string) => void;
-  onBook: () => void;
   metrics: InvestorMetrics;
 }
 
-export default function MeetingGate({ isUnlocked, onUnlock, onBook, metrics }: MeetingGateProps) {
+export default function MeetingGate({ isUnlocked, onUnlock, metrics }: MeetingGateProps) {
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -66,7 +65,9 @@ export default function MeetingGate({ isUnlocked, onUnlock, onBook, metrics }: M
             </p>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-3 max-w-sm mx-auto">
+              <label htmlFor="gate-email" className="sr-only">Email Address</label>
               <input
+                id="gate-email"
                 type="email"
                 required
                 value={email}
@@ -128,18 +129,19 @@ export default function MeetingGate({ isUnlocked, onUnlock, onBook, metrics }: M
           <AnalysisResults metrics={metrics} />
 
           {/* Book CTA */}
-          <motion.button
-            onClick={onBook}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+          <motion.a
+            href="tel:9789872806"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
             className="
               w-full bg-gold text-[#0a0a0a] font-bold text-sm tracking-widest uppercase
               px-6 py-4 transition-colors duration-200 hover:bg-gold-hover
+              block text-center
             "
           >
             Book a Strategy Call With Brandon
-          </motion.button>
+          </motion.a>
         </motion.div>
       )}
     </AnimatePresence>
