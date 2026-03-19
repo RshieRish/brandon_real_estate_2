@@ -31,12 +31,21 @@ async def chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     return ChatResponse(reply=reply)
 
 
+class CaptureLeadRequest(BaseModel):
+    name: str
+    email: str
+    phone: str = None
+    lead_type: str = "general"
+    lead_context: dict = {}
+
+
 @router.post("/lead")
-async def capture_lead_from_chat(
-    name: str, email: str, phone: str = None, lead_type: str = "general",
-    db: AsyncSession = Depends(get_db)
-):
-    lead = Lead(name=name, email=email, phone=phone, source="chatbot", lead_type=lead_type, metadata_json="{}")
+async def capture_lead_from_chat(req: CaptureLeadRequest, db: AsyncSession = Depends(get_db)):
+    lead = Lead(
+        name=req.name, email=req.email, phone=req.phone,
+        source="chatbot", lead_type=req.lead_type,
+        metadata_json=json.dumps(req.lead_context),
+    )
     db.add(lead)
     await db.flush()
     return {"id": lead.id, "message": "Lead captured"}
