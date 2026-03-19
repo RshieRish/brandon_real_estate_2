@@ -7,8 +7,8 @@
 - Neon PostgreSQL for launch
 
 ## Integration Status
-- Gemini API: Key in .env ✓
-- Google OAuth: Client ID + Secret in .env ✓
+- Gemini API: Key provided, not yet in .env file (Task 3)
+- Google OAuth: Credentials provided, not yet in .env file (Task 3)
 - Google Calendar: Same OAuth credentials (pending calendar scope)
 - Google Maps: Pending key
 - KW CRM: Pending access path

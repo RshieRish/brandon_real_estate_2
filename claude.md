@@ -17,6 +17,7 @@ Convert visitors into qualified meetings: Buy → strategy call, Sell → valuat
 
 ## Design Skill (MANDATORY for all frontend)
 taste-skill applied: DESIGN_VARIANCE:8, MOTION_INTENSITY:6, VISUAL_DENSITY:4
+Source: https://github.com/Leonxlnx/taste-skill
 - NO emojis anywhere in code or UI — use @phosphor-icons/react
 - min-h-[100dvh] for full-height sections (never h-screen)
 - Asymmetric layouts (split-screen heroes, no 3-col equal card rows)
@@ -32,6 +33,7 @@ taste-skill applied: DESIGN_VARIANCE:8, MOTION_INTENSITY:6, VISUAL_DENSITY:4
 - AI: Google Gemini via google-generativeai SDK
 - Calendar: Google Calendar API OAuth2
 - CRM: KW Command CRM
+- Migrations: Alembic
 
 ## Key Rules
 1. Update tdtn.md and memory.md after EVERY task
