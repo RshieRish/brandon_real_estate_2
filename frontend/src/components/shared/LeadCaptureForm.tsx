@@ -8,6 +8,8 @@ interface LeadPayload {
   name: string;
   email: string;
   phone?: string;
+  source?: string;
+  lead_type?: string;
 }
 
 interface LeadResponse {
@@ -64,7 +66,19 @@ function CheckmarkIcon() {
   );
 }
 
-export default function LeadCaptureForm({ className = '' }: { className?: string }) {
+interface LeadCaptureFormProps {
+  className?: string;
+  source?: string;
+  leadType?: string;
+  ctaText?: string;
+}
+
+export default function LeadCaptureForm({
+  className = '',
+  source,
+  leadType,
+  ctaText = 'Get Started',
+}: LeadCaptureFormProps) {
   const [formState, setFormState] = useState<FormState>('idle');
   const [error, setError] = useState('');
   const [fields, setFields] = useState({ name: '', email: '', phone: '' });
@@ -82,6 +96,8 @@ export default function LeadCaptureForm({ className = '' }: { className?: string
       name: fields.name,
       email: fields.email,
       ...(fields.phone ? { phone: fields.phone } : {}),
+      ...(source ? { source } : {}),
+      ...(leadType ? { lead_type: leadType } : {}),
     };
 
     try {
@@ -192,7 +208,7 @@ export default function LeadCaptureForm({ className = '' }: { className?: string
                   className="w-full h-12 bg-gold text-black font-bold text-sm tracking-widest uppercase hover:bg-gold-hover transition-colors duration-200"
                   style={{ letterSpacing: '0.12em' }}
                 >
-                  Get Started
+                  {ctaText}
                 </motion.button>
               </>
             )}
