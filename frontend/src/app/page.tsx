@@ -1,7 +1,17 @@
+import Hero from '@/components/home/Hero';
+import ExplodingHouseScroll from '@/components/home/ExplodingHouseScroll';
+import TrustSection from '@/components/home/TrustSection';
+import AudienceCards from '@/components/home/AudienceCards';
+import GivingBack from '@/components/home/GivingBack';
+
 export default function Home() {
   return (
-    <main className="min-h-[100dvh] flex items-center justify-center bg-dark-surface">
-      <p className="text-gold font-semibold">Brandon Real Estate — Loading...</p>
-    </main>
+    <>
+      <Hero />
+      <ExplodingHouseScroll />
+      <TrustSection />
+      <AudienceCards />
+      <GivingBack />
+    </>
   );
 }
