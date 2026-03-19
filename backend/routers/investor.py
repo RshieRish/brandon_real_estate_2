@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+import json
 from database import get_db
 from models.lead import Lead
 from services.investor_service import generate_investor_analysis
@@ -78,14 +79,16 @@ async def calculate(inp: InvestorInputs):
 
 @router.post("/analyze")
 async def full_analysis(inp: InvestorInputs, db: AsyncSession = Depends(get_db)):
-    """Full AI analysis — requires lead capture (email required)."""
+    """Full AI analysis — email required for lead capture."""
+    if not inp.email:
+        raise HTTPException(status_code=422, detail="email is required for analysis")
     metrics = calculate_metrics(inp)
-    if inp.email:
-        lead = Lead(
-            name=inp.name or "", email=inp.email, phone=inp.phone,
-            source="investor_tool", lead_type="investor",
-            metadata_json="{}"
-        )
-        db.add(lead)
+    lead_meta = json.dumps({"purchase_price": inp.purchase_price, "property_type": inp.property_type, "address": inp.address})
+    lead = Lead(
+        name=inp.name or "", email=inp.email, phone=inp.phone,
+        source="investor_tool", lead_type="investor",
+        metadata_json=lead_meta,
+    )
+    db.add(lead)
     ai_report = await generate_investor_analysis(inp.model_dump(), metrics)
     return {"metrics": metrics, "report": ai_report}
