@@ -3,6 +3,7 @@
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { Heart, ArrowRight, ArrowUpRight } from '@phosphor-icons/react';
+import Link from 'next/link';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 
 const containerVariants = {
@@ -110,7 +111,7 @@ export default function GivingBack() {
                 </motion.span>
               </a>
 
-              <a href="/about">
+              <Link href="/about">
                 <motion.span
                   className="inline-flex items-center gap-2.5 px-6 py-3.5 bg-gold text-[#0a0a0a] font-semibold text-sm tracking-widest uppercase hover:bg-gold-hover transition-colors duration-200"
                   whileHover={{ scale: 1.03 }}
@@ -120,7 +121,7 @@ export default function GivingBack() {
                   Brandon&apos;s Story
                   <ArrowRight weight="bold" className="w-4 h-4" />
                 </motion.span>
-              </a>
+              </Link>
             </motion.div>
           </div>
 
