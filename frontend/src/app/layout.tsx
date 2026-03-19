@@ -2,6 +2,9 @@ import type { Metadata } from 'next';
 import './globals.css';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
+import dynamic from 'next/dynamic';
+
+const ChatWidget = dynamic(() => import('@/components/chat/ChatWidget'), { ssr: false });
 
 export const metadata: Metadata = {
   title: 'Sold With Sweeney & Co. | Brandon Sweeney, REALTOR\u00ae',
@@ -15,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Navbar />
         <main className="pt-16">{children}</main>
         <Footer />
+        <ChatWidget />
       </body>
     </html>
   );
