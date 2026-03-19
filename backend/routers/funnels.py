@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
+from typing import List, Optional
 import re, json
 from database import get_db
 from models.funnel import Funnel
@@ -12,12 +13,31 @@ from middleware.auth import require_admin
 
 router = APIRouter()
 
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+
+
 def slugify(text: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
 
+
+async def _unique_slug(base_slug: str, db: AsyncSession) -> str:
+    slug = base_slug
+    suffix = 1
+    while True:
+        result = await db.execute(select(Funnel).where(Funnel.slug == slug))
+        if not result.scalar_one_or_none():
+            return slug
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+
+
 @router.post("/", response_model=FunnelOut)
 async def create_funnel(data: FunnelCreate, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
-    slug = slugify(data.title)
+    slug = await _unique_slug(slugify(data.title), db)
     content = await generate_funnel_content(data.title, data.audience, data.description, data.cta_text)
     funnel = Funnel(
         title=data.title, slug=slug, audience=data.audience,
@@ -65,12 +85,12 @@ async def publish_funnel(funnel_id: int, db: AsyncSession = Depends(get_db), _=D
     return funnel
 
 @router.post("/{slug}/register")
-async def register_for_funnel(slug: str, name: str, email: str, phone: str = None, db: AsyncSession = Depends(get_db)):
+async def register_for_funnel(slug: str, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Funnel).where(Funnel.slug == slug))
     funnel = result.scalar_one_or_none()
     if not funnel:
         raise HTTPException(404, "Funnel not found")
-    lead = Lead(name=name, email=email, phone=phone, source=f"funnel:{slug}", lead_type=funnel.audience, metadata_json=json.dumps({"funnel_id": funnel.id}))
+    lead = Lead(name=req.name, email=req.email, phone=req.phone, source=f"funnel:{slug}", lead_type=funnel.audience, metadata_json=json.dumps({"funnel_id": funnel.id}))
     db.add(lead)
     funnel.registrations = (funnel.registrations or 0) + 1
     await db.flush()
