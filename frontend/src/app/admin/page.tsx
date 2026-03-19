@@ -37,6 +37,8 @@ function StatSkeleton() {
   );
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
 export default function AdminDashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -45,7 +47,8 @@ export default function AdminDashboardPage() {
     const fetchStats = async () => {
       try {
         const token = localStorage.getItem('admin_token');
-        const res = await fetch('/api/v1/analytics/dashboard', {
+        if (!token) return;
+        const res = await fetch(`${API_URL}/api/v1/analytics/dashboard`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
@@ -120,7 +123,7 @@ export default function AdminDashboardPage() {
             </motion.div>
           ))
         ) : (
-          <div className="col-span-4 flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded">
+          <div className="w-full flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded">
             <WarningCircle weight="fill" className="w-5 h-5 text-red-400 flex-shrink-0" />
             <div>
               <p className="text-red-400 text-sm font-medium">Unable to load stats</p>

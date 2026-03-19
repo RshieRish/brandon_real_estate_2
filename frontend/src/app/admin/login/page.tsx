@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowClockwise, LockKey, User } from '@phosphor-icons/react';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
 export default function AdminLoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState('');
@@ -18,7 +20,7 @@ export default function AdminLoginPage() {
     setError('');
 
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch(`${API_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),

@@ -5,6 +5,8 @@ import { useRouter, usePathname } from 'next/navigation';
 import { CircleNotch } from '@phosphor-icons/react';
 import AdminSidebar from '@/components/layout/AdminSidebar';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -30,7 +32,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       }
 
       try {
-        const res = await fetch('/api/v1/auth/me', {
+        const res = await fetch(`${API_URL}/api/v1/auth/me`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -49,7 +51,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     };
 
     checkAuth();
-  }, [isLoginPage, router]);
+  }, [isLoginPage]);
 
   // Login page: render without shell
   if (isLoginPage) {
