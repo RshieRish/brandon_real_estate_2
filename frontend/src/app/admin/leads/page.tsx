@@ -46,7 +46,11 @@ export default function LeadsPage() {
   useEffect(() => {
     const fetchLeads = async () => {
       const token = localStorage.getItem('admin_token');
-      if (!token) return;
+      if (!token) {
+        setError('Not authenticated. Please log in.');
+        setIsLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`${API_URL}/api/v1/leads/?limit=100`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -88,13 +92,14 @@ export default function LeadsPage() {
       const updated = { ...selectedLead, status: newStatus };
       setSelectedLead(updated);
       setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Failed to save status:', err);
     }
   };
 
   const handleNotesBlur = async () => {
     if (!selectedLead) return;
+    if (notesDraft === (selectedLead?.notes ?? '')) return;
     const token = localStorage.getItem('admin_token');
     if (!token) return;
     try {
@@ -110,8 +115,8 @@ export default function LeadsPage() {
       const updated = { ...selectedLead, notes: notesDraft };
       setSelectedLead(updated);
       setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Failed to save:', err);
     }
   };
 
@@ -234,6 +239,7 @@ export default function LeadsPage() {
             <h2 className="text-white font-bold text-base leading-snug">{selectedLead.name}</h2>
             <button
               onClick={() => setSelectedLead(null)}
+              aria-label="Close lead detail"
               className="text-white/40 hover:text-white transition-colors cursor-pointer ml-3 flex-shrink-0"
             >
               <X size={18} />

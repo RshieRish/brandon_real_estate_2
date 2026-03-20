@@ -23,7 +23,11 @@ export default function ContentPage() {
   useEffect(() => {
     const fetchBlocks = async () => {
       const token = localStorage.getItem('admin_token');
-      if (!token) return;
+      if (!token) {
+        setError('Not authenticated. Please log in.');
+        setIsLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`${API_URL}/api/v1/content/`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -67,8 +71,8 @@ export default function ContentPage() {
       setBlocks((prev) => prev.map((b) => (b.id === block.id ? updated : b)));
       setEditingId(null);
       setEditValue('');
-    } catch {
-      // silently fail — keep editing state open
+    } catch (err) {
+      console.error('Failed to save:', err);
     }
   };
 

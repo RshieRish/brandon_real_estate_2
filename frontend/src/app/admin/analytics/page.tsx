@@ -48,7 +48,11 @@ export default function AnalyticsPage() {
   useEffect(() => {
     const fetchData = async () => {
       const token = localStorage.getItem('admin_token');
-      if (!token) return;
+      if (!token) {
+        setError('Not authenticated. Please log in.');
+        setIsLoading(false);
+        return;
+      }
       try {
         const [statsRes, eventsRes] = await Promise.all([
           fetch(`${API_URL}/api/v1/analytics/dashboard?period_days=30`, {

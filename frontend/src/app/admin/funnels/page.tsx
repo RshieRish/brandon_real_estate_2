@@ -24,6 +24,7 @@ export default function FunnelsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [form, setForm] = useState({
     title: '',
     audience: 'buyer',
@@ -67,8 +68,8 @@ export default function FunnelsPage() {
       setFunnels((prev) =>
         prev.map((f) => (f.id === id ? { ...f, status: 'published' } : f))
       );
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Failed to save:', err);
     }
   };
 
@@ -97,8 +98,9 @@ export default function FunnelsPage() {
       setFunnels((prev) => [newFunnel, ...prev]);
       setShowCreate(false);
       setForm({ title: '', audience: 'buyer', description: '', cta_text: '' });
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Failed to create funnel:', err);
+      setCreateError('Failed to create funnel. Please try again.');
     } finally {
       setIsCreating(false);
     }
@@ -268,10 +270,17 @@ export default function FunnelsPage() {
               />
             </div>
 
+            {createError && (
+              <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
+                <WarningCircle weight="fill" className="w-4 h-4 flex-shrink-0" />
+                {createError}
+              </div>
+            )}
+
             <div className="flex gap-3 justify-end pt-2">
               <button
                 type="button"
-                onClick={() => setShowCreate(false)}
+                onClick={() => { setShowCreate(false); setCreateError(null); }}
                 className="text-xs text-white/40 border border-dark-border hover:border-white/20 px-4 py-2 rounded transition-colors cursor-pointer"
               >
                 Cancel
