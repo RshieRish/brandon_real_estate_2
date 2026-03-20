@@ -1,0 +1,4 @@
+# Frame files are large and generated — not committed to git
+*.webp
+*.jpg
+*.png

@@ -19,3 +19,12 @@ public/assets/*.mp4
 public/assets/*.MP4
 public/testimonial/*.MP4
 public/testimonial/*.mp4
+
+# Large video files — managed outside git
+frontend/public/videos/*.mp4
+frontend/public/frames/*.webp
+frontend/public/frames/*.jpg
+frontend/public/frames/*.png
+frontend/public/frames/house-blast/*.jpg
+frontend/public/frames/house-blast/*.webp
+frontend/public/frames/house-blast/*.png
