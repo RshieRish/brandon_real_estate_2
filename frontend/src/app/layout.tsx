@@ -5,6 +5,7 @@ import Footer from '@/components/layout/Footer';
 import dynamic from 'next/dynamic';
 
 const ChatWidget = dynamic(() => import('@/components/chat/ChatWidget'), { ssr: false });
+const PageViewTracker = dynamic(() => import('@/components/analytics/PageViewTracker'), { ssr: false });
 
 export const metadata: Metadata = {
   title: 'Sold With Sweeney & Co. | Brandon Sweeney, REALTOR\u00ae',
@@ -19,6 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="pt-16">{children}</main>
         <Footer />
         <ChatWidget />
+        <PageViewTracker />
       </body>
     </html>
   );
