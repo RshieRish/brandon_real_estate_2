@@ -41,8 +41,8 @@ export default function FunnelRegistration({ slug, ctaText, audience }: FunnelRe
       });
       if (!res.ok) throw new Error('Registration failed');
       setIsSuccess(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+    } catch {
+      setError('Something went wrong. Please try again or call (978) 987-2806.');
     } finally {
       setIsLoading(false);
     }

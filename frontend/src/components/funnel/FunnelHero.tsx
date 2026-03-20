@@ -45,6 +45,20 @@ function audienceLabel(audience: string): string {
   return map[audience.toLowerCase()] ?? audience;
 }
 
+function isSafeEmbedUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname === 'www.youtube.com' ||
+      parsed.hostname === 'youtube.com' ||
+      parsed.hostname === 'player.vimeo.com' ||
+      parsed.hostname === 'www.loom.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function FunnelHero({ funnel }: FunnelHeroProps) {
   const headline = funnel.content?.headline ?? funnel.title;
   const bulletPoints = funnel.content?.bullet_points;
@@ -130,10 +144,11 @@ export default function FunnelHero({ funnel }: FunnelHeroProps) {
           )}
 
           {/* Video embed */}
-          {funnel.video_url && (
+          {funnel.video_url && isSafeEmbedUrl(funnel.video_url) && (
             <div className="mt-8 max-w-2xl aspect-video relative">
               <iframe
                 src={funnel.video_url}
+                title={`Video: ${funnel.title}`}
                 className="w-full h-full rounded border border-dark-border"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen

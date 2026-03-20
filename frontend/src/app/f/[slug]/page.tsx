@@ -5,6 +5,10 @@ import FunnelRegistration from '@/components/funnel/FunnelRegistration';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
+// getFunnel is called in both generateMetadata and FunnelPage.
+// Next.js 14 App Router deduplicates fetch() calls with identical URL+cache options
+// within a single request, so no double network round-trip occurs.
+// If this is ever rewritten to use a non-fetch data source, introduce explicit caching.
 async function getFunnel(slug: string) {
   try {
     const res = await fetch(`${API_URL}/api/v1/funnels/${slug}`, {
