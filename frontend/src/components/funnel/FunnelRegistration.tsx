@@ -12,7 +12,15 @@ interface FunnelRegistrationProps {
   audience: string;
 }
 
-export default function FunnelRegistration({ slug, ctaText }: FunnelRegistrationProps) {
+export default function FunnelRegistration({ slug, ctaText, audience }: FunnelRegistrationProps) {
+  const audienceLabel =
+    audience === 'buyer' || audience === 'buyers'
+      ? 'For Buyers'
+      : audience === 'seller' || audience === 'sellers'
+      ? 'For Sellers'
+      : audience === 'investor' || audience === 'investors'
+      ? 'For Investors'
+      : 'Register';
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -45,7 +53,7 @@ export default function FunnelRegistration({ slug, ctaText }: FunnelRegistration
       <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12 text-center">
         {/* Eyebrow */}
         <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-          Reserve Your Spot
+          {audienceLabel}
         </p>
 
         {/* Section heading */}
