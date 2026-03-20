@@ -34,7 +34,11 @@ export default function FunnelsPage() {
   useEffect(() => {
     const fetchFunnels = async () => {
       const token = localStorage.getItem('admin_token');
-      if (!token) return;
+      if (!token) {
+        setError('Not authenticated. Please log in.');
+        setIsLoading(false);
+        return;
+      }
       try {
         const res = await fetch(`${API_URL}/api/v1/funnels/`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -280,7 +284,7 @@ export default function FunnelsPage() {
                 {isCreating ? (
                   <>
                     <CircleNotch size={14} className="animate-spin" />
-                    Generating content with AI...
+                    Generating with AI...
                   </>
                 ) : (
                   'Create Funnel'

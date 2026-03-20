@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { WarningCircle } from '@phosphor-icons/react';
+import { WarningCircle, TextT } from '@phosphor-icons/react';
 
 interface ContentBlock {
   id: number;
@@ -60,7 +60,7 @@ export default function ContentPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ key: block.key, value: editValue }),
+        body: JSON.stringify({ value: editValue }),
       });
       if (!res.ok) throw new Error('Save failed');
       const updated: ContentBlock = await res.json();
@@ -88,6 +88,14 @@ export default function ContentPage() {
             <p className="text-red-400 text-sm font-medium">Failed to load content</p>
             <p className="text-white/40 text-xs mt-0.5">{error}</p>
           </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && !error && blocks.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <TextT weight="fill" className="w-10 h-10 text-white/20 mb-4" />
+          <p className="text-white/40 text-sm">No content blocks yet.</p>
         </div>
       )}
 
