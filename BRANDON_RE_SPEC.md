@@ -280,7 +280,7 @@ Every page footer must include links to:
 
 ### AI Stack
 - **Chatbot**: Google Gemini via `google-generativeai` Python SDK
-- **API Key**: `<REDACTED_GEMINI_KEY>` — store in `.env` ONLY, never in source
+- **API Key**: Store in `.env` ONLY, never in source
 - **Models**: Use `gemini-1.5-flash` for fast chatbot responses; `gemini-1.5-pro` for funnel generation, investor AI explanations, and complex reasoning
 - **Funnel generation / Seller evaluator / Investor analysis**: Gemini for extraction + explanation
 - Keep prompts structured and component-driven so outputs remain editable
