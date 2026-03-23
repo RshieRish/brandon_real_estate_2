@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import DateTime, Integer, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -17,6 +17,9 @@ class Funnel(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     cta_text: Mapped[str] = mapped_column(String(255), default="Register Now")
     video_url: Mapped[str | None] = mapped_column(String(500))
+    hero_image_url: Mapped[str | None] = mapped_column(String(500))
+    hero_image_data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    hero_image_mime: Mapped[str | None] = mapped_column(String(100))
     lead_routing: Mapped[str] = mapped_column(String(50), default="dashboard")
     status: Mapped[str] = mapped_column(String(50), default="draft")
     generated_content: Mapped[str] = mapped_column(Text, default="{}")

@@ -5,6 +5,7 @@ import { motion, useInView } from 'framer-motion';
 import { Heart, ArrowRight, ArrowUpRight } from '@phosphor-icons/react';
 import Link from 'next/link';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
+import AnimatedNumber from '@/components/shared/AnimatedNumber';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -16,7 +17,7 @@ const fadeUp = {
   show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100, damping: 20 } },
 };
 
-export default function GivingBack() {
+export default function GivingBack({ donationAmount = '300000' }: { donationAmount?: string }) {
   const sectionRef = useRef<HTMLElement>(null);
   const inView = useInView(sectionRef, { once: true, margin: '-80px' });
 
@@ -78,7 +79,7 @@ export default function GivingBack() {
                   textShadow: '0 0 60px rgba(234,196,105,0.25)',
                 }}
               >
-                $300,000+
+                <AnimatedNumber target={parseFloat(donationAmount.replace(/[^0-9.]/g, ''))} prefix="$" decimals={0} duration={2000} />
               </div>
             </motion.div>
 
@@ -88,7 +89,7 @@ export default function GivingBack() {
             >
               Real estate is more than transactions — it&apos;s about community. Brandon donates a
               portion of every closing to&nbsp;
-              <span className="text-gold font-medium">MS is BS New England</span>, funding research
+              <span className="text-gold font-medium">MS is BS New England Inc.</span>, funding research
               and support for those living with Multiple Sclerosis.
             </motion.p>
 
@@ -146,11 +147,11 @@ export default function GivingBack() {
 
               <div className="relative z-10">
                 <h3 className="font-black text-white text-2xl md:text-3xl tracking-tight mb-4">
-                  MS is BS New England
+                  MS is BS New England Inc.
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed mb-6 font-light">
                   Multiple Sclerosis has touched Brandon&apos;s life personally. That&apos;s why he
-                  co-founded MS is BS New England — a grassroots movement raising awareness and
+                  co-founded MS is BS New England Inc. — a grassroots movement raising awareness and
                   funds for MS research, events, and warrior support.
                 </p>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
@@ -167,7 +168,7 @@ export default function GivingBack() {
                     </div>
                   </div>
                   <div>
-                    <div className="text-gold font-black text-2xl">MA &amp; NH</div>
+                    <div className="text-gold font-black text-2xl">New England</div>
                     <div className="text-white/40 text-xs tracking-widest uppercase font-medium mt-1">
                       Service Area
                     </div>

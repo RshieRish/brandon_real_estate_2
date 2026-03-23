@@ -5,11 +5,19 @@ import { WarningCircle, TextT } from '@phosphor-icons/react';
 
 interface ContentBlock {
   id: number;
-  key: string;
-  value: string;
-  label: string | null;
+  block_id: string;
+  content: string;
+  content_type: string;
+  page: string | null;
   updated_at: string;
 }
+
+const formatLabel = (id: string) => {
+  return id
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -46,7 +54,7 @@ export default function ContentPage() {
 
   const handleEdit = (block: ContentBlock) => {
     setEditingId(block.id);
-    setEditValue(block.value);
+    setEditValue(block.content);
   };
 
   const handleCancel = () => {
@@ -64,7 +72,7 @@ export default function ContentPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ value: editValue }),
+        body: JSON.stringify({ content: editValue }),
       });
       if (!res.ok) throw new Error('Save failed');
       const updated: ContentBlock = await res.json();
@@ -124,7 +132,7 @@ export default function ContentPage() {
               >
                 {/* Eyebrow */}
                 <span className="text-xs tracking-widest uppercase text-gold font-semibold">
-                  {block.label ?? block.key}
+                  {formatLabel(block.block_id)}
                 </span>
 
                 {editingId === block.id ? (
@@ -151,7 +159,7 @@ export default function ContentPage() {
                   </>
                 ) : (
                   <>
-                    <p className="text-white/70 text-sm flex-1">{block.value}</p>
+                    <p className="text-white/70 text-sm flex-1">{block.content}</p>
                     <div className="flex justify-end">
                       <button
                         onClick={() => handleEdit(block)}

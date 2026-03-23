@@ -40,7 +40,7 @@ export default function Navbar() {
           {/* Logo */}
           <Link href="/" className="flex items-center shrink-0">
             <Image
-              src="/logos/Sold With Sweeney Primary Logo Transparent Color.p.png"
+              src="/logos/sws-logo-white-gold.png"
               alt="Sold With Sweeney & Co."
               width={160}
               height={44}
@@ -64,13 +64,13 @@ export default function Navbar() {
 
           {/* Desktop CTA */}
           <div className="hidden md:flex">
-            <Link
-              href="/book"
+            <a
+              href="tel:9789872806"
               className="inline-flex items-center px-5 py-2 rounded-none text-sm font-bold tracking-widest uppercase bg-gold text-black hover:bg-gold-hover transition-colors duration-200"
               style={{ letterSpacing: '0.12em' }}
             >
               Book Brandon
-            </Link>
+            </a>
           </div>
 
           {/* Mobile hamburger */}
@@ -123,14 +123,14 @@ export default function Navbar() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: navLinks.length * 0.07, type: 'spring', stiffness: 100, damping: 20 }}
               >
-                <Link
-                  href="/book"
+                <a
+                  href="tel:9789872806"
                   onClick={() => setMobileOpen(false)}
                   className="inline-flex items-center px-8 py-3 text-base font-bold tracking-widest uppercase bg-gold text-black hover:bg-gold-hover transition-colors duration-200"
                   style={{ letterSpacing: '0.12em' }}
                 >
                   Book Brandon
-                </Link>
+                </a>
               </motion.div>
             </nav>
           </motion.div>

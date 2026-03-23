@@ -62,7 +62,6 @@ export default function BuyerMistakes() {
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-14">
           <div className="max-w-xl">
             <div className="flex items-center gap-3 mb-4">
-              <Warning weight="fill" className="text-gold w-5 h-5" />
               <span className="text-gold text-xs font-semibold tracking-widest uppercase border border-gold/30 px-3 py-1">
                 Common Mistakes
               </span>

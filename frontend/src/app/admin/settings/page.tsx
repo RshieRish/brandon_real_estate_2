@@ -12,7 +12,7 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="p-8 max-w-3xl">
+    <div className="p-8 w-full">
       <h1 className="text-white font-black text-2xl mb-8">Settings</h1>
 
       {/* Integrations */}

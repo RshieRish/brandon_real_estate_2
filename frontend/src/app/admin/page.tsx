@@ -67,12 +67,12 @@ export default function AdminDashboardPage() {
 
   const statCards = stats
     ? [
-        { label: 'Total Events', value: stats.total_events.toLocaleString(), icon: ChartBar },
-        { label: 'Unique Visitors', value: stats.unique_visitors.toLocaleString(), icon: Users },
-        { label: 'Page Views', value: stats.page_views.toLocaleString(), icon: Eye },
+        { label: 'Total Events', value: (stats.total_events ?? 0).toLocaleString(), icon: ChartBar },
+        { label: 'Unique Visitors', value: (stats.unique_visitors ?? 0).toLocaleString(), icon: Users },
+        { label: 'Page Views', value: (stats.page_views ?? 0).toLocaleString(), icon: Eye },
         {
-          label: `Last ${stats.period_days} Days`,
-          value: stats.period_days.toString(),
+          label: `Last ${stats.period_days ?? 30} Days`,
+          value: (stats.period_days ?? 30).toString(),
           icon: ChartBar,
           subtitle: 'Period',
         },
@@ -80,7 +80,7 @@ export default function AdminDashboardPage() {
     : null;
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-8 w-full">
       {/* Page header */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}

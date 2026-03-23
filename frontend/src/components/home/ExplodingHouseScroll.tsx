@@ -1,161 +1,190 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion';
-
-const TOTAL_FRAMES = 60;
-const FRAME_PATH = (n: number) =>
-  `/frames/house-blast/frame_${String(n).padStart(4, '0')}.jpg`;
+import { useEffect, useRef } from 'react';
 
 const TEXT_OVERLAYS = [
   {
     threshold: 0,
-    heading: 'Every Home Has a Story',
+    eyebrow: 'CURATED VISION',
+    heading: 'Every home has a story',
     sub: 'Brandon Sweeney helps you write yours.',
   },
   {
-    threshold: 0.4,
-    heading: 'Market Expertise. Real Results.',
-    sub: 'Award-winning strategy across MA & NH.',
+    threshold: 0.3,
+    eyebrow: 'PROVEN STRATEGY',
+    heading: 'Market expertise, real results',
+    sub: 'Award-winning negotiation strategy across Massachusetts and New Hampshire.',
   },
   {
-    threshold: 0.75,
-    heading: 'Ready to Make Your Move?',
-    sub: 'Let\'s find your perfect property together.',
+    threshold: 0.6,
+    eyebrow: 'ARCHITECTURE',
+    heading: 'Every detail, rebuilt',
+    sub: 'From foundation to finish — we understand how light, material, and proportion interact.',
+  },
+  {
+    threshold: 0.85,
+    eyebrow: 'THE NEXT CHAPTER',
+    heading: "Ready to make your move?",
+    sub: "Let's assemble the final composition and find your perfect property together.",
   },
 ];
 
-function getOverlay(progress: number) {
-  let active = TEXT_OVERLAYS[0];
-  for (const o of TEXT_OVERLAYS) {
-    if (progress >= o.threshold) active = o;
+function getOverlayIndex(progress: number) {
+  let idx = 0;
+  for (let i = 0; i < TEXT_OVERLAYS.length; i++) {
+    if (progress >= TEXT_OVERLAYS[i].threshold) idx = i;
   }
-  return active;
+  return idx;
 }
+
+// Lerp factor — higher = snappier tracking, lower = smoother lag
+// 0.12 balances responsiveness with smoothness at 60fps
+const LERP_FACTOR = 0.12;
+
+// Snap threshold — when close enough, jump to target to avoid infinite drift
+const SNAP_THRESHOLD = 0.0001;
 
 export default function ExplodingHouseScroll() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const framesRef = useRef<HTMLImageElement[]>([]);
-  const [useFallback, setUseFallback] = useState(false);
-  const [framesLoaded, setFramesLoaded] = useState(false);
-  const [currentOverlay, setCurrentOverlay] = useState(TEXT_OVERLAYS[0]);
-  const progressRef = useRef(0);
+  const forwardVideoRef = useRef<HTMLVideoElement>(null);
 
-  const { scrollYProgress } = useScroll({
-    target: containerRef,
-    offset: ['start start', 'end end'],
-  });
+  // DOM refs for direct manipulation (zero re-renders during scroll)
+  const eyebrowRef = useRef<HTMLParagraphElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const subRef = useRef<HTMLParagraphElement>(null);
+  const overlayWrapperRef = useRef<HTMLDivElement>(null);
+  const textBlockRef = useRef<HTMLDivElement>(null);
 
-  // Load frames
+  const targetProgressRef = useRef(0);
+  const smoothProgressRef = useRef(0);
+  const rafRef = useRef<number>(0);
+  const currentOverlayIdxRef = useRef(0);
+
   useEffect(() => {
-    const firstFrame = new Image();
-    firstFrame.onload = () => {
-      // First frame loaded — proceed to load all
-      const images: HTMLImageElement[] = [];
-      let loaded = 0;
+    const container = containerRef.current;
+    if (!container) return;
 
-      for (let i = 1; i <= TOTAL_FRAMES; i++) {
-        const img = new Image();
-        img.src = FRAME_PATH(i);
-        img.onload = () => {
-          loaded++;
-          if (loaded === TOTAL_FRAMES) {
-            framesRef.current = images;
-            setFramesLoaded(true);
-          }
-        };
-        img.onerror = () => {
-          loaded++;
-          if (loaded === TOTAL_FRAMES) {
-            framesRef.current = images;
-            setFramesLoaded(true);
-          }
-        };
-        images.push(img);
+    // Manual scroll progress calculation — avoids Framer Motion's overhead
+    const computeProgress = () => {
+      const rect = container.getBoundingClientRect();
+      const scrollHeight = container.scrollHeight - window.innerHeight;
+      if (scrollHeight <= 0) return 0;
+      const raw = -rect.top / scrollHeight;
+      return Math.max(0, Math.min(1, raw));
+    };
+
+    // Passive scroll listener — just updates target, no heavy work
+    const onScroll = () => {
+      targetProgressRef.current = computeProgress();
+    };
+
+    // Set initial value
+    targetProgressRef.current = computeProgress();
+    smoothProgressRef.current = targetProgressRef.current;
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    // Direct DOM text update — no React reconciliation
+    const updateOverlayText = (idx: number) => {
+      if (idx === currentOverlayIdxRef.current) return;
+
+      const eyebrow = eyebrowRef.current;
+      const heading = headingRef.current;
+      const sub = subRef.current;
+      const block = textBlockRef.current;
+      if (!eyebrow || !heading || !sub || !block) return;
+
+      // Fade out
+      block.style.opacity = '0';
+      block.style.transform = 'translateY(-12px)';
+
+      setTimeout(() => {
+        eyebrow.textContent = TEXT_OVERLAYS[idx].eyebrow;
+        heading.textContent = TEXT_OVERLAYS[idx].heading;
+        sub.textContent = TEXT_OVERLAYS[idx].sub;
+        // Fade in
+        block.style.opacity = '1';
+        block.style.transform = 'translateY(0)';
+        currentOverlayIdxRef.current = idx;
+      }, 180);
+    };
+
+
+
+    // Update overlay container opacity based on scroll edges
+    const updateOverlayOpacity = (progress: number) => {
+      const wrapper = overlayWrapperRef.current;
+      if (!wrapper) return;
+      let opacity = 1;
+      if (progress < 0.05) opacity = progress / 0.05;
+      else if (progress > 0.9) opacity = (1 - progress) / 0.1;
+      wrapper.style.opacity = String(Math.max(0, Math.min(1, opacity)));
+    };
+
+    // Core animation loop — runs at display refresh rate
+    const tick = () => {
+      const target = targetProgressRef.current;
+      let current = smoothProgressRef.current;
+
+      const delta = target - current;
+
+      // Snap when close enough to avoid asymptotic drift
+      if (Math.abs(delta) < SNAP_THRESHOLD) {
+        current = target;
+      } else {
+        current += delta * LERP_FACTOR;
       }
+
+      smoothProgressRef.current = current;
+
+      // Scrub the active video — Forward then backwards to create a perfect loop
+      const fwd = forwardVideoRef.current;
+
+      if (fwd && fwd.duration) {
+        let t;
+        if (current <= 0.5) {
+          // Explode (0 to duration)
+          t = Math.min((current / 0.5), 1) * fwd.duration;
+        } else {
+          // Reassemble (duration back to 0)
+          t = Math.max((1 - current) / 0.5, 0) * fwd.duration;
+        }
+        
+        // Only seek if the change is meaningful (> ~1 frame at 24fps)
+        if (Math.abs(fwd.currentTime - t) > 0.02) {
+          fwd.currentTime = t;
+        }
+      }
+
+      // Update text and opacity — all direct DOM, zero React
+      updateOverlayText(getOverlayIndex(current));
+      updateOverlayOpacity(current);
+
+      rafRef.current = requestAnimationFrame(tick);
     };
-    firstFrame.onerror = () => {
-      setUseFallback(true);
+
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(rafRef.current);
     };
-    firstFrame.src = FRAME_PATH(1);
   }, []);
-
-  // Draw frame on canvas
-  useEffect(() => {
-    if (!framesLoaded || useFallback) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const drawFrame = (index: number) => {
-      const img = framesRef.current[index];
-      if (!img || !img.complete) return;
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-      const scale = Math.max(
-        canvas.width / img.naturalWidth,
-        canvas.height / img.naturalHeight
-      );
-      const w = img.naturalWidth * scale;
-      const h = img.naturalHeight * scale;
-      const x = (canvas.width - w) / 2;
-      const y = (canvas.height - h) / 2;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, x, y, w, h);
-    };
-
-    const unsubscribe = scrollYProgress.on('change', (v) => {
-      progressRef.current = v;
-      const frameIndex = Math.min(
-        Math.floor(v * TOTAL_FRAMES),
-        TOTAL_FRAMES - 1
-      );
-      drawFrame(frameIndex);
-      setCurrentOverlay(getOverlay(v));
-    });
-
-    // Draw first frame immediately
-    drawFrame(0);
-
-    return () => unsubscribe();
-  }, [framesLoaded, useFallback, scrollYProgress]);
-
-  // Sync fallback video with scroll
-  useEffect(() => {
-    if (!useFallback) return;
-    const unsubscribe = scrollYProgress.on('change', (v) => {
-      setCurrentOverlay(getOverlay(v));
-    });
-    return () => unsubscribe();
-  }, [useFallback, scrollYProgress]);
-
-  const overlayOpacity = useTransform(scrollYProgress, [0, 0.05, 0.9, 1], [0, 1, 1, 0]);
 
   return (
     <div ref={containerRef} className="relative" style={{ height: '300vh' }}>
-      {/* Sticky viewport */}
       <div className="sticky top-0 min-h-[100dvh] overflow-hidden bg-[#0a0a0a]">
-        {useFallback ? (
-          <video
-            ref={videoRef}
-            className="absolute inset-0 w-full h-full object-cover"
-            src="/assets/house_blast.mp4"
-            autoPlay
-            muted
-            loop
-            playsInline
-            aria-hidden="true"
-          />
-        ) : (
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full"
-            aria-hidden="true"
-          />
-        )}
+
+        {/* Scroll scrub timeline: 0-50% Explodes, 50-100% Reassembles perfectly backwards */}
+        <video
+          ref={forwardVideoRef}
+          className="absolute inset-0 w-full h-full object-cover"
+          src="/assets/house_blast_forward_kf.mp4"
+          muted
+          playsInline
+          preload="auto"
+          aria-hidden="true"
+        />
 
         {/* Dark vignette */}
         <div
@@ -167,39 +196,43 @@ export default function ExplodingHouseScroll() {
           aria-hidden="true"
         />
 
-        {/* Text overlay */}
-        <motion.div
+        {/* Text overlay — all direct DOM manipulation, no AnimatePresence */}
+        <div
+          ref={overlayWrapperRef}
           className="absolute inset-0 flex flex-col items-center justify-center z-10 px-6 text-center"
-          style={{ opacity: overlayOpacity }}
+          style={{ opacity: 0 }}
         >
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentOverlay.heading}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-              className="max-w-3xl"
+          <div
+            ref={textBlockRef}
+            className="w-[85%] max-w-[280px] md:max-w-[320px] mx-auto bg-[#0a0a0a]/30 backdrop-blur-md border border-white/10 shadow-2xl rounded-[2.5rem] py-16 px-8 md:py-20 md:px-10 flex flex-col items-center justify-center text-center"
+            style={{
+              transition: 'opacity 0.25s ease-out, transform 0.25s ease-out',
+              opacity: 1,
+              transform: 'translateY(0)',
+            }}
+          >
+            <p
+              ref={eyebrowRef}
+              className="text-gold text-[0.6rem] md:text-[0.65rem] font-semibold tracking-[0.35em] md:tracking-[0.4em] uppercase mb-8"
             >
-              <h2
-                className="font-black text-white tracking-tight mb-4"
-                style={{ fontSize: 'clamp(2rem, 5vw, 4rem)' }}
-              >
-                {currentOverlay.heading}
-              </h2>
-              <p className="text-white/70 text-lg md:text-xl font-light">
-                {currentOverlay.sub}
-              </p>
-            </motion.div>
-          </AnimatePresence>
-        </motion.div>
+              {TEXT_OVERLAYS[0].eyebrow}
+            </p>
+            <h2
+              ref={headingRef}
+              className="font-black text-white text-3xl md:text-4xl leading-[1.1] tracking-tight mb-8"
+            >
+              {TEXT_OVERLAYS[0].heading}
+            </h2>
+            <p ref={subRef} className="text-white/70 text-xs md:text-sm leading-relaxed font-light">
+              {TEXT_OVERLAYS[0].sub}
+            </p>
+          </div>
+        </div>
 
         {/* Bottom gradient fade into next section */}
         <div
           className="absolute bottom-0 left-0 right-0 h-32 pointer-events-none"
-          style={{
-            background: 'linear-gradient(to bottom, transparent, #0a0a0a)',
-          }}
+          style={{ background: 'linear-gradient(to bottom, transparent, #0a0a0a)' }}
           aria-hidden="true"
         />
       </div>

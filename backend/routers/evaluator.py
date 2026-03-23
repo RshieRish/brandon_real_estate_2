@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +39,13 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
     if req.address:
         geo = await geocode_address(req.address)
 
-    result = await evaluate_property(data)
+    try:
+        result = await evaluate_property(data)
+    except Exception as e:
+        err = str(e)
+        if "quota" in err.lower() or "429" in err or "ResourceExhausted" in err:
+            raise HTTPException(status_code=503, detail="AI valuation service temporarily unavailable. Please try again later.")
+        raise HTTPException(status_code=502, detail="AI service error.")
     result["address_display"] = geo.get("display", req.address)
     result["coordinates"] = {"lat": geo.get("lat"), "lon": geo.get("lon")}
     result["disclaimer"] = "This is an AI-assisted estimate, not a formal appraisal. For an accurate valuation, book a meeting with Brandon."

@@ -1,0 +1,300 @@
+import type { Metadata } from 'next';
+import { Phone, Star } from '@phosphor-icons/react/dist/ssr';
+import CTAButton from '@/components/shared/CTAButton';
+import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
+import ReviewCard from '@/components/shared/ReviewCard';
+import LeadCaptureForm from '@/components/shared/LeadCaptureForm';
+import TheProcess from '@/components/home/TheProcess';
+import BuyerMistakes from '@/components/buyer/BuyerMistakes';
+
+export const metadata: Metadata = {
+  title: 'Home Buying 101 | Sold With Sweeney & Co.',
+  description:
+    'Ready to buy a home in MA or NH? Brandon Sweeney, REALTOR\u00ae, guides buyers through every step — from pre-approval to closing. Book a free strategy call.',
+};
+
+const TEAM_MEMBERS = [
+  'Your REALTOR\u00ae (Brandon)',
+  'Lender / Loan Officer',
+  'Real Estate Attorney',
+  'Estate Planning Attorney',
+  'Insurance Agent',
+  'Financial Advisor',
+  'Accountant',
+];
+
+const REVIEWS = [
+  {
+    author: 'Yasmine Turco',
+    location: 'Facebook',
+    quote:
+      'Brandon helped my husband and me buy our dream home, and we’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely.',
+    rating: 5 as const,
+  },
+  {
+    author: 'Dan Emond',
+    location: 'Google',
+    quote:
+      'From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been for a pair of first-time homebuyers. Always having answers to questions, scheduling showings quickly and being responsive.',
+    rating: 5 as const,
+  },
+  {
+    author: 'Sonya Reagan',
+    location: 'RealSatisfied',
+    quote:
+      'Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable.',
+    rating: 5 as const,
+  },
+  {
+    author: 'Jeannine R.',
+    location: 'Zillow',
+    quote:
+      'Brandon did a phenomenal job... He kept me informed at all times and was always available to answer any questions I had. I definitely would recommend Brandon to anyone looking for an amazing agent.',
+    rating: 5 as const,
+  },
+];
+
+export default function BuyPage() {
+  return (
+    <>
+      {/* ── Hero ─────────────────────────────────────────────────────── */}
+      <section className="relative min-h-[100dvh] flex flex-col justify-center overflow-hidden bg-[#0a0a0a]">
+        {/* Background video */}
+        <video
+          className="absolute inset-0 w-full h-full object-cover"
+          src="/assets/black_gold.mp4"
+          autoPlay
+          muted
+          loop
+          playsInline
+          aria-hidden="true"
+        />
+
+        {/* Gradient overlay */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              'linear-gradient(105deg, rgba(10,10,10,0.97) 0%, rgba(10,10,10,0.82) 50%, rgba(10,10,10,0.45) 100%)',
+          }}
+          aria-hidden="true"
+        />
+
+        <HalftoneOverlay opacity={0.04} />
+
+        {/* Gold accent line — left edge */}
+        <div
+          className="absolute left-0 top-0 bottom-0 w-1 bg-gold"
+          style={{ boxShadow: '0 0 40px rgba(234,196,105,0.5)' }}
+          aria-hidden="true"
+        />
+
+        <div className="relative z-10 w-full max-w-7xl mx-auto px-6 md:px-12 pt-20 pb-32">
+          {/* Asymmetric split: large left text, right accent block */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-16 items-center">
+            <div className="max-w-2xl">
+              {/* Eyebrow */}
+              <span className="inline-block border border-gold/40 text-gold text-xs font-semibold tracking-widest uppercase px-4 py-2 mb-6">
+                For Buyers
+              </span>
+
+              {/* H1 */}
+              <h1
+                className="font-black text-white leading-[0.95] tracking-tight mb-6"
+                style={{ fontSize: 'clamp(3rem, 8vw, 6.5rem)' }}
+              >
+                Home Buying{' '}
+                <span
+                  className="text-gold block"
+                  style={{ textShadow: '0 0 48px rgba(234,196,105,0.4)' }}
+                >
+                  101
+                </span>
+              </h1>
+
+              <p className="text-white/65 text-base md:text-lg leading-relaxed mb-10 max-w-xl font-light">
+                Buying a home is the biggest financial decision of your life. Brandon Sweeney,
+                REALTOR&#174;, takes you from pre-approval to closing — protecting your interests
+                every step of the way in MA &amp; NH.
+              </p>
+
+              <CTAButton
+                href="tel:9789872806"
+                external
+                variant="gold"
+                className="gap-3"
+              >
+                <Phone weight="bold" className="w-4 h-4" />
+                Book a Strategy Call
+              </CTAButton>
+            </div>
+
+            {/* Right accent stat block */}
+            <div className="hidden lg:flex flex-col gap-1 border border-gold/20 bg-dark-card/60 backdrop-blur-sm p-8 min-w-[220px]">
+              <div className="border-b border-dark-border pb-5 mb-5">
+                <p className="text-gold font-black text-4xl leading-none">100+</p>
+                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Homes Sold</p>
+              </div>
+              <div className="border-b border-dark-border pb-5 mb-5">
+                <p className="text-gold font-black text-4xl leading-none flex items-center gap-1">5<Star weight="fill" className="w-7 h-7" /></p>
+                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Avg. Rating</p>
+              </div>
+              <div>
+                <p className="text-gold font-black text-4xl leading-none">MA+NH</p>
+                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Markets Served</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── The Process (accordion) ─────────────────────────────── */}
+      <TheProcess />
+
+      {/* ── Winning Home Buying Team ──────────────────────────────────── */}
+      <section className="relative py-24 px-6 md:px-12 bg-[#0a0a0a] overflow-hidden">
+        <HalftoneOverlay opacity={0.03} />
+
+        <div className="relative max-w-7xl mx-auto">
+          {/* Asymmetric header */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start mb-14">
+            <div>
+              <span className="inline-block border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-3 py-1 mb-5">
+                Your Power Team
+              </span>
+              <h2
+                className="font-black text-white leading-tight tracking-tight"
+                style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
+              >
+                The Winning Home{' '}
+                <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
+                  Buying Team
+                </span>
+              </h2>
+            </div>
+            <p className="text-gray text-sm leading-relaxed lg:pt-16">
+              Buying a home isn&apos;t a solo mission. The most successful buyers build a team of
+              trusted professionals — and Brandon helps connect you with every one of them.
+            </p>
+          </div>
+
+          {/* Pill tags — wrapping flex */}
+          <div className="flex flex-wrap gap-3">
+            {TEAM_MEMBERS.map((member) => (
+              <span
+                key={member}
+                className="inline-flex items-center px-5 py-2.5 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200"
+              >
+                {member}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Buyer Mistakes ───────────────────────────────────────────── */}
+      <BuyerMistakes />
+
+      {/* ── Reviews 2×2 ─────────────────────────────────────────────── */}
+      <section className="relative py-24 px-6 md:px-12 bg-[#0a0a0a]">
+        <HalftoneOverlay opacity={0.035} />
+
+        <div className="relative max-w-7xl mx-auto">
+          <div className="mb-12">
+            <span className="inline-block border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-3 py-1 mb-4">
+              Client Stories
+            </span>
+            <h2
+              className="font-black text-white leading-tight tracking-tight"
+              style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
+            >
+              Buyers Who Won With{' '}
+              <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
+                Brandon
+              </span>
+            </h2>
+          </div>
+
+          {/* 2×2 grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {REVIEWS.map((review) => (
+              <ReviewCard
+                key={review.author}
+                quote={review.quote}
+                author={review.author}
+                location={review.location}
+                rating={review.rating}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Lead Capture ─────────────────────────────────────────────── */}
+      <section className="relative py-24 px-6 md:px-12 bg-dark-card overflow-hidden">
+        {/* Gold glow top */}
+        <div
+          className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px"
+          style={{ background: 'linear-gradient(90deg, transparent, rgba(234,196,105,0.6), transparent)' }}
+          aria-hidden="true"
+        />
+        <HalftoneOverlay opacity={0.03} />
+
+        <div className="relative max-w-7xl mx-auto">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
+            {/* Left copy */}
+            <div>
+              <span className="inline-block border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-3 py-1 mb-6">
+                Ready to Start?
+              </span>
+              <h2
+                className="font-black text-white leading-tight tracking-tight mb-6"
+                style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
+              >
+                Let&apos;s Find Your{' '}
+                <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
+                  Dream Home
+                </span>
+              </h2>
+              <p className="text-gray text-sm leading-relaxed mb-8 max-w-md">
+                Fill out the form and Brandon will reach out to schedule your free buyer strategy
+                call. No pressure — just a straight conversation about your goals.
+              </p>
+
+              {/* Phone CTA */}
+              <a
+                href="tel:9789872806"
+                className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+              >
+                <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200">
+                  <Phone weight="bold" className="w-4 h-4" />
+                </span>
+                <div>
+                  <p className="text-xs text-gray uppercase tracking-widest font-medium">Call Direct</p>
+                  <p className="font-bold tracking-wide">(978) 987-2806</p>
+                </div>
+              </a>
+            </div>
+
+            {/* Right form */}
+            <div className="bg-[#0a0a0a] border border-dark-border p-8">
+              <LeadCaptureForm
+                source="buyer-page"
+                leadType="buyer"
+                ctaText="Book a Buyer Strategy Call"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* KW Legal disclaimer */}
+        <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
+          Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. All real
+          estate services are subject to applicable state law and Keller Williams Realty
+          International&apos;s policies. Equal Housing Opportunity. Information deemed reliable but
+          not guaranteed.
+        </p>
+      </section>
+    </>
+  );
+}

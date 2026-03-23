@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { House, CurrencyDollar, ChartLine, ArrowDown } from '@phosphor-icons/react';
+import RotatingText from '@/components/shared/RotatingText';
 
 const container = {
   hidden: { opacity: 0 },
@@ -107,15 +108,31 @@ export default function Hero() {
               className="font-black text-white leading-[0.95] tracking-tight mb-6"
               style={{ fontSize: 'clamp(2.8rem, 7vw, 6rem)' }}
             >
-              NOT Your{' '}
+              <span className="inline-flex flex-wrap items-baseline gap-x-[0.3em]">
+                <span>NOT</span>
+                <RotatingText
+                  text={[
+                    'Your',       // English
+                    'Tu',         // Spanish
+                    'आपका',       // Hindi
+                    'របស់អ្នក',    // Cambodian
+                    'ของคุณ',     // Thai
+                    'Votre',      // French
+                    '你的',       // Chinese
+                    'あなたの'    // Japanese
+                  ]}
+                  containerClassName="inline-flex items-baseline"
+                />
+              </span>
+              <br />
               <span
-                className="text-gold relative inline-block"
+                className="text-gold relative inline-block mt-1"
                 style={{ textShadow: '0 0 40px rgba(234,196,105,0.35)' }}
               >
                 AVERAGE
               </span>
               <br />
-              REALTOR&#174;
+              REALTOR<sup className="text-[0.35em] font-normal opacity-60 ml-[0.02em] align-super relative -top-[0.4em]">&reg;</sup>
             </motion.h1>
 
             {/* Subtext */}

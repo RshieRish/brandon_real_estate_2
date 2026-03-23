@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,14 +21,20 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    reply: str
+    response: str
 
 
 @router.post("/", response_model=ChatResponse)
 async def chat(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     msgs = [{"role": m.role, "content": m.content} for m in req.messages]
-    reply = await chat_response(msgs)
-    return ChatResponse(reply=reply)
+    try:
+        reply = await chat_response(msgs)
+    except Exception as e:
+        err = str(e)
+        if "quota" in err.lower() or "429" in err or "ResourceExhausted" in err:
+            raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again later.")
+        raise HTTPException(status_code=502, detail="AI service error.")
+    return ChatResponse(response=reply)
 
 
 class CaptureLeadRequest(BaseModel):

@@ -5,36 +5,44 @@ import { motion, useInView, AnimatePresence } from 'framer-motion';
 import ReviewCard from '@/components/shared/ReviewCard';
 import Image from 'next/image';
 
-const stats = [
-  { label: 'Satisfaction', value: 4.9, max: 5.0, display: '4.9/5.0' },
-  { label: 'Performance', value: 5.0, max: 5.0, display: '5.0/5.0' },
-  { label: 'Recommendation', value: 5.0, max: 5.0, display: '5.0/5.0' },
+import AnimatedNumber from '@/components/shared/AnimatedNumber';
+
+interface TrustSectionProps {
+  volumeDone?: string;
+  familiesServed?: string;
+  yearsInBusiness?: string;
+}
+
+const ratingStats = [
+  { label: 'Satisfaction', value: 4.9, max: 5.0, suffix: '/5.0', decimals: 1, prefix: '', progress: true },
+  { label: 'Performance', value: 5.0, max: 5.0, suffix: '/5.0', decimals: 1, prefix: '', progress: true },
+  { label: 'Recommendation', value: 5.0, max: 5.0, suffix: '/5.0', decimals: 1, prefix: '', progress: true },
 ];
 
 const reviews = [
   {
     quote:
-      "Brandon went above and beyond throughout this process... He's a wonderful Realtor and an even better person.",
-    author: 'Adam P',
-    location: 'Lowell, MA',
+      "Brandon helped my husband and me buy our dream home, and we’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had (and we had a lot!). Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.",
+    author: 'Yasmine Turco',
+    location: 'Facebook',
   },
   {
     quote:
-      'Working with Brandon was amazing! He made a generally stressful process feel much easier by being there for us every step of the way.',
-    author: 'Jacqui',
-    location: 'Westford, MA',
+      "Brandon did a phenomenal job in helping me sell my parents' home. He kept me informed at all times and was always available to answer any questions I had. He got the house listed and sold so quickly at a great price which was very important to me and my family. I definitely would recommend Brandon to anyone looking to sell their home.",
+    author: 'Jeannine R.',
+    location: 'Zillow',
   },
   {
     quote:
-      'Brandon was very responsive, very professional, presented a great marketing plan with a great price strategy.',
-    author: 'Valerie W',
-    location: 'Nashua, NH',
+      "From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been for a pair of first-time homebuyers. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.",
+    author: 'Dan Emond',
+    location: 'Google',
   },
   {
     quote:
-      'Besides the outstanding assistance with valuing and marketing the property — the one that really stands out is patience.',
-    author: 'Jim R',
-    location: 'Dracut, MA',
+      "Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process. I knew I was in good hands working with him.",
+    author: 'Sonya Reagan',
+    location: 'RealSatisfied',
   },
 ];
 
@@ -48,36 +56,7 @@ const designations = [
   { src: '/logos/Designations-Associations/Green.jpg', alt: 'NAR Green Designation' },
 ];
 
-function AnimatedNumber({ target, suffix = '' }: { target: number; suffix?: string }) {
-  const [display, setDisplay] = useState(0);
-  const ref = useRef<HTMLSpanElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-80px' });
 
-  useEffect(() => {
-    if (!inView) return;
-    const start = performance.now();
-    const duration = 1200;
-    const from = 0;
-
-    const animate = (now: number) => {
-      const elapsed = now - start;
-      const progress = Math.min(elapsed / duration, 1);
-      // ease out cubic
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(parseFloat((from + (target - from) * eased).toFixed(1)));
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-
-    requestAnimationFrame(animate);
-  }, [inView, target]);
-
-  return (
-    <span ref={ref}>
-      {display.toFixed(1)}
-      {suffix}
-    </span>
-  );
-}
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -89,9 +68,21 @@ const fadeUp = {
   show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100, damping: 20 } },
 };
 
-export default function TrustSection() {
+export default function TrustSection({
+  volumeDone = '100',
+  familiesServed = '250',
+  yearsInBusiness = '10',
+}: TrustSectionProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const inView = useInView(sectionRef, { once: true, margin: '-100px' });
+
+  const dynStats = [
+    { label: 'Volume Done', value: parseFloat(volumeDone.replace(/[^0-9.]/g, '')), suffix: 'M+', decimals: 0, prefix: '$', progress: false },
+    { label: 'Families Served', value: parseFloat(familiesServed.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
+    { label: 'Years in Business', value: parseFloat(yearsInBusiness.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
+  ];
+
+  const allStats = [...dynStats, ...ratingStats];
 
   return (
     <section
@@ -135,9 +126,9 @@ export default function TrustSection() {
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
         >
-          {stats.map(({ label, value, display }) => (
+          {allStats.map((stat) => (
             <motion.div
-              key={label}
+              key={stat.label}
               variants={fadeUp}
               className="bg-[#0a0a0a] p-8 md:p-10 flex flex-col gap-3"
             >
@@ -145,20 +136,22 @@ export default function TrustSection() {
                 className="text-gold font-black leading-none"
                 style={{ fontSize: 'clamp(2.5rem, 5vw, 4rem)' }}
               >
-                <AnimatedNumber target={value} />/5.0
+                <AnimatedNumber target={stat.value} suffix={stat.suffix} prefix={stat.prefix} decimals={stat.decimals} />
               </div>
               <div className="text-white/50 text-sm tracking-widest uppercase font-medium">
-                {label}
+                {stat.label}
               </div>
               {/* Progress bar */}
-              <div className="h-0.5 bg-dark-border mt-2 overflow-hidden">
-                <motion.div
-                  className="h-full bg-gold"
-                  initial={{ width: 0 }}
-                  animate={inView ? { width: `${(value / 5) * 100}%` } : { width: 0 }}
-                  transition={{ duration: 1.2, ease: 'easeOut', delay: 0.3 }}
-                />
-              </div>
+              {stat.progress && (
+                <div className="h-0.5 bg-dark-border mt-2 overflow-hidden">
+                  <motion.div
+                    className="h-full bg-gold"
+                    initial={{ width: 0 }}
+                    animate={inView ? { width: `${(stat.value / 5) * 100}%` } : { width: 0 }}
+                    transition={{ duration: 1.2, ease: 'easeOut', delay: 0.3 }}
+                  />
+                </div>
+              )}
             </motion.div>
           ))}
         </motion.div>

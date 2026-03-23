@@ -22,7 +22,7 @@ CONTACT: Phone (978) 987-2806 | Email info@SoldWithSweeney.com | 101 Broadway Rd
 
 
 async def chat_response(messages: list[dict], use_pro: bool = False) -> str:
-    model_name = "gemini-1.5-pro" if use_pro else "gemini-1.5-flash"
+    model_name = "gemini-3.1-pro-preview" if use_pro else "gemini-3.1-flash-lite-preview"
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=CHATBOT_SYSTEM_PROMPT,
@@ -36,7 +36,7 @@ async def chat_response(messages: list[dict], use_pro: bool = False) -> str:
 
 
 async def generate_text(prompt: str, use_pro: bool = True) -> str:
-    model_name = "gemini-1.5-pro" if use_pro else "gemini-1.5-flash"
+    model_name = "gemini-3.1-pro-preview" if use_pro else "gemini-3.1-flash-lite-preview"
     model = genai.GenerativeModel(model_name)
     response = await model.generate_content_async(prompt)
     return response.text

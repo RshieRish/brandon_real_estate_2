@@ -39,6 +39,26 @@ DEFAULT_CONTENT = [
         ),
         "page": "buyer",
     },
+    {
+        "block_id": "trust_volume_done",
+        "content": "100",
+        "page": "home",
+    },
+    {
+        "block_id": "trust_families_served",
+        "content": "250",
+        "page": "home",
+    },
+    {
+        "block_id": "trust_years_in_business",
+        "content": "10",
+        "page": "home",
+    },
+    {
+        "block_id": "giving_back_donated",
+        "content": "300000",
+        "page": "home",
+    },
 ]
 
 

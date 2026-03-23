@@ -9,7 +9,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -23,7 +23,7 @@ export default function AdminLoginPage() {
       const res = await fetch(`${API_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, password }),
       });
 
       if (!res.ok) {
@@ -80,12 +80,12 @@ export default function AdminLoginPage() {
               <User size={16} />
             </span>
             <input
-              type="text"
-              placeholder="Username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
-              autoComplete="username"
+              autoComplete="email"
               className="w-full bg-dark-surface border border-dark-border rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-white/30 outline-none focus:border-gold/40 focus:ring-1 focus:ring-gold/20 transition-colors"
             />
           </div>

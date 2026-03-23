@@ -3,13 +3,20 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
+import {
+  FacebookLogo,
+  InstagramLogo,
+  YoutubeLogo,
+  TiktokLogo,
+  LinkedinLogo,
+} from '@phosphor-icons/react/dist/ssr';
 
 const socialLinks = [
-  { abbr: 'FB', label: 'Facebook', href: 'https://www.facebook.com/BrandonSweeneyRealtor' },
-  { abbr: 'IG', label: 'Instagram', href: 'https://www.instagram.com/brandonsweeney_realtor' },
-  { abbr: 'YT', label: 'YouTube', href: 'https://www.youtube.com/@soldwithsweeney' },
-  { abbr: 'TT', label: 'TikTok', href: 'https://www.tiktok.com/@soldwithsweeney' },
-  { abbr: 'LI', label: 'LinkedIn', href: 'https://www.linkedin.com/in/brandon-sweeney-realtor' },
+  { icon: FacebookLogo, label: 'Facebook', href: 'https://www.facebook.com/BrandonSweeneyRealtor' },
+  { icon: InstagramLogo, label: 'Instagram', href: 'https://www.instagram.com/brandonsweeney_realtor' },
+  { icon: YoutubeLogo, label: 'YouTube', href: 'https://www.youtube.com/@soldwithsweeney' },
+  { icon: TiktokLogo, label: 'TikTok', href: 'https://www.tiktok.com/@soldwithsweeney' },
+  { icon: LinkedinLogo, label: 'LinkedIn', href: 'https://www.linkedin.com/in/brandon-sweeney-realtor' },
 ];
 
 const legalLinks = [
@@ -32,11 +39,11 @@ export default function Footer() {
           {/* Column 1: Brand */}
           <div className="flex flex-col gap-6">
             <Image
-              src="/logos/Sold With Sweeney Primary Logo Transparent Color.p.png"
+              src="/logos/sws-logo-white-gold.png"
               alt="Sold With Sweeney & Co."
               width={200}
               height={56}
-              className="object-contain h-12 w-auto"
+              className="object-contain object-left h-12 w-auto"
             />
             <p className="text-sm text-gray leading-relaxed max-w-xs">
               Premium real estate representation across Massachusetts &amp; New Hampshire. Driven by integrity, results-obsessed.
@@ -90,22 +97,25 @@ export default function Footer() {
               Connect
             </h3>
             <div className="flex flex-wrap gap-3">
-              {socialLinks.map((s) => (
-                <motion.a
-                  key={s.abbr}
-                  href={s.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={s.label}
-                  whileHover={{ scale: 1.08 }}
-                  whileTap={{ scale: 0.95 }}
-                  transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-                  className="w-11 h-11 rounded-full border border-dark-border flex items-center justify-center text-xs font-bold tracking-wider text-gray hover:border-gold hover:text-gold transition-colors duration-200"
-                  style={{ backgroundColor: '#111111' }}
-                >
-                  {s.abbr}
-                </motion.a>
-              ))}
+              {socialLinks.map((s) => {
+                const Icon = s.icon;
+                return (
+                  <motion.a
+                    key={s.label}
+                    href={s.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={s.label}
+                    whileHover={{ scale: 1.08 }}
+                    whileTap={{ scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+                    className="w-11 h-11 rounded-full border border-dark-border flex items-center justify-center text-gray hover:border-gold hover:text-gold transition-colors duration-200"
+                    style={{ backgroundColor: '#111111' }}
+                  >
+                    <Icon size={20} weight="fill" />
+                  </motion.a>
+                );
+              })}
             </div>
             <p className="text-xs text-gray/60 mt-4 leading-relaxed">
               SoldWithSweeney.com is operated by Brandon Sweeney, affiliated with Keller Williams Realty. All information deemed reliable but not guaranteed.

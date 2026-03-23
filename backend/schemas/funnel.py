@@ -9,6 +9,7 @@ class FunnelCreate(BaseModel):
     description: str = ""
     cta_text: str = "Register Now"
     video_url: Optional[str] = None
+    hero_image_url: Optional[str] = None
     lead_routing: str = "dashboard"
 
 class FunnelOut(BaseModel):
@@ -21,4 +22,7 @@ class FunnelOut(BaseModel):
     status: str
     registrations: int
     generated_content: str
+    hero_image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    cta_text: str = "Register Now"
     created_at: datetime
