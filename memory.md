@@ -7,12 +7,12 @@
 - Neon PostgreSQL for launch
 
 ## Integration Status
-- Gemini API: Key provided, not yet in .env file (Task 3)
-- Google OAuth: Credentials provided, not yet in .env file (Task 3)
-- Google Calendar: Same OAuth credentials (pending calendar scope)
-- Google Maps: Pending key
-- KW CRM: Pending access path
-- SMTP: Pending
+## Integration Status
+- Gemini API: Key provided; using `gemini-1.5-pro` (pro) and `gemini-1.5-flash` (standard).
+- Google OAuth/Calendar: Credentials provided.
+- Instagram: Access token prone to expiration; frontend handles fetching failure gracefully.
+- Railway Backend: Docker builder forced via `railway.json`. Uses dynamic `$PORT` and root context.
+- Vercel Frontend: Requires `NEXT_PUBLIC_API_URL` to match Railway domain.
 
 ## Content Status
 - Videos: Available in public/assets/
@@ -49,5 +49,5 @@
 - `frontend/src/app/admin/settings/page.tsx` — 3 integration cards (Gemini/Calendar/KW), password form (coming soon), site info
 
 ## Last Session Context
-- Task 20 complete: Admin sub-pages (leads, content, funnels, analytics, settings)
-- Next: Check BRANDON_RE_SPEC.md for Task 21+
+- 2026-03-23: Fixed Railway Railpack/Caddy detection bug by adding root `railway.json` and modifying `backend/Dockerfile` for root context. Fixed missing phase images by force-adding to git. Verified backend health success.
+- Next: Final E2E verification once user updates Vercel API URL.

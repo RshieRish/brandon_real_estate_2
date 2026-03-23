@@ -48,4 +48,15 @@ Last Updated: 2026-03-20
 - Key decisions: house_blast.mp4 is 5s at 24fps (121 frames total); used fps=12 filter to get exactly 60 frames; JPG format used for component path compatibility (house-blast/)
 - Status: Complete
 
+### 2026-03-23 — Deployment Fixes & Model Updates
+- What was built: Resolved Railway deployment issues, fixed Instagram build error, and updated Gemini models.
+- Files modified:
+  - `backend/services/gemini.py`: Updated models to `gemini-1.5-pro` (for pro tasks) and `gemini-1.5-flash` (standard).
+  - `frontend/src/app/(main)/page.tsx`: Changed Instagram fetch error to `console.warn` to prevent build failures on expired tokens.
+  - `backend/Dockerfile`: Updated to use dynamic `PORT` and root build context for Railway compatibility.
+  - `railway.json`: Created at root to force Docker builder and bypass Railpack/Caddy detection.
+- Force-added: `frontend/public/frames/phase-1-swiping.jpg`, `phase-2-touring.jpg`, `phase-3-keys.jpg` (previously gitignored).
+- Key decisions: Using explicit `railway.json` to force Docker; switched to dynamic `$PORT` for Railway edge routing; enabled `PYTHONUNBUFFERED=1` for live logs.
+- Status: Complete
+
 *Claude Code: Update this file after completing every task.*
