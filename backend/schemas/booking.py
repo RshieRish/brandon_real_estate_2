@@ -8,6 +8,7 @@ class BookingCreate(BaseModel):
     phone: Optional[str] = None
     meeting_type: str = "phone"
     context: str = "general"
+    location: Optional[str] = ""
     scheduled_at: datetime
     notes: Optional[str] = ""
 
@@ -19,4 +20,6 @@ class BookingOut(BaseModel):
     email: str
     meeting_type: str
     context: str
+    location: Optional[str] = ""
     scheduled_at: datetime
+    google_event_id: Optional[str] = None

@@ -16,6 +16,7 @@ class Booking(Base):
     phone: Mapped[str | None] = mapped_column(String(50))
     meeting_type: Mapped[str] = mapped_column(String(50), default="phone")
     context: Mapped[str] = mapped_column(String(50), default="general")
+    location: Mapped[str | None] = mapped_column(String(500), default="")
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     google_event_id: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str] = mapped_column(Text, default="")

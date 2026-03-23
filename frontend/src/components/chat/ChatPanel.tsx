@@ -2,9 +2,10 @@
 
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Robot, X, PaperPlaneTilt } from '@phosphor-icons/react';
+import { Robot, X, PaperPlaneTilt, CalendarBlank } from '@phosphor-icons/react';
 import { useChat } from '@/hooks/useChat';
 import { useState } from 'react';
+import CalendarPickerCard from './CalendarPickerCard';
 
 interface ChatPanelProps {
   onClose: () => void;
@@ -17,7 +18,7 @@ const QUICK_REPLIES = [
 ];
 
 export default function ChatPanel({ onClose }: ChatPanelProps) {
-  const { messages, isLoading, error, sendMessage } = useChat();
+  const { messages, isLoading, error, sendMessage, triggerBooking, addMessage } = useChat();
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -45,6 +46,10 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleBookingComplete = (summary: string) => {
+    addMessage('assistant', summary);
   };
 
   return (
@@ -102,24 +107,37 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
                   {reply}
                 </button>
               ))}
+              {/* Book a Call quick action */}
+              <button
+                onClick={() => triggerBooking()}
+                className="text-xs text-gold border border-gold/30 rounded-full px-3 py-1.5 hover:border-gold/60 hover:bg-gold/5 transition-colors text-left flex items-center gap-1.5"
+              >
+                <CalendarBlank weight="fill" className="w-3 h-3" />
+                Book a call with Brandon
+              </button>
             </div>
           </div>
         ) : (
           <>
             {messages.map(msg => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
-                    msg.role === 'user'
-                      ? 'bg-gold text-[#0a0a0a] font-medium'
-                      : 'bg-dark-card border border-dark-border text-white/80'
-                  }`}
-                >
-                  {msg.content}
+              <div key={msg.id}>
+                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
+                      msg.role === 'user'
+                        ? 'bg-gold text-[#0a0a0a] font-medium'
+                        : 'bg-dark-card border border-dark-border text-white/80'
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
                 </div>
+                {/* Render CalendarPickerCard inline after the message */}
+                {msg.widget === 'calendar_picker' && (
+                  <div className="mt-2">
+                    <CalendarPickerCard onBooked={handleBookingComplete} />
+                  </div>
+                )}
               </div>
             ))}
 
