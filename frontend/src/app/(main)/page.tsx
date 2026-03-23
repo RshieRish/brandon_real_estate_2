@@ -31,13 +31,13 @@ async function fetchInstagramPosts() {
       { next: { revalidate: 3600 } }
     );
     if (!res.ok) {
-      console.error('Failed to fetch Instagram posts:', await res.text());
+      console.warn('⚠️ Could not fetch Instagram posts. Using fallback. Reason:', await res.text());
       return [];
     }
     const data = await res.json();
     return data.data || [];
   } catch (err) {
-    console.error('Failed to fetch Instagram posts error:', err);
+    console.warn('⚠️ Could not fetch Instagram posts. Using fallback. Error:', err);
     return [];
   }
 }
