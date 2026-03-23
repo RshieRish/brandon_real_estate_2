@@ -12,6 +12,7 @@ from models.booking import Booking
 from models.lead import Lead
 from schemas.booking import BookingCreate, BookingOut
 from services.calendar_service import get_available_slots, create_event
+from services.email_service import notify_new_booking
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -120,4 +121,19 @@ async def create_booking(data: BookingCreate, db: AsyncSession = Depends(get_db)
         "Booking created: %s with %s on %s (calendar: %s)",
         data.meeting_type, data.name, data.scheduled_at, google_event_id,
     )
+
+    # Send email notification to Brandon (fire-and-forget)
+    try:
+        await notify_new_booking(
+            name=data.name,
+            email=data.email,
+            phone=data.phone or "",
+            meeting_type=data.meeting_type,
+            scheduled_at=str(data.scheduled_at),
+            location=data.location or "",
+            context=data.context,
+        )
+    except Exception:
+        logger.exception("Failed to send booking notification email")
+
     return booking
