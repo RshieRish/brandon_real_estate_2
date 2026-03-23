@@ -145,6 +145,7 @@ export default function TheProcess() {
                   className="object-cover"
                   sizes="(max-width: 1024px) 100vw, 50vw"
                   priority
+                  unoptimized={true}
                 />
               </motion.div>
             </AnimatePresence>
