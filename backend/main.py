@@ -52,4 +52,4 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "service": "brandon-re-api"}
+    return {"status": "ok", "service": "brandon-re-api", "version": "1.0.1-debug"}
