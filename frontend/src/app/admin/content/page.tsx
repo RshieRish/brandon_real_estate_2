@@ -66,7 +66,7 @@ export default function ContentPage() {
     const token = localStorage.getItem('admin_token');
     if (!token) return;
     try {
-      const res = await fetch(`${API_URL}/api/v1/content/${block.id}`, {
+      const res = await fetch(`${API_URL}/api/v1/content/${block.block_id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
