@@ -133,7 +133,7 @@ export default function BuyPage() {
             <div className="hidden lg:flex flex-col gap-1 border border-gold/20 bg-dark-card/60 backdrop-blur-sm p-8 min-w-[220px]">
               <div className="border-b border-dark-border pb-5 mb-5">
                 <p className="text-gold font-black text-4xl leading-none">100+</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Homes Sold</p>
+                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Families Served</p>
               </div>
               <div className="border-b border-dark-border pb-5 mb-5">
                 <p className="text-gold font-black text-4xl leading-none flex items-center gap-1">5<Star weight="fill" className="w-7 h-7" /></p>
@@ -289,7 +289,7 @@ export default function BuyPage() {
 
         {/* KW Legal disclaimer */}
         <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
-          Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. All real
+          Brandon Sweeney is a licensed real estate professional with Keller Williams Realty Success. All real
           estate services are subject to applicable state law and Keller Williams Realty
           International&apos;s policies. Equal Housing Opportunity. Information deemed reliable but
           not guaranteed.

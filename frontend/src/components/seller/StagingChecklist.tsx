@@ -7,14 +7,13 @@ import { CheckCircle } from '@phosphor-icons/react';
 const CHECKLIST_ITEMS = [
   { id: 'photos', label: 'Remove personal photos' },
   { id: 'clean', label: 'Deep clean every room' },
-  { id: 'neutral', label: 'Apply neutral paint colors' },
+  { id: 'neutral', label: 'Apply fresh neutral paint where needed' },
   { id: 'counters', label: 'Clear countertops' },
   { id: 'declutter', label: 'Declutter all spaces' },
   { id: 'lawn', label: 'Manicure the lawn' },
   { id: 'beds', label: 'Style beds with fresh linens' },
   { id: 'closets', label: 'Organize closets' },
   { id: 'cords', label: 'Hide cords and cables' },
-  { id: 'paint', label: 'Fresh paint where needed' },
   { id: 'fixtures', label: 'Clean or replace light fixtures' },
   { id: 'flowers', label: 'Add fresh flowers or plants' },
 ];
@@ -140,7 +139,7 @@ export default function StagingChecklist() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -8 }}
                     transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-                    className="mt-4 flex items-center gap-2 text-emerald-400 text-sm font-semibold"
+                    className="mt-4 flex items-center gap-2 text-gold text-sm font-semibold"
                   >
                     <CheckCircle weight="fill" className="w-5 h-5" />
                     Your home is ready to list — reach out to Brandon!
@@ -148,6 +147,9 @@ export default function StagingChecklist() {
                 )}
               </AnimatePresence>
             </div>
+            <p className="text-white/30 text-xs font-light mt-6 leading-relaxed">
+              This is a standard tool. For a dedicated list based on your home, reach out to Brandon.
+            </p>
           </motion.div>
 
           {/* Checklist */}

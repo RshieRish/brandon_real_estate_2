@@ -57,7 +57,7 @@ export default function AdminLoginPage() {
 
         {/* Logo area */}
         <div className="mb-8 text-center">
-          <p className="text-gold font-black text-lg tracking-tight leading-none">Sweeney &amp; Co.</p>
+          <p className="text-gold font-black text-lg tracking-tight leading-none">Sold With Sweeney &amp; Co.</p>
           <p className="text-white/40 text-xs mt-1 uppercase tracking-widest">Admin</p>
         </div>
 

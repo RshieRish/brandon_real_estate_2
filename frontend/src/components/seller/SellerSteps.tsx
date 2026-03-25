@@ -7,6 +7,7 @@ import {
   Camera,
   Storefront,
   Handshake,
+  ClipboardText,
   Key,
 } from '@phosphor-icons/react';
 
@@ -16,8 +17,8 @@ const STEPS = [
     label: 'Prepare',
     icon: MagnifyingGlass,
     description:
-      'Brandon conducts a thorough home tour and listing appointment to assess your property, understand your goals, and build a winning pricing strategy.',
-    details: ['Home tour & condition review', 'Listing appointment consultation', 'Pricing strategy analysis', 'Timeline planning'],
+      'Brandon conducts a thorough home tour and seller consultation to assess your property, understand your goals, and build a winning pricing strategy.',
+    details: ['Home tour & condition review', 'Seller consultation', 'Pricing strategy analysis', 'Timeline planning'],
   },
   {
     number: 2,
@@ -32,8 +33,8 @@ const STEPS = [
     label: 'Listing Time',
     icon: Storefront,
     description:
-      'Your home goes live across every major platform simultaneously — MLS, Zillow, Realtor.com, and a full social media campaign — generating maximum exposure.',
-    details: ['MLS + syndication launch', 'Zillow & Realtor.com featured', 'Social media campaign', 'Open house scheduling'],
+      'Your home goes live across every major platform simultaneously — MLS, Zillow, Realtor.com, Homes.com, and a full social media campaign — generating maximum exposure.',
+    details: ['MLS + syndication launch', 'Zillow, Realtor.com, Homes.com & more', 'Social media campaign', 'Open house scheduling'],
   },
   {
     number: 4,
@@ -45,6 +46,14 @@ const STEPS = [
   },
   {
     number: 5,
+    label: 'Under Contract',
+    icon: ClipboardText,
+    description:
+      'Brandon coordinates every contingency from accepted offer to clear-to-close — inspections, appraisal, loan commitment, and all required documentation.',
+    details: ['Home inspection coordination', 'Appraisal & loan commitment', 'Smoke certificate (MA)', 'Buyer\'s agent, lender & attorney coordination'],
+  },
+  {
+    number: 6,
     label: 'Closing Time',
     icon: Key,
     description:

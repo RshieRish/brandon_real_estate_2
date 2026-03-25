@@ -13,7 +13,7 @@ import {
 
 const socialLinks = [
   { icon: FacebookLogo, label: 'Facebook', href: 'https://www.facebook.com/BrandonSweeneyRealtor' },
-  { icon: InstagramLogo, label: 'Instagram', href: 'https://www.instagram.com/brandonsweeney_realtor' },
+  { icon: InstagramLogo, label: 'Instagram', href: 'https://www.instagram.com/soldwithsweeneyco' },
   { icon: YoutubeLogo, label: 'YouTube', href: 'https://www.youtube.com/@soldwithsweeney' },
   { icon: TiktokLogo, label: 'TikTok', href: 'https://www.tiktok.com/@soldwithsweeney' },
   { icon: LinkedinLogo, label: 'LinkedIn', href: 'https://www.linkedin.com/in/brandon-sweeney-realtor' },
@@ -51,17 +51,10 @@ export default function Footer() {
             <div className="flex items-center gap-3">
               <Image
                 src="/logos/KWRS White.png"
-                alt="Keller Williams Realty"
-                width={100}
-                height={32}
-                className="object-contain h-8 w-auto opacity-70"
-              />
-              <Image
-                src="/logos/Designations-Associations/NEAR.png"
-                alt="NEAR Association"
-                width={56}
-                height={32}
-                className="object-contain h-8 w-auto opacity-70"
+                alt="Keller Williams Realty Success"
+                width={140}
+                height={40}
+                className="object-contain h-10 w-auto opacity-70"
               />
             </div>
           </div>
@@ -80,14 +73,14 @@ export default function Footer() {
                 (978) 212-8069
               </a>
               <a
-                href="mailto:brandon@soldwithsweeney.com"
+                href="mailto:info@soldwithsweeney.com"
                 className="hover:text-gold transition-colors duration-200 break-all"
               >
-                brandon@soldwithsweeney.com
+                info@soldwithsweeney.com
               </a>
             </address>
             <p className="text-xs text-gray/60 mt-2 leading-relaxed">
-              MA Associate Broker #9589032&nbsp;&nbsp;|&nbsp;&nbsp;NH Salesperson #072734
+              Licensed salesperson in MA &amp; NH with Keller Williams Realty Success
             </p>
           </div>
 
@@ -118,7 +111,7 @@ export default function Footer() {
               })}
             </div>
             <p className="text-xs text-gray/60 mt-4 leading-relaxed">
-              SoldWithSweeney.com is operated by Brandon Sweeney, affiliated with Keller Williams Realty. All information deemed reliable but not guaranteed.
+              The Sold With Sweeney &amp; Co. website soldwithsweeney.com is operated by Brandon Sweeney. Powered by Keller Williams Realty Success. All information deemed reliable but not guaranteed.
             </p>
           </div>
         </div>

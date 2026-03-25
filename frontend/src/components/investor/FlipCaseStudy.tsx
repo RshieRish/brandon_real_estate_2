@@ -55,7 +55,7 @@ export default function FlipCaseStudy() {
         <h3 className="text-white font-black text-xl md:text-2xl tracking-tight mb-1">
           50 Cheever Ave
         </h3>
-        <p className="text-white/50 text-sm font-light mb-6">Lawrence, MA &mdash; Completed Flip</p>
+        <p className="text-white/50 text-sm font-light mb-6">Dracut, MA &mdash; Completed Flip</p>
 
         {/* Metrics grid — asymmetric 2+2+2 */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">

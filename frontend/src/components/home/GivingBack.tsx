@@ -70,7 +70,7 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
             {/* Big donation headline */}
             <motion.div variants={fadeUp}>
               <p className="text-white/40 text-sm font-medium tracking-wider uppercase mb-2">
-                Donated to MS Warriors
+                Granted to MS is BS New England, Inc.
               </p>
               <div
                 className="font-black text-gold leading-none tracking-tight mb-6"
@@ -87,9 +87,9 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
               variants={fadeUp}
               className="text-white/60 text-base md:text-lg leading-relaxed font-light mb-10 max-w-lg"
             >
-              Real estate is more than transactions — it&apos;s about community. Brandon donates a
+              Real estate is more than transactions — it&apos;s about community. Brandon grants a
               portion of every closing to&nbsp;
-              <span className="text-gold font-medium">MS is BS New England Inc.</span>, funding research
+              <span className="text-gold font-medium">MS is BS New England, Inc.</span>, funding research
               and support for those living with Multiple Sclerosis.
             </motion.p>
 
@@ -151,7 +151,7 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed mb-6 font-light">
                   Multiple Sclerosis has touched Brandon&apos;s life personally. That&apos;s why he
-                  co-founded MS is BS New England Inc. — a grassroots movement raising awareness and
+                  founded MS is BS New England, Inc. — a grassroots movement raising awareness and
                   funds for MS research, events, and warrior support.
                 </p>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">

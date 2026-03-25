@@ -7,25 +7,25 @@ const TEXT_OVERLAYS = [
     threshold: 0,
     eyebrow: 'CURATED VISION',
     heading: 'Every home has a story',
-    sub: 'Brandon Sweeney helps you write yours.',
+    sub: 'Sold With Sweeney & Co. helps you write yours.',
   },
   {
     threshold: 0.3,
     eyebrow: 'PROVEN STRATEGY',
     heading: 'Market expertise, real results',
-    sub: 'Award-winning negotiation strategy across Massachusetts and New Hampshire.',
+    sub: 'Award-winning negotiation and marketing strategy across Massachusetts and New Hampshire.',
   },
   {
     threshold: 0.6,
-    eyebrow: 'ARCHITECTURE',
-    heading: 'Every detail, rebuilt',
-    sub: 'From foundation to finish — we understand how light, material, and proportion interact.',
+    eyebrow: 'THE DIFFERENCE',
+    heading: 'Not just listed — sold',
+    sub: 'Precision pricing, maximum exposure, and expert negotiation to maximize what you walk away with.',
   },
   {
     threshold: 0.85,
     eyebrow: 'THE NEXT CHAPTER',
     heading: "Ready to make your move?",
-    sub: "Let's assemble the final composition and find your perfect property together.",
+    sub: "Let's curate the winning team and strategy and move you from A to B.",
   },
 ];
 

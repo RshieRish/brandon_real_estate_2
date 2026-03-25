@@ -34,7 +34,7 @@ function RotatingText({
   const currentText = Array.isArray(text) ? text[index] : text
 
   return (
-    <div className={`overflow-hidden py-1 ${containerClassName || ''}`}>
+    <div className={`overflow-hidden py-2 ${containerClassName || ''}`}>
       <AnimatePresence mode="wait">
         <motion.div
           animate={{ opacity: 1, y: 0 }}

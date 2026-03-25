@@ -121,9 +121,9 @@ function HeroSection() {
               {/* Bio detail chips */}
               <motion.div variants={fadeUp} className="flex flex-wrap gap-3 mt-8">
                 {[
-                  { icon: CalendarBlank, label: 'Licensed 2017' },
+                  { icon: CalendarBlank, label: 'Licensed salesperson since 2017' },
                   { icon: Trophy, label: 'REALTOR\u00ae Of The Year 2025' },
-                  { icon: Certificate, label: 'MA #9589032 | NH #072734' },
+                  { icon: Star, label: 'MA & NH Licensed' },
                 ].map(({ icon: Icon, label }) => (
                   <span
                     key={label}
@@ -193,7 +193,7 @@ function HeroSection() {
 // ─── Section: Stats Strip ──────────────────────────────────────────────────────
 
 const stats = [
-  { value: 'Since 2017', label: 'Licensed REALTOR\u00ae' },
+  { value: '100+', label: 'Families Served' },
   { value: '500+', label: 'Transactions Closed' },
   { value: 'Of The Year', label: 'REALTOR\u00ae Award 2025' },
   { value: 'MA & NH', label: 'Licensed States' },
@@ -340,9 +340,8 @@ function BioSection() {
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
                   Brandon grew up in Dracut, MA — deeply embedded in the Merrimack Valley community.
-                  He started his career in sales at 18 and earned his real estate license at 24.
-                  Since 2017, he has held his MA Associate Broker license (#9589032) and NH
-                  Salesperson license (#072734), building a reputation rooted in integrity and
+                  He started his career in sales at 18 and earned his real estate license at 22 in 2017.
+                  Licensed as a salesperson in MA and NH, he has built a reputation rooted in integrity and
                   results.
                 </p>
               </div>
@@ -368,7 +367,7 @@ function BioSection() {
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
                   As CEO of Sold With Sweeney &amp; Co. at Keller Williams Realty Success, Brandon
-                  specializes in residential, investment, and commercial real estate across the
+                  specializes in residential and investment real estate across the
                   Merrimack Valley. His clients trust him for deep market knowledge, direct honest
                   communication, and a commitment to going above and beyond — every single time.
                 </p>
@@ -396,9 +395,9 @@ function BioSection() {
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
                   In 2025, Brandon was named{' '}
                   <span className="text-gold font-medium">NEAR REALTOR&#174; Of The Year</span> —
-                  the highest honor awarded by the New England Association of REALTORS&#174;. He
+                  the highest honor awarded by the Northeast Association of Realtors&#174;. He
                   also serves as the 2025 NEAR President, guiding the direction of real estate
-                  standards and advocacy across New England.
+                  standards and advocacy across Massachusetts.
                 </p>
               </div>
             </motion.div>
@@ -415,7 +414,7 @@ const designations = [
   {
     src: '/logos/Designations-Associations/NEAR.png',
     alt: 'NEAR',
-    label: 'New England Association of REALTORS\u00ae',
+    label: 'Northeast Association of Realtors\u00ae',
   },
   {
     src: '/logos/Designations-Associations/MAR-Logo-Color-VERT-300dpi.png',
@@ -440,8 +439,8 @@ const designations = [
 ];
 
 const awards = [
-  { icon: Trophy, title: '2025 NEAR REALTOR\u00ae Of The Year', sub: 'Highest honor from New England Association of REALTORS\u00ae' },
-  { icon: Star, title: '2025 NEAR President', sub: 'Leading real estate standards across New England' },
+  { icon: Trophy, title: '2025 Northeast Association of Realtors REALTOR\u00ae Of The Year', sub: 'Highest honor awarded by Northeast Association of Realtors' },
+  { icon: Star, title: '2025 NEAR President', sub: 'Guiding real estate standards and advocacy across Massachusetts' },
 ];
 
 function DesignationsSection() {
@@ -512,7 +511,7 @@ function DesignationsSection() {
                   src={src}
                   alt={alt}
                   fill
-                  className="object-contain"
+                  className="object-contain brightness-150 group-hover:brightness-200 transition-all duration-200"
                   sizes="160px"
                 />
               </div>
@@ -632,8 +631,8 @@ function MSisBSSection() {
               variants={fadeUp}
               className="text-white/60 text-base leading-relaxed font-light mb-10"
             >
-              When you close with Brandon, he donates{' '}
-              <span className="text-gold font-semibold">$200 to MS is BS New England</span> — or{' '}
+              When you close with Brandon, he grants{' '}
+              <span className="text-gold font-semibold">$200 to MS is BS New England, Inc.</span> — or{' '}
               <span className="text-gold font-semibold">$100 to a charity of your choice</span>
               . Every transaction becomes part of something bigger.
             </motion.p>

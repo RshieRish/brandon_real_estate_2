@@ -28,7 +28,7 @@ const item = {
 
 const ctaButtons = [
   {
-    label: 'Find My Home',
+    label: 'Buy with Brandon',
     href: '/buy',
     icon: House,
     variant: 'gold',
@@ -121,7 +121,7 @@ export default function Hero() {
                     '你的',       // Chinese
                     'あなたの'    // Japanese
                   ]}
-                  containerClassName="inline-flex items-baseline"
+                  containerClassName="inline-flex items-baseline min-w-[5rem] py-1"
                 />
               </span>
               <br />
@@ -145,7 +145,7 @@ export default function Hero() {
             </motion.p>
 
             {/* CTA buttons */}
-            <motion.div variants={item} className="flex flex-wrap gap-4">
+            <motion.div variants={item} className="flex flex-wrap sm:flex-nowrap gap-4">
               {ctaButtons.map(({ label, href, icon: Icon, variant }) => (
                 <Link key={href} href={href}>
                   <motion.span

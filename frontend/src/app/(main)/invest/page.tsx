@@ -113,10 +113,10 @@ export default function InvestPage() {
             {/* Decorative stat block */}
             <div className="hidden lg:grid grid-cols-2 gap-4">
               {[
-                { label: 'Deals Closed', value: '50+' },
-                { label: 'Avg. Flip ROI', value: '58%' },
+                { label: 'Investors Created', value: '50+' },
                 { label: 'Markets', value: 'MA & NH' },
                 { label: 'Years Active', value: '10+' },
+                { label: 'Avg. Rating', value: '5.0★' },
               ].map((stat) => (
                 <div
                   key={stat.label}
@@ -152,7 +152,7 @@ export default function InvestPage() {
           {/* Section header */}
           <div className="mb-10">
             <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-3">
-              Free Tool
+              Free AI Deal Evaluator
             </p>
             <h2
               className="font-black text-white leading-tight tracking-tight mb-3"
@@ -164,8 +164,7 @@ export default function InvestPage() {
               </span>
             </h2>
             <p className="text-white/50 text-sm font-light max-w-xl">
-              Instantly calculate flip profit, cash-on-cash return, cap rate, and more. Enter your
-              deal numbers and unlock your full analysis in seconds.
+              Run the numbers in seconds using our AI analyzer. Calculate flip profit, cash-on-cash return, cap rate, and more. AI-assisted estimates — not a formal appraisal.
             </p>
           </div>
 
@@ -264,7 +263,7 @@ export default function InvestPage() {
             Ready to Find Your Next Deal?
           </h2>
           <p className="text-white/60 text-base font-light leading-relaxed mb-10 max-w-xl mx-auto">
-            Schedule a free investor review call with Brandon. Bring your deal — he will help you
+            Schedule a free investor strategy call with Brandon. Bring your deal — he will help you
             run the numbers, validate your strategy, and move fast.
           </p>
 

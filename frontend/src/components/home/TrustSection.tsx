@@ -77,7 +77,7 @@ export default function TrustSection({
   const inView = useInView(sectionRef, { once: true, margin: '-100px' });
 
   const dynStats = [
-    { label: 'Volume Done', value: parseFloat(volumeDone.replace(/[^0-9.]/g, '')), suffix: 'M+', decimals: 0, prefix: '$', progress: false },
+    { label: 'Real Estate Sold', value: parseFloat(volumeDone.replace(/[^0-9.]/g, '')), suffix: 'M+', decimals: 0, prefix: '$', progress: false },
     { label: 'Families Served', value: parseFloat(familiesServed.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
     { label: 'Years in Business', value: parseFloat(yearsInBusiness.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
   ];
@@ -115,7 +115,7 @@ export default function TrustSection({
             className="font-black text-white tracking-tight"
             style={{ fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}
           >
-            The Numbers Speak
+            The Numbers Speak For Themselves
           </h2>
         </motion.div>
 
@@ -215,7 +215,7 @@ export default function TrustSection({
             {designations.map(({ src, alt }) => (
               <div
                 key={src}
-                className="relative h-12 w-auto flex items-center justify-center opacity-50 hover:opacity-80 transition-opacity duration-200"
+                className="relative h-12 w-auto flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity duration-200"
               >
                 <Image
                   src={src}

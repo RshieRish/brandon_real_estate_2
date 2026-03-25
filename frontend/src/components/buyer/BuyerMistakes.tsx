@@ -30,14 +30,14 @@ const MISTAKES: Mistake[] = [
     mistake: 'Buying with the listing agent',
     mistakeDetail:
       'The listing agent\'s fiduciary duty is to the seller — not you. Working without your own representation means you\'re negotiating against someone whose job is to get the seller the highest price.',
-    fix: 'Always have a dedicated buyer\'s agent representing your interests. Brandon provides exclusive buyer representation at no cost to you in most transactions — the seller pays the commission.',
+    fix: 'Always have a dedicated buyer\'s agent representing your interests. Brandon provides exclusive buyer representation where his sole job is to get you the home for the best price with the best terms for you.',
   },
   {
     id: 4,
-    mistake: 'Not comparing multiple lenders',
+    mistake: 'Picking a lender based on rate alone',
     mistakeDetail:
-      'Accepting the first mortgage offer without shopping around can cost you tens of thousands over the life of the loan. Even a 0.25% rate difference makes a significant impact.',
-    fix: 'Get quotes from at least 3 lenders before committing. Compare rates, fees, and loan products. Brandon has a network of trusted lenders who compete for your business.',
+      'Rates are similar across lenders — but customer service, communication, and ability to close on time are not. A lender who goes dark or misses a deadline can cost you the deal entirely.',
+    fix: 'Choose a lender with a proven track record: fast communication, deep knowledge, and the ability to close on time. Brandon works with trusted local lenders who guide you through every step and fight for your timeline.',
   },
 ];
 
