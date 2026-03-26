@@ -89,49 +89,46 @@ export default function SellPage() {
 
         <div className="relative z-10 w-full max-w-7xl mx-auto px-6 md:px-12 pt-24 pb-32">
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-16 items-center">
-          <div className="max-w-3xl">
-            {/* Eyebrow */}
-            <div className="mb-6">
-              <span className="inline-block glass border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-4 py-2">
-                For Sellers
-              </span>
-            </div>
+            <div className="max-w-3xl">
+              {/* Eyebrow */}
+              <div className="mb-6">
+                <span className="inline-block glass border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-4 py-2">
+                  For Sellers
+                </span>
+              </div>
 
-            {/* H1 */}
-            <h1
-              className="font-black text-white leading-[0.95] tracking-tight mb-6"
-              style={{ fontSize: 'clamp(2.8rem, 7vw, 5.5rem)' }}
-            >
-              Sell With{' '}
-              <span
-                className="text-gold relative"
-                style={{ textShadow: '0 0 50px rgba(234,196,105,0.35)' }}
+              {/* H1 */}
+              <h1
+                className="font-black text-white leading-[0.95] tracking-tight mb-6"
+                style={{ fontSize: 'clamp(2.8rem, 7vw, 5.5rem)' }}
               >
-                Peace of Mind
-              </span>
-            </h1>
+                Sell With{' '}
+                <span
+                  className="text-gold relative"
+                  style={{ textShadow: '0 0 50px rgba(234,196,105,0.35)' }}
+                >
+                  Peace of Mind
+                </span>
+              </h1>
 
-            {/* Subtext */}
-            <p className="text-white/70 text-base md:text-lg leading-relaxed mb-10 max-w-2xl font-light">
-              Brandon Sweeney combines cutting-edge marketing, expert negotiation, and white-glove
-              service to get your home sold fast — and for top dollar. Start with a free,
-              AI-powered home valuation below.
-            </p>
+              {/* Subtext */}
+              <p className="text-white/70 text-base md:text-lg leading-relaxed mb-10 max-w-2xl font-light">
+                Brandon Sweeney combines cutting-edge marketing, expert negotiation, and white-glove
+                service to get your home sold fast — and for top dollar. Start with a free,
+                AI-powered home valuation below.
+              </p>
 
-            {/* CTA */}
-            <div className="flex flex-wrap gap-4 items-center">
-              <CTAButton href="#evaluator" variant="gold">
-                Get Your Free Home Estimate
-                <ArrowDown weight="bold" className="w-4 h-4" />
-              </CTAButton>
-              <CTAButton href="tel:9789872806" external variant="outline">
-                Call Brandon Directly
-              </CTAButton>
+              {/* CTA */}
+              <div className="flex flex-wrap gap-4 items-center">
+                <CTAButton href="#evaluator" variant="gold">
+                  Get Your Free Home Estimate
+                  <ArrowDown weight="bold" className="w-4 h-4" />
+                </CTAButton>
+                <CTAButton href="tel:9789872806" external variant="outline">
+                  Call Brandon Directly
+                </CTAButton>
+              </div>
             </div>
-          </div>
-        </div>
-
-          </div>
 
             {/* Right accent stat block */}
             <div className="hidden lg:flex flex-col gap-1 border border-gold/20 bg-dark-card/60 backdrop-blur-sm p-8 min-w-[220px]">
@@ -149,6 +146,7 @@ export default function SellPage() {
               </div>
             </div>
           </div>
+        </div>
 
         {/* Scroll nudge */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2 pointer-events-none">
