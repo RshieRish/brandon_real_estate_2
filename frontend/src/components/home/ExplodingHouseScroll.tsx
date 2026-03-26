@@ -59,28 +59,31 @@ export default function ExplodingHouseScroll() {
   const smoothProgressRef = useRef(0);
   const rafRef = useRef<number>(0);
   const currentOverlayIdxRef = useRef(0);
+  // Mobile flag — set once on mount; avoids scrubbing on iOS where preload is blocked
+  const isMobileRef = useRef(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // iOS Safari requires play() before currentTime seeking is unlocked
-    const unlockVideo = async () => {
-      const fwd = forwardVideoRef.current;
-      if (!fwd) return;
-      try {
-        await fwd.play();
-        fwd.pause();
-      } catch {
-        // Autoplay blocked — scrubbing still attempted
-      }
-    };
-    const fwdEl = forwardVideoRef.current;
-    if (fwdEl) {
-      if (fwdEl.readyState >= 2) {
-        unlockVideo();
+    // Detect mobile (iOS/Android) — these browsers block video preload,
+    // making currentTime scrubbing show a black frame. Fall back to autoplay loop.
+    isMobileRef.current = window.innerWidth < 768 ||
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+    const fwd = forwardVideoRef.current;
+    if (fwd) {
+      if (isMobileRef.current) {
+        // Mobile: play the animation as a looping autoplay video
+        fwd.loop = true;
+        fwd.play().catch(() => {});
       } else {
-        fwdEl.addEventListener('loadeddata', unlockVideo, { once: true });
+        // Desktop: unlock seeking with play+pause so currentTime scrubbing works
+        const unlockScrub = async () => {
+          try { await fwd.play(); fwd.pause(); } catch { /* blocked */ }
+        };
+        if (fwd.readyState >= 2) unlockScrub();
+        else fwd.addEventListener('loadeddata', unlockScrub, { once: true });
       }
     }
 
@@ -157,22 +160,19 @@ export default function ExplodingHouseScroll() {
 
       smoothProgressRef.current = current;
 
-      // Scrub the active video — Forward then backwards to create a perfect loop
-      const fwd = forwardVideoRef.current;
-
-      if (fwd && fwd.duration) {
-        let t;
-        if (current <= 0.5) {
-          // Explode (0 to duration)
-          t = Math.min((current / 0.5), 1) * fwd.duration;
-        } else {
-          // Reassemble (duration back to 0)
-          t = Math.max((1 - current) / 0.5, 0) * fwd.duration;
-        }
-        
-        // Only seek if the change is meaningful (> ~1 frame at 24fps)
-        if (Math.abs(fwd.currentTime - t) > 0.02) {
-          fwd.currentTime = t;
+      // Scrub the active video — desktop only (mobile uses autoplay loop)
+      if (!isMobileRef.current) {
+        const fwd = forwardVideoRef.current;
+        if (fwd && fwd.duration) {
+          let t;
+          if (current <= 0.5) {
+            t = Math.min((current / 0.5), 1) * fwd.duration;
+          } else {
+            t = Math.max((1 - current) / 0.5, 0) * fwd.duration;
+          }
+          if (Math.abs(fwd.currentTime - t) > 0.02) {
+            fwd.currentTime = t;
+          }
         }
       }
 
