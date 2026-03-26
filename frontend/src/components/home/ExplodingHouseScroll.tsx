@@ -64,6 +64,26 @@ export default function ExplodingHouseScroll() {
     const container = containerRef.current;
     if (!container) return;
 
+    // iOS Safari requires play() before currentTime seeking is unlocked
+    const unlockVideo = async () => {
+      const fwd = forwardVideoRef.current;
+      if (!fwd) return;
+      try {
+        await fwd.play();
+        fwd.pause();
+      } catch {
+        // Autoplay blocked — scrubbing still attempted
+      }
+    };
+    const fwdEl = forwardVideoRef.current;
+    if (fwdEl) {
+      if (fwdEl.readyState >= 2) {
+        unlockVideo();
+      } else {
+        fwdEl.addEventListener('loadeddata', unlockVideo, { once: true });
+      }
+    }
+
     // Manual scroll progress calculation — avoids Framer Motion's overhead
     const computeProgress = () => {
       const rect = container.getBoundingClientRect();
@@ -176,6 +196,7 @@ export default function ExplodingHouseScroll() {
       <div className="sticky top-0 min-h-[100dvh] overflow-hidden bg-[#0a0a0a]">
 
         {/* Scroll scrub timeline: 0-50% Explodes, 50-100% Reassembles perfectly backwards */}
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
         <video
           ref={forwardVideoRef}
           className="absolute inset-0 w-full h-full object-cover"
@@ -183,6 +204,7 @@ export default function ExplodingHouseScroll() {
           muted
           playsInline
           preload="auto"
+          x-webkit-airplay="deny"
           aria-hidden="true"
         />
 

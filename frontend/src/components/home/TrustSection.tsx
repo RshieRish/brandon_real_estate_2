@@ -77,7 +77,7 @@ export default function TrustSection({
   const inView = useInView(sectionRef, { once: true, margin: '-100px' });
 
   const dynStats = [
-    { label: 'Real Estate Sold', value: parseFloat(volumeDone.replace(/[^0-9.]/g, '')), suffix: 'M+', decimals: 0, prefix: '$', progress: false },
+    { label: 'Real Estate Sold', value: parseFloat(volumeDone.replace(/[^0-9.]/g, '')), suffix: '', decimals: 0, prefix: '$', progress: false },
     { label: 'Families Served', value: parseFloat(familiesServed.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
     { label: 'Years in Business', value: parseFloat(yearsInBusiness.replace(/[^0-9.]/g, '')), suffix: '+', decimals: 0, prefix: '', progress: false },
   ];
@@ -134,7 +134,7 @@ export default function TrustSection({
             >
               <div
                 className="text-gold font-black leading-none"
-                style={{ fontSize: 'clamp(2.5rem, 5vw, 4rem)' }}
+                style={{ fontSize: 'clamp(1.6rem, 3.5vw, 3rem)' }}
               >
                 <AnimatedNumber target={stat.value} suffix={stat.suffix} prefix={stat.prefix} decimals={stat.decimals} />
               </div>
