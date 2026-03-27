@@ -226,7 +226,7 @@ export default function ExplodingHouseScroll() {
         >
           <div
             ref={textBlockRef}
-            className="w-[85%] max-w-[280px] md:max-w-[320px] mx-auto bg-[#0a0a0a]/30 backdrop-blur-md border border-white/10 shadow-2xl rounded-[2.5rem] py-16 px-8 md:py-20 md:px-10 flex flex-col items-center justify-center text-center"
+            className="w-[90%] max-w-[360px] md:max-w-[420px] mx-auto bg-[#0a0a0a]/40 backdrop-blur-md border border-white/10 shadow-2xl rounded-[2.5rem] py-14 px-8 md:py-16 md:px-12 flex flex-col items-center justify-center text-center"
             style={{
               transition: 'opacity 0.25s ease-out, transform 0.25s ease-out',
               opacity: 1,
@@ -235,17 +235,18 @@ export default function ExplodingHouseScroll() {
           >
             <p
               ref={eyebrowRef}
-              className="text-gold text-[0.6rem] md:text-[0.65rem] font-semibold tracking-[0.35em] md:tracking-[0.4em] uppercase mb-8"
+              className="text-gold text-[0.7rem] md:text-[0.75rem] font-semibold tracking-[0.3em] uppercase mb-5"
             >
               {TEXT_OVERLAYS[0].eyebrow}
             </p>
             <h2
               ref={headingRef}
-              className="font-black text-white text-3xl md:text-4xl leading-[1.1] tracking-tight mb-8"
+              className="font-black text-white text-3xl md:text-[2.6rem] leading-[1.1] tracking-tight mb-5"
+              style={{ textShadow: '0 2px 16px rgba(0,0,0,0.6)' }}
             >
               {TEXT_OVERLAYS[0].heading}
             </h2>
-            <p ref={subRef} className="text-white/70 text-xs md:text-sm leading-relaxed font-light">
+            <p ref={subRef} className="text-white/80 text-sm md:text-base leading-relaxed font-light">
               {TEXT_OVERLAYS[0].sub}
             </p>
           </div>

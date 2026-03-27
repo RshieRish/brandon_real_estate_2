@@ -12,11 +12,11 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 
 const socialLinks = [
-  { icon: FacebookLogo, label: 'Facebook', href: 'https://www.facebook.com/BrandonSweeneyRealtor' },
+  { icon: FacebookLogo, label: 'Facebook', href: 'https://www.facebook.com/SoldWithSweeneyCo' },
   { icon: InstagramLogo, label: 'Instagram', href: 'https://www.instagram.com/soldwithsweeneyco' },
-  { icon: YoutubeLogo, label: 'YouTube', href: 'https://www.youtube.com/@soldwithsweeney' },
-  { icon: TiktokLogo, label: 'TikTok', href: 'https://www.tiktok.com/@soldwithsweeney' },
-  { icon: LinkedinLogo, label: 'LinkedIn', href: 'https://www.linkedin.com/in/brandon-sweeney-realtor' },
+  { icon: YoutubeLogo, label: 'YouTube', href: 'https://www.youtube.com/@soldwithsweeneyco' },
+  { icon: TiktokLogo, label: 'TikTok', href: 'https://www.tiktok.com/@soldwithsweeneyco' },
+  { icon: LinkedinLogo, label: 'LinkedIn', href: 'https://www.linkedin.com/in/soldwithsweeneyco/' },
 ];
 
 const legalLinks = [
@@ -65,12 +65,20 @@ export default function Footer() {
               Contact
             </h3>
             <address className="not-italic flex flex-col gap-3 text-sm text-gray leading-relaxed">
-              <span>Keller Williams Realty<br />594 Marston St, Lowell, MA 01852</span>
+              <span className="font-semibold text-white/70">Keller Williams Realty Success</span>
+              <span>Satellite: 101 Broadway Rd #21, Dracut, MA 01826</span>
+              <span>Main: 138 River Rd, Andover, MA 01810</span>
               <a
-                href="tel:+19782128069"
+                href="tel:+19784752111"
                 className="hover:text-gold transition-colors duration-200"
               >
-                (978) 212-8069
+                Office: (978) 475-2111
+              </a>
+              <a
+                href="tel:+19789872806"
+                className="hover:text-gold transition-colors duration-200"
+              >
+                Cell: (978) 987-2806
               </a>
               <a
                 href="mailto:info@soldwithsweeney.com"

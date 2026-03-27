@@ -24,6 +24,18 @@
 ## Known Issues
 - None
 
+## Chatbot Architecture
+- Chat widget is mounted globally from `frontend/src/components/layout/ClientWidgets.tsx`, so it appears across public pages.
+- `backend/routers/chat.py` now returns structured chat payloads: `text`, `actions[]`, `widget`, plus backward-compatible `response`.
+- `backend/services/gemini.py` instructs Gemini to return JSON and normalizes assistant actions into three allowed types: `send_message`, `navigate`, and `open_widget`.
+- Legacy booking tags like `[BOOK_MEETING]` still work as a fallback and are normalized into `widget: 'calendar_picker'`.
+- `frontend/src/hooks/useChat.ts` normalizes the structured API payload, preserves legacy booking fallback, and stores `actions` on assistant messages.
+- `frontend/src/components/chat/ChatPanel.tsx` renders assistant messages as text bubbles with premium action buttons underneath and conditionally mounts `CalendarPickerCard` below a message when `widget === 'calendar_picker'`.
+- `frontend/src/components/chat/CalendarPickerCard.tsx` remains the inline booking widget used by both direct widget replies and action-button triggered booking flows.
+- `/api/v1/chat/lead` exists, but the current chat frontend does not submit lead capture there.
+- Current allowed navigate destinations are `/buy`, `/sell`, `/invest`, and `/about`.
+- Generative UI is still best treated as a later-stage extension for multiple rich widget types; the implemented server-driven structured actions are the safer current fit.
+
 ## Buyer Components
 - `MonopolyJourney`: 3-phase accordion — Phase 1 (DeviceMobile), Phase 2 (HeartStraight), Phase 3 (House); CaretDown toggle; AnimatePresence open/close
 - `BuyerMistakes`: 4-card 2-col grid; XCircle (red-400) for mistake, CheckCircle (gold) for fix
@@ -50,4 +62,5 @@
 
 ## Last Session Context
 - 2026-03-23: Fixed Railway Railpack/Caddy detection bug by adding root `railway.json` and modifying `backend/Dockerfile` for root context. Fixed missing phase images by force-adding to git. Verified backend health success.
-- Next: Final E2E verification once user updates Vercel API URL.
+- 2026-03-27: Analyzed chatbot flow, then implemented structured assistant actions/buttons in the chatbot with browser-verified action rendering and booking-widget launch.
+- Next: If requested, extend the action system with lead-capture prompts, richer analytics events, or additional widget types beyond booking.

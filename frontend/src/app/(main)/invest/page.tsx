@@ -95,7 +95,8 @@ export default function InvestPage() {
               <p className="text-white/70 text-base md:text-lg leading-relaxed mb-10 max-w-2xl font-light">
                 Brandon Sweeney helps investors analyze deals, identify high-return properties, and
                 execute smart strategies across Massachusetts and New Hampshire. Flip, rent, or
-                BRRRR — run the numbers in seconds below.
+                BRRRR — run the numbers in seconds below. Start with a{' '}
+                <span className="text-gold font-semibold">FREE AI DEAL EVALUATOR</span> below.
               </p>
 
               {/* CTAs */}
@@ -150,20 +151,22 @@ export default function InvestPage() {
 
         <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12">
           {/* Section header */}
-          <div className="mb-10">
-            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-3">
-              Free AI Deal Evaluator
-            </p>
-            <h2
-              className="font-black text-white leading-tight tracking-tight mb-3"
-              style={{ fontSize: 'clamp(1.8rem, 3.5vw, 3rem)' }}
-            >
-              Deal{' '}
-              <span className="text-gold" style={{ textShadow: '0 0 28px rgba(234,196,105,0.25)' }}>
-                Analyzer
-              </span>
-            </h2>
-            <p className="text-white/50 text-sm font-light max-w-xl">
+          <div className="mb-10 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+            <div>
+              <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-3">
+                Free AI Deal Evaluator
+              </p>
+              <h2
+                className="font-black text-white leading-tight tracking-tight"
+                style={{ fontSize: 'clamp(1.8rem, 3.5vw, 3rem)' }}
+              >
+                Deal{' '}
+                <span className="text-gold" style={{ textShadow: '0 0 28px rgba(234,196,105,0.25)' }}>
+                  Analyzer
+                </span>
+              </h2>
+            </div>
+            <p className="text-white/50 text-sm font-light max-w-sm md:text-right">
               Run the numbers in seconds using our AI analyzer. Calculate flip profit, cash-on-cash return, cap rate, and more. AI-assisted estimates — not a formal appraisal.
             </p>
           </div>

@@ -87,7 +87,7 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
               variants={fadeUp}
               className="text-white/60 text-base md:text-lg leading-relaxed font-light mb-10 max-w-lg"
             >
-              Real estate is more than transactions — it&apos;s about community. Brandon grants a
+              Real estate is more than transactions — it&apos;s about community. Brandon donates a
               portion of every closing to&nbsp;
               <span className="text-gold font-medium">MS is BS New England, Inc.</span>, funding research
               and support for those living with Multiple Sclerosis.

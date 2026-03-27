@@ -3,7 +3,8 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Robot, X, PaperPlaneTilt, CalendarBlank } from '@phosphor-icons/react';
-import { useChat } from '@/hooks/useChat';
+import { useRouter } from 'next/navigation';
+import { useChat, type ChatAction } from '@/hooks/useChat';
 import { useState } from 'react';
 import CalendarPickerCard from './CalendarPickerCard';
 
@@ -21,6 +22,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
   const { messages, isLoading, error, sendMessage, triggerBooking, addMessage } = useChat();
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -50,6 +52,31 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
 
   const handleBookingComplete = (summary: string) => {
     addMessage('assistant', summary);
+  };
+
+  const handleActionClick = (action: ChatAction) => {
+    if (isLoading) return;
+
+    if (action.type === 'send_message') {
+      sendMessage(action.message ?? action.label);
+      return;
+    }
+
+    if (action.type === 'navigate' && action.href) {
+      router.push(action.href);
+      onClose();
+      return;
+    }
+
+    if (action.type === 'open_widget' && action.widget === 'calendar_picker') {
+      triggerBooking("Let me pull up Brandon's availability for you!");
+    }
+  };
+
+  const getActionEyebrow = (action: ChatAction) => {
+    if (action.type === 'navigate') return 'Explore';
+    if (action.type === 'open_widget') return 'Schedule';
+    return 'Continue';
   };
 
   return (
@@ -128,10 +155,39 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
                         ? 'bg-gold text-[#0a0a0a] font-medium'
                         : 'bg-dark-card border border-dark-border text-white/80'
                     }`}
+                    style={{ whiteSpace: 'pre-wrap' }}
                   >
                     {msg.content}
                   </div>
                 </div>
+                {msg.role === 'assistant' && msg.actions && msg.actions.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
+                    className="mt-2 flex max-w-[88%] flex-wrap gap-2"
+                  >
+                    {msg.actions.map((action, index) => (
+                      <motion.button
+                        key={`${msg.id}-${action.type}-${action.label}-${index}`}
+                        whileHover={{ y: -2 }}
+                        whileTap={{ scale: 0.98 }}
+                        transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
+                        onClick={() => handleActionClick(action)}
+                        disabled={isLoading}
+                        className="group relative min-w-[140px] flex-1 overflow-hidden rounded-2xl border border-gold/20 bg-[linear-gradient(135deg,rgba(234,196,105,0.16),rgba(255,255,255,0.03))] px-3 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition-all duration-300 hover:border-gold/50 hover:bg-[linear-gradient(135deg,rgba(234,196,105,0.24),rgba(255,255,255,0.06))] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.14),transparent_48%)] opacity-80" />
+                        <span className="relative block text-[9px] uppercase tracking-[0.24em] text-gold/60">
+                          {getActionEyebrow(action)}
+                        </span>
+                        <span className="relative mt-1 block text-sm font-medium leading-snug text-white/90 group-hover:text-white">
+                          {action.label}
+                        </span>
+                      </motion.button>
+                    ))}
+                  </motion.div>
+                )}
                 {/* Render CalendarPickerCard inline after the message */}
                 {msg.widget === 'calendar_picker' && (
                   <div className="mt-2">

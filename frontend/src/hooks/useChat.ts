@@ -3,12 +3,30 @@ import { useState, useCallback, useRef } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
+export type ChatWidget = 'calendar_picker';
+
+export interface ChatAction {
+  type: 'send_message' | 'navigate' | 'open_widget';
+  label: string;
+  message?: string;
+  href?: string;
+  widget?: ChatWidget;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  widget?: 'calendar_picker';
+  actions?: ChatAction[];
+  widget?: ChatWidget;
+}
+
+interface ChatApiResponse {
+  text?: string;
+  response?: string;
+  actions?: unknown;
+  widget?: unknown;
 }
 
 // Patterns that indicate the AI wants to trigger booking
@@ -30,12 +48,80 @@ function cleanBookingTrigger(text: string): string {
   return cleaned;
 }
 
+function normalizeWidget(value: unknown): ChatWidget | undefined {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized === 'calendar_picker' || normalized === 'calendar' || normalized === 'booking') {
+    return 'calendar_picker';
+  }
+  return undefined;
+}
+
+function normalizeAction(value: unknown): ChatAction | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const action = value as Record<string, unknown>;
+  const type = typeof action.type === 'string' ? action.type : '';
+  const label = typeof action.label === 'string' ? action.label.trim() : '';
+
+  if (!label) {
+    return null;
+  }
+
+  if (type === 'send_message') {
+    const message = typeof action.message === 'string' ? action.message.trim() : '';
+    if (!message) {
+      return null;
+    }
+    return { type, label, message };
+  }
+
+  if (type === 'navigate') {
+    const href = typeof action.href === 'string' ? action.href.trim() : '';
+    if (!href) {
+      return null;
+    }
+    return { type, label, href };
+  }
+
+  if (type === 'open_widget') {
+    const widget = normalizeWidget(action.widget);
+    if (!widget) {
+      return null;
+    }
+    return { type, label, widget };
+  }
+
+  return null;
+}
+
+function normalizeAssistantPayload(data: ChatApiResponse): Pick<Message, 'content' | 'actions' | 'widget'> {
+  const rawText = typeof data.text === 'string'
+    ? data.text
+    : typeof data.response === 'string'
+      ? data.response
+      : 'Sorry, I could not process that.';
+
+  const hasBookingTrigger = detectBookingTrigger(rawText);
+  const cleanedContent = hasBookingTrigger ? cleanBookingTrigger(rawText) : rawText.trim();
+  const normalizedActions = Array.isArray(data.actions)
+    ? data.actions.map(normalizeAction).filter((action): action is ChatAction => action !== null)
+    : [];
+  const widget = normalizeWidget(data.widget) ?? (hasBookingTrigger ? 'calendar_picker' : undefined);
+
+  return {
+    content: cleanedContent || (widget === 'calendar_picker' ? "Let me pull up Brandon's availability for you!" : 'Sorry, I could not process that.'),
+    actions: normalizedActions,
+    widget,
+  };
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showBooking, setShowBooking] = useState(false);
 
   const sendMessage = useCallback(async (content: string) => {
     const userMsg: Message = {
@@ -64,27 +150,20 @@ export function useChat() {
       });
 
       if (!res.ok) throw new Error('Failed to get response');
-      const data = await res.json();
-      const rawResponse = data?.response ?? 'Sorry, I could not process that.';
-
-      // Check if the AI wants to trigger booking
-      const hasBookingTrigger = detectBookingTrigger(rawResponse);
-      const cleanedContent = hasBookingTrigger ? cleanBookingTrigger(rawResponse) : rawResponse;
+      const data = await res.json() as ChatApiResponse;
+      const assistantPayload = normalizeAssistantPayload(data);
 
       const assistantMsg: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: cleanedContent,
+        content: assistantPayload.content,
         timestamp: new Date(),
-        widget: hasBookingTrigger ? 'calendar_picker' : undefined,
+        actions: assistantPayload.actions,
+        widget: assistantPayload.widget,
       };
       const withAssistant = [...messagesRef.current, assistantMsg];
       messagesRef.current = withAssistant;
       setMessages(withAssistant);
-
-      if (hasBookingTrigger) {
-        setShowBooking(true);
-      }
     } catch {
       setError('Unable to connect. Please try again.');
     } finally {
@@ -92,12 +171,11 @@ export function useChat() {
     }
   }, []);
 
-  const triggerBooking = useCallback(() => {
-    setShowBooking(true);
+  const triggerBooking = useCallback((content = "Let me pull up Brandon's availability for you!") => {
     const bookingMsg: Message = {
       id: crypto.randomUUID(),
       role: 'assistant',
-      content: "Let me pull up Brandon's availability for you!",
+      content,
       timestamp: new Date(),
       widget: 'calendar_picker',
     };
@@ -121,8 +199,7 @@ export function useChat() {
   const clearMessages = useCallback(() => {
     messagesRef.current = [];
     setMessages([]);
-    setShowBooking(false);
   }, []);
 
-  return { messages, isLoading, error, sendMessage, clearMessages, showBooking, triggerBooking, addMessage };
+  return { messages, isLoading, error, sendMessage, clearMessages, triggerBooking, addMessage };
 }

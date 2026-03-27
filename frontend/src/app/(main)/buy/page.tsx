@@ -178,12 +178,22 @@ export default function BuyPage() {
             </p>
           </div>
 
-          {/* Pill tags — wrapping flex */}
-          <div className="flex flex-wrap gap-3">
-            {TEAM_MEMBERS.map((member) => (
+          {/* Team grid: 4 on first row, 3 on second row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {TEAM_MEMBERS.slice(0, 4).map((member) => (
               <span
                 key={member}
-                className="inline-flex items-center px-5 py-2.5 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200"
+                className="flex items-center justify-center text-center px-4 py-4 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200 min-h-[64px]"
+              >
+                {member}
+              </span>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-3 mt-3">
+            {TEAM_MEMBERS.slice(4).map((member) => (
+              <span
+                key={member}
+                className="flex items-center justify-center text-center px-4 py-4 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200 min-h-[64px]"
               >
                 {member}
               </span>

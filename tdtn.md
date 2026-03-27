@@ -1,7 +1,7 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-03-20
+Last Updated: 2026-03-27
 
 ### 2026-03-19 — Project Initialized
 - What was built: Git repo, project config files (claude.md, tdtn.md, memory.md, .gitignore, .env.example)
@@ -57,6 +57,43 @@ Last Updated: 2026-03-20
   - `railway.json`: Created at root to force Docker builder and bypass Railpack/Caddy detection.
 - Force-added: `frontend/public/frames/phase-1-swiping.jpg`, `phase-2-touring.jpg`, `phase-3-keys.jpg` (previously gitignored).
 - Key decisions: Using explicit `railway.json` to force Docker; switched to dynamic `$PORT` for Railway edge routing; enabled `PYTHONUNBUFFERED=1` for live logs.
+- Status: Complete
+
+### 2026-03-27 — Chatbot Architecture Analysis
+- What was analyzed: End-to-end chatbot flow across frontend widget, React chat state, FastAPI chat router, Gemini service, and inline booking widget behavior.
+- Files reviewed: `frontend/src/components/layout/ClientWidgets.tsx`, `frontend/src/components/chat/ChatWidget.tsx`, `frontend/src/components/chat/ChatPanel.tsx`, `frontend/src/components/chat/CalendarPickerCard.tsx`, `frontend/src/hooks/useChat.ts`, `backend/routers/chat.py`, `backend/services/gemini.py`, `backend/routers/booking.py`
+- Key findings:
+  - Chat is mounted site-wide via `ClientWidgets` and is entirely client-side on the frontend.
+  - Backend chat API currently returns only `{ response: string }`; there is no structured UI payload.
+  - Frontend only upgrades one special case today: booking tags like `[BOOK_MEETING]` are stripped from text and converted into the inline `CalendarPickerCard`.
+  - Assistant message bubbles render plain text only; there is no support for per-message actions, chips, cards, or routed CTAs.
+  - `/api/v1/chat/lead` exists for chatbot lead capture, but the current frontend does not call it.
+  - `showBooking` state exists in `useChat` but is not used by the rendered UI beyond being toggled.
+- Recommendation:
+  - Best next step is a structured assistant response contract such as `text + actions + widget`, then render actions as buttons in the chat bubble.
+  - Avoid heuristic parsing of plain prose into buttons.
+  - Full free-form generative UI is not the best first move for the current buy/sell/invest/book flows; a bounded server-driven UI layer is lower risk and fits the current architecture better.
+- Status: Complete — analysis only, no product code changed
+
+### 2026-03-27 — Chatbot Structured Actions Upgrade
+- What was built: Replaced the plain-text-only chatbot contract with a structured assistant payload supporting `text`, `actions[]`, and `widget`, then rendered those actions as premium in-chat buttons.
+- Files modified:
+  - `backend/services/gemini.py`: Updated chatbot instructions to return JSON, added structured response parsing, action normalization, widget normalization, legacy booking-tag fallback, and discovery-action fallback logic.
+  - `backend/routers/chat.py`: Expanded chat API response model to include `text`, `actions`, `widget`, and backward-compatible `response`.
+  - `frontend/src/hooks/useChat.ts`: Added frontend action/widget types, normalized structured API payloads, preserved legacy booking-tag fallback, and attached actions to assistant messages.
+  - `frontend/src/components/chat/ChatPanel.tsx`: Rendered assistant actions as glassmorphism buttons, added action click handling for chat replies, page navigation, and booking widget launch.
+- UX behavior now supported:
+  - AI can return tappable `send_message` actions that continue the conversation.
+  - AI can return `navigate` actions to `/buy`, `/sell`, `/invest`, and `/about`.
+  - AI can return `open_widget` or top-level `widget` instructions for the inline booking calendar.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - `backend`: `python -m py_compile backend/routers/chat.py backend/services/gemini.py` passed.
+  - API smoke test: `POST /api/v1/chat/` returned structured actions for “What can you help me with?”
+  - Browser test: Opened chat on `http://localhost:3000`, sent “What can you help me with?”, confirmed four rendered action buttons, clicked `Buy a home`, confirmed follow-up response with new actions, clicked `Book a call`, confirmed inline calendar widget opened.
+  - Screenshots captured: `chat-structured-actions.png`, `chat-action-booking-widget.png`
+- Known verification note:
+  - `npm run lint` still fails on a pre-existing unrelated error in `frontend/src/components/shared/RotatingText.tsx` (`no-explicit-any`) plus several unrelated warnings.
 - Status: Complete
 
 *Claude Code: Update this file after completing every task.*

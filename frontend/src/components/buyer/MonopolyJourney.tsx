@@ -19,7 +19,7 @@ const PHASES: Phase[] = [
     label: 'Phase 1',
     title: 'The Swiping Phase',
     description:
-      'Before you start scrolling Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
+      'Before you start swiping Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
     steps: [
       'Pre-Approval for Budget',
       'Meet with Your REALTOR\u00ae',

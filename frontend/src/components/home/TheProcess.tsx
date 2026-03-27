@@ -10,7 +10,7 @@ const phases = [
     id: 'phase-1',
     title: 'Phase 1',
     subtitle: 'The Swiping Phase',
-    description: 'Before you start scrolling Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
+    description: 'Before you start swiping Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
     bullets: [
       'Pre-Approval for Budget',
       'Meet with Your REALTOR®',

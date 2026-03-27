@@ -96,7 +96,7 @@ export default function InstagramFeed({ posts = [] }: { posts?: InstagramPost[] 
             Load More
           </a>
           <a
-            href="https://instagram.com/brandonsweeney_realtor"
+            href="https://www.instagram.com/soldwithsweeneyco"
             target="_blank"
             rel="noopener noreferrer"
             className="w-full sm:w-auto flex items-center justify-center gap-2.5 px-8 py-3.5 bg-black text-white font-semibold text-xs md:text-sm tracking-widest uppercase border border-dark-border hover:border-white/30 transition-colors duration-200 rounded-sm"
