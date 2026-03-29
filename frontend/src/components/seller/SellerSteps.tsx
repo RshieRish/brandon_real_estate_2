@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef } from 'react';
-import { motion, useInView } from 'framer-motion';
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   MagnifyingGlass,
   Camera,
@@ -9,79 +9,82 @@ import {
   Handshake,
   ClipboardText,
   Key,
+  CaretDown,
+  CheckCircle,
 } from '@phosphor-icons/react';
 
-const STEPS = [
+interface Step {
+  id: number;
+  label: string;
+  title: string;
+  description: string;
+  details: string[];
+  Icon: React.ElementType;
+}
+
+const STEPS: Step[] = [
   {
-    number: 1,
-    label: 'Prepare',
-    icon: MagnifyingGlass,
+    id: 1,
+    label: 'Step 1',
+    title: 'Prepare',
+    Icon: MagnifyingGlass,
     description:
       'Brandon conducts a thorough home tour and seller consultation to assess your property, understand your goals, and build a winning pricing strategy.',
     details: ['Home tour & condition review', 'Seller consultation', 'Pricing strategy analysis', 'Timeline planning'],
   },
   {
-    number: 2,
-    label: 'Pre-Listing',
-    icon: Camera,
+    id: 2,
+    label: 'Step 2',
+    title: 'Pre-Listing',
+    Icon: Camera,
     description:
       'Professional staging guidance, high-quality photography, and fully branded marketing materials are prepared before your home ever hits the market.',
     details: ['Professional staging guidance', 'HDR photography & video walkthrough', 'Branded marketing materials', '3D virtual tour'],
   },
   {
-    number: 3,
-    label: 'Listing Time',
-    icon: Storefront,
+    id: 3,
+    label: 'Step 3',
+    title: 'Listing Time',
+    Icon: Storefront,
     description:
       'Your home goes live across every major platform simultaneously — MLS, Zillow, Realtor.com, Homes.com, and a full social media campaign — generating maximum exposure.',
     details: ['MLS + syndication launch', 'Zillow, Realtor.com, Homes.com & more', 'Social media campaign', 'Open house scheduling'],
   },
   {
-    number: 4,
-    label: 'Offer Process',
-    icon: Handshake,
+    id: 4,
+    label: 'Step 4',
+    title: 'Offer Process',
+    Icon: Handshake,
     description:
       'Brandon reviews every offer with you in plain language, negotiates aggressively on your behalf, and guides you to the strongest possible terms.',
     details: ['Offer review & analysis', 'Expert negotiation', 'Contingency strategy', 'Counter-offer guidance'],
   },
   {
-    number: 5,
-    label: 'Under Contract',
-    icon: ClipboardText,
+    id: 5,
+    label: 'Step 5',
+    title: 'Under Contract',
+    Icon: ClipboardText,
     description:
       'Brandon coordinates every contingency from accepted offer to clear-to-close — inspections, appraisal, loan commitment, and all required documentation.',
-    details: ['Home inspection coordination', 'Appraisal & loan commitment', 'Smoke certificate (MA)', 'Buyer\'s agent, lender & attorney coordination'],
+    details: ['Home inspection coordination', 'Appraisal & loan commitment', 'Smoke certificate (MA)', "Buyer's agent, lender & attorney coordination"],
   },
   {
-    number: 6,
-    label: 'Closing Time',
-    icon: Key,
+    id: 6,
+    label: 'Step 6',
+    title: 'Closing Time',
+    Icon: Key,
     description:
       'From the final walkthrough to handing over keys, Brandon coordinates every detail so closing day is smooth, stress-free, and celebratory.',
     details: ['Final walkthrough coordination', 'Closing document review', 'Closing day attendance', 'Post-sale follow-up'],
   },
-] as const;
+];
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: { staggerChildren: 0.18, delayChildren: 0.1 },
-  },
-};
-
-const stepVariants = {
-  hidden: { opacity: 0, x: -40 },
-  show: {
-    opacity: 1,
-    x: 0,
-    transition: { type: 'spring' as const, stiffness: 100, damping: 20 },
-  },
-};
+const SPRING = { type: 'spring' as const, stiffness: 100, damping: 20 };
 
 export default function SellerSteps() {
-  const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: '-80px' });
+  const [openId, setOpenId] = useState<number | null>(1);
+
+  const toggle = (id: number) => setOpenId((prev) => (prev === id ? null : id));
 
   return (
     <section className="relative bg-dark-surface py-24 md:py-32 overflow-hidden">
@@ -102,12 +105,12 @@ export default function SellerSteps() {
           initial={{ opacity: 0, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-80px' }}
-          transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+          transition={SPRING}
           className="mb-16 md:mb-20"
         >
-          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
+          <span className="inline-block text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4 border border-gold/30 px-3 py-1">
             The Process
-          </p>
+          </span>
           <h2
             className="font-black text-white leading-tight tracking-tight"
             style={{ fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}
@@ -118,89 +121,108 @@ export default function SellerSteps() {
             </span>
           </h2>
           <p className="text-white/60 mt-4 max-w-xl text-base font-light leading-relaxed">
-            A proven five-step system refined over hundreds of transactions — designed to maximize your
+            A proven six-step system refined over hundreds of transactions — designed to maximize your
             sale price and minimize your stress.
           </p>
         </motion.div>
 
-        {/* Timeline */}
-        <motion.div
-          ref={ref}
-          variants={containerVariants}
-          initial="hidden"
-          animate={isInView ? 'show' : 'hidden'}
-          className="relative"
-        >
-          {/* Vertical connector line */}
-          <div
-            className="absolute left-[27px] md:left-[31px] top-0 bottom-0 w-px bg-gradient-to-b from-gold/60 via-gold/20 to-transparent"
-            aria-hidden="true"
-          />
+        {/* Accordion */}
+        <div className="flex flex-col gap-3">
+          {STEPS.map((step, idx) => {
+            const isOpen = openId === step.id;
+            const { Icon } = step;
 
-          <div className="flex flex-col gap-0">
-            {STEPS.map((step, index) => {
-              const Icon = step.icon;
-              const isLast = index === STEPS.length - 1;
-
-              return (
-                <motion.div
-                  key={step.number}
-                  variants={stepVariants}
-                  className={`relative flex gap-6 md:gap-10 ${isLast ? '' : 'pb-12 md:pb-16'}`}
+            return (
+              <motion.div
+                key={step.id}
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ ...SPRING, delay: idx * 0.08 }}
+                className={`border rounded-none overflow-hidden transition-colors duration-300 ${
+                  isOpen
+                    ? 'border-gold/50 bg-dark-card'
+                    : 'border-dark-border bg-dark-card/40 hover:border-gold/20'
+                }`}
+              >
+                {/* Accordion trigger */}
+                <button
+                  onClick={() => toggle(step.id)}
+                  aria-expanded={isOpen}
+                  className="w-full flex items-center gap-5 px-6 py-5 text-left group"
                 >
-                  {/* Step circle */}
-                  <div className="relative flex-shrink-0 z-10">
-                    <div
-                      className="w-14 h-14 md:w-16 md:h-16 rounded-full border-2 border-gold bg-dark-card flex items-center justify-center"
-                      style={{ boxShadow: '0 0 20px rgba(234,196,105,0.15)' }}
-                    >
-                      <span className="text-gold font-black text-lg md:text-xl leading-none">
-                        {step.number}
-                      </span>
-                    </div>
+                  {/* Icon box */}
+                  <div
+                    className={`flex-shrink-0 w-12 h-12 flex items-center justify-center border transition-colors duration-300 ${
+                      isOpen
+                        ? 'bg-gold border-gold text-[#0a0a0a]'
+                        : 'bg-transparent border-dark-border text-gold group-hover:border-gold/40'
+                    }`}
+                  >
+                    <Icon weight="bold" className="w-5 h-5" />
                   </div>
 
-                  {/* Content card */}
-                  <div className="flex-1 min-w-0 pb-2">
-                    <motion.div
-                      className="glass border border-dark-border rounded-xl p-6 md:p-8"
-                      whileHover={{ y: -3, boxShadow: '0 8px 32px rgba(234,196,105,0.08)' }}
-                      transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+                  <div className="flex-1 min-w-0">
+                    <span
+                      className={`text-xs font-semibold tracking-widest uppercase block mb-0.5 transition-colors duration-200 ${
+                        isOpen ? 'text-gold' : 'text-gray'
+                      }`}
                     >
-                      {/* Step label row */}
-                      <div className="flex items-center gap-3 mb-3">
-                        <Icon weight="duotone" className="w-5 h-5 text-gold flex-shrink-0" />
-                        <h3 className="font-bold text-white text-lg tracking-wide uppercase">
-                          {step.label}
-                        </h3>
-                        <span className="ml-auto text-gold/40 text-xs font-semibold tracking-widest uppercase">
-                          Step {step.number}
-                        </span>
-                      </div>
+                      {step.label}
+                    </span>
+                    <span className="text-white font-bold text-lg leading-tight">{step.title}</span>
+                  </div>
 
-                      {/* Description */}
-                      <p className="text-white/60 text-sm leading-relaxed font-light mb-4">
-                        {step.description}
-                      </p>
+                  {/* Caret */}
+                  <motion.span
+                    animate={{ rotate: isOpen ? 180 : 0 }}
+                    transition={SPRING}
+                    className={`flex-shrink-0 transition-colors duration-200 ${
+                      isOpen ? 'text-gold' : 'text-gray'
+                    }`}
+                  >
+                    <CaretDown weight="bold" className="w-5 h-5" />
+                  </motion.span>
+                </button>
 
-                      {/* Detail pills */}
-                      <div className="flex flex-wrap gap-2">
-                        {step.details.map((detail) => (
-                          <span
-                            key={detail}
-                            className="text-xs text-gold/70 border border-gold/20 bg-gold/5 px-3 py-1 font-medium tracking-wide"
-                          >
-                            {detail}
-                          </span>
-                        ))}
+                {/* Accordion panel */}
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      key="panel"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={SPRING}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-6 pb-7 pt-1 border-t border-dark-border">
+                        <p className="text-gray text-sm leading-relaxed mb-6 max-w-2xl">
+                          {step.description}
+                        </p>
+
+                        {/* Detail items */}
+                        <ul className="flex flex-col gap-3">
+                          {step.details.map((detail, dIdx) => (
+                            <motion.li
+                              key={detail}
+                              initial={{ opacity: 0, x: -12 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ ...SPRING, delay: dIdx * 0.07 }}
+                              className="flex items-center gap-3"
+                            >
+                              <CheckCircle weight="fill" className="text-gold w-4 h-4 flex-shrink-0" />
+                              <span className="text-white/85 text-sm font-medium">{detail}</span>
+                            </motion.li>
+                          ))}
+                        </ul>
                       </div>
                     </motion.div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
-        </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
