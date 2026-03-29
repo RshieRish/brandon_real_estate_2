@@ -15,16 +15,30 @@ export const metadata: Metadata = {
 const INVESTOR_REVIEWS = [
   {
     quote:
-      'Brandon helped my husband and me buy our dream home, and we’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had. Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.',
-    author: 'Yasmine Turco',
-    location: 'Facebook',
+      ‘Brandon helped my husband and me buy our dream home, and we\’re so grateful for him. The property was a total gem — and super competitive — but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had.’,
+    author: ‘Yasmine Turco’,
+    location: ‘Facebook’,
     rating: 5,
   },
   {
     quote:
-      'From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.',
-    author: 'Dan Emond',
-    location: 'Google',
+      ‘From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.’,
+    author: ‘Dan Emond’,
+    location: ‘Google’,
+    rating: 5,
+  },
+  {
+    quote:
+      ‘Brandon did a phenomenal job in helping me sell my parents\’ home. He kept me informed at all times and was always available to answer any questions I had. He got the house listed and sold so quickly at a great price. I definitely would recommend Brandon to anyone.’,
+    author: ‘Jeannine R.’,
+    location: ‘Zillow’,
+    rating: 5,
+  },
+  {
+    quote:
+      ‘Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process.’,
+    author: ‘Sonya Reagan’,
+    location: ‘RealSatisfied’,
     rating: 5,
   },
 ];
@@ -228,7 +242,7 @@ export default function InvestPage() {
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-4xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {INVESTOR_REVIEWS.map((review) => (
               <ReviewCard
                 key={review.author}

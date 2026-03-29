@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import {
   ArrowDown,
   MegaphoneSimple,
-  Star,
+  Phone,
 } from '@phosphor-icons/react/dist/ssr';
 import PropertyEvaluator from '@/components/seller/PropertyEvaluator';
 import SellerSteps from '@/components/seller/SellerSteps';
@@ -10,6 +10,7 @@ import StagingChecklist from '@/components/seller/StagingChecklist';
 import ReviewCard from '@/components/shared/ReviewCard';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
+import LeadCaptureForm from '@/components/shared/LeadCaptureForm';
 
 export const metadata: Metadata = {
   title: 'Sell Your Home | Brandon Sweeney, REALTOR\u00ae | Sold With Sweeney & Co.',
@@ -48,6 +49,20 @@ const SELLER_REVIEWS = [
       "Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process. I knew I was in good hands working with him.",
     author: 'Sonya Reagan',
     location: 'RealSatisfied',
+    rating: 5,
+  },
+  {
+    quote:
+      'Brandon helped my husband and me buy our dream home, and we\'re so grateful for him. The property was a total gem — and super competitive — but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had.',
+    author: 'Yasmine Turco',
+    location: 'Facebook',
+    rating: 5,
+  },
+  {
+    quote:
+      'From start to finish, the process with Brandon was smooth and as worry-free as it could possibly be. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.',
+    author: 'Dan Emond',
+    location: 'Google',
     rating: 5,
   },
 ];
@@ -130,20 +145,29 @@ export default function SellPage() {
               </div>
             </div>
 
-            {/* Right accent stat block */}
-            <div className="hidden lg:flex flex-col gap-1 border border-gold/20 bg-dark-card/60 backdrop-blur-sm p-8 min-w-[220px]">
-              <div className="border-b border-dark-border pb-5 mb-5">
-                <p className="text-gold font-black text-4xl leading-none">100+</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Families Served</p>
-              </div>
-              <div className="border-b border-dark-border pb-5 mb-5">
-                <p className="text-gold font-black text-4xl leading-none flex items-center gap-1">5<Star weight="fill" className="w-7 h-7" /></p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Avg. Rating</p>
-              </div>
-              <div>
-                <p className="text-gold font-black text-4xl leading-none">MA+NH</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Markets Served</p>
-              </div>
+            {/* Right stat block — 2×2 glass grid matching invest page style */}
+            <div className="hidden lg:grid grid-cols-2 gap-4 shrink-0">
+              {[
+                { label: 'Families Served', value: '100+' },
+                { label: 'Avg. Rating', value: '5.0★' },
+                { label: 'Markets', value: 'MA & NH' },
+                { label: 'Years Active', value: '10+' },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="glass border border-dark-border rounded-xl p-5 flex flex-col gap-1"
+                >
+                  <span className="text-white/40 text-xs font-medium tracking-widest uppercase">
+                    {stat.label}
+                  </span>
+                  <span
+                    className="font-black text-3xl text-gold"
+                    style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}
+                  >
+                    {stat.value}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -194,39 +218,86 @@ export default function SellPage() {
       {/* ── SELLER STEPS ── */}
       <SellerSteps />
 
-      {/* ── MARKETING CHANNELS ── */}
+      {/* ── MARKETING CHANNELS — YOUR HOME, EVERYWHERE ── */}
       <section className="relative bg-dark-card py-24 md:py-28 overflow-hidden">
         <HalftoneOverlay opacity={0.02} />
 
         <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12">
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-12 items-start">
-            <div>
-              <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-                Maximum Exposure
-              </p>
-              <h2
-                className="font-black text-white leading-tight tracking-tight mb-4"
-                style={{ fontSize: 'clamp(1.8rem, 3vw, 2.8rem)' }}
-              >
-                Your Home,{' '}
-                <span className="text-gold" style={{ textShadow: '0 0 28px rgba(234,196,105,0.25)' }}>
-                  Everywhere
-                </span>
-              </h2>
-              <p className="text-white/50 text-sm font-light leading-relaxed">
-                Brandon markets every listing across 15+ channels simultaneously — digital, print,
-                and in-person — ensuring maximum buyer exposure.
-              </p>
+          {/* Section header */}
+          <div className="mb-12">
+            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
+              Maximum Exposure
+            </p>
+            <h2
+              className="font-black text-white leading-tight tracking-tight mb-4"
+              style={{ fontSize: 'clamp(1.8rem, 3vw, 2.8rem)' }}
+            >
+              Your Home,{' '}
+              <span className="text-gold" style={{ textShadow: '0 0 28px rgba(234,196,105,0.25)' }}>
+                Everywhere
+              </span>
+            </h2>
+            <p className="text-white/50 text-sm font-light leading-relaxed max-w-xl">
+              Brandon markets every listing across 15+ channels simultaneously — digital, print,
+              and in-person — ensuring maximum buyer exposure from day one.
+            </p>
+          </div>
+
+          {/* Visual: listing mockup + channel grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.6fr] gap-12 items-center">
+
+            {/* Left: listing card mockup */}
+            <div className="glass border border-dark-border rounded-xl overflow-hidden">
+              {/* Mock browser bar */}
+              <div className="bg-dark-surface border-b border-dark-border px-4 py-3 flex items-center gap-2">
+                <div className="flex gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-red-500/50" />
+                  <span className="w-3 h-3 rounded-full bg-yellow-500/50" />
+                  <span className="w-3 h-3 rounded-full bg-green-500/50" />
+                </div>
+                <div className="flex-1 mx-4 bg-dark-card rounded px-3 py-1">
+                  <span className="text-white/30 text-xs font-mono">soldwithsweeney.com/listing</span>
+                </div>
+              </div>
+              {/* Mock listing content */}
+              <div className="p-5">
+                <div className="aspect-[16/9] bg-dark-surface rounded-lg mb-4 overflow-hidden relative">
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(234,196,105,0.05) 0%, rgba(10,10,10,0.8) 100%)',
+                      backgroundImage: 'url(/frames/frame_001.webp)',
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      opacity: 0.6,
+                    }}
+                  />
+                  <div className="absolute bottom-3 left-3">
+                    <span className="bg-gold text-[#0a0a0a] text-xs font-black px-3 py-1 uppercase tracking-wider">Listed</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="h-4 bg-dark-surface rounded w-3/4" />
+                  <div className="h-3 bg-dark-surface rounded w-1/2" />
+                  <div className="flex gap-2 mt-3">
+                    <div className="h-6 bg-gold/20 border border-gold/30 rounded px-3 w-20" />
+                    <div className="h-6 bg-dark-surface rounded px-3 w-16" />
+                  </div>
+                </div>
+              </div>
+              {/* Broadcast arrow indicator */}
+              <div className="px-5 pb-5 flex items-center gap-2">
+                <MegaphoneSimple weight="fill" className="w-4 h-4 text-gold flex-shrink-0" />
+                <span className="text-gold text-xs font-semibold tracking-widest uppercase">Broadcasting to {MARKETING_CHANNELS.length} channels</span>
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              {MARKETING_CHANNELS.map((channel, index) => (
+            {/* Right: channel grid */}
+            <div className="flex flex-wrap gap-2.5">
+              {MARKETING_CHANNELS.map((channel) => (
                 <div
                   key={channel}
-                  className="flex items-center gap-2 px-4 py-2.5 border border-dark-border bg-dark-surface text-white/70 text-xs font-semibold tracking-widest uppercase"
-                  style={{
-                    animationDelay: `${index * 0.05}s`,
-                  }}
+                  className="flex items-center gap-2 px-4 py-3 border border-dark-border bg-dark-surface text-white/70 text-xs font-semibold tracking-widest uppercase hover:border-gold/40 hover:text-white/90 hover:bg-gold/5 transition-colors duration-200"
                 >
                   <MegaphoneSimple weight="fill" className="w-3.5 h-3.5 text-gold flex-shrink-0" />
                   {channel}
@@ -276,52 +347,69 @@ export default function SellPage() {
       </section>
 
       {/* ── LEAD CAPTURE ── */}
-      <section className="relative bg-dark-card py-24 md:py-32 overflow-hidden">
-        {/* Gold gradient sweep */}
+      <section className="relative py-24 px-6 md:px-12 bg-dark-card overflow-hidden">
+        {/* Gold glow top */}
         <div
-          className="absolute inset-0"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 60% at 50% 100%, rgba(234,196,105,0.07) 0%, transparent 70%)',
-          }}
+          className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px"
+          style={{ background: 'linear-gradient(90deg, transparent, rgba(234,196,105,0.6), transparent)' }}
           aria-hidden="true"
         />
         <HalftoneOverlay opacity={0.03} />
 
-        <div className="relative z-10 max-w-3xl mx-auto px-6 md:px-12 text-center">
-          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-            Ready to Sell?
-          </p>
-          <h2
-            className="font-black text-white leading-tight tracking-tight mb-6"
-            style={{ fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}
-          >
-            Ready to Get Started?
-          </h2>
-          <p className="text-white/60 text-base font-light leading-relaxed mb-10 max-w-xl mx-auto">
-            Schedule a free home valuation meeting with Brandon. No pressure, no obligation — just
-            a clear plan to get your home sold.
-          </p>
+        <div className="relative max-w-7xl mx-auto">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
+            {/* Left copy */}
+            <div>
+              <span className="inline-block border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-3 py-1 mb-6">
+                Ready to Sell?
+              </span>
+              <h2
+                className="font-black text-white leading-tight tracking-tight mb-6"
+                style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
+              >
+                Let&apos;s Get Your{' '}
+                <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
+                  Home Sold
+                </span>
+              </h2>
+              <p className="text-gray text-sm leading-relaxed mb-8 max-w-md">
+                Fill out the form and Brandon will reach out to schedule your free home valuation
+                meeting. No pressure — just a straight conversation about your goals.
+              </p>
 
-          <div className="flex flex-wrap gap-4 justify-center">
-            <CTAButton href="#evaluator" variant="gold">
-              Get Your Free Estimate
-            </CTAButton>
-            <CTAButton href="tel:9789872806" external variant="outline">
-              Call (978) 987-2806
-            </CTAButton>
+              {/* Phone CTA */}
+              <a
+                href="tel:9789872806"
+                className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+              >
+                <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200">
+                  <Phone weight="bold" className="w-4 h-4" />
+                </span>
+                <div>
+                  <p className="text-xs text-gray uppercase tracking-widest font-medium">Call Direct</p>
+                  <p className="font-bold tracking-wide">(978) 987-2806</p>
+                </div>
+              </a>
+            </div>
+
+            {/* Right form */}
+            <div className="bg-[#0a0a0a] border border-dark-border p-8">
+              <LeadCaptureForm
+                source="seller-page"
+                leadType="seller"
+                ctaText="Book a Free Home Valuation"
+              />
+            </div>
           </div>
-
-          {/* KW Legal Disclaimer */}
-          <p className="text-white/20 text-xs font-light mt-12 leading-relaxed max-w-2xl mx-auto">
-            Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. This
-            AI valuation tool provides an estimate only and is not a formal appraisal. Actual sale
-            price may vary based on market conditions, property condition, and other factors. Equal
-            Housing Opportunity. &copy; {new Date().getFullYear()} Sold With Sweeney &amp; Co. All
-            rights reserved. Keller Williams Realty, Inc. is not responsible for the accuracy of
-            third-party data.
-          </p>
         </div>
+
+        {/* KW Legal disclaimer */}
+        <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
+          Brandon Sweeney is a licensed real estate professional with Keller Williams Realty Success. This
+          AI valuation tool provides an estimate only and is not a formal appraisal. Actual sale price may
+          vary based on market conditions, property condition, and other factors. Equal Housing Opportunity.
+          Information deemed reliable but not guaranteed.
+        </p>
       </section>
     </>
   );

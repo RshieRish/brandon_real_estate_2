@@ -46,7 +46,10 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
         if "quota" in err.lower() or "429" in err or "ResourceExhausted" in err:
             raise HTTPException(status_code=503, detail="AI valuation service temporarily unavailable. Please try again later.")
         raise HTTPException(status_code=502, detail="AI service error.")
-    result["address_display"] = geo.get("display", req.address)
-    result["coordinates"] = {"lat": geo.get("lat"), "lon": geo.get("lon")}
+
+    # Normalize field names — service returns range_low/range_high, frontend expects price_low/price_high
+    result["price_low"] = result.pop("range_low", result.get("price_low", 0))
+    result["price_high"] = result.pop("range_high", result.get("price_high", 0))
+    result["address"] = geo.get("display", req.address)
     result["disclaimer"] = "This is an AI-assisted estimate, not a formal appraisal. For an accurate valuation, book a meeting with Brandon."
     return result

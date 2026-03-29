@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle } from '@phosphor-icons/react';
 
@@ -150,6 +151,33 @@ export default function StagingChecklist() {
             <p className="text-white/30 text-xs font-light mt-6 leading-relaxed">
               This is a standard tool. For a dedicated list based on your home, reach out to Brandon.
             </p>
+
+            {/* Staging image */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: '-60px' }}
+              transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.2 }}
+              className="mt-8 relative rounded-xl overflow-hidden border border-dark-border aspect-[4/3]"
+            >
+              <Image
+                src="/frames/frame_030.webp"
+                alt="Professionally staged home interior"
+                fill
+                className="object-cover opacity-70"
+                sizes="(max-width: 1024px) 100vw, 45vw"
+              />
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{ background: 'linear-gradient(to top, rgba(10,10,10,0.7) 0%, transparent 60%)' }}
+                aria-hidden="true"
+              />
+              <div className="absolute bottom-4 left-4 right-4">
+                <p className="text-white/80 text-xs font-semibold tracking-wider uppercase">
+                  Staged homes sell up to 88% faster
+                </p>
+              </div>
+            </motion.div>
           </motion.div>
 
           {/* Checklist */}

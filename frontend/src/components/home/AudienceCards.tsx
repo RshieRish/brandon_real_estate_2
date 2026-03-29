@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { House, CurrencyDollar, ChartLine, ArrowRight } from '@phosphor-icons/react';
@@ -15,6 +16,7 @@ const cards = [
     icon: House,
     accent: '#eac469',
     featured: true,
+    image: '/frames/phase-2-touring.jpg',
   },
   {
     id: 'sell',
@@ -25,6 +27,7 @@ const cards = [
     icon: CurrencyDollar,
     accent: '#eac469',
     featured: false,
+    image: '/frames/frame_020.webp',
   },
   {
     id: 'invest',
@@ -35,6 +38,7 @@ const cards = [
     icon: ChartLine,
     accent: '#eac469',
     featured: false,
+    image: '/frames/frame_050.webp',
   },
 ] as const;
 
@@ -119,6 +123,20 @@ export default function AudienceCards() {
                     whileHover={{ borderColor: 'rgba(234,196,105,0.4)' }}
                     transition={{ duration: 0.25 }}
                   >
+                    {/* Background photo */}
+                    <Image
+                      src={card.image}
+                      alt={card.label}
+                      fill
+                      className="object-cover opacity-25 group-hover:opacity-35 transition-opacity duration-500 scale-105 group-hover:scale-100 transition-transform"
+                      sizes="(max-width: 1024px) 100vw, 60vw"
+                    />
+                    {/* Dark gradient overlay so text stays readable */}
+                    <div
+                      className="absolute inset-0 pointer-events-none"
+                      style={{ background: 'linear-gradient(to top, rgba(10,10,10,0.95) 0%, rgba(10,10,10,0.5) 50%, rgba(10,10,10,0.3) 100%)' }}
+                      aria-hidden="true"
+                    />
                     {/* Background glow on hover */}
                     <div
                       className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
@@ -180,6 +198,20 @@ export default function AudienceCards() {
                       whileHover={{ borderColor: 'rgba(234,196,105,0.4)' }}
                       transition={{ duration: 0.25 }}
                     >
+                      {/* Background photo */}
+                      <Image
+                        src={card.image}
+                        alt={card.label}
+                        fill
+                        className="object-cover opacity-20 group-hover:opacity-30 transition-opacity duration-500"
+                        sizes="(max-width: 1024px) 100vw, 40vw"
+                      />
+                      {/* Dark gradient overlay */}
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{ background: 'linear-gradient(135deg, rgba(10,10,10,0.92) 0%, rgba(10,10,10,0.75) 100%)' }}
+                        aria-hidden="true"
+                      />
                       {/* Background glow on hover */}
                       <div
                         className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"

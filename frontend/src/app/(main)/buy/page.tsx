@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Phone, Star } from '@phosphor-icons/react/dist/ssr';
+import { Phone } from '@phosphor-icons/react/dist/ssr';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 import ReviewCard from '@/components/shared/ReviewCard';
@@ -129,20 +129,29 @@ export default function BuyPage() {
               </CTAButton>
             </div>
 
-            {/* Right accent stat block */}
-            <div className="hidden lg:flex flex-col gap-1 border border-gold/20 bg-dark-card/60 backdrop-blur-sm p-8 min-w-[220px]">
-              <div className="border-b border-dark-border pb-5 mb-5">
-                <p className="text-gold font-black text-4xl leading-none">100+</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Families Served</p>
-              </div>
-              <div className="border-b border-dark-border pb-5 mb-5">
-                <p className="text-gold font-black text-4xl leading-none flex items-center gap-1">5<Star weight="fill" className="w-7 h-7" /></p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Avg. Rating</p>
-              </div>
-              <div>
-                <p className="text-gold font-black text-4xl leading-none">MA+NH</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">Markets Served</p>
-              </div>
+            {/* Right stat block — 2×2 glass grid */}
+            <div className="hidden lg:grid grid-cols-2 gap-4 shrink-0">
+              {[
+                { label: 'Families Served', value: '100+' },
+                { label: 'Avg. Rating', value: '5.0★' },
+                { label: 'Markets', value: 'MA & NH' },
+                { label: 'Years Active', value: '10+' },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="glass border border-dark-border rounded-xl p-5 flex flex-col gap-1"
+                >
+                  <span className="text-white/40 text-xs font-medium tracking-widest uppercase">
+                    {stat.label}
+                  </span>
+                  <span
+                    className="font-black text-3xl text-gold"
+                    style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}
+                  >
+                    {stat.value}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
