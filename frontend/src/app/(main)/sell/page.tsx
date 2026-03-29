@@ -39,29 +39,29 @@ const MARKETING_CHANNELS = [
 const SELLER_REVIEWS = [
   {
     quote:
-      "Brandon did a phenomenal job in helping me sell my parents' home. He kept me informed at all times and was always available to answer any questions I had. He got the house listed and sold so quickly at a great price which was very important to me and my family. I definitely would recommend Brandon to anyone looking to sell their home.",
+      "Brandon did a phenomenal job in helping me sell my parents' home. He kept me informed at all times and was always available to answer any questions I had. He got the house listed and sold so quickly at a great price. I definitely would recommend Brandon to anyone looking to sell their home.",
     author: 'Jeannine R.',
-    location: 'Zillow',
+    location: 'Realtor.com',
     rating: 5,
   },
   {
     quote:
-      "Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process. I knew I was in good hands working with him.",
-    author: 'Sonya Reagan',
-    location: 'RealSatisfied',
+      "I had the pleasure of working with Brandon to sell my Dad's home and I couldn't be happier with the experience. From our first meeting until the closing Brandon was professional, knowledgeable, and incredibly responsive. He went above and beyond to showcase my Dad's home using top-notch photography and marketing. He secured a fantastic offer that fully exceeded my expectations. I highly recommend him.",
+    author: 'Melissa Simon',
+    location: 'Google',
     rating: 5,
   },
   {
     quote:
-      'Brandon helped my husband and me buy our dream home, and we\'re so grateful for him. The property was a total gem — and super competitive — but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had.',
-    author: 'Yasmine Turco',
+      'Brandon is a true professional. He got me a great price for my house. He is honest and trustworthy. A real straight shooter. He made the process very easy — everything was explained and there were no surprises except that he got me more for my house than I expected. I highly recommend him to anyone looking to sell their home.',
+    author: 'John Murphy',
     location: 'Facebook',
     rating: 5,
   },
   {
     quote:
-      'From start to finish, the process with Brandon was smooth and as worry-free as it could possibly be. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.',
-    author: 'Dan Emond',
+      'After having a less than pleasant experience with a previous agent, when we decided to sell we knew we wanted to work with an experienced professional. From the first call with Brandon, we felt so much confidence that he knew what he was doing and was going to do what was best for us. The entire process was made seamless — he was extremely communicative and explained every step very clearly.',
+    author: 'Zoe DiSabito',
     location: 'Google',
     rating: 5,
   },

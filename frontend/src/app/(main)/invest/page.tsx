@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 const INVESTOR_REVIEWS = [
   {
     quote:
-      ‘Brandon helped my husband and me buy our dream home, and we\’re so grateful for him. The property was a total gem — and super competitive — but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had.’,
+      ‘Brandon helped my husband and me buy our dream home, and we\’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had (and we had a lot!). Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.’,
     author: ‘Yasmine Turco’,
     location: ‘Facebook’,
     rating: 5,
@@ -29,15 +29,15 @@ const INVESTOR_REVIEWS = [
   },
   {
     quote:
-      ‘Brandon did a phenomenal job in helping me sell my parents\’ home. He kept me informed at all times and was always available to answer any questions I had. He got the house listed and sold so quickly at a great price. I definitely would recommend Brandon to anyone.’,
-    author: ‘Jeannine R.’,
-    location: ‘Zillow’,
+      ‘Brandon was excellent as an agent and a knowledgeable resource. He understood my needs when looking for an investment property and was creative in tracking down new leads, often forwarding me properties he found via unconventional sources. I highly recommend him!’,
+    author: ‘Leominster Buyer’,
+    location: ‘RealSatisfied’,
     rating: 5,
   },
   {
     quote:
-      ‘Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process.’,
-    author: ‘Sonya Reagan’,
+      ‘Having worked with Brandon on previous sales he again exceeded our expectations. This time he used the most innovative marketing techniques I\’ve ever seen. Results count — it worked! Excellent experience, excellent results. Highly recommend Brandon and the Sold with Sweeney Team.’,
+    author: ‘Paulette Geoffroy’,
     location: ‘RealSatisfied’,
     rating: 5,
   },

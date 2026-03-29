@@ -40,7 +40,7 @@ const reviews = [
   },
   {
     quote:
-      "Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable with the entire process. I knew I was in good hands working with him.",
+      "Brandon was such a tremendous help. It was my first time buying a home, and he made me feel comfortable through the entire process. He explained everything thoroughly, answered all of my questions, and always responded in a timely manner. He made the home buying experience easy and seamless. Cannot thank him enough for all he did.",
     author: 'Sonya Reagan',
     location: 'RealSatisfied',
   },

@@ -25,31 +25,31 @@ const TEAM_MEMBERS = [
 
 const REVIEWS = [
   {
-    author: 'Yasmine Turco',
-    location: 'Facebook',
+    author: ‘Yasmine Turco’,
+    location: ‘Facebook’,
     quote:
-      'Brandon helped my husband and me buy our dream home, and we’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely.',
+      ‘Brandon helped my husband and me buy our dream home, and we\’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had (and we had a lot!). Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.’,
     rating: 5 as const,
   },
   {
-    author: 'Dan Emond',
-    location: 'Google',
+    author: ‘Dan Emond’,
+    location: ‘Google’,
     quote:
-      'From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been for a pair of first-time homebuyers. Always having answers to questions, scheduling showings quickly and being responsive.',
+      ‘From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been for a pair of first-time homebuyers. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.’,
     rating: 5 as const,
   },
   {
-    author: 'Sonya Reagan',
-    location: 'RealSatisfied',
+    author: ‘Matt Perez’,
+    location: ‘Facebook’,
     quote:
-      'Brandon was fantastic. He was so patient, very responsive and so knowledgeable. He works where he grew up so he knows all about the area and the market. He answered all of my questions thoroughly and made me feel comfortable.',
+      ‘Working with Brandon was a fantastic process. Everything was spelt out and very digestible from our very first meeting on. As first time home buyers, there were so many unknowns for us and Brandon took the time to make sure we were comfortable every step of the way. Highly recommend.’,
     rating: 5 as const,
   },
   {
-    author: 'Jeannine R.',
-    location: 'Zillow',
+    author: ‘Gabriel Reyes’,
+    location: ‘Facebook’,
     quote:
-      'Brandon did a phenomenal job... He kept me informed at all times and was always available to answer any questions I had. I definitely would recommend Brandon to anyone looking for an amazing agent.',
+      "Just closed on our first home with Brandon and although it wasn’t easy, it wouldn’t have been possible without him. If you’re looking to buy a home in this crazy market he is your guy!",
     rating: 5 as const,
   },
 ];
