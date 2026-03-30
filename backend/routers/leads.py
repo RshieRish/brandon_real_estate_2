@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import List, Optional
@@ -7,12 +7,17 @@ from database import get_db
 from models.lead import Lead
 from schemas.lead import LeadCreate, LeadUpdate, LeadOut
 from middleware.auth import require_admin
+from services.zapier_service import push_lead_to_zapier
 
 router = APIRouter()
 
 
 @router.post("/", response_model=LeadOut)
-async def create_lead(data: LeadCreate, db: AsyncSession = Depends(get_db)):
+async def create_lead(
+    data: LeadCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     lead = Lead(
         name=data.name, email=data.email, phone=data.phone,
         source=data.source, lead_type=data.lead_type,
@@ -21,6 +26,18 @@ async def create_lead(data: LeadCreate, db: AsyncSession = Depends(get_db)):
     db.add(lead)
     await db.flush()
     await db.refresh(lead)
+
+    # Fire-and-forget: push to Zapier → KW Command in the background
+    background_tasks.add_task(
+        push_lead_to_zapier,
+        name=data.name,
+        email=data.email,
+        phone=data.phone,
+        source=data.source,
+        lead_type=data.lead_type,
+        notes=json.dumps(data.metadata_ or {}),
+    )
+
     return lead
 
 
