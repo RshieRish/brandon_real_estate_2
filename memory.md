@@ -64,3 +64,9 @@
 - 2026-03-23: Fixed Railway Railpack/Caddy detection bug by adding root `railway.json` and modifying `backend/Dockerfile` for root context. Fixed missing phase images by force-adding to git. Verified backend health success.
 - 2026-03-27: Analyzed chatbot flow, then implemented structured assistant actions/buttons in the chatbot with browser-verified action rendering and booking-widget launch.
 - Next: If requested, extend the action system with lead-capture prompts, richer analytics events, or additional widget types beyond booking.
+
+## 2026-03-31 - Home Videos
+- Updated Invest and Sell pages with custom watermark-free hero videos saved in `frontend/public/videos`.
+
+## 2026-03-31 - Home Video Cards
+- Replaced static fallback images with video loops in the AudienceCards section (Buy, Sell, Invest). Used the corresponding videos from each respective page's hero section.

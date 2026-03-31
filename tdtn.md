@@ -97,3 +97,15 @@ Last Updated: 2026-03-27
 - Status: Complete
 
 *Claude Code: Update this file after completing every task.*
+
+### 2026-03-31 — Invest & Sell Hero Videos
+- What was built: Updated Invest and Sell pages to use new, watermark-free MP4 videos.
+- Files modified: `frontend/src/app/(main)/invest/page.tsx`, `frontend/src/app/(main)/sell/page.tsx`
+- Key decisions: Copied the downloaded MP4 files to `frontend/public/videos/invest_hero.mp4` and `sell_hero.mp4`. Fixed catastrophic parsing errors caused by curly quotes in the Invest page testimonial array.
+- Status: Complete
+
+### 2026-03-31 — Audience Cards Video Backgrounds
+- What was built: Updated AudienceCards component on the home page to use looping video backgrounds.
+- Files modified: `frontend/src/components/home/AudienceCards.tsx`
+- Key decisions: Extracted `video` field into the `cards` data array (Buy: `black_gold.mp4`, Sell: `sell_hero.mp4`, Invest: `invest_hero.mp4`). Replaced the `<Image>` tags with `<video>` tags for the cards.
+- Status: Complete

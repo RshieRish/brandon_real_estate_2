@@ -75,7 +75,7 @@ export default function SellPage() {
         {/* Background video */}
         <video
           className="absolute inset-0 w-full h-full object-cover"
-          src="/assets/black_gold.mp4"
+          src="/videos/sell_hero.mp4"
           autoPlay
           muted
           loop

@@ -15,30 +15,30 @@ export const metadata: Metadata = {
 const INVESTOR_REVIEWS = [
   {
     quote:
-      ‘Brandon helped my husband and me buy our dream home, and we\’re so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had (and we had a lot!). Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.’,
-    author: ‘Yasmine Turco’,
-    location: ‘Facebook’,
+      "Brandon helped my husband and me buy our dream home, and we're so grateful for him. The property was a total gem—and super competitive—but he guided us through it all with confidence and ease. His communication was always clear and timely, and he answered every single question we had (and we had a lot!). Brandon is not only a great negotiator, but also just a kind, down-to-earth person who makes a stressful process feel manageable.",
+    author: 'Yasmine Turco',
+    location: 'Facebook',
     rating: 5,
   },
   {
     quote:
-      ‘From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.’,
-    author: ‘Dan Emond’,
-    location: ‘Google’,
+      "From start to finish, the homebuying process from Brandon was smooth and as worry-free as it could have possibly been. Always having answers to questions, scheduling showings quickly and being responsive to anything that came up. Just an overall A+++ experience.",
+    author: 'Dan Emond',
+    location: 'Google',
     rating: 5,
   },
   {
     quote:
-      ‘Brandon was excellent as an agent and a knowledgeable resource. He understood my needs when looking for an investment property and was creative in tracking down new leads, often forwarding me properties he found via unconventional sources. I highly recommend him!’,
-    author: ‘Leominster Buyer’,
-    location: ‘RealSatisfied’,
+      "Brandon was excellent as an agent and a knowledgeable resource. He understood my needs when looking for an investment property and was creative in tracking down new leads, often forwarding me properties he found via unconventional sources. I highly recommend him!",
+    author: 'Leominster Buyer',
+    location: 'RealSatisfied',
     rating: 5,
   },
   {
     quote:
-      ‘Having worked with Brandon on previous sales he again exceeded our expectations. This time he used the most innovative marketing techniques I\’ve ever seen. Results count — it worked! Excellent experience, excellent results. Highly recommend Brandon and the Sold with Sweeney Team.’,
-    author: ‘Paulette Geoffroy’,
-    location: ‘RealSatisfied’,
+      "Having worked with Brandon on previous sales he again exceeded our expectations. This time he used the most innovative marketing techniques I've ever seen. Results count — it worked! Excellent experience, excellent results. Highly recommend Brandon and the Sold with Sweeney Team.",
+    author: 'Paulette Geoffroy',
+    location: 'RealSatisfied',
     rating: 5,
   },
 ];
@@ -51,7 +51,7 @@ export default function InvestPage() {
         {/* Background video */}
         <video
           className="absolute inset-0 w-full h-full object-cover"
-          src="/assets/black_gold.mp4"
+          src="/videos/invest_hero.mp4"
           autoPlay
           muted
           loop

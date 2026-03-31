@@ -17,6 +17,7 @@ const cards = [
     accent: '#eac469',
     featured: true,
     image: '/frames/phase-2-touring.jpg',
+    video: '/assets/black_gold.mp4',
   },
   {
     id: 'sell',
@@ -28,6 +29,7 @@ const cards = [
     accent: '#eac469',
     featured: false,
     image: '/frames/frame_020.webp',
+    video: '/videos/sell_hero.mp4',
   },
   {
     id: 'invest',
@@ -39,6 +41,7 @@ const cards = [
     accent: '#eac469',
     featured: false,
     image: '/frames/frame_050.webp',
+    video: '/videos/invest_hero.mp4',
   },
 ] as const;
 
@@ -123,13 +126,15 @@ export default function AudienceCards() {
                     whileHover={{ borderColor: 'rgba(234,196,105,0.4)' }}
                     transition={{ duration: 0.25 }}
                   >
-                    {/* Background photo */}
-                    <Image
-                      src={card.image}
-                      alt={card.label}
-                      fill
-                      className="object-cover opacity-25 group-hover:opacity-35 transition-opacity duration-500 scale-105 group-hover:scale-100 transition-transform"
-                      sizes="(max-width: 1024px) 100vw, 60vw"
+                    {/* Background video */}
+                    <video
+                      src={card.video}
+                      autoPlay
+                      muted
+                      loop
+                      playsInline
+                      className="absolute inset-0 w-full h-full object-cover opacity-25 group-hover:opacity-35 transition-all duration-500 scale-105 group-hover:scale-100"
+                      aria-hidden="true"
                     />
                     {/* Dark gradient overlay so text stays readable */}
                     <div
@@ -198,13 +203,15 @@ export default function AudienceCards() {
                       whileHover={{ borderColor: 'rgba(234,196,105,0.4)' }}
                       transition={{ duration: 0.25 }}
                     >
-                      {/* Background photo */}
-                      <Image
-                        src={card.image}
-                        alt={card.label}
-                        fill
-                        className="object-cover opacity-20 group-hover:opacity-30 transition-opacity duration-500"
-                        sizes="(max-width: 1024px) 100vw, 40vw"
+                      {/* Background video */}
+                      <video
+                        src={card.video}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        className="absolute inset-0 w-full h-full object-cover opacity-20 group-hover:opacity-30 transition-opacity duration-500"
+                        aria-hidden="true"
                       />
                       {/* Dark gradient overlay */}
                       <div
