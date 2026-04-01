@@ -109,3 +109,11 @@ Last Updated: 2026-03-27
 - Files modified: `frontend/src/components/home/AudienceCards.tsx`
 - Key decisions: Extracted `video` field into the `cards` data array (Buy: `black_gold.mp4`, Sell: `sell_hero.mp4`, Invest: `invest_hero.mp4`). Replaced the `<Image>` tags with `<video>` tags for the cards.
 - Status: Complete
+
+### 2026-03-31 — Marketing Dyson Sphere
+- What was built: Developed a cinematic 3D interactive WebGL dyson sphere for the "Your Home, Everywhere" sell page section.
+- Files created: `frontend/src/components/sell/MarketingSphere.tsx`
+- Files modified: `frontend/src/app/(main)/sell/page.tsx`
+- Key decisions: Ported raw vanilla Three.js into a React `useRef` based component inside Next.js rather than using R3F to precisely save the custom global canvas texture loop logic. Dynamically draws user's provided PNG logos (`/facebook_logo.png`, etc.) onto the WebGL nodes instead of just vectors. Added rigorous React unmout disposal to prevent memory leaks.
+- Status: Complete
+Completed Checklist Video Integration

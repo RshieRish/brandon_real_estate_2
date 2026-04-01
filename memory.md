@@ -70,3 +70,10 @@
 
 ## 2026-03-31 - Home Video Cards
 - Replaced static fallback images with video loops in the AudienceCards section (Buy, Sell, Invest). Used the corresponding videos from each respective page's hero section.
+
+## 2026-03-31 - Marketing Dyson Sphere
+- Built a 3D WebGL dyson sphere using Three.js inside `frontend/src/components/sell/MarketingSphere.tsx`.
+- Maps custom PNG image logos onto 2D canvas sprites inside the 3D scene.
+- Load `mini_house.gltf` into the center.
+- Wrapped in Next.js `useRef` and `useEffect` with strict `cancelAnimationFrame` and unmounting logic for safely avoiding WebGL context leaks during client router navigation.
+Added interactive videos to Seller Staging Checklist

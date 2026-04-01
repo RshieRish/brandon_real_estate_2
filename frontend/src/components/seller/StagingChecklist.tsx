@@ -6,17 +6,17 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle } from '@phosphor-icons/react';
 
 const CHECKLIST_ITEMS = [
-  { id: 'photos', label: 'Remove personal photos' },
-  { id: 'clean', label: 'Deep clean every room' },
-  { id: 'neutral', label: 'Apply fresh neutral paint where needed' },
-  { id: 'counters', label: 'Clear countertops' },
-  { id: 'declutter', label: 'Declutter all spaces' },
-  { id: 'lawn', label: 'Manicure the lawn' },
-  { id: 'beds', label: 'Style beds with fresh linens' },
-  { id: 'closets', label: 'Organize closets' },
-  { id: 'cords', label: 'Hide cords and cables' },
-  { id: 'fixtures', label: 'Clean or replace light fixtures' },
-  { id: 'flowers', label: 'Add fresh flowers or plants' },
+  { id: 'photos', label: 'Remove personal photos', video: '/videos/Removing_personal_photos_202603311933.mp4' },
+  { id: 'clean', label: 'Deep clean every room', video: '/videos/Kitchen_deep_clean_202603311933.mp4' },
+  { id: 'neutral', label: 'Apply fresh neutral paint where needed', video: '/videos/Apply_neutral_paint_202603311933.mp4' },
+  { id: 'counters', label: 'Clear countertops', video: '/videos/Countertops_cleared_of_202603311934.mp4' },
+  { id: 'declutter', label: 'Declutter all spaces', video: '/videos/Decluttering_transformation_of_202603311933.mp4' },
+  { id: 'lawn', label: 'Manicure the lawn', video: '/videos/Manicure_the_lawn_202603311933.mp4' },
+  { id: 'beds', label: 'Style beds with fresh linens', video: undefined },
+  { id: 'closets', label: 'Organize closets', video: '/videos/Closet_organizes_itself_202603311934.mp4' },
+  { id: 'cords', label: 'Hide cords and cables', video: '/videos/Hide_cords_and_202603311935.mp4' },
+  { id: 'fixtures', label: 'Clean or replace light fixtures', video: '/videos/Clean_or_Replace_202603311935.mp4' },
+  { id: 'flowers', label: 'Add fresh flowers or plants', video: '/videos/Add_fresh_flowers_202603311935.mp4' },
 ];
 
 function CheckboxIcon({ checked }: { checked: boolean }) {
@@ -56,14 +56,18 @@ function CheckboxIcon({ checked }: { checked: boolean }) {
 
 export default function StagingChecklist() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [activeVideo, setActiveVideo] = useState<string | null>('/videos/Home_from_listing_202603312328.mp4');
 
-  function toggle(id: string) {
+  function toggle(id: string, videoSrc?: string) {
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
       } else {
         next.add(id);
+        if (videoSrc) {
+          setActiveVideo(videoSrc);
+        }
       }
       return next;
     });
@@ -152,21 +156,48 @@ export default function StagingChecklist() {
               This is a standard tool. For a dedicated list based on your home, reach out to Brandon.
             </p>
 
-            {/* Staging image */}
+            {/* Staging Media */}
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-60px' }}
               transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.2 }}
-              className="mt-8 relative rounded-xl overflow-hidden border border-dark-border aspect-[4/3]"
+              className="mt-8 relative rounded-xl overflow-hidden border border-dark-border aspect-[4/3] bg-black"
             >
-              <Image
-                src="/frames/frame_030.webp"
-                alt="Professionally staged home interior"
-                fill
-                className="object-cover opacity-70"
-                sizes="(max-width: 1024px) 100vw, 45vw"
-              />
+              <AnimatePresence mode="wait">
+                {activeVideo ? (
+                  <motion.video
+                    key={activeVideo}
+                    src={activeVideo}
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.6 }}
+                    className="absolute inset-0 w-full h-full object-cover opacity-80"
+                  />
+                ) : (
+                  <motion.div
+                    key="fallback-image"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.6 }}
+                    className="absolute inset-0"
+                  >
+                    <Image
+                      src="/frames/frame_030.webp"
+                      alt="Professionally staged home interior"
+                      fill
+                      className="object-cover opacity-70"
+                      sizes="(max-width: 1024px) 100vw, 45vw"
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <div
                 className="absolute inset-0 pointer-events-none"
                 style={{ background: 'linear-gradient(to top, rgba(10,10,10,0.7) 0%, transparent 60%)' }}
@@ -206,7 +237,7 @@ export default function StagingChecklist() {
                   >
                     <button
                       type="button"
-                      onClick={() => toggle(item.id)}
+                      onClick={() => toggle(item.id, item.video)}
                       className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-colors ${
                         isChecked
                           ? 'bg-gold/5'

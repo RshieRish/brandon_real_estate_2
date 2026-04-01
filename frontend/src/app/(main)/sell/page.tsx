@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import {
   ArrowDown,
-  MegaphoneSimple,
   Phone,
 } from '@phosphor-icons/react/dist/ssr';
 import PropertyEvaluator from '@/components/seller/PropertyEvaluator';
@@ -11,30 +10,13 @@ import ReviewCard from '@/components/shared/ReviewCard';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 import LeadCaptureForm from '@/components/shared/LeadCaptureForm';
-
+import MarketingSphere from '@/components/sell/MarketingSphere';
 export const metadata: Metadata = {
   title: 'Sell Your Home | Brandon Sweeney, REALTOR\u00ae | Sold With Sweeney & Co.',
   description:
     'Get a free AI-powered home valuation and work with award-winning REALTOR\u00ae Brandon Sweeney to sell your home faster, for more money.',
 };
 
-const MARKETING_CHANNELS = [
-  'MLS',
-  'Zillow',
-  'Realtor.com',
-  'Trulia',
-  'Facebook',
-  'Instagram',
-  'LinkedIn',
-  'Local Groups',
-  'Email Marketing',
-  'Open Houses',
-  'Video Marketing',
-  'Homes.com Ads',
-  'Professional Flyers',
-  'Signage',
-  'Networking',
-];
 
 const SELLER_REVIEWS = [
   {
@@ -219,94 +201,11 @@ export default function SellPage() {
       <SellerSteps />
 
       {/* ── MARKETING CHANNELS — YOUR HOME, EVERYWHERE ── */}
-      <section className="relative bg-dark-card py-24 md:py-28 overflow-hidden">
+      <section className="relative bg-[#0a0a0a] overflow-hidden w-full">
         <HalftoneOverlay opacity={0.02} />
-
-        <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-12">
-          {/* Section header */}
-          <div className="mb-12">
-            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-              Maximum Exposure
-            </p>
-            <h2
-              className="font-black text-white leading-tight tracking-tight mb-4"
-              style={{ fontSize: 'clamp(1.8rem, 3vw, 2.8rem)' }}
-            >
-              Your Home,{' '}
-              <span className="text-gold" style={{ textShadow: '0 0 28px rgba(234,196,105,0.25)' }}>
-                Everywhere
-              </span>
-            </h2>
-            <p className="text-white/50 text-sm font-light leading-relaxed max-w-xl">
-              Brandon markets every listing across 15+ channels simultaneously — digital, print,
-              and in-person — ensuring maximum buyer exposure from day one.
-            </p>
-          </div>
-
-          {/* Visual: listing mockup + channel grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.6fr] gap-12 items-center">
-
-            {/* Left: listing card mockup */}
-            <div className="glass border border-dark-border rounded-xl overflow-hidden">
-              {/* Mock browser bar */}
-              <div className="bg-dark-surface border-b border-dark-border px-4 py-3 flex items-center gap-2">
-                <div className="flex gap-1.5">
-                  <span className="w-3 h-3 rounded-full bg-red-500/50" />
-                  <span className="w-3 h-3 rounded-full bg-yellow-500/50" />
-                  <span className="w-3 h-3 rounded-full bg-green-500/50" />
-                </div>
-                <div className="flex-1 mx-4 bg-dark-card rounded px-3 py-1">
-                  <span className="text-white/30 text-xs font-mono">soldwithsweeney.com/listing</span>
-                </div>
-              </div>
-              {/* Mock listing content */}
-              <div className="p-5">
-                <div className="aspect-[16/9] bg-dark-surface rounded-lg mb-4 overflow-hidden relative">
-                  <div
-                    className="absolute inset-0"
-                    style={{
-                      background: 'linear-gradient(135deg, rgba(234,196,105,0.05) 0%, rgba(10,10,10,0.8) 100%)',
-                      backgroundImage: 'url(/frames/frame_001.webp)',
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      opacity: 0.6,
-                    }}
-                  />
-                  <div className="absolute bottom-3 left-3">
-                    <span className="bg-gold text-[#0a0a0a] text-xs font-black px-3 py-1 uppercase tracking-wider">Listed</span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="h-4 bg-dark-surface rounded w-3/4" />
-                  <div className="h-3 bg-dark-surface rounded w-1/2" />
-                  <div className="flex gap-2 mt-3">
-                    <div className="h-6 bg-gold/20 border border-gold/30 rounded px-3 w-20" />
-                    <div className="h-6 bg-dark-surface rounded px-3 w-16" />
-                  </div>
-                </div>
-              </div>
-              {/* Broadcast arrow indicator */}
-              <div className="px-5 pb-5 flex items-center gap-2">
-                <MegaphoneSimple weight="fill" className="w-4 h-4 text-gold flex-shrink-0" />
-                <span className="text-gold text-xs font-semibold tracking-widest uppercase">Broadcasting to {MARKETING_CHANNELS.length} channels</span>
-              </div>
-            </div>
-
-            {/* Right: channel grid */}
-            <div className="flex flex-wrap gap-2.5">
-              {MARKETING_CHANNELS.map((channel) => (
-                <div
-                  key={channel}
-                  className="flex items-center gap-2 px-4 py-3 border border-dark-border bg-dark-surface text-white/70 text-xs font-semibold tracking-widest uppercase hover:border-gold/40 hover:text-white/90 hover:bg-gold/5 transition-colors duration-200"
-                >
-                  <MegaphoneSimple weight="fill" className="w-3.5 h-3.5 text-gold flex-shrink-0" />
-                  {channel}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <MarketingSphere />
       </section>
+
 
       {/* ── STAGING CHECKLIST ── */}
       <StagingChecklist />
