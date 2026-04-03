@@ -96,6 +96,56 @@ Last Updated: 2026-03-27
   - `npm run lint` still fails on a pre-existing unrelated error in `frontend/src/components/shared/RotatingText.tsx` (`no-explicit-any`) plus several unrelated warnings.
 - Status: Complete
 
+### 2026-04-02 — About / Buy / Sell / Home Polish Pass
+- What was built: Implemented requested copy and UI refinements across the About, Buy, Sell, and home pages, including a buyer flashcard experience and a fix for the homepage hero video showing Brandon's face before playback.
+- Files modified:
+  - `frontend/src/app/(main)/about/page.tsx`
+  - `frontend/src/app/(main)/buy/page.tsx`
+  - `frontend/src/app/(main)/sell/page.tsx`
+  - `frontend/src/components/buyer/BuyerMistakes.tsx`
+  - `frontend/src/components/home/GivingBack.tsx`
+  - `frontend/src/components/home/Hero.tsx`
+- About page changes:
+  - Changed the hero image badge separator so `|` renders in white.
+  - Reworked the stats strip so the cards tie directly to Brandon-specific milestones instead of generic stats.
+  - Expanded awards coverage with added recognition cards for MAR Good Neighbor, NEAR Good Neighbor, and Distinguished Young Professional.
+  - Updated team/contact copy to use `the Sold With Sweeney & Co. team`.
+  - Replaced `research` with `advocacy` in the MS fundraising copy.
+- Buy / Sell changes:
+  - Added a new Buy-page CTA: `Find "THE ONE"` with a downward scroll target.
+  - Changed the buyer lead-section headline gold text from `Dream Home` to `THE ONE`.
+  - Converted the buyer mistakes section into interactive flip-style flashcards for clearer reading.
+  - Changed the seller lead-section headline to `Stop Listing. Start Moving.`
+- Home page changes:
+  - Removed the hero video poster image that used Brandon's headshot.
+  - Added a dark fallback background and fade-in behavior until the video is loaded, preventing the initial headshot flash.
+  - Updated Giving Back copy from `research` to `advocacy`.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - Route checks via `curl` confirmed the updated About, Buy, Sell, and home-page markup.
+  - Home page hero markup no longer includes a `poster` attribute, and now renders a preload + fade-in fallback state.
+- Blocker:
+  - The repo does not currently include the requested `Brandon and Paige at Maine gala` image or an awards-collage image, so those two image swaps could not be completed from local assets.
+- Known verification note:
+  - `npm run lint` still fails on the pre-existing unrelated `frontend/src/components/shared/RotatingText.tsx` `no-explicit-any` error plus older warnings in unrelated files.
+- Status: Complete with image-asset blocker noted
+
+### 2026-04-02 — About Gala Image Swap
+- What was built: Replaced the About page's lower team image with the provided Brandon and Paige at Maine gala photo.
+- Files modified:
+  - `frontend/src/app/(main)/about/page.tsx`
+- Files added:
+  - `frontend/public/headshots/brandon-and-paige-maine-gala.jpeg`
+- Implementation details:
+  - Updated the About page `TeamSection` image source to the new gala asset.
+  - Changed the image framing to a portrait-friendly `4/5` aspect ratio for better crop behavior.
+  - Updated the image alt text to `Brandon and Paige at the Maine gala`.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - Route check confirmed `/about` references the new image asset.
+  - Screenshot captured: `about-gala-update-check.png`
+- Status: Complete
+
 *Claude Code: Update this file after completing every task.*
 
 ### 2026-03-31 — Invest & Sell Hero Videos

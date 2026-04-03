@@ -178,7 +178,7 @@ function HeroSection() {
                 <div className="absolute bottom-6 left-6 right-6 glass border border-gold/25 px-5 py-4 z-10">
                   <div className="text-white font-bold text-base tracking-tight">Brandon Sweeney</div>
                   <div className="text-gold text-xs font-semibold tracking-widest uppercase mt-0.5">
-                    CEO, Sold With Sweeney &amp; Co. | REALTOR&#174;
+                    CEO, Sold With Sweeney &amp; Co. <span className="text-white/80">|</span> REALTOR&#174;
                   </div>
                 </div>
               </div>
@@ -193,10 +193,10 @@ function HeroSection() {
 // ─── Section: Stats Strip ──────────────────────────────────────────────────────
 
 const stats = [
-  { value: '100+', label: 'Families Served' },
-  { value: '500+', label: 'Transactions Closed' },
-  { value: 'Of The Year', label: 'REALTOR\u00ae Award 2025' },
-  { value: 'MA & NH', label: 'Licensed States' },
+  { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
+  { value: '2025', label: 'NEAR President', detail: 'Leading advocacy and standards for the association.' },
+  { value: ['Of The', 'Year'], label: 'REALTOR\u00ae Of The Year Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' },
+  { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
 
 function StatsStrip() {
@@ -224,23 +224,42 @@ function StatsStrip() {
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
         >
-          {stats.map(({ value, label }) => (
+          {stats.map(({ value, label, detail }) => (
             <motion.div
               key={label}
               variants={fadeUp}
-              className="glass flex flex-col items-center justify-center text-center px-6 py-10 gap-2"
+              className="glass flex flex-col items-center justify-center text-center px-6 py-10 gap-3"
             >
-              <span
-                className="font-black text-gold leading-none"
-                style={{
-                  fontSize: 'clamp(1.6rem, 3.5vw, 2.8rem)',
-                  textShadow: '0 0 30px rgba(234,196,105,0.25)',
-                }}
-              >
-                {value}
-              </span>
+              {Array.isArray(value) ? (
+                <span
+                  className="font-black text-gold leading-[0.9]"
+                  style={{
+                    fontSize: 'clamp(1.3rem, 3vw, 2.2rem)',
+                    textShadow: '0 0 30px rgba(234,196,105,0.25)',
+                  }}
+                >
+                  {value.map((line) => (
+                    <span key={line} className="block">
+                      {line}
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                <span
+                  className="font-black text-gold leading-none"
+                  style={{
+                    fontSize: 'clamp(1.6rem, 3.5vw, 2.8rem)',
+                    textShadow: '0 0 30px rgba(234,196,105,0.25)',
+                  }}
+                >
+                  {value}
+                </span>
+              )}
               <span className="text-white/50 text-xs font-semibold tracking-[0.2em] uppercase">
                 {label}
+              </span>
+              <span className="max-w-[14rem] text-white/38 text-[11px] leading-relaxed">
+                {detail}
               </span>
             </motion.div>
           ))}
@@ -415,32 +434,40 @@ const designations = [
     src: '/logos/Designations-Associations/NEAR.png',
     alt: 'NEAR',
     label: 'Northeast Association of Realtors\u00ae',
+    imageClassName: 'brightness-125 saturate-110',
   },
   {
     src: '/logos/Designations-Associations/MAR-Logo-Color-VERT-300dpi.png',
     alt: 'MAR',
     label: 'Massachusetts Association of REALTORS\u00ae',
+    imageClassName: 'brightness-0 invert opacity-95',
   },
   {
     src: '/logos/Designations-Associations/National_Association_of_REALTORS_Logo.svg.png',
     alt: 'NAR',
     label: 'National Association of REALTORS\u00ae',
+    imageClassName: 'brightness-0 invert opacity-95',
   },
   {
     src: '/logos/Designations-Associations/Green.jpg',
     alt: 'GREEN',
     label: 'GREEN Designation',
+    imageClassName: 'brightness-125 saturate-110',
   },
   {
     src: '/logos/Designations-Associations/NAR-1424_C2EX_New Lockup_isolated_10.21.20[1].png',
     alt: 'C2EX',
     label: 'Commitment to Excellence (C2EX)',
+    imageClassName: 'brightness-125 saturate-110',
   },
 ];
 
 const awards = [
-  { icon: Trophy, title: '2025 Northeast Association of Realtors REALTOR\u00ae Of The Year', sub: 'Highest honor awarded by Northeast Association of Realtors' },
-  { icon: Star, title: '2025 NEAR President', sub: 'Guiding real estate standards and advocacy across Massachusetts' },
+  { icon: Trophy, title: '2025 NEAR REALTOR\u00ae Of The Year', sub: 'The Northeast Association of REALTORS\u00ae highest annual honor.' },
+  { icon: Star, title: '2025 NEAR President', sub: 'Helping guide standards, leadership, and advocacy for the association.' },
+  { icon: Certificate, title: 'MAR Good Neighbor Award', sub: 'Recognized for community-first leadership and charitable impact.' },
+  { icon: Heart, title: 'NEAR Good Neighbor Recognition', sub: 'Honoring real local impact through service and giving back.' },
+  { icon: Users, title: 'Distinguished Young Professional', sub: 'Celebrating standout leadership early in a high-growth career.' },
 ];
 
 function DesignationsSection() {
@@ -494,7 +521,7 @@ function DesignationsSection() {
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
         >
-          {designations.map(({ src, alt, label }) => (
+          {designations.map(({ src, alt, label, imageClassName }) => (
             <motion.div
               key={alt}
               variants={fadeUp}
@@ -511,7 +538,7 @@ function DesignationsSection() {
                   src={src}
                   alt={alt}
                   fill
-                  className="object-contain brightness-150 group-hover:brightness-200 transition-all duration-200"
+                  className={`object-contain transition-all duration-200 ${imageClassName}`}
                   sizes="160px"
                 />
               </div>
@@ -524,7 +551,7 @@ function DesignationsSection() {
 
         {/* Awards row */}
         <motion.div
-          className="grid grid-cols-1 sm:grid-cols-2 gap-6"
+          className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6"
           variants={containerVariants}
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
@@ -710,7 +737,7 @@ function MSisBSSection() {
                     <div>
                       <div className="text-white font-semibold text-sm mb-1">$300,000+ Raised</div>
                       <div className="text-white/45 text-sm leading-relaxed font-light">
-                        100% grassroots. Every closing contributes to MS research and warrior
+                        100% grassroots. Every closing contributes to MS advocacy and warrior
                         support across New England.
                       </div>
                     </div>
@@ -754,12 +781,16 @@ function TeamSection() {
           animate={inView ? 'show' : 'hidden'}
         >
           {/* Left: team image */}
-          <motion.div variants={fadeIn} className="relative overflow-hidden rounded-xl border border-white/10 shadow-2xl" style={{ aspectRatio: '4/3' }}>
+          <motion.div
+            variants={fadeIn}
+            className="relative overflow-hidden rounded-xl border border-white/10 shadow-2xl"
+            style={{ aspectRatio: '4/5' }}
+          >
             <Image
-              src="/headshots/SWS TEAM Headshot.png"
-              alt="Sold With Sweeney &amp; Co. Team"
+              src="/headshots/brandon-and-paige-maine-gala.jpeg"
+              alt="Brandon and Paige at the Maine gala"
               fill
-              className="object-cover object-top"
+              className="object-cover object-center"
               sizes="(max-width: 1024px) 100vw, 50vw"
             />
           </motion.div>
@@ -796,8 +827,8 @@ function TeamSection() {
               className="text-white/60 text-base leading-relaxed font-light mb-10"
             >
               Whether you&apos;re buying your first home, selling a high-end property, or building
-              an investment portfolio, the Sweeney &amp; Co. team brings deep local knowledge,
-              strategic thinking, and relentless hustle to every transaction.
+              an investment portfolio, the Sold With Sweeney &amp; Co. team brings deep local
+              knowledge, strategic thinking, and relentless hustle to every transaction.
             </motion.p>
 
             {/* Team highlights */}
@@ -871,8 +902,8 @@ function ContactSection() {
             variants={fadeUp}
             className="text-white/55 text-base md:text-lg leading-relaxed font-light mb-12 max-w-xl mx-auto"
           >
-            Whether you&apos;re buying, selling, or investing — Brandon and the Sweeney &amp; Co.
-            team are ready to deliver results.
+            Whether you&apos;re buying, selling, or investing — Brandon and the Sold With Sweeney
+            &amp; Co. team are ready to deliver results.
           </motion.p>
 
           {/* Contact details */}

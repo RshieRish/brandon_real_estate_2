@@ -1,7 +1,8 @@
 'use client';
 
-import { motion } from 'framer-motion';
-import { XCircle, CheckCircle, Warning } from '@phosphor-icons/react';
+import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { ArrowArcRight, CheckCircle, CornersOut, XCircle } from '@phosphor-icons/react';
 
 interface Mistake {
   id: number;
@@ -44,6 +45,8 @@ const MISTAKES: Mistake[] = [
 const SPRING = { type: 'spring' as const, stiffness: 100, damping: 20 };
 
 export default function BuyerMistakes() {
+  const [activeCard, setActiveCard] = useState<number>(1);
+
   return (
     <section className="relative py-24 px-6 md:px-12 bg-dark-card">
       {/* Subtle halftone */}
@@ -77,11 +80,12 @@ export default function BuyerMistakes() {
             </h2>
           </div>
           <p className="text-gray text-sm leading-relaxed max-w-sm md:text-right">
-            Avoid the mistakes that derail most home purchases — and the cost overruns that follow.
+            Tap each flashcard to flip from the mistake to the move that keeps your deal clean,
+            competitive, and protected.
           </p>
         </div>
 
-        {/* Mistakes grid — 2-col on desktop */}
+        {/* Flashcard grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {MISTAKES.map((item, idx) => (
             <motion.div
@@ -90,38 +94,98 @@ export default function BuyerMistakes() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-60px' }}
               transition={{ ...SPRING, delay: idx * 0.09 }}
-              className="bg-[#0a0a0a] border border-dark-border p-6 flex flex-col gap-5 hover:border-gold/20 transition-colors duration-300"
+              className="min-h-[320px]"
             >
-              {/* Mistake */}
-              <div className="flex flex-col gap-3">
-                <div className="flex items-start gap-3">
-                  <XCircle
-                    weight="fill"
-                    className="text-red-400 w-5 h-5 mt-0.5 flex-shrink-0"
-                  />
-                  <div>
-                    <p className="text-white font-bold text-sm leading-snug">{item.mistake}</p>
-                    <p className="text-gray text-xs leading-relaxed mt-1.5">{item.mistakeDetail}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="border-t border-dark-border" />
-
-              {/* Fix */}
-              <div className="flex items-start gap-3">
-                <CheckCircle
-                  weight="fill"
-                  className="text-gold w-5 h-5 mt-0.5 flex-shrink-0"
+              <motion.button
+                type="button"
+                onClick={() => setActiveCard((current) => (current === item.id ? 0 : item.id))}
+                className="group relative h-full w-full overflow-hidden border border-dark-border bg-[#0a0a0a] p-0 text-left transition-colors duration-300 hover:border-gold/30"
+                whileHover={{ y: -3 }}
+                whileTap={{ scale: 0.99 }}
+                transition={SPRING}
+                aria-expanded={activeCard === item.id}
+              >
+                <div
+                  className="absolute inset-0 opacity-70"
+                  style={{
+                    background:
+                      activeCard === item.id
+                        ? 'linear-gradient(145deg, rgba(234,196,105,0.12), rgba(255,255,255,0.02) 55%, rgba(234,196,105,0.08))'
+                        : 'linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01) 55%, rgba(255,255,255,0.02))',
+                  }}
+                  aria-hidden="true"
                 />
-                <div>
-                  <p className="text-gold text-xs font-semibold tracking-wide uppercase mb-1">
-                    The Fix
-                  </p>
-                  <p className="text-white/80 text-xs leading-relaxed">{item.fix}</p>
-                </div>
-              </div>
+                <div className="absolute inset-px border border-white/4" aria-hidden="true" />
+                <AnimatePresence mode="wait" initial={false}>
+                  {activeCard === item.id ? (
+                    <motion.div
+                      key="back"
+                      initial={{ opacity: 0, rotateY: -90 }}
+                      animate={{ opacity: 1, rotateY: 0 }}
+                      exit={{ opacity: 0, rotateY: 90 }}
+                      transition={SPRING}
+                      className="relative flex h-full min-h-[320px] flex-col justify-between gap-6 p-6 md:p-7"
+                    >
+                      <div>
+                        <div className="mb-5 flex items-center justify-between gap-3">
+                          <span className="inline-flex items-center gap-2 text-gold text-[10px] font-semibold tracking-[0.24em] uppercase">
+                            <CheckCircle weight="fill" className="w-4 h-4" />
+                            The Fix
+                          </span>
+                          <span className="text-white/25 text-[10px] tracking-[0.24em] uppercase">
+                            Tap to flip back
+                          </span>
+                        </div>
+                        <h3 className="text-white text-xl font-black leading-tight tracking-tight mb-4">
+                          {item.mistake}
+                        </h3>
+                        <p className="text-white/75 text-sm leading-relaxed">
+                          {item.fix}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-gold/70 text-[11px] font-semibold tracking-[0.18em] uppercase">
+                        <ArrowArcRight weight="bold" className="w-4 h-4" />
+                        Brandon's buyer strategy
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="front"
+                      initial={{ opacity: 0, rotateY: 90 }}
+                      animate={{ opacity: 1, rotateY: 0 }}
+                      exit={{ opacity: 0, rotateY: -90 }}
+                      transition={SPRING}
+                      className="relative flex h-full min-h-[320px] flex-col justify-between gap-6 p-6 md:p-7"
+                    >
+                      <div>
+                        <div className="mb-5 flex items-center justify-between gap-3">
+                          <span className="inline-flex items-center gap-2 text-red-400 text-[10px] font-semibold tracking-[0.24em] uppercase">
+                            <XCircle weight="fill" className="w-4 h-4" />
+                            Buyer Mistake
+                          </span>
+                          <span className="inline-flex items-center gap-2 text-white/25 text-[10px] tracking-[0.24em] uppercase">
+                            <CornersOut weight="bold" className="w-4 h-4" />
+                            Tap to flip
+                          </span>
+                        </div>
+                        <h3 className="text-white text-xl font-black leading-tight tracking-tight mb-4">
+                          {item.mistake}
+                        </h3>
+                        <p className="text-white/55 text-sm leading-relaxed">
+                          {item.mistakeDetail}
+                        </p>
+                      </div>
+
+                      <div className="pt-5 border-t border-dark-border">
+                        <p className="text-gold/75 text-[11px] font-semibold tracking-[0.2em] uppercase">
+                          Flip for Brandon&apos;s move
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.button>
             </motion.div>
           ))}
         </div>

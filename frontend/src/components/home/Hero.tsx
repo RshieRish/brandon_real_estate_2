@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { House, CurrencyDollar, ChartLine, ArrowDown } from '@phosphor-icons/react';
@@ -49,22 +49,39 @@ const ctaButtons = [
 
 export default function Hero() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoReady, setVideoReady] = useState(false);
 
   return (
     <AnimatePresence>
-      <section className="relative min-h-[100dvh] flex flex-col justify-center overflow-hidden">
+      <section className="relative min-h-[100dvh] flex flex-col justify-center overflow-hidden bg-[#0a0a0a]">
         {/* Background video */}
         <video
           ref={videoRef}
           className="absolute inset-0 w-full h-full object-cover"
           src="/assets/aerial_drone_shot.mp4"
-          poster="/headshots/Brandon Sweeney Headshot.jpg"
+          preload="auto"
           autoPlay
           muted
           loop
           playsInline
+          onLoadedData={() => setVideoReady(true)}
+          style={{
+            opacity: videoReady ? 1 : 0,
+            transition: 'opacity 480ms ease',
+          }}
           aria-hidden="true"
         />
+
+        {!videoReady && (
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'radial-gradient(circle at 78% 18%, rgba(234,196,105,0.15) 0%, rgba(10,10,10,0.92) 40%, #0a0a0a 100%)',
+            }}
+            aria-hidden="true"
+          />
+        )}
 
         {/* Gradient overlay — dark left-dominant */}
         <div

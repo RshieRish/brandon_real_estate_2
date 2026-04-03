@@ -89,7 +89,7 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
             >
               Real estate is more than transactions — it&apos;s about community. Brandon donates a
               portion of every closing to&nbsp;
-              <span className="text-gold font-medium">MS is BS New England, Inc.</span>, funding research
+              <span className="text-gold font-medium">MS is BS New England, Inc.</span>, funding advocacy
               and support for those living with Multiple Sclerosis.
             </motion.p>
 
@@ -152,11 +152,12 @@ export default function GivingBack({ donationAmount = '300000' }: { donationAmou
                 <p className="text-white/60 text-sm md:text-base leading-relaxed mb-6 font-light">
                   Multiple Sclerosis has touched Brandon&apos;s life personally. That&apos;s why he
                   founded MS is BS New England, Inc. — a grassroots movement raising awareness and
-                  funds for MS research, events, and warrior support.
+                  funds for MS advocacy, events, and warrior support.
                 </p>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
-                  Every home Brandon sells contributes to the cause. When you work with Sweeney
-                  &amp; Co., your real estate transaction becomes part of something bigger.
+                  Every home Brandon sells contributes to the cause. When you work with the Sold
+                  With Sweeney &amp; Co. team, your real estate transaction becomes part of
+                  something bigger.
                 </p>
 
                 {/* Stat row */}

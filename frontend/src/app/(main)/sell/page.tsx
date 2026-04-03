@@ -266,9 +266,9 @@ export default function SellPage() {
                 className="font-black text-white leading-tight tracking-tight mb-6"
                 style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
               >
-                Let&apos;s Get Your{' '}
+                Stop Listing.{' '}
                 <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
-                  Home Sold
+                  Start Moving.
                 </span>
               </h2>
               <p className="text-gray text-sm leading-relaxed mb-8 max-w-md">

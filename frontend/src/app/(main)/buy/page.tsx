@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Phone } from '@phosphor-icons/react/dist/ssr';
+import { ArrowDown, Phone } from '@phosphor-icons/react/dist/ssr';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 import ReviewCard from '@/components/shared/ReviewCard';
@@ -127,6 +127,16 @@ export default function BuyPage() {
                 <Phone weight="bold" className="w-4 h-4" />
                 Book a Strategy Call
               </CTAButton>
+
+              <div className="mt-5">
+                <a
+                  href="#find-the-one"
+                  className="inline-flex items-center gap-2 text-gold text-sm font-semibold tracking-[0.18em] uppercase hover:text-white transition-colors duration-200"
+                >
+                  Find &quot;THE ONE&quot;
+                  <ArrowDown weight="bold" className="w-4 h-4" />
+                </a>
+              </div>
             </div>
 
             {/* Right stat block — 2×2 glass grid */}
@@ -250,7 +260,7 @@ export default function BuyPage() {
       </section>
 
       {/* ── Lead Capture ─────────────────────────────────────────────── */}
-      <section className="relative py-24 px-6 md:px-12 bg-dark-card overflow-hidden">
+      <section id="find-the-one" className="relative py-24 px-6 md:px-12 bg-dark-card overflow-hidden">
         {/* Gold glow top */}
         <div
           className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px"
@@ -272,7 +282,7 @@ export default function BuyPage() {
               >
                 Let&apos;s Find Your{' '}
                 <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
-                  Dream Home
+                  THE ONE
                 </span>
               </h2>
               <p className="text-gray text-sm leading-relaxed mb-8 max-w-md">
