@@ -280,7 +280,7 @@ export default function BuyPage() {
                 className="font-black text-white leading-tight tracking-tight mb-6"
                 style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
               >
-                Let&apos;s Find Your{' '}
+                Let&apos;s Find You{' '}
                 <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
                   THE ONE
                 </span>
