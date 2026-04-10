@@ -18,6 +18,7 @@ import CTAButton from '@/components/shared/CTAButton';
 type PropertyType = 'single_family' | 'multi_family' | 'condo' | 'townhouse';
 type Condition = 'excellent' | 'good' | 'fair' | 'needs_work';
 type FormState = 'form' | 'loading' | 'result';
+type EvaluatorRating = 'expected' | 'under' | 'above';
 
 interface EvaluatorForm {
   address: string;
@@ -34,6 +35,7 @@ interface EvaluatorForm {
 }
 
 interface EvaluatorResult {
+  calculation_id: number;
   address: string;
   price_low: number;
   price_high: number;
@@ -67,6 +69,12 @@ const UPGRADE_OPTIONS = [
   'Windows',
   'Flooring',
   'Addition',
+];
+
+const RATING_OPTIONS: { value: EvaluatorRating; label: string }[] = [
+  { value: 'expected', label: 'This is what I expected to get' },
+  { value: 'under', label: 'This is under what I expected to get' },
+  { value: 'above', label: 'This is more than what I expected to get' },
 ];
 
 const CONFIDENCE_CONFIG: Record<
@@ -133,6 +141,10 @@ export default function PropertyEvaluator() {
   const [form, setForm] = useState<EvaluatorForm>(INITIAL_FORM);
   const [result, setResult] = useState<EvaluatorResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rating, setRating] = useState<EvaluatorRating | null>(null);
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  const [ratingSubmitting, setRatingSubmitting] = useState(false);
+  const [ratingError, setRatingError] = useState<string | null>(null);
 
   function setField<K extends keyof EvaluatorForm>(key: K, value: EvaluatorForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -171,6 +183,9 @@ export default function PropertyEvaluator() {
 
       const data = await apiPost<EvaluatorResult>('/api/v1/evaluator/', payload);
       setResult(data);
+      setRating(null);
+      setRatingSubmitted(false);
+      setRatingError(null);
       setFormState('result');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
@@ -178,10 +193,33 @@ export default function PropertyEvaluator() {
     }
   }
 
+  async function handleRatingSubmit(nextRating: EvaluatorRating) {
+    if (!result?.calculation_id || ratingSubmitting || ratingSubmitted) return;
+
+    setRating(nextRating);
+    setRatingSubmitting(true);
+    setRatingError(null);
+
+    try {
+      await apiPost(`/api/v1/evaluator/${result.calculation_id}/rating`, {
+        rating: nextRating,
+      });
+      setRatingSubmitted(true);
+    } catch (err) {
+      setRatingError(err instanceof Error ? err.message : 'Could not save your feedback.');
+    } finally {
+      setRatingSubmitting(false);
+    }
+  }
+
   function handleReset() {
     setForm(INITIAL_FORM);
     setResult(null);
     setError(null);
+    setRating(null);
+    setRatingSubmitted(false);
+    setRatingSubmitting(false);
+    setRatingError(null);
     setFormState('form');
   }
 
@@ -475,6 +513,53 @@ export default function PropertyEvaluator() {
             {/* Disclaimer */}
             {result.disclaimer && (
               <p className="text-white/30 text-xs italic leading-relaxed">{result.disclaimer}</p>
+            )}
+
+            {result.calculation_id > 0 && (
+              <div className="glass border border-dark-border rounded-xl p-5 space-y-4">
+                <div>
+                  <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-2">
+                    How Did This Compare To Your Expectation?
+                  </p>
+                  <p className="text-white/55 text-sm font-light">
+                    This helps Brandon calibrate the valuation experience over time.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  {RATING_OPTIONS.map((option) => {
+                    const selected = rating === option.value;
+                    return (
+                      <motion.button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleRatingSubmit(option.value)}
+                        whileHover={ratingSubmitted ? undefined : { scale: 1.01 }}
+                        whileTap={ratingSubmitted ? undefined : { scale: 0.99 }}
+                        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+                        disabled={ratingSubmitting || ratingSubmitted}
+                        className={`w-full border px-4 py-3 text-left text-sm transition-colors ${
+                          selected || ratingSubmitted
+                            ? 'border-gold bg-gold/10 text-white'
+                            : 'border-dark-border bg-dark-surface text-white/60 hover:border-gold/40 hover:text-white'
+                        } disabled:cursor-not-allowed disabled:opacity-80`}
+                      >
+                        {option.label}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+
+                {ratingSubmitted && (
+                  <p className="text-gold text-xs font-semibold tracking-widest uppercase">
+                    Feedback saved
+                  </p>
+                )}
+
+                {ratingError && (
+                  <p className="text-red-400 text-xs">{ratingError}</p>
+                )}
+              </div>
             )}
 
             {/* CTAs */}

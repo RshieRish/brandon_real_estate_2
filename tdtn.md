@@ -3,6 +3,46 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-03-27
 
+### 2026-04-10 — Investor Preview Unlock Flow + Seller Expectation Ratings
+- What was built: Reworked the investor calculator so live deal numbers are visible immediately and moved the contact gate to the deeper AI report only; also added a post-result expectation rating flow to the seller valuation tool and persisted every valuation calculation plus rating in the database.
+- Files modified:
+  - `backend/routers/evaluator.py`
+  - `backend/tests/test_evaluator_router.py`
+  - `frontend/src/components/investor/InvestorCalculator.tsx`
+  - `frontend/src/components/investor/MeetingGate.tsx`
+  - `frontend/src/components/investor/FullReportResults.tsx`
+  - `frontend/src/components/investor/report-types.ts`
+  - `frontend/src/components/seller/PropertyEvaluator.tsx`
+- Key decisions:
+  - Investor metrics now render live on the page with no blur/lock overlay.
+  - The gated step is now specifically for the full AI report, which uses the existing `/api/v1/investor/analyze` backend endpoint and captures name/email/phone before requesting it.
+  - Changing any investor input invalidates the unlocked full report so stale report copy is never shown against new deal numbers.
+  - Fixed investor instant-math percentage handling so `Down Payment %` and `Interest Rate` now behave like real percentages (`15`, `7`) instead of requiring decimal fractions (`0.15`, `0.07`).
+  - Updated investor flip math to include estimated closing costs and surfaced those assumptions directly in the UI.
+  - Seller valuations now create a `seller_evaluator_calculation` analytics event on every run, regardless of whether the visitor leaves contact info.
+  - Seller result view now asks one follow-up question with three responses:
+    - `This is what I expected to get`
+    - `This is under what I expected to get`
+    - `This is more than what I expected to get`
+  - Rating submissions are stored as linked `seller_evaluator_rating` analytics events keyed to the originating calculation id.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed (`13` tests).
+  - `frontend`: `npm run typecheck` passed.
+  - `backend`: seller evaluator smoke test returned a live `calculation_id`.
+  - `backend`: `POST /api/v1/evaluator/{calculation_id}/rating` returned `{"ok": true}`.
+  - `backend`: `/api/v1/investor/analyze` logged `200 OK` during live smoke testing.
+  - Browser test on `http://localhost:3000/invest` completed end-to-end with screenshots captured at:
+    - `investor-instant-results-check.png`
+    - `investor-full-report-check.png`
+  - Using the user-provided flip scenario values, the instant snapshot produced:
+    - `Estimated Profit`: `$78,799`
+    - `Holding Costs`: `$14,081`
+    - `Closing Costs`: `$13,350`
+    - `Total Project Cost`: `$491,201`
+- Known note:
+  - The investor UI still does not take a property address as a direct input, so the user-provided `50 Cheever Ave, Dracut, MA 01826` address could not be entered into the calculator itself; the browser test used the provided financial inputs only.
+- Status: Complete
+
 ### 2026-04-10 — Booking Hardening + Calendar OAuth Bootstrap + Seller Estimate Recalibration
 - What was built: Hardened booking against Brandon's real calendar rules, added the missing one-time Google Calendar OAuth connect flow in admin settings, and recalibrated the seller estimate model to a more realistic local market band.
 - Files modified:

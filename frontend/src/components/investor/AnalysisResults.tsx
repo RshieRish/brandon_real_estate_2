@@ -62,6 +62,9 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
     flipROI,
     flipAnnualizedROI,
     maxAllowableOffer,
+    holdingCosts,
+    closingCosts,
+    totalProjectCost,
     monthlyCashFlow,
     cashOnCashReturn,
     capRate,
@@ -107,7 +110,26 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
             label="Max Allowable Offer"
             value={fmt(maxAllowableOffer)}
           />
+          <MetricCard
+            eyebrow="Flip"
+            label="Holding Costs"
+            value={fmt(holdingCosts)}
+          />
+          <MetricCard
+            eyebrow="Flip"
+            label="Closing Costs"
+            value={fmt(closingCosts)}
+          />
+          <MetricCard
+            eyebrow="Flip"
+            label="Total Project Cost"
+            value={fmt(totalProjectCost)}
+            valueColor="text-gold"
+          />
         </motion.div>
+        <p className="mt-3 text-white/35 text-xs font-light leading-relaxed">
+          Flip math assumes 1.5% buy-side closing costs and 1.25% sell-side closing costs.
+        </p>
       </div>
 
       {/* Rental / BRRRR Analysis */}

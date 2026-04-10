@@ -38,6 +38,20 @@
 - Current allowed navigate destinations are `/buy`, `/sell`, `/invest`, and `/about`.
 - Generative UI is still best treated as a later-stage extension for multiple rich widget types; the implemented server-driven structured actions are the safer current fit.
 
+## Calculator Notes
+- Investor calculator now shows live numeric results before any lead gate. The gate is only for the deeper AI report generated from `/api/v1/investor/analyze`.
+- Investor full-report gate now collects `name`, `email`, and `phone`, then renders AI explanation text, hold scenarios, exit-path commentary, and sensitivity cards once unlocked.
+- Changing investor deal inputs after unlocking clears the prior full report so stale analysis is not shown.
+- Investor calculator percentage inputs were corrected on 2026-04-10 to use human-entered percentages (`15`, `7`) instead of decimal fractions.
+- Investor flip math now includes estimated closing costs in the instant snapshot and exposes `Holding Costs`, `Closing Costs`, and `Total Project Cost` cards. Current assumptions: `1.5%` buy-side closing costs and `1.25%` sell-side closing costs.
+- Seller valuation tool now returns `calculation_id` from `backend/routers/evaluator.py`.
+- Every seller valuation run is persisted as an analytics event with `event_type="seller_evaluator_calculation"` and includes the request inputs plus returned estimate in `metadata`.
+- Seller feedback is now captured as a second analytics event with `event_type="seller_evaluator_rating"` linked back to the originating `calculation_id`.
+- Current seller rating choices are:
+  - `expected`
+  - `under`
+  - `above`
+
 ## Frontend Content Notes
 - About page stats strip was updated to use Brandon-specific milestones instead of generic numbers.
 - About page awards section now includes text-based recognition cards for MAR Good Neighbor, NEAR Good Neighbor, and Distinguished Young Professional.
@@ -83,6 +97,9 @@
 - 2026-04-09: `frontend/src/components/buyer/BuyerMistakes.tsx` is now a rotating deck with auto-advance, hover-to-pause, and click-to-flip `Buyer Mistake` / `The Fix` states; browser automation verified both reorder and flip behavior.
 - 2026-04-10: Added admin Google Calendar OAuth bootstrap endpoints and settings-page connect UI. Booking now truthfully blocks with a one-time authorization message until Brandon connects Calendar.
 - 2026-04-10: Recalibrated seller valuation baselines so the Lowell smoke-test sample now returns roughly `$512k-$602k` instead of overshooting the local market band.
+- 2026-04-10: Investor calculator now exposes its instant metrics up front and only gates the full AI report behind contact capture.
+- 2026-04-10: Seller calculator now stores every calculation plus the follow-up expectation rating in the database through analytics events.
+- 2026-04-10: Browser verification of the investor calculator was run against localhost with screenshots saved as `investor-instant-results-check.png` and `investor-full-report-check.png`.
 - 2026-04-09: Revised `BuyerMistakes.tsx` again so the right side is now a single rotating hero card instead of four stacked cards, and removed the extra `Rotating Buyer Playbook` explainer panel.
 - Next: If requested, extend the action system with lead-capture prompts, richer analytics events, or additional widget types beyond booking, or swap in an awards-collage image once that asset is added.
 

@@ -1,11 +1,16 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { LockSimple } from '@phosphor-icons/react';
 import { calculateMetrics, type InvestorInputs } from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
+import AnalysisResults from './AnalysisResults';
 import MeetingGate from './MeetingGate';
+import type {
+  InvestorAiReport,
+  InvestorAnalysisResponse,
+  InvestorLeadCapture,
+} from './report-types';
 
 const DEFAULT_INPUTS: InvestorInputs = {
   purchasePrice: 300000,
@@ -15,8 +20,8 @@ const DEFAULT_INPUTS: InvestorInputs = {
   rentalIncome: 2400,
   propertyTax: 4800,
   insurance: 1500,
-  downPaymentPct: 0.25,
-  interestRate: 0.07,
+  downPaymentPct: 25,
+  interestRate: 7,
   loanTermYears: 30,
 };
 
@@ -67,33 +72,39 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
   );
 }
 
-const fmt = (value: number) =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(value);
-
-const pct = (value: number) => value.toFixed(1) + '%';
-
 export default function InvestorCalculator() {
   const [inputs, setInputs] = useState<InvestorInputs>(DEFAULT_INPUTS);
-  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
 
   const metrics = useMemo(() => calculateMetrics(inputs), [inputs]);
 
   function handleChange(name: keyof InvestorInputs, value: number) {
     setInputs((prev) => ({ ...prev, [name]: value }));
+    setFullReport(null);
   }
 
-  async function handleUnlock(email: string) {
-    await apiPost('/api/v1/leads/', {
-      name: 'Investor Lead',
-      email,
-      lead_type: 'investor',
-      source: 'investor-calculator',
+  async function handleUnlock(contact: InvestorLeadCapture) {
+    const response = await apiPost<InvestorAnalysisResponse>('/api/v1/investor/analyze', {
+      property_type: 'single_family',
+      units: 1,
+      purchase_price: inputs.purchasePrice,
+      down_payment_pct: inputs.downPaymentPct,
+      interest_rate: inputs.interestRate,
+      loan_term_years: inputs.loanTermYears,
+      monthly_rent_total: inputs.rentalIncome,
+      rehab_costs: inputs.rehabCost,
+      annual_taxes: inputs.propertyTax,
+      annual_insurance: inputs.insurance,
+      monthly_maintenance: 0,
+      vacancy_rate_pct: 8,
+      mgmt_fee_pct: 0,
+      hold_years: Math.max(1, Math.ceil(inputs.holdMonths / 12)),
+      appreciation_rate_pct: 3,
+      name: contact.name || undefined,
+      email: contact.email,
+      phone: contact.phone || undefined,
     });
-    setIsUnlocked(true);
+    setFullReport(response.report);
   }
 
   return (
@@ -205,47 +216,22 @@ export default function InvestorCalculator() {
         transition={{ type: 'spring' as const, stiffness: 100, damping: 20, delay: 0.1 }}
         className="space-y-6"
       >
-        {!isUnlocked && (
-          /* Teaser — blurred locked metrics */
-          <div>
-            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-3">
-              Preview
-            </p>
-            <div className="grid grid-cols-3 gap-3 mb-6">
-              {[
-                { label: 'Cash-on-Cash', value: pct(metrics.cashOnCashReturn) },
-                { label: 'Flip Profit', value: fmt(metrics.flipProfit) },
-                { label: 'Cap Rate', value: pct(metrics.capRate) },
-              ].map((item) => (
-                <div
-                  key={item.label}
-                  className="glass border border-dark-border rounded-xl p-3 relative overflow-hidden"
-                >
-                  <span className="text-white/40 text-xs font-medium tracking-widest uppercase block mb-1">
-                    {item.label}
-                  </span>
-                  {/* Blurred value */}
-                  <span
-                    className="font-black text-lg text-white/20 block"
-                    style={{ filter: 'blur(6px)', userSelect: 'none' }}
-                    aria-hidden="true"
-                  >
-                    {item.value}
-                  </span>
-                  {/* Lock overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <LockSimple weight="fill" className="w-5 h-5 text-gold/70" aria-hidden="true" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <div>
+          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-1">
+            Instant Snapshot
+          </p>
+          <h3 className="text-white font-black text-lg tracking-tight mb-3">
+            Live Numbers As You Model The Deal
+          </h3>
+          <p className="text-white/50 text-sm font-light mb-5">
+            These headline numbers update immediately. The gated step below is only for the deeper AI report.
+          </p>
+          <AnalysisResults metrics={metrics} />
+        </div>
 
         <MeetingGate
-          isUnlocked={isUnlocked}
+          fullReport={fullReport}
           onUnlock={handleUnlock}
-          metrics={metrics}
         />
       </motion.div>
     </div>

@@ -3,27 +3,35 @@
 import { useState, type FormEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LockSimple, LockOpen } from '@phosphor-icons/react';
-import type { InvestorMetrics } from '@/lib/investor-calc';
-import AnalysisResults from './AnalysisResults';
+import FullReportResults from './FullReportResults';
+import type { InvestorAiReport, InvestorLeadCapture } from './report-types';
 
 interface MeetingGateProps {
-  isUnlocked: boolean;
-  onUnlock: (email: string) => void;
-  metrics: InvestorMetrics;
+  fullReport: InvestorAiReport | null;
+  onUnlock: (contact: InvestorLeadCapture) => Promise<void>;
 }
 
-export default function MeetingGate({ isUnlocked, onUnlock, metrics }: MeetingGateProps) {
-  const [email, setEmail] = useState('');
+export default function MeetingGate({ fullReport, onUnlock }: MeetingGateProps) {
+  const [form, setForm] = useState<InvestorLeadCapture>({
+    name: '',
+    email: '',
+    phone: '',
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const isUnlocked = Boolean(fullReport);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!form.email.trim()) return;
     setSubmitting(true);
     setError('');
     try {
-      await onUnlock(email.trim());
+      await onUnlock({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+      });
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {
@@ -58,21 +66,47 @@ export default function MeetingGate({ isUnlocked, onUnlock, metrics }: MeetingGa
             </div>
 
             <h3 className="text-white font-black text-xl md:text-2xl tracking-tight mb-2">
-              Unlock Your Full Analysis
+              Unlock the Full AI Report
             </h3>
             <p className="text-white/50 text-sm font-light mb-6 max-w-xs mx-auto">
-              Enter your email to see detailed projections for this deal.
+              Your instant numbers are already above. Add your contact info to unlock Brandon&apos;s full hold, exit, and sensitivity report.
             </p>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-3 max-w-sm mx-auto">
+              <label htmlFor="gate-name" className="sr-only">Name</label>
+              <input
+                id="gate-name"
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="Your name"
+                className="
+                  w-full bg-dark-surface border border-dark-border text-white
+                  placeholder:text-white/30 text-sm px-4 py-3 rounded-none
+                  focus:outline-none focus:border-gold transition-colors duration-200
+                "
+              />
               <label htmlFor="gate-email" className="sr-only">Email Address</label>
               <input
                 id="gate-email"
                 type="email"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={form.email}
+                onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
                 placeholder="your@email.com"
+                className="
+                  w-full bg-dark-surface border border-dark-border text-white
+                  placeholder:text-white/30 text-sm px-4 py-3 rounded-none
+                  focus:outline-none focus:border-gold transition-colors duration-200
+                "
+              />
+              <label htmlFor="gate-phone" className="sr-only">Phone Number</label>
+              <input
+                id="gate-phone"
+                type="tel"
+                value={form.phone}
+                onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+                placeholder="Phone number"
                 className="
                   w-full bg-dark-surface border border-dark-border text-white
                   placeholder:text-white/30 text-sm px-4 py-3 rounded-none
@@ -94,12 +128,12 @@ export default function MeetingGate({ isUnlocked, onUnlock, metrics }: MeetingGa
                   disabled:opacity-50 disabled:cursor-not-allowed
                 "
               >
-                {submitting ? 'Unlocking...' : 'Unlock Full Analysis'}
+                {submitting ? 'Building Report...' : 'Unlock Full Report'}
               </motion.button>
             </form>
 
             <p className="text-white/20 text-xs mt-4">
-              No spam. No obligation. Instant access.
+              No spam. No obligation. Instant report access.
             </p>
           </div>
         </motion.div>
@@ -117,16 +151,15 @@ export default function MeetingGate({ isUnlocked, onUnlock, metrics }: MeetingGa
             <LockOpen weight="fill" className="w-6 h-6 text-gold flex-shrink-0" aria-hidden="true" />
             <div>
               <p className="text-gold text-xs font-semibold tracking-[0.18em] uppercase">
-                Analysis Unlocked
+                Full AI Report Unlocked
               </p>
               <p className="text-white/50 text-xs font-light">
-                Full deal projections below
+                Brandon&apos;s deeper deal read is ready below
               </p>
             </div>
           </div>
 
-          {/* Full analysis */}
-          <AnalysisResults metrics={metrics} />
+          {fullReport && <FullReportResults report={fullReport} />}
 
           {/* Book CTA */}
           <motion.a

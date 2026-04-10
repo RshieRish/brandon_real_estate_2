@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
 from database import get_db
+from models.analytics_event import AnalyticsEvent
 from models.lead import Lead
 from services.evaluator_service import evaluate_property, geocode_address
 
@@ -23,6 +24,10 @@ class EvaluatorRequest(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+
+
+class RatingRequest(BaseModel):
+    rating: Literal["under", "expected", "above"]
 
 
 @router.post("/")
@@ -49,4 +54,48 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
     result["price_high"] = result.pop("range_high", result.get("price_high", 0))
     result["address"] = geo.get("display", req.address)
     result["disclaimer"] = "This is a market-based estimate, not a formal appraisal. For a true listing price strategy, book a valuation meeting with Brandon."
+    calculation_event = AnalyticsEvent(
+        event_type="seller_evaluator_calculation",
+        page="/sell",
+        referrer=None,
+        user_agent=None,
+        device_type=None,
+        metadata_json=json.dumps(
+            {
+                "inputs": data,
+                "result": result,
+            }
+        ),
+    )
+    db.add(calculation_event)
+    await db.flush()
+    result["calculation_id"] = calculation_event.id
     return result
+
+
+@router.post("/{calculation_id}/rating")
+async def submit_rating(
+    calculation_id: int,
+    payload: RatingRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    calculation = await db.get(AnalyticsEvent, calculation_id)
+    if not calculation or calculation.event_type != "seller_evaluator_calculation":
+        raise HTTPException(status_code=404, detail="Calculation not found.")
+
+    rating_event = AnalyticsEvent(
+        event_type="seller_evaluator_rating",
+        page="/sell",
+        referrer=None,
+        user_agent=None,
+        device_type=None,
+        metadata_json=json.dumps(
+            {
+                "calculation_id": calculation_id,
+                "rating": payload.rating,
+            }
+        ),
+    )
+    db.add(rating_event)
+    await db.flush()
+    return {"ok": True}

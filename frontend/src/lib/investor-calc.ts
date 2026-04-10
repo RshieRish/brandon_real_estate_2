@@ -6,8 +6,8 @@ export interface InvestorInputs {
   rentalIncome: number; // Monthly gross
   propertyTax: number;  // Annual
   insurance: number;    // Annual
-  downPaymentPct: number; // e.g. 0.25
-  interestRate: number;   // e.g. 0.07
+  downPaymentPct: number; // e.g. 25
+  interestRate: number;   // e.g. 7
   loanTermYears: number;  // e.g. 30
 }
 
@@ -17,6 +17,9 @@ export interface InvestorMetrics {
   flipROI: number;          // %
   flipAnnualizedROI: number; // %
   maxAllowableOffer: number; // 70% rule
+  holdingCosts: number;
+  closingCosts: number;
+  totalProjectCost: number;
 
   // Rental / BRRRR
   monthlyMortgage: number;
@@ -43,9 +46,11 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   const safeDivide = (n: number, d: number) => (d === 0 ? 0 : n / d);
 
   const totalInvested = purchasePrice + rehabCost;
-  const downPayment = purchasePrice * downPaymentPct;
+  const downPaymentRate = downPaymentPct / 100;
+  const interestRateDecimal = interestRate / 100;
+  const downPayment = purchasePrice * downPaymentRate;
   const loanAmount = purchasePrice - downPayment;
-  const monthlyRate = interestRate / 12;
+  const monthlyRate = interestRateDecimal / 12;
   const numPayments = loanTermYears * 12;
   const monthlyMortgage =
     monthlyRate === 0
@@ -56,8 +61,10 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
 
   // Flip
   const holdingCosts = monthlyMortgage * holdMonths;
-  const flipProfit = arv - totalInvested - holdingCosts;
-  const cashInvestedFlip = downPayment + rehabCost + holdingCosts;
+  const closingCosts = (purchasePrice * 0.015) + (arv * 0.0125);
+  const totalProjectCost = totalInvested + holdingCosts + closingCosts;
+  const flipProfit = arv - totalProjectCost;
+  const cashInvestedFlip = downPayment + rehabCost + holdingCosts + closingCosts;
   const flipROI = safeDivide(flipProfit, cashInvestedFlip) * 100;
   const flipAnnualizedROI = (flipROI / holdMonths) * 12;
   const maxAllowableOffer = arv * 0.7 - rehabCost;
@@ -80,6 +87,7 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
 
   return {
     flipProfit, flipROI, flipAnnualizedROI, maxAllowableOffer,
+    holdingCosts, closingCosts, totalProjectCost,
     monthlyMortgage, monthlyCashFlow, annualCashFlow,
     cashOnCashReturn, capRate, grm, noi,
     totalEquity, equityMultiple,
