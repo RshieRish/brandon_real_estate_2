@@ -14,23 +14,53 @@ from database import get_db
 from middleware.auth import require_admin
 from models.booking import Booking
 from models.lead import Lead
+from models.setting import Setting
 from schemas.booking import BookingCreate, BookingOut
 from services.calendar_service import (
     EASTERN_TZ,
     BookingValidationError,
     CalendarIntegrationError,
     create_event,
+    delete_event,
     exchange_code,
     ensure_booking_slot_available,
     get_auth_url,
     get_available_slots,
     get_calendar_connection_status,
 )
-from services.email_service import notify_new_booking
+from services.notification_service import (
+    enqueue_notification,
+    enqueue_notification_in_new_session,
+    run_notification_retry_pass,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 CALENDAR_OAUTH_STATE_TTL_MINUTES = 10
+CALENDAR_REFRESH_TOKEN_KEY = "google_calendar_refresh_token"
+
+
+async def load_calendar_refresh_token_from_db(db: AsyncSession) -> str:
+    if settings.GOOGLE_CALENDAR_REFRESH_TOKEN:
+        return settings.GOOGLE_CALENDAR_REFRESH_TOKEN
+
+    result = await db.execute(select(Setting).where(Setting.key == CALENDAR_REFRESH_TOKEN_KEY))
+    token_setting = result.scalar_one_or_none()
+    if token_setting and token_setting.value:
+        settings.GOOGLE_CALENDAR_REFRESH_TOKEN = token_setting.value
+        return token_setting.value
+
+    return ""
+
+
+async def persist_calendar_refresh_token_to_db(db: AsyncSession, refresh_token: str) -> None:
+    result = await db.execute(select(Setting).where(Setting.key == CALENDAR_REFRESH_TOKEN_KEY))
+    token_setting = result.scalar_one_or_none()
+    if token_setting:
+        token_setting.value = refresh_token
+        return
+
+    db.add(Setting(key=CALENDAR_REFRESH_TOKEN_KEY, value=refresh_token))
 
 
 def _build_calendar_oauth_state(admin_payload: dict) -> str:
@@ -110,7 +140,11 @@ def _render_calendar_oauth_page(title: str, message: str) -> str:
 
 
 @router.get("/calendar/status")
-async def calendar_status(_: dict = Depends(require_admin)):
+async def calendar_status(
+    _: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await load_calendar_refresh_token_from_db(db)
     return get_calendar_connection_status()
 
 
@@ -121,7 +155,12 @@ async def calendar_auth_url(admin_payload: dict = Depends(require_admin)):
 
 
 @router.get("/calendar/callback", response_class=HTMLResponse)
-async def calendar_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+async def calendar_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     if error:
         return HTMLResponse(
             _render_calendar_oauth_page(
@@ -142,7 +181,8 @@ async def calendar_callback(code: str | None = None, state: str | None = None, e
 
     try:
         _validate_calendar_oauth_state(state)
-        exchange_code(code, state)
+        refresh_token = exchange_code(code, state)
+        await persist_calendar_refresh_token_to_db(db, refresh_token)
     except HTTPException as exc:
         return HTMLResponse(
             _render_calendar_oauth_page("Calendar Not Connected", exc.detail),
@@ -173,6 +213,7 @@ async def available_slots(
     location: str = Query(
         "", description="Client address for in-person meetings"
     ),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return available booking slots for a specific date.
 
@@ -188,6 +229,7 @@ async def available_slots(
         return {"error": "Invalid date format. Use ISO format, e.g. 2026-03-25"}
 
     try:
+        await load_calendar_refresh_token_from_db(db)
         slots = await get_available_slots(
             target_date=target_date,
             meeting_type=meeting_type,
@@ -211,6 +253,7 @@ async def available_slots(
 async def create_booking(data: BookingCreate, db: AsyncSession = Depends(get_db)):
     """Create a booking, upsert the lead, and create a Google Calendar event."""
     try:
+        await load_calendar_refresh_token_from_db(db)
         slot_start, meeting_end = await ensure_booking_slot_available(
             scheduled_at=data.scheduled_at,
             meeting_type=data.meeting_type,
@@ -220,6 +263,19 @@ async def create_booking(data: BookingCreate, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except CalendarIntegrationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    await enqueue_notification_in_new_session(
+        event_type="booking_attempted",
+        payload={
+            "name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+            "meeting_type": data.meeting_type,
+            "context": data.context,
+            "requested_at": data.scheduled_at.isoformat(),
+            "location": data.location or "",
+        },
+    )
 
     # Upsert lead
     result = await db.execute(select(Lead).where(Lead.email == data.email))
@@ -281,26 +337,39 @@ async def create_booking(data: BookingCreate, db: AsyncSession = Depends(get_db)
         notes=data.notes or "",
     )
     db.add(booking)
-    await db.flush()
+    try:
+        await db.flush()
+    except Exception:
+        try:
+            await delete_event(google_event_id)
+        except CalendarIntegrationError:
+            logger.exception(
+                "Booking database save failed and cleanup of calendar event %s also failed",
+                google_event_id,
+            )
+        raise
     await db.refresh(booking)
 
     logger.info(
         "Booking created: %s with %s on %s (calendar: %s)",
         data.meeting_type, data.name, slot_start, google_event_id,
     )
-
-    # Send email notification to Brandon (fire-and-forget)
-    try:
-        await notify_new_booking(
-            name=data.name,
-            email=data.email,
-            phone=data.phone or "",
-            meeting_type=data.meeting_type,
-            scheduled_at=str(slot_start),
-            location=data.location or "",
-            context=data.context,
-        )
-    except Exception:
-        logger.exception("Failed to send booking notification email")
+    await enqueue_notification(
+        db,
+        event_type="booking_confirmed",
+        payload={
+            "booking_id": booking.id,
+            "name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+            "meeting_type": data.meeting_type,
+            "context": data.context,
+            "scheduled_at": slot_start.isoformat(),
+            "location": data.location or "",
+            "google_event_id": google_event_id,
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
 
     return booking

@@ -22,6 +22,7 @@ import models.analytics_event  # noqa: F401
 import models.booking  # noqa: F401
 import models.admin_user  # noqa: F401
 import models.setting  # noqa: F401
+import models.notification_job  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

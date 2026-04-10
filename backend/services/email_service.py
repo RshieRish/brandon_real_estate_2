@@ -22,11 +22,10 @@ logger = logging.getLogger(__name__)
 BRANDON_EMAIL = "brandon@soldwithsweeney.com"
 
 
-async def _send_email(subject: str, body_html: str, to: str = BRANDON_EMAIL) -> bool:
-    """Send an email via SMTP. Returns True on success."""
+async def send_internal_email(subject: str, body_html: str, to: str = BRANDON_EMAIL) -> None:
+    """Send an internal email via SMTP or raise on failure."""
     if not settings.SMTP_HOST or not settings.SMTP_USER:
-        logger.warning("SMTP not configured — skipping email: %s", subject)
-        return False
+        raise RuntimeError("SMTP is not configured.")
 
     msg = MIMEMultipart("alternative")
     msg["From"] = f"SWS Platform <{settings.SMTP_USER}>"
@@ -34,16 +33,21 @@ async def _send_email(subject: str, body_html: str, to: str = BRANDON_EMAIL) -> 
     msg["Subject"] = subject
     msg.attach(MIMEText(body_html, "html"))
 
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.SMTP_HOST,
+        port=settings.SMTP_PORT,
+        start_tls=True,
+        username=settings.SMTP_USER,
+        password=settings.SMTP_PASS,
+    )
+    logger.info("Email sent: %s -> %s", subject, to)
+
+
+async def _send_email(subject: str, body_html: str, to: str = BRANDON_EMAIL) -> bool:
+    """Send an email via SMTP. Returns True on success."""
     try:
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.SMTP_HOST,
-            port=settings.SMTP_PORT,
-            start_tls=True,
-            username=settings.SMTP_USER,
-            password=settings.SMTP_PASS,
-        )
-        logger.info("Email sent: %s → %s", subject, to)
+        await send_internal_email(subject=subject, body_html=body_html, to=to)
         return True
     except Exception:
         logger.exception("Failed to send email: %s", subject)

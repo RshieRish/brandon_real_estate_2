@@ -299,6 +299,19 @@ async def create_event(
         raise CalendarIntegrationError("Unable to create a Google Calendar event.") from exc
 
 
+async def delete_event(event_id: str) -> None:
+    """Delete a Google Calendar event by ID."""
+    try:
+        service = _get_calendar_service()
+        service.events().delete(calendarId="primary", eventId=event_id, sendUpdates="all").execute()
+        logger.info("Deleted calendar event: %s", event_id)
+    except CalendarIntegrationError:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to delete calendar event")
+        raise CalendarIntegrationError("Unable to delete a Google Calendar event.") from exc
+
+
 async def get_available_slots(
     target_date: datetime,
     meeting_type: str = "phone",

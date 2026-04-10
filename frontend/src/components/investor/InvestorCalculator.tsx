@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { calculateMetrics, type InvestorInputs } from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
@@ -75,8 +75,50 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
 export default function InvestorCalculator() {
   const [inputs, setInputs] = useState<InvestorInputs>(DEFAULT_INPUTS);
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
+  const engagementRetryTimeoutRef = useRef<number | null>(null);
 
   const metrics = useMemo(() => calculateMetrics(inputs), [inputs]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const hasChanged = JSON.stringify(inputs) !== JSON.stringify(DEFAULT_INPUTS);
+    const alreadySent = window.sessionStorage.getItem('investor_engagement_sent') === '1';
+    if (!hasChanged || alreadySent) return undefined;
+
+    const existingKey = window.sessionStorage.getItem('investor_engagement_key');
+    const sessionKey = existingKey || window.crypto?.randomUUID?.() || `investor-${Date.now()}`;
+    if (!existingKey) {
+      window.sessionStorage.setItem('investor_engagement_key', sessionKey);
+    }
+
+    let cancelled = false;
+
+    const sendEngagement = async () => {
+      try {
+        await apiPost<{ queued: boolean }>('/api/v1/investor/engagement', {
+          session_key: sessionKey,
+          purchase_price: inputs.purchasePrice,
+          rehab_costs: inputs.rehabCost,
+          arv: inputs.arv,
+          hold_months: inputs.holdMonths,
+        });
+        window.sessionStorage.setItem('investor_engagement_sent', '1');
+      } catch {
+        if (cancelled) return;
+        engagementRetryTimeoutRef.current = window.setTimeout(sendEngagement, 5000);
+      }
+    };
+
+    engagementRetryTimeoutRef.current = window.setTimeout(sendEngagement, 1200);
+
+    return () => {
+      cancelled = true;
+      if (engagementRetryTimeoutRef.current) {
+        window.clearTimeout(engagementRetryTimeoutRef.current);
+      }
+    };
+  }, [inputs]);
 
   function handleChange(name: keyof InvestorInputs, value: number) {
     setInputs((prev) => ({ ...prev, [name]: value }));

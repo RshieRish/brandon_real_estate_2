@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models.lead import Lead
 from services.gemini import chat_response
+from services.notification_service import enqueue_notification, run_notification_retry_pass
 import json
 
 router = APIRouter()
@@ -70,4 +71,18 @@ async def capture_lead_from_chat(req: CaptureLeadRequest, db: AsyncSession = Dep
     )
     db.add(lead)
     await db.flush()
+    await enqueue_notification(
+        db,
+        event_type="chat_lead_captured",
+        payload={
+            "lead_id": lead.id,
+            "name": req.name,
+            "email": req.email,
+            "phone": req.phone,
+            "lead_type": req.lead_type,
+            "lead_context": req.lead_context,
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
     return {"id": lead.id, "message": "Lead captured"}

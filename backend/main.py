@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +18,13 @@ from routers import (
     investor,
     leads,
 )
+from services.notification_service import (
+    NOTIFICATION_RETRY_INTERVAL_SECONDS,
+    run_notification_retry_pass,
+)
 
 app = FastAPI(title="Brandon RE API", version="1.0.0", docs_url="/docs")
+_notification_retry_task: asyncio.Task | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,6 +44,31 @@ app.include_router(booking.router, prefix="/api/v1/booking", tags=["booking"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(content.router, prefix="/api/v1/content", tags=["content"])
 app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
+
+
+async def _notification_retry_loop() -> None:
+    while True:
+        await run_notification_retry_pass(limit=20)
+        await asyncio.sleep(NOTIFICATION_RETRY_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def start_notification_retry_loop() -> None:
+    global _notification_retry_task
+    if _notification_retry_task is None or _notification_retry_task.done():
+        _notification_retry_task = asyncio.create_task(_notification_retry_loop())
+
+
+@app.on_event("shutdown")
+async def stop_notification_retry_loop() -> None:
+    global _notification_retry_task
+    if _notification_retry_task:
+        _notification_retry_task.cancel()
+        try:
+            await _notification_retry_task
+        except asyncio.CancelledError:
+            pass
+        _notification_retry_task = None
 
 
 @app.exception_handler(Exception)

@@ -3,6 +3,152 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-03-27
 
+### 2026-04-10 — Brandon Notification Queue Implemented
+- What was built: Added a durable `notification_jobs` queue for Brandon-only internal email notifications, wired it into lead capture, chatbot lead capture, funnel registrations, booking attempts, booking confirmations, seller calculator activity, seller calculator ratings, investor full-report requests, and investor calculator engagement.
+- Files created:
+  - `backend/models/notification_job.py`
+  - `backend/services/notification_service.py`
+  - `backend/alembic/versions/7efdda0d6b65_add_notification_jobs.py`
+  - `backend/tests/test_notification_service.py`
+  - `backend/tests/test_leads_notifications.py`
+  - `backend/tests/test_investor_notifications.py`
+- Files modified:
+  - `backend/alembic/env.py`
+  - `backend/main.py`
+  - `backend/routers/leads.py`
+  - `backend/routers/chat.py`
+  - `backend/routers/funnels.py`
+  - `backend/routers/booking.py`
+  - `backend/routers/evaluator.py`
+  - `backend/routers/investor.py`
+  - `backend/services/email_service.py`
+  - `backend/tests/test_booking_calendar.py`
+  - `backend/tests/test_evaluator_router.py`
+  - `frontend/src/components/investor/InvestorCalculator.tsx`
+- Key decisions:
+  - Notifications now save to DB first as `notification_jobs` with status, attempts, next retry time, last error, and delivered timestamp.
+  - Failed notification sends are kept and retried with escalating backoff instead of being silently dropped.
+  - Added a background retry loop in `backend/main.py` so failed jobs continue retrying even without fresh user traffic.
+  - Booking attempts are queued in a separate DB session before downstream booking work continues, so Brandon can still be notified of attempted bookings even if later calendar or booking persistence steps fail.
+  - Booking confirmations now use the queue instead of direct inline SMTP calls.
+  - Seller evaluator usage and ratings now both notify Brandon.
+  - Investor report requests notify Brandon from the backend, and investor calculator engagement now sends a one-time event from the frontend per browser session with retry-on-failure.
+  - Email rendering was centralized with explicit subjects for lead, funnel, chat, booking, seller calculator, and investor events.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed (`30` tests).
+  - `frontend`: `npm run typecheck` passed.
+  - `backend`: `./.venv/bin/alembic upgrade head` succeeded, upgrading `0d8d9bce6f44 -> 7efdda0d6b65`.
+- Deployment note:
+  - The connected database now has the `notification_jobs` table, but the live Railway backend still needs these code changes deployed before production traffic will use the queue and retry loop.
+- Status: Complete locally; ready to deploy
+
+### 2026-04-10 — Brandon Notification Queue Spec + Plan Drafted
+- What was written:
+  - A notification-queue design spec for Brandon-only internal email alerts with durable retry-until-delivered behavior.
+  - A detailed implementation plan covering the new `notification_jobs` model, queue service, route integrations, investor engagement endpoint, retry processing, and verification steps.
+- Files created:
+  - `docs/superpowers/specs/2026-04-10-brandon-notification-queue-design.md`
+  - `docs/superpowers/plans/2026-04-10-brandon-notification-queue.md`
+- Coverage included in the plan:
+  - Standard leads
+  - Funnel registrations
+  - Chatbot lead capture
+  - Booking attempts
+  - Booking confirmations
+  - Seller calculator usage
+  - Seller calculator rating feedback
+  - Investor full-report requests
+  - Investor calculator engagement before contact capture
+- Status: Planning complete; implementation not started yet in this plan phase
+
+### 2026-04-10 — Booking Email Delivery Diagnosis
+- What was analyzed: Investigated why Brandon did not receive a booking email even though SMTP is configured.
+- Files reviewed:
+  - `backend/routers/booking.py`
+  - `backend/services/email_service.py`
+  - `backend/config.py`
+- Findings:
+  - SMTP credentials themselves are not the primary blocker in the local environment; direct calls to `send_test_email()` and `notify_new_booking()` both returned `True`.
+  - Booking notifications are only attempted at the very end of `create_booking(...)`, after:
+    - calendar token load
+    - slot validation
+    - Google Calendar event creation
+    - booking DB insert / refresh
+  - Because the live booking flow had been failing before that point (`bookings.location` schema mismatch, then non-durable Google refresh-token persistence), Brandon would not get an email even if SMTP was perfectly configured.
+  - The current code also hides email send failures:
+    - `backend/services/email_service.py` catches SMTP exceptions and returns `False`
+    - `backend/routers/booking.py` ignores that boolean return value and only logs exceptions
+    - result: the API can appear successful even when Brandon never receives an email
+  - The notification is sent from Brandon's own Gmail SMTP account to the same Brandon email address, which can make Gmail delivery less obvious in the inbox even when accepted by SMTP.
+- Status: Diagnosed; no product-code change in this analysis pass
+
+### 2026-04-10 — Live Chat Booking Verification + Booking Schema/Token Persistence Fix
+- What was analyzed and fixed:
+  - Ran a live production booking verification against the chatbot/booking endpoints after Google Calendar was reconnected.
+  - Found that the live chatbot correctly returned the calendar widget, but the booking POST crashed because the production `bookings` table was missing the `location` column.
+  - Added a new Alembic migration for `bookings.location`, applied it to the connected production database, and added cleanup logic so orphaned Google events are deleted if the DB save fails after calendar insertion.
+  - Found a second production issue: the Google Calendar refresh token was only being written into the container-local `.env`, which is not durable on Railway across deploys / instance changes.
+  - Added DB-backed refresh-token persistence helpers in the booking router so the OAuth callback also stores the token in the `settings` table, and booking/status/availability routes load the token from DB before calling Google Calendar.
+- Files modified:
+  - `backend/alembic/versions/0d8d9bce6f44_add_location_to_bookings.py`
+  - `backend/routers/booking.py`
+  - `backend/services/calendar_service.py`
+  - `backend/tests/test_booking_calendar.py`
+  - `backend/tests/test_booking_token_persistence.py`
+- Live verification details:
+  - `POST /api/v1/chat/` on the live Railway backend returned `widget: "calendar_picker"` for a booking request.
+  - Before the schema fix, `POST /api/v1/booking/` failed with `UndefinedColumnError: column "location" of relation "bookings" does not exist`.
+  - The first failed live booking attempt created a real Google Calendar event before the DB insert crashed, which removed the `2026-04-13 09:00 AM ET` slot from availability.
+  - After applying the migration, the live database schema now includes `bookings.location`.
+  - Repeated live availability / booking checks then showed `Google Calendar needs one-time authorization before Brandon can accept bookings.`, confirming the refresh token was not durably persisted in Railway.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest tests.test_booking_calendar -v` passed (`5` tests).
+  - `backend`: `./.venv/bin/python -m unittest tests.test_booking_token_persistence -v` passed (`3` tests).
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed (`16` tests) after the schema + cleanup changes.
+  - `backend`: `./.venv/bin/alembic upgrade head` succeeded against the connected production database, upgrading `9c1fb48ea689 -> 0d8d9bce6f44`.
+- Remaining external step:
+  - After deploying the new DB-backed token-persistence code, Brandon will need to reconnect Google Calendar one more time so the refresh token is stored durably in the database instead of only the Railway container filesystem.
+- Status: Local code fix complete, production DB migrated, still needs backend deploy + one reconnect to make live chatbot bookings reliable again
+
+### 2026-04-10 — Google Calendar OAuth Access Blocked Diagnosis
+- What was analyzed: Investigated why the Google Calendar connect flow shows `Access blocked` during Brandon's admin Settings authorization attempt.
+- Files reviewed:
+  - `backend/config.py`
+  - `backend/services/calendar_service.py`
+  - `backend/routers/booking.py`
+  - `frontend/src/app/admin/settings/page.tsx`
+  - `backend/tests/test_calendar_oauth.py`
+  - `backend/.env.example`
+- Root cause found:
+  - The generated Google OAuth URL is using `http://localhost:8000/api/v1/booking/calendar/callback` as the redirect URI because `GOOGLE_CALENDAR_REDIRECT_URI` is not set in the backend environment and the app falls back to the localhost default in `backend/config.py`.
+  - A direct repro against Google's OAuth endpoint returned `redirect_uri_mismatch`, which surfaces in the browser as `Access blocked` / `This app's request is invalid`.
+- Verification:
+  - Generated the live auth URL from `services.calendar_service.get_auth_url(...)`.
+  - Parsed the outgoing OAuth query and confirmed `redirect_uri=http://localhost:8000/api/v1/booking/calendar/callback`.
+  - Direct fetch of the Google OAuth URL finished at `https://accounts.google.com/signin/oauth/error?...authError=...redirect_uri_mismatch...`.
+- Fix required:
+  - Set `GOOGLE_CALENDAR_REDIRECT_URI` in the deployed backend environment to the real public backend callback URL.
+  - Add that exact same callback URL to the OAuth client's Authorized redirect URIs in Google Cloud Console.
+- Status: Diagnosed; no product code changed in this analysis pass
+
+### 2026-04-10 — Admin Login Seed Resync Fix
+- What was built: Fixed the admin seeding flow so Brandon's default admin account is not left with a stale password hash when the row already exists in the database.
+- Files modified:
+  - `backend/seed.py`
+  - `backend/tests/test_seed_admin_user.py`
+- Key decisions:
+  - Added `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` constants so the seed behavior is centralized.
+  - Introduced `ensure_admin_user(...)` to handle both create and update cases for the admin account.
+  - If the Brandon admin row already exists but its stored hash no longer matches the expected seeded password, the seed now rewrites the hash instead of silently leaving the stale credentials in place.
+  - Ran the updated seed against the connected database so the live Brandon admin row was resynced immediately.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest tests.test_seed_admin_user -v` passed (`2` tests).
+  - `backend`: direct database verification confirmed `pwd_context.verify("changeme123!", user.hashed_password) == True` for `brandon@soldwithsweeney.com`.
+  - `backend`: direct ASGI smoke test to `POST /api/v1/auth/login` with Brandon's seeded credentials returned `200` and a bearer token.
+- Root cause:
+  - `seed.py` previously only created the admin user if it did not exist, so an older password hash in the live database could persist forever even though the seed file still advertised `changeme123!`.
+- Status: Complete
+
 ### 2026-04-10 — Investor Preview Unlock Flow + Seller Expectation Ratings
 - What was built: Reworked the investor calculator so live deal numbers are visible immediately and moved the contact gate to the deeper AI report only; also added a post-result expectation rating flow to the seller valuation tool and persisted every valuation calculation plus rating in the database.
 - Files modified:
@@ -236,6 +382,30 @@ Last Updated: 2026-03-27
     - After rotation: `Using all your savings for the down payment` → `Buying with the listing agent` → `Picking a lender based on rate alone` → `Shopping before pre-approval`
   - Browser automation also confirmed clicking a card flips it to `The Fix`.
   - Screenshots captured: `home-reviews-two-left.png`, `buy-mistakes-rotating-initial.png`, `buy-mistakes-rotating-flipped.png`
+- Status: Complete
+
+### 2026-04-10 — Brandon Notification Queue Hardening
+- What was built: Tightened the new Brandon notification queue so user actions commit before immediate email delivery is attempted.
+- Files modified:
+  - `backend/services/notification_service.py`
+  - `backend/routers/leads.py`
+  - `backend/routers/chat.py`
+  - `backend/routers/funnels.py`
+  - `backend/routers/booking.py`
+  - `backend/routers/evaluator.py`
+  - `backend/routers/investor.py`
+  - `backend/tests/test_booking_calendar.py`
+  - `backend/tests/test_evaluator_router.py`
+  - `backend/tests/test_investor_notifications.py`
+  - `backend/tests/test_leads_notifications.py`
+- Implementation details:
+  - Route integrations now commit the saved lead, booking, calculator event, or rating plus its pending notification job before any immediate send pass runs.
+  - `enqueue_notification_in_new_session()` now persists the pending job first and only then triggers the retry worker path.
+  - Notification email table rendering now HTML-escapes payload content before composing Brandon-facing emails.
+- Verification:
+  - `backend`: `./.venv/bin/alembic upgrade head` passed.
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed with 30 tests.
+  - `frontend`: `npm run typecheck` passed.
 - Status: Complete
 
 ### 2026-04-02 — About Gala Image Swap

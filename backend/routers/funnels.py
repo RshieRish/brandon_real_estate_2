@@ -10,6 +10,7 @@ from models.funnel import Funnel
 from models.lead import Lead
 from schemas.funnel import FunnelCreate, FunnelOut
 from services.funnel_service import generate_funnel_content
+from services.notification_service import enqueue_notification, run_notification_retry_pass
 from middleware.auth import require_admin
 
 router = APIRouter()
@@ -174,4 +175,19 @@ async def register_for_funnel(slug: str, req: RegisterRequest, db: AsyncSession 
     db.add(lead)
     funnel.registrations = (funnel.registrations or 0) + 1
     await db.flush()
+    await enqueue_notification(
+        db,
+        event_type="funnel_registration",
+        payload={
+            "funnel_id": funnel.id,
+            "funnel_slug": funnel.slug,
+            "funnel_title": funnel.title,
+            "audience": funnel.audience,
+            "name": req.name,
+            "email": req.email,
+            "phone": req.phone,
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
     return {"ok": True, "message": "Registered successfully"}

@@ -6,6 +6,7 @@ import json
 from database import get_db
 from models.analytics_event import AnalyticsEvent
 from models.lead import Lead
+from services.notification_service import enqueue_notification, run_notification_retry_pass
 from services.evaluator_service import evaluate_property, geocode_address
 
 router = APIRouter()
@@ -69,6 +70,28 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
     )
     db.add(calculation_event)
     await db.flush()
+    await enqueue_notification(
+        db,
+        event_type="seller_evaluator_calculated",
+        payload={
+            "address": result["address"],
+            "property_type": req.property_type,
+            "bedrooms": req.bedrooms,
+            "bathrooms": req.bathrooms,
+            "sqft": req.sqft,
+            "year_built": req.year_built,
+            "condition": req.condition,
+            "upgrades": req.upgrades or [],
+            "price_low": result["price_low"],
+            "price_high": result["price_high"],
+            "confidence": result["confidence"],
+            "name": req.name,
+            "email": req.email,
+            "phone": req.phone,
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
     result["calculation_id"] = calculation_event.id
     return result
 
@@ -98,4 +121,14 @@ async def submit_rating(
     )
     db.add(rating_event)
     await db.flush()
+    await enqueue_notification(
+        db,
+        event_type="seller_evaluator_rated",
+        payload={
+            "calculation_id": calculation_id,
+            "rating": payload.rating,
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
     return {"ok": True}

@@ -7,6 +7,7 @@ from database import get_db
 from models.lead import Lead
 from schemas.lead import LeadCreate, LeadUpdate, LeadOut
 from middleware.auth import require_admin
+from services.notification_service import enqueue_notification, run_notification_retry_pass
 from services.zapier_service import push_lead_to_zapier
 
 router = APIRouter()
@@ -26,6 +27,22 @@ async def create_lead(
     db.add(lead)
     await db.flush()
     await db.refresh(lead)
+
+    await enqueue_notification(
+        db,
+        event_type="lead_captured",
+        payload={
+            "lead_id": lead.id,
+            "name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+            "source": data.source,
+            "lead_type": data.lead_type,
+            "metadata": data.metadata_ or {},
+        },
+    )
+    await db.commit()
+    await run_notification_retry_pass(limit=5)
 
     # Fire-and-forget: push to Zapier → KW Command in the background
     background_tasks.add_task(

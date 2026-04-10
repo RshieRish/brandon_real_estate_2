@@ -5,6 +5,8 @@
 - FastAPI backend: all AI, DB, business logic
 - Gemini flash for chatbot speed; Gemini pro for complex analysis
 - Neon PostgreSQL for launch
+- 2026-04-10: Approved direction for Brandon internal notifications is a DB-backed `notification_jobs` queue with save-first semantics and retry-until-delivered email behavior instead of inline route-level SMTP sends.
+- 2026-04-10: Implemented `notification_jobs` with DB-backed retry state plus a background retry loop in `backend/main.py`, so failed Brandon-notification emails can continue retrying independently of new traffic.
 
 ## Integration Status
 ## Integration Status
@@ -23,6 +25,19 @@
 
 ## Known Issues
 - Real Google Calendar event creation is still blocked until Brandon completes the one-time OAuth connect flow and the backend receives a refresh token.
+- As of 2026-04-10, the immediate `Access blocked` error on the Google Calendar connect flow is specifically caused by `redirect_uri_mismatch`: the backend is still generating the OAuth URL with the localhost callback because `GOOGLE_CALENDAR_REDIRECT_URI` is unset and falls back to `http://localhost:8000/api/v1/booking/calendar/callback`.
+- The next required setup step is to point `GOOGLE_CALENDAR_REDIRECT_URI` at the real public backend callback and register that exact URI in the Google Cloud OAuth client.
+- As of the later 2026-04-10 live booking verification, the redirect mismatch was fixed, but a separate persistence issue remained: the OAuth callback currently writes the Google Calendar refresh token into the container-local backend `.env`, which is not durable on Railway across deploys / instance changes.
+- Local code now also stores the refresh token in the `settings` table and reloads it from DB before live calendar reads/writes, but that backend code still needs deployment and then one more Google reconnect to repopulate the durable token store.
+- A real test Google event was accidentally created on Brandon's calendar for Monday, April 13, 2026 at 9:00 AM ET during the failed pre-migration booking attempt; that slot disappeared from availability even though the DB write failed.
+- Booking emails are only sent after the full booking flow succeeds. So when live bookings fail earlier in the pipeline, Brandon will not receive any SMTP notification even if Gmail SMTP is configured correctly.
+- Current email behavior also masks delivery failures: `_send_email()` returns `False` on SMTP failure, but the booking route does not check that return value, so the app does not currently surface email-delivery failure to the UI or API response.
+- As of the notification-queue implementation on 2026-04-10, Brandon notifications no longer depend on inline route-level SMTP helpers in the new code path; they are queued and retried from `notification_jobs`. This still needs a backend deploy before production uses it.
+
+## Admin Auth Notes
+- As of 2026-04-10, the Brandon admin login issue was traced to seed drift: the `admin_users` row already existed in the live database with an older hash that did not match `changeme123!`.
+- `backend/seed.py` now uses `ensure_admin_user(...)` to create the Brandon admin account if missing and also refresh the stored hash if the existing row no longer matches the expected seeded password.
+- The connected database was reseeded on 2026-04-10, and a direct `/api/v1/auth/login` smoke test succeeded for `brandon@soldwithsweeney.com` with the seeded password from `seed.py`.
 
 ## Chatbot Architecture
 - Chat widget is mounted globally from `frontend/src/components/layout/ClientWidgets.tsx`, so it appears across public pages.
@@ -89,6 +104,10 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-10: Wrote the durable notification queue design at `docs/superpowers/specs/2026-04-10-brandon-notification-queue-design.md`.
+- 2026-04-10: Wrote the implementation plan at `docs/superpowers/plans/2026-04-10-brandon-notification-queue.md`.
+- 2026-04-10: Implemented the notification queue itself, including route integrations for leads, chat leads, funnels, booking attempts, booking confirmations, seller evaluator usage, seller ratings, investor report requests, and investor calculator engagement.
+- 2026-04-10: Hardened the notification queue so routes commit user actions and pending notification jobs before immediate delivery is attempted, which prevents Brandon from getting false-positive emails for rolled-back work.
 - 2026-03-23: Fixed Railway Railpack/Caddy detection bug by adding root `railway.json` and modifying `backend/Dockerfile` for root context. Fixed missing phase images by force-adding to git. Verified backend health success.
 - 2026-03-27: Analyzed chatbot flow, then implemented structured assistant actions/buttons in the chatbot with browser-verified action rendering and booking-widget launch.
 - 2026-04-02: Applied About/Buy/Sell/home-page polish pass and removed the homepage hero headshot poster to fix the initial video flash.

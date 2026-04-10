@@ -11,6 +11,7 @@ from routers.evaluator import EvaluatorRequest, RatingRequest, evaluate, submit_
 class _FakeDB:
     def __init__(self):
         self.added = []
+        self.commit = AsyncMock()
         self.next_id = 1
         self.get = AsyncMock(return_value=None)
         self.flush = AsyncMock(side_effect=self._assign_ids)
@@ -53,7 +54,13 @@ class EvaluatorRouterTests(unittest.IsolatedAsyncioTestCase):
                     "key_factors": ["Factor 1"],
                 }
             ),
-        ):
+        ), patch(
+            "routers.evaluator.enqueue_notification",
+            AsyncMock(),
+        ) as enqueue_mock, patch(
+            "routers.evaluator.run_notification_retry_pass",
+            AsyncMock(return_value=1),
+        ) as retry_mock:
             response = await evaluate(request, db)
 
         self.assertGreater(response["calculation_id"], 0)
@@ -62,6 +69,9 @@ class EvaluatorRouterTests(unittest.IsolatedAsyncioTestCase):
         metadata = json.loads(stored_event.metadata_json)
         self.assertEqual(metadata["inputs"]["address"], "50 Cheever Ave, Lowell, MA")
         self.assertEqual(metadata["result"]["price_low"], 512000)
+        enqueue_mock.assert_awaited_once()
+        db.commit.assert_awaited_once()
+        retry_mock.assert_awaited_once_with(limit=5)
 
     async def test_submit_rating_stores_linked_rating_event(self):
         db = _FakeDB()
@@ -76,11 +86,15 @@ class EvaluatorRouterTests(unittest.IsolatedAsyncioTestCase):
         existing_event.id = 7
         db.get = AsyncMock(return_value=existing_event)
 
-        response = await submit_rating(
-            calculation_id=7,
-            payload=RatingRequest(rating="expected"),
-            db=db,
-        )
+        with patch("routers.evaluator.enqueue_notification", AsyncMock()) as enqueue_mock, patch(
+            "routers.evaluator.run_notification_retry_pass",
+            AsyncMock(return_value=1),
+        ) as retry_mock:
+            response = await submit_rating(
+                calculation_id=7,
+                payload=RatingRequest(rating="expected"),
+                db=db,
+            )
 
         self.assertEqual(response, {"ok": True})
         stored_event = db.added[-1]
@@ -88,6 +102,16 @@ class EvaluatorRouterTests(unittest.IsolatedAsyncioTestCase):
         metadata = json.loads(stored_event.metadata_json)
         self.assertEqual(metadata["calculation_id"], 7)
         self.assertEqual(metadata["rating"], "expected")
+        enqueue_mock.assert_awaited_once_with(
+            db,
+            event_type="seller_evaluator_rated",
+            payload={
+                "calculation_id": 7,
+                "rating": "expected",
+            },
+        )
+        db.commit.assert_awaited_once()
+        retry_mock.assert_awaited_once_with(limit=5)
 
     async def test_submit_rating_raises_for_missing_calculation(self):
         db = _FakeDB()

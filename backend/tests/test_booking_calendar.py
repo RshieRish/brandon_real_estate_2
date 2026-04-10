@@ -21,12 +21,38 @@ class _FakeResult:
 class _FakeDB:
     def __init__(self):
         self.added = []
+        self.commit = AsyncMock()
         self.execute = AsyncMock(return_value=_FakeResult())
-        self.flush = AsyncMock()
-        self.refresh = AsyncMock()
+        self._id_counter = 1
+        self.flush = AsyncMock(side_effect=self._flush_impl)
+        self.refresh = AsyncMock(side_effect=self._refresh_impl)
 
     def add(self, item):
         self.added.append(item)
+
+    async def _flush_impl(self):
+        for item in self.added:
+            if getattr(item, "id", None) is None:
+                item.id = self._id_counter
+                self._id_counter += 1
+
+    async def _refresh_impl(self, item):
+        if getattr(item, "id", None) is None:
+            item.id = self._id_counter
+            self._id_counter += 1
+
+
+class _FakeDBWithBookingFlushFailure(_FakeDB):
+    def __init__(self):
+        super().__init__()
+        flush_count = {"count": 0}
+
+        async def _flush():
+            flush_count["count"] += 1
+            if flush_count["count"] >= 2:
+                raise RuntimeError("booking insert failed")
+
+        self.flush = AsyncMock(side_effect=_flush)
 
 
 class CalendarAvailabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -112,12 +138,105 @@ class CreateBookingTests(unittest.IsolatedAsyncioTestCase):
                     datetime(2026, 4, 13, 10, 0, tzinfo=EASTERN),
                 )
             ),
-        ), patch("routers.booking.create_event", AsyncMock(return_value=None)), patch(
-            "routers.booking.notify_new_booking",
+        ), patch(
+            "routers.booking.enqueue_notification_in_new_session",
             AsyncMock(),
+        ) as attempt_enqueue_mock, patch(
+            "routers.booking.create_event",
+            AsyncMock(return_value=None),
+        ), patch(
+            "routers.booking.enqueue_notification",
+            AsyncMock(),
+        ) as confirmed_enqueue_mock, patch(
+            "routers.booking.run_notification_retry_pass",
+            AsyncMock(return_value=0),
         ):
             with self.assertRaises(HTTPException):
                 await create_booking(payload, db)
+
+        attempt_enqueue_mock.assert_awaited_once()
+        confirmed_enqueue_mock.assert_not_awaited()
+
+    async def test_create_booking_deletes_calendar_event_if_booking_insert_fails(self):
+        db = _FakeDBWithBookingFlushFailure()
+        payload = BookingCreate(
+            name="Codex Test",
+            email="codex-test@example.com",
+            phone="9785550101",
+            meeting_type="phone",
+            context="general",
+            scheduled_at=datetime(2026, 4, 13, 9, 0, tzinfo=EASTERN),
+            location="",
+            notes="db failure rollback regression",
+        )
+
+        with patch(
+            "routers.booking.ensure_booking_slot_available",
+            AsyncMock(
+                return_value=(
+                    datetime(2026, 4, 13, 9, 0, tzinfo=EASTERN),
+                    datetime(2026, 4, 13, 10, 0, tzinfo=EASTERN),
+                )
+            ),
+        ), patch(
+            "routers.booking.enqueue_notification_in_new_session",
+            AsyncMock(),
+        ), patch("routers.booking.create_event", AsyncMock(return_value="google-event-123")), patch(
+            "routers.booking.delete_event",
+            AsyncMock(),
+        ) as delete_event_mock, patch(
+            "routers.booking.enqueue_notification",
+            AsyncMock(),
+        ), patch(
+            "routers.booking.run_notification_retry_pass",
+            AsyncMock(return_value=0),
+        ):
+            with self.assertRaises(RuntimeError):
+                await create_booking(payload, db)
+
+        delete_event_mock.assert_awaited_once_with("google-event-123")
+
+    async def test_create_booking_enqueues_attempt_and_confirmation_notifications(self):
+        db = _FakeDB()
+        payload = BookingCreate(
+            name="Codex Test",
+            email="codex-test@example.com",
+            phone="9785550101",
+            meeting_type="phone",
+            context="general",
+            scheduled_at=datetime(2026, 4, 13, 9, 0, tzinfo=EASTERN),
+            location="",
+            notes="booking success regression",
+        )
+
+        with patch(
+            "routers.booking.ensure_booking_slot_available",
+            AsyncMock(
+                return_value=(
+                    datetime(2026, 4, 13, 9, 0, tzinfo=EASTERN),
+                    datetime(2026, 4, 13, 10, 0, tzinfo=EASTERN),
+                )
+            ),
+        ), patch(
+            "routers.booking.enqueue_notification_in_new_session",
+            AsyncMock(),
+        ) as attempt_enqueue_mock, patch(
+            "routers.booking.create_event",
+            AsyncMock(return_value="google-event-123"),
+        ), patch(
+            "routers.booking.enqueue_notification",
+            AsyncMock(),
+        ) as confirmed_enqueue_mock, patch(
+            "routers.booking.run_notification_retry_pass",
+            AsyncMock(return_value=1),
+        ) as retry_mock:
+            booking = await create_booking(payload, db)
+
+        attempt_enqueue_mock.assert_awaited_once()
+        confirmed_enqueue_mock.assert_awaited_once()
+        db.commit.assert_awaited_once()
+        retry_mock.assert_awaited_once_with(limit=5)
+        self.assertEqual(booking.google_event_id, "google-event-123")
 
 
 if __name__ == "__main__":

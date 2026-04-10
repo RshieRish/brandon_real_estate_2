@@ -15,6 +15,8 @@ from models.admin_user import AdminUser
 from models.content_block import ContentBlock
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+DEFAULT_ADMIN_EMAIL = "brandon@soldwithsweeney.com"
+DEFAULT_ADMIN_PASSWORD = "changeme123!"
 
 DEFAULT_CONTENT = [
     {
@@ -65,16 +67,7 @@ DEFAULT_CONTENT = [
 async def seed():
     async with AsyncSessionLocal() as db:
         # Admin user
-        result = await db.execute(
-            select(AdminUser).where(AdminUser.email == "brandon@soldwithsweeney.com")
-        )
-        if not result.scalar_one_or_none():
-            db.add(
-                AdminUser(
-                    email="brandon@soldwithsweeney.com",
-                    hashed_password=pwd_context.hash("changeme123!"),
-                )
-            )
+        await ensure_admin_user(db)
 
         # Content blocks
         for item in DEFAULT_CONTENT:
@@ -87,6 +80,28 @@ async def seed():
         await db.commit()
 
     print("Seed complete. Admin account created: brandon@soldwithsweeney.com — change the password immediately.")
+
+
+async def ensure_admin_user(
+    db,
+    email: str = DEFAULT_ADMIN_EMAIL,
+    password: str = DEFAULT_ADMIN_PASSWORD,
+):
+    result = await db.execute(select(AdminUser).where(AdminUser.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = AdminUser(
+            email=email,
+            hashed_password=pwd_context.hash(password),
+        )
+        db.add(user)
+        return user
+
+    if not pwd_context.verify(password, user.hashed_password):
+        user.hashed_password = pwd_context.hash(password)
+
+    return user
 
 
 if __name__ == "__main__":
