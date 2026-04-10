@@ -57,6 +57,13 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
+function formatDateParam(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps) {
   const [step, setStep] = useState<Step>('type');
   const [meetingType, setMeetingType] = useState<MeetingType>('phone');
@@ -78,21 +85,24 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
     setSlots([]);
     setError('');
     try {
-      const dateStr = date.toISOString().split('T')[0];
+      const dateStr = formatDateParam(date);
       const params = new URLSearchParams({
         date: dateStr,
         meeting_type: type,
         location: loc,
       });
       const res = await fetch(`${API_URL}/api/v1/booking/available-slots?${params}`);
-      if (!res.ok) throw new Error('Failed to fetch slots');
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to fetch slots');
+      }
       const data = await res.json();
       setSlots(data.slots || []);
       if ((data.slots || []).length === 0) {
         setError('No available slots for this date. Try another day.');
       }
-    } catch {
-      setError('Could not load availability. Please try again.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load availability. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -151,7 +161,10 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
           notes: '',
         }),
       });
-      if (!res.ok) throw new Error('Booking failed');
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Booking failed');
+      }
       setBookingDone(true);
       setStep('done');
 
@@ -165,8 +178,8 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
       onBooked(
         `You're all set! Brandon will meet you on ${dateStr} at ${timeStr} (${typeLabel})${location ? ` at ${location}` : ''}. He'll send a confirmation shortly.`
       );
-    } catch {
-      setError('Could not complete booking. Please try again.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not complete booking. Please try again.');
     } finally {
       setLoading(false);
     }

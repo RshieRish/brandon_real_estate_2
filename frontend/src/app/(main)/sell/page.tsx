@@ -14,7 +14,7 @@ import MarketingSphere from '@/components/sell/MarketingSphere';
 export const metadata: Metadata = {
   title: 'Sell Your Home | Brandon Sweeney, REALTOR\u00ae | Sold With Sweeney & Co.',
   description:
-    'Get a free AI-powered home valuation and work with award-winning REALTOR\u00ae Brandon Sweeney to sell your home faster, for more money.',
+    'Get a free market-based home valuation and work with award-winning REALTOR\u00ae Brandon Sweeney to sell your home faster, for more money.',
 };
 
 
@@ -112,7 +112,7 @@ export default function SellPage() {
               <p className="text-white/70 text-base md:text-lg leading-relaxed mb-10 max-w-2xl font-light">
                 Brandon Sweeney combines cutting-edge marketing, expert negotiation, and white-glove
                 service to get your home sold fast — and for top dollar. Start with a free,
-                AI-powered home valuation below.
+                market-based home valuation below.
               </p>
 
               {/* CTA */}
@@ -170,7 +170,7 @@ export default function SellPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-12">
             <div>
               <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-                Free AI Valuation
+                Free Market Valuation
               </p>
               <h2
                 className="font-black text-white leading-tight tracking-tight"
@@ -184,8 +184,8 @@ export default function SellPage() {
             </div>
             <div className="flex items-end">
               <p className="text-white/50 text-sm font-light leading-relaxed">
-                Our AI analyzes comparable sales, market trends, and property-specific factors to
-                give you an accurate price range in seconds — no obligation required.
+                This valuation model uses local pricing baselines, property specifics, and
+                market-standard adjustments to give you a realistic starting range in seconds.
               </p>
             </div>
           </div>
@@ -305,7 +305,7 @@ export default function SellPage() {
         {/* KW Legal disclaimer */}
         <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
           Brandon Sweeney is a licensed real estate professional with Keller Williams Realty Success. This
-          AI valuation tool provides an estimate only and is not a formal appraisal. Actual sale price may
+          market valuation tool provides an estimate only and is not a formal appraisal. Actual sale price may
           vary based on market conditions, property condition, and other factors. Equal Housing Opportunity.
           Information deemed reliable but not guaranteed.
         </p>

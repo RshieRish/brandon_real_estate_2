@@ -40,16 +40,13 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
         geo = await geocode_address(req.address)
 
     try:
-        result = await evaluate_property(data)
-    except Exception as e:
-        err = str(e)
-        if "quota" in err.lower() or "429" in err or "ResourceExhausted" in err:
-            raise HTTPException(status_code=503, detail="AI valuation service temporarily unavailable. Please try again later.")
-        raise HTTPException(status_code=502, detail="AI service error.")
+        result = await evaluate_property(data, geo=geo)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Valuation service error.") from exc
 
     # Normalize field names — service returns range_low/range_high, frontend expects price_low/price_high
     result["price_low"] = result.pop("range_low", result.get("price_low", 0))
     result["price_high"] = result.pop("range_high", result.get("price_high", 0))
     result["address"] = geo.get("display", req.address)
-    result["disclaimer"] = "This is an AI-assisted estimate, not a formal appraisal. For an accurate valuation, book a meeting with Brandon."
+    result["disclaimer"] = "This is a market-based estimate, not a formal appraisal. For a true listing price strategy, book a valuation meeting with Brandon."
     return result

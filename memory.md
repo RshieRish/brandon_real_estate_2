@@ -9,7 +9,7 @@
 ## Integration Status
 ## Integration Status
 - Gemini API: Key provided; using `gemini-1.5-pro` (pro) and `gemini-1.5-flash` (standard).
-- Google OAuth/Calendar: Credentials provided.
+- Google OAuth/Calendar: OAuth client credentials are present, but as of 2026-04-10 Brandon still needs to complete the one-time Google consent to generate `GOOGLE_CALENDAR_REFRESH_TOKEN`.
 - Instagram: Access token prone to expiration; frontend handles fetching failure gracefully.
 - Railway Backend: Docker builder forced via `railway.json`. Uses dynamic `$PORT` and root context.
 - Vercel Frontend: Requires `NEXT_PUBLIC_API_URL` to match Railway domain.
@@ -22,7 +22,7 @@
 - Bio/reviews: In BRANDON_RE_SPEC.md Section 14
 
 ## Known Issues
-- None
+- Real Google Calendar event creation is still blocked until Brandon completes the one-time OAuth connect flow and the backend receives a refresh token.
 
 ## Chatbot Architecture
 - Chat widget is mounted globally from `frontend/src/components/layout/ClientWidgets.tsx`, so it appears across public pages.
@@ -32,6 +32,8 @@
 - `frontend/src/hooks/useChat.ts` normalizes the structured API payload, preserves legacy booking fallback, and stores `actions` on assistant messages.
 - `frontend/src/components/chat/ChatPanel.tsx` renders assistant messages as text bubbles with premium action buttons underneath and conditionally mounts `CalendarPickerCard` below a message when `widget === 'calendar_picker'`.
 - `frontend/src/components/chat/CalendarPickerCard.tsx` remains the inline booking widget used by both direct widget replies and action-button triggered booking flows.
+- Booking availability now enforces Monday-Friday `9 AM-6 PM` Eastern only, revalidates the selected slot against Brandon's live calendar before saving, and truthfully surfaces when Google Calendar still needs authorization.
+- For in-person meetings, booking checks the locations on Brandon's neighboring calendar events and uses route-time estimates to hide infeasible travel slots.
 - `/api/v1/chat/lead` exists, but the current chat frontend does not submit lead capture there.
 - Current allowed navigate destinations are `/buy`, `/sell`, `/invest`, and `/about`.
 - Generative UI is still best treated as a later-stage extension for multiple rich widget types; the implemented server-driven structured actions are the safer current fit.
@@ -70,12 +72,18 @@
 - `frontend/src/app/admin/funnels/page.tsx` — table with publish/copy-link, create form with AI loading spinner
 - `frontend/src/app/admin/analytics/page.tsx` — stats strip, top pages + top events with gold bar, recent events table
 - `frontend/src/app/admin/settings/page.tsx` — 3 integration cards (Gemini/Calendar/KW), password form (coming soon), site info
+- Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
 - 2026-03-23: Fixed Railway Railpack/Caddy detection bug by adding root `railway.json` and modifying `backend/Dockerfile` for root context. Fixed missing phase images by force-adding to git. Verified backend health success.
 - 2026-03-27: Analyzed chatbot flow, then implemented structured assistant actions/buttons in the chatbot with browser-verified action rendering and booking-widget launch.
 - 2026-04-02: Applied About/Buy/Sell/home-page polish pass and removed the homepage hero headshot poster to fix the initial video flash.
 - 2026-04-02: Added the provided Brandon and Paige gala image into `frontend/public/headshots/` and wired it into the About page.
+- 2026-04-09: Home `TrustSection` now uses a two-card left review rail and includes a new Madison Levanti Google testimonial sourced from `reviews.html`.
+- 2026-04-09: `frontend/src/components/buyer/BuyerMistakes.tsx` is now a rotating deck with auto-advance, hover-to-pause, and click-to-flip `Buyer Mistake` / `The Fix` states; browser automation verified both reorder and flip behavior.
+- 2026-04-10: Added admin Google Calendar OAuth bootstrap endpoints and settings-page connect UI. Booking now truthfully blocks with a one-time authorization message until Brandon connects Calendar.
+- 2026-04-10: Recalibrated seller valuation baselines so the Lowell smoke-test sample now returns roughly `$512k-$602k` instead of overshooting the local market band.
+- 2026-04-09: Revised `BuyerMistakes.tsx` again so the right side is now a single rotating hero card instead of four stacked cards, and removed the extra `Rotating Buyer Playbook` explainer panel.
 - Next: If requested, extend the action system with lead-capture prompts, richer analytics events, or additional widget types beyond booking, or swap in an awards-collage image once that asset is added.
 
 ## 2026-03-31 - Home Videos
@@ -90,3 +98,5 @@
 - Load `mini_house.gltf` into the center.
 - Wrapped in Next.js `useRef` and `useEffect` with strict `cancelAnimationFrame` and unmounting logic for safely avoiding WebGL context leaks during client router navigation.
 Added interactive videos to Seller Staging Checklist
+- 2026-04-09: Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX.
+- 2026-04-09: Refactored BuyerMistakes to move pagination dots to vertical alignment on the right edge of the card, moving from a top-horizontal layout.

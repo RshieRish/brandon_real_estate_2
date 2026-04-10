@@ -44,6 +44,12 @@ const reviews = [
     author: 'Sonya Reagan',
     location: 'RealSatisfied',
   },
+  {
+    quote:
+      'We just hit the one year mark in our home and always reflect on how great the process was since we worked with Brandon. He was so patient with us as we found the perfect space for us and our new baby, and we have been so happy since finding it. I will always recommend Brandon to anyone looking to sell or buy.',
+    author: 'Madison Levanti',
+    location: 'Google',
+  },
 ];
 
 const designations = [
@@ -83,6 +89,8 @@ export default function TrustSection({
   ];
 
   const allStats = [...dynStats, ...ratingStats];
+  const leftRailReviews = [reviews[0], reviews[4]];
+  const rightRailReviews = reviews.slice(1, 4);
 
   return (
     <section
@@ -171,19 +179,21 @@ export default function TrustSection({
           </motion.h3>
 
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-            {/* Large featured review */}
-            <motion.div variants={fadeUp} className="lg:col-span-2">
-              <ReviewCard
-                quote={reviews[0].quote}
-                author={reviews[0].author}
-                location={reviews[0].location}
-                className="h-full"
-              />
-            </motion.div>
+            <div className="lg:col-span-2 grid grid-cols-1 auto-rows-fr gap-4">
+              {leftRailReviews.map((review) => (
+                <motion.div key={review.author} variants={fadeUp}>
+                  <ReviewCard
+                    quote={review.quote}
+                    author={review.author}
+                    location={review.location}
+                    className="h-full"
+                  />
+                </motion.div>
+              ))}
+            </div>
 
-            {/* Three stacked reviews */}
             <div className="lg:col-span-3 grid grid-cols-1 gap-4">
-              {reviews.slice(1).map((review) => (
+              {rightRailReviews.map((review) => (
                 <motion.div key={review.author} variants={fadeUp}>
                   <ReviewCard
                     quote={review.quote}
@@ -222,7 +232,8 @@ export default function TrustSection({
                   alt={alt}
                   width={80}
                   height={48}
-                  className="object-contain max-h-12 w-auto"
+                  className="h-12 w-auto object-contain"
+                  style={{ width: 'auto', height: '48px' }}
                   unoptimized
                 />
               </div>

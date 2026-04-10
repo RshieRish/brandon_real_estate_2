@@ -3,6 +3,41 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-03-27
 
+### 2026-04-10 — Booking Hardening + Calendar OAuth Bootstrap + Seller Estimate Recalibration
+- What was built: Hardened booking against Brandon's real calendar rules, added the missing one-time Google Calendar OAuth connect flow in admin settings, and recalibrated the seller estimate model to a more realistic local market band.
+- Files modified:
+  - `backend/.env.example`
+  - `backend/config.py`
+  - `backend/routers/booking.py`
+  - `backend/routers/evaluator.py`
+  - `backend/services/calendar_service.py`
+  - `backend/services/evaluator_service.py`
+  - `backend/services/maps_service.py`
+  - `frontend/src/app/(main)/sell/page.tsx`
+  - `frontend/src/app/admin/settings/page.tsx`
+  - `frontend/src/components/chat/CalendarPickerCard.tsx`
+  - `backend/tests/test_booking_calendar.py`
+  - `backend/tests/test_calendar_oauth.py`
+  - `backend/tests/test_evaluator_service.py`
+- Key decisions:
+  - Booking hours are now enforced as Monday-Friday, 9 AM-6 PM Eastern with slot revalidation at booking time.
+  - In-person meetings continue to use neighboring calendar-event locations plus travel-time checks, with OSRM fallback when Google Maps is unavailable.
+  - Added admin calendar endpoints for status, auth URL generation, and OAuth callback so Brandon can connect Google Calendar without hand-editing env vars.
+  - OAuth callback persists `GOOGLE_CALENDAR_REFRESH_TOKEN` into `backend/.env` and updates runtime settings so the current server process can start using it immediately.
+  - Settings page Google Calendar card is now dynamic and can start or refresh the connection flow instead of showing a static placeholder.
+  - Seller pricing baselines were recalibrated so Lowell-area single-family estimates no longer overshoot the current local market band.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed (`10` tests).
+  - `frontend`: `npm run typecheck` passed.
+  - `backend`: `GET /api/v1/booking/calendar/status` returns `configured: true`, `connected: false`, `can_connect: true` when Brandon still needs OAuth.
+  - `backend`: `GET /api/v1/booking/calendar/auth-url` returns a valid Google OAuth URL with offline access, consent prompt, and signed state.
+  - `backend`: direct request to the Google OAuth URL returned `HTTP 302`, confirming handoff to Google.
+  - `backend`: booking endpoints now return `Google Calendar needs one-time authorization before Brandon can accept bookings.` until the real Calendar consent is completed.
+  - `backend`: seller evaluator smoke test for `50 Cheever Ave, Lowell, MA 01852` returned `$512,000-$602,000`.
+- Blocker:
+  - Live event creation in Brandon's actual Google Calendar still requires Brandon to complete the one-time Google consent so the app can receive a refresh token.
+- Status: Complete in code; waiting on external Google authorization to finish true live booking
+
 ### 2026-03-19 — Project Initialized
 - What was built: Git repo, project config files (claude.md, tdtn.md, memory.md, .gitignore, .env.example)
 - Files created: .gitignore, claude.md, tdtn.md, memory.md, .env.example, BRANDON_RE_SPEC.md committed
@@ -130,6 +165,39 @@ Last Updated: 2026-03-27
   - `npm run lint` still fails on the pre-existing unrelated `frontend/src/components/shared/RotatingText.tsx` `no-explicit-any` error plus older warnings in unrelated files.
 - Status: Complete with image-asset blocker noted
 
+### 2026-04-09 — Buyer Mistakes Single-Card Revision
+- What was built: Simplified the Buy-page `What Most Buyers Get Wrong` experience from a four-card deck into one rotating hero card.
+- Files modified:
+  - `frontend/src/components/buyer/BuyerMistakes.tsx`
+- Implementation details:
+  - Removed the `Rotating Buyer Playbook` explainer panel entirely.
+  - Reworked the right column to render a single cinematic card that auto-advances to the next buyer mistake every 4.2 seconds.
+  - Kept click-to-flip behavior so the active card still toggles between `Buyer Mistake` and `The Fix`.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - Browser automation confirmed the active card rotates from `Shopping before pre-approval` to `Using all your savings for the down payment`.
+  - Browser automation confirmed clicking the rotated card flips it into `The Fix`.
+  - Screenshots refreshed: `buy-mistakes-rotating-initial.png`, `buy-mistakes-rotating-flipped.png`
+- Status: Complete
+
+### 2026-04-09 — Home Reviews + Buyer Mistakes Motion Refresh
+- What was built: Filled the blank space in the home-page reviews rail by stacking two reviews on the left and rebuilt the Buy-page `What Most Buyers Get Wrong` section into a rotating flip-card deck.
+- Files modified:
+  - `frontend/src/components/home/TrustSection.tsx`
+  - `frontend/src/components/buyer/BuyerMistakes.tsx`
+- Implementation details:
+  - Added a new non-duplicate Google review from `reviews.html` by Madison Levanti and changed the home testimonials layout to a 2-left / 3-right composition.
+  - Reworked the buyer mistakes module into a premium two-column section with a timed upward rotation, hover-to-pause behavior, and click-to-flip cards that switch between `Buyer Mistake` and `The Fix`.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - Browser automation confirmed the home reviews now render both left-rail testimonials including Madison Levanti.
+  - Browser automation confirmed the buyer deck reorders over time:
+    - Before: `Shopping before pre-approval` → `Using all your savings for the down payment` → `Buying with the listing agent` → `Picking a lender based on rate alone`
+    - After rotation: `Using all your savings for the down payment` → `Buying with the listing agent` → `Picking a lender based on rate alone` → `Shopping before pre-approval`
+  - Browser automation also confirmed clicking a card flips it to `The Fix`.
+  - Screenshots captured: `home-reviews-two-left.png`, `buy-mistakes-rotating-initial.png`, `buy-mistakes-rotating-flipped.png`
+- Status: Complete
+
 ### 2026-04-02 — About Gala Image Swap
 - What was built: Replaced the About page's lower team image with the provided Brandon and Paige at Maine gala photo.
 - Files modified:
@@ -167,3 +235,5 @@ Last Updated: 2026-03-27
 - Key decisions: Ported raw vanilla Three.js into a React `useRef` based component inside Next.js rather than using R3F to precisely save the custom global canvas texture loop logic. Dynamically draws user's provided PNG logos (`/facebook_logo.png`, etc.) onto the WebGL nodes instead of just vectors. Added rigorous React unmout disposal to prevent memory leaks.
 - Status: Complete
 Completed Checklist Video Integration
+  - Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX, addressing user complaint about sliding sideways.
+  - Updated BuyerMistakes UI: moved the top horizontal pagination strip into a vertical alignment flush to the right edge with the index number stacked underneath.

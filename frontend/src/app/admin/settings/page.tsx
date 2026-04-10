@@ -1,7 +1,16 @@
 'use client';
 
-import { useState } from 'react';
-import { CheckCircle, Warning, ArrowsClockwise } from '@phosphor-icons/react';
+import { useEffect, useState } from 'react';
+import { ArrowsClockwise, CheckCircle, CircleNotch, Warning } from '@phosphor-icons/react';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
+interface CalendarStatus {
+  configured: boolean;
+  connected: boolean;
+  can_connect: boolean;
+  detail: string;
+}
 
 export default function SettingsPage() {
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -10,6 +19,84 @@ export default function SettingsPage() {
     new_password: '',
     confirm: '',
   });
+  const [calendarStatus, setCalendarStatus] = useState<CalendarStatus | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(true);
+  const [calendarActionLoading, setCalendarActionLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState('');
+
+  async function loadCalendarStatus() {
+    const token = localStorage.getItem('admin_token');
+    if (!token) {
+      setCalendarLoading(false);
+      return null;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/booking/calendar/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        throw new Error('Could not load calendar status.');
+      }
+
+      const data = await res.json() as CalendarStatus;
+      setCalendarStatus(data);
+      setCalendarError('');
+      return data;
+    } catch (error) {
+      setCalendarError(error instanceof Error ? error.message : 'Could not load calendar status.');
+      return null;
+    } finally {
+      setCalendarLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadCalendarStatus();
+  }, []);
+
+  async function handleConnectCalendar() {
+    const token = localStorage.getItem('admin_token');
+    if (!token) return;
+
+    setCalendarActionLoading(true);
+    setCalendarError('');
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/booking/calendar/auth-url`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        throw new Error('Could not start Google Calendar authorization.');
+      }
+
+      const data = await res.json() as { auth_url: string };
+      const popup = window.open(data.auth_url, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        window.location.href = data.auth_url;
+      }
+
+      let attempts = 0;
+      const poll = window.setInterval(async () => {
+        attempts += 1;
+        const latestStatus = await loadCalendarStatus();
+        if (latestStatus?.connected || attempts >= 24) {
+          window.clearInterval(poll);
+          setCalendarActionLoading(false);
+        }
+      }, 2500);
+    } catch (error) {
+      setCalendarActionLoading(false);
+      setCalendarError(
+        error instanceof Error ? error.message : 'Could not start Google Calendar authorization.'
+      );
+    }
+  }
+
+  const calendarConnected = calendarStatus?.connected;
+  const calendarCanConnect = calendarStatus?.can_connect;
 
   return (
     <div className="p-8 w-full">
@@ -35,14 +122,61 @@ export default function SettingsPage() {
 
           {/* Google Calendar */}
           <div className="bg-dark-card border border-dark-border p-6 rounded-xl flex flex-col gap-3">
-            <Warning size={24} weight="fill" className="text-yellow-400" />
+            {calendarLoading ? (
+              <CircleNotch size={24} className="text-gold animate-spin" />
+            ) : calendarConnected ? (
+              <CheckCircle size={24} weight="fill" className="text-green-400" />
+            ) : (
+              <Warning size={24} weight="fill" className="text-yellow-400" />
+            )}
             <div>
               <p className="text-white font-semibold text-sm">Google Calendar</p>
-              <span className="inline-block mt-1 bg-yellow-500/20 text-yellow-400 text-xs px-2 py-0.5 rounded-full uppercase tracking-widest font-semibold">
-                Not Configured
+              <span
+                className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full uppercase tracking-widest font-semibold ${
+                  calendarLoading
+                    ? 'bg-white/10 text-white/50'
+                    : calendarConnected
+                      ? 'bg-green-500/20 text-green-400'
+                      : 'bg-yellow-500/20 text-yellow-400'
+                }`}
+              >
+                {calendarLoading
+                  ? 'Checking'
+                  : calendarConnected
+                    ? 'Connected'
+                    : calendarStatus?.configured
+                      ? 'Needs Authorization'
+                      : 'Not Configured'}
               </span>
             </div>
-            <p className="text-white/40 text-xs">Add credentials to enable booking</p>
+            <p className="text-white/40 text-xs">
+              {calendarStatus?.detail ?? 'Connect Google Calendar to enable live availability and actual booking.'}
+            </p>
+            {calendarError && (
+              <p className="text-red-400/80 text-xs">{calendarError}</p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-1">
+              {calendarCanConnect && (
+                <button
+                  type="button"
+                  onClick={handleConnectCalendar}
+                  disabled={calendarActionLoading}
+                  className="text-xs bg-gold text-black font-bold uppercase tracking-widest px-3 py-2 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {calendarActionLoading ? 'Waiting For Google' : calendarConnected ? 'Reconnect' : 'Connect Calendar'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setCalendarLoading(true);
+                  void loadCalendarStatus();
+                }}
+                className="text-xs text-white/70 border border-dark-border hover:border-gold/30 hover:text-white px-3 py-2 rounded transition-colors"
+              >
+                Refresh Status
+              </button>
+            </div>
           </div>
 
           {/* KW CRM */}
