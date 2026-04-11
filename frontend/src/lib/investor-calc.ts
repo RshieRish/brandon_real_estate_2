@@ -13,6 +13,7 @@ export interface InvestorInputs {
 
 export interface InvestorMetrics {
   // Flip
+  loanStructure: 'interest_only' | 'amortized';
   flipProfit: number;
   flipROI: number;          // %
   flipAnnualizedROI: number; // %
@@ -51,9 +52,14 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   const downPayment = purchasePrice * downPaymentRate;
   const loanAmount = purchasePrice - downPayment;
   const monthlyRate = interestRateDecimal / 12;
-  const numPayments = loanTermYears * 12;
-  const monthlyMortgage =
-    monthlyRate === 0
+  const numPayments = Math.max(loanTermYears * 12, 1);
+  const isShortTermInvestorDebt = loanTermYears <= 2;
+  const loanStructure: InvestorMetrics['loanStructure'] = isShortTermInvestorDebt
+    ? 'interest_only'
+    : 'amortized';
+  const monthlyMortgage = isShortTermInvestorDebt
+    ? loanAmount * monthlyRate
+    : monthlyRate === 0
       ? safeDivide(loanAmount, numPayments)
       : loanAmount *
         (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) /
@@ -86,7 +92,7 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   const equityMultiple = safeDivide(arv, cashInvestedRental);
 
   return {
-    flipProfit, flipROI, flipAnnualizedROI, maxAllowableOffer,
+    loanStructure, flipProfit, flipROI, flipAnnualizedROI, maxAllowableOffer,
     holdingCosts, closingCosts, totalProjectCost,
     monthlyMortgage, monthlyCashFlow, annualCashFlow,
     cashOnCashReturn, capRate, grm, noi,

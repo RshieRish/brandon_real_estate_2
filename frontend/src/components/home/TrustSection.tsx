@@ -53,13 +53,26 @@ const reviews = [
 ];
 
 const designations = [
-  { src: '/logos/Designations-Associations/NEAR.png', alt: 'NEAR — New England Association of REALTORS®' },
-  { src: '/logos/Designations-Associations/MAR-Logo-Color-VERT-300dpi.png', alt: 'MAR — Massachusetts Association of REALTORS®' },
+  {
+    src: '/logos/Designations-Associations/NEAR.png',
+    alt: 'NEAR — New England Association of REALTORS®',
+    imageClassName: 'brightness-125 saturate-110',
+  },
+  {
+    src: '/logos/Designations-Associations/MAR-Logo-Color-VERT-300dpi.png',
+    alt: 'MAR — Massachusetts Association of REALTORS®',
+    imageClassName: 'brightness-0 invert opacity-95',
+  },
   {
     src: '/logos/Designations-Associations/National_Association_of_REALTORS_Logo.svg.png',
     alt: 'National Association of REALTORS®',
+    imageClassName: 'brightness-0 invert opacity-95',
   },
-  { src: '/logos/Designations-Associations/Green.jpg', alt: 'NAR Green Designation' },
+  {
+    src: '/logos/Designations-Associations/Green.jpg',
+    alt: 'NAR Green Designation',
+    imageClassName: 'brightness-125 saturate-110',
+  },
 ];
 
 
@@ -222,17 +235,17 @@ export default function TrustSection({
             variants={fadeUp}
             className="flex flex-wrap items-center justify-center gap-8 md:gap-12"
           >
-            {designations.map(({ src, alt }) => (
+            {designations.map(({ src, alt, imageClassName }) => (
               <div
                 key={src}
-                className="relative h-12 w-auto flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity duration-200"
+                className="relative h-12 w-auto flex items-center justify-center opacity-80 hover:opacity-100 transition-opacity duration-200"
               >
                 <Image
                   src={src}
                   alt={alt}
                   width={80}
                   height={48}
-                  className="h-12 w-auto object-contain"
+                  className={`h-12 w-auto object-contain ${imageClassName}`}
                   style={{ width: 'auto', height: '48px' }}
                   unoptimized
                 />

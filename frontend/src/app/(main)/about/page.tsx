@@ -195,7 +195,7 @@ function HeroSection() {
 const stats = [
   { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
   { value: '2025', label: 'NEAR President', detail: 'Leading advocacy and standards for the association.' },
-  { value: ['Of The', 'Year'], label: 'REALTOR\u00ae Of The Year Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' },
+  { value: ['REALTOR\u00ae', 'Of The', 'Year'], label: 'Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' },
   { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
 

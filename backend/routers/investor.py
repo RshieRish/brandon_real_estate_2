@@ -44,11 +44,18 @@ def calculate_metrics(inp: InvestorInputs) -> dict:
     loan_amount = inp.purchase_price * (1 - inp.down_payment_pct / 100)
     down_payment = inp.purchase_price * (inp.down_payment_pct / 100)
     monthly_rate = inp.interest_rate / 100 / 12
-    n = inp.loan_term_years * 12
-    if monthly_rate > 0:
+    loan_term_months = max(inp.loan_term_years * 12, 1)
+    is_short_term_investor_debt = inp.loan_term_years <= 2
+    if is_short_term_investor_debt:
+        mortgage = loan_amount * monthly_rate
+        loan_structure = "interest_only"
+    elif monthly_rate > 0:
+        n = loan_term_months
         mortgage = loan_amount * (monthly_rate * (1 + monthly_rate)**n) / ((1 + monthly_rate)**n - 1)
+        loan_structure = "amortized"
     else:
-        mortgage = loan_amount / n
+        mortgage = loan_amount / loan_term_months
+        loan_structure = "amortized"
 
     gross_rent = inp.monthly_rent_total
     vacancy_loss = gross_rent * (inp.vacancy_rate_pct / 100)
@@ -73,6 +80,7 @@ def calculate_metrics(inp: InvestorInputs) -> dict:
         "total_cash_required": round(total_cash_required, 2),
         "down_payment": round(down_payment, 2),
         "loan_amount": round(loan_amount, 2),
+        "loan_structure": loan_structure,
     }
 
 

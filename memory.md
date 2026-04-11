@@ -104,6 +104,7 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-11: Fixed the investor calculator short-term loan bug. Terms of 1-2 years now model interest-only bridge / fix-and-flip debt, while 3+ year terms stay amortized; regression coverage lives in `backend/tests/test_investor_metrics.py`.
 - 2026-04-10: Wrote the durable notification queue design at `docs/superpowers/specs/2026-04-10-brandon-notification-queue-design.md`.
 - 2026-04-10: Wrote the implementation plan at `docs/superpowers/plans/2026-04-10-brandon-notification-queue.md`.
 - 2026-04-10: Implemented the notification queue itself, including route integrations for leads, chat leads, funnels, booking attempts, booking confirmations, seller evaluator usage, seller ratings, investor report requests, and investor calculator engagement.
@@ -139,3 +140,5 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-10: Mapped 'Style beds' staging checklist item to its respective interactive media.
 - 2026-04-11: Updated the footer logo to use the new SWS Primary Logo White and Gold TRANSPARENT.
 - 2026-04-11: Introduced interactive bio-panel hover images on the About page 'Built on Trust' section.
+- 2026-04-11: Updated text split layout for 'REALTOR Of The Year' statistic on the About page.
+- 2026-04-11: Aligned visibility styling for designation logos in the home page TrustSection with the About page.

@@ -12,8 +12,8 @@ const CHEEVER_DEAL = calculateMetrics({
   rentalIncome: 0,
   propertyTax: 0,
   insurance: 0,
-  downPaymentPct: 0.25,
-  interestRate: 0.07,
+  downPaymentPct: 25,
+  interestRate: 7,
   loanTermYears: 30,
 });
 

@@ -58,6 +58,7 @@ function MetricCard({ label, value, valueColor = 'text-white', eyebrow }: Metric
 
 export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
   const {
+    loanStructure,
     flipProfit,
     flipROI,
     flipAnnualizedROI,
@@ -129,6 +130,10 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
         </motion.div>
         <p className="mt-3 text-white/35 text-xs font-light leading-relaxed">
           Flip math assumes 1.5% buy-side closing costs and 1.25% sell-side closing costs.
+          {' '}
+          {loanStructure === 'interest_only'
+            ? 'Short-term loan terms of 1-2 years are modeled as interest-only bridge or fix-and-flip debt.'
+            : 'Loan terms of 3+ years are modeled with amortized payments.'}
         </p>
       </div>
 

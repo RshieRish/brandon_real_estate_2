@@ -1,7 +1,28 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-03-27
+Last Updated: 2026-04-11
+
+### 2026-04-11 — Investor Calculator Short-Term Loan Fix
+- What was built: Updated the investment calculator so one-year fix-and-flip style loans use interest-only debt service instead of being fully amortized over 12 months.
+- Files created:
+  - `backend/tests/test_investor_metrics.py`
+- Files modified:
+  - `backend/routers/investor.py`
+  - `frontend/src/lib/investor-calc.ts`
+  - `frontend/src/components/investor/AnalysisResults.tsx`
+  - `frontend/src/components/investor/FlipCaseStudy.tsx`
+- Key decisions:
+  - Loan terms of 1-2 years are modeled as interest-only bridge / fix-and-flip debt.
+  - Loan terms of 3+ years stay on the standard amortized payment formula.
+  - The frontend now carries a `loanStructure` metric and explains the assumption under the flip-analysis cards.
+  - Corrected the case-study percentage inputs from decimal-style values to the calculator's current percent-style inputs.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest tests.test_investor_metrics -v` first failed against the old one-year math (`$30,522.31/mo` vs expected `$2,057.71/mo`).
+  - `backend`: `./.venv/bin/python -m unittest discover -s tests -v` passed with 32 tests.
+  - `frontend`: `npm run typecheck` passed.
+  - `frontend`: direct calculator smoke checks passed for both one-year interest-only and 30-year amortized scenarios.
+- Status: Complete locally
 
 ### 2026-04-10 — Brandon Notification Queue Implemented
 - What was built: Added a durable `notification_jobs` queue for Brandon-only internal email notifications, wired it into lead capture, chatbot lead capture, funnel registrations, booking attempts, booking confirmations, seller calculator activity, seller calculator ratings, investor full-report requests, and investor calculator engagement.
@@ -451,3 +472,5 @@ Completed Checklist Video Integration
   - Removed video file exclusions from .gitignore and pushed all previously ignored videos/frames to the repo origin.
   - Replaced the primary logo in the Footer with the new designated SWS Primary Logo White and Gold TRANSPARENT asset.
   - Added interactive hover states to the 'Built on Trust' section on the About page that dynamically swaps the side headshot based on the active bio panel.
+  - Updated text split and display for the 'REALTOR Of The Year' statistic in the About section.
+  - Added 'imageClassName' visibility filters to the designation logos on the Home page (TrustSection) to match the high-contrast look from the About page.
