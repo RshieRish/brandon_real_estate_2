@@ -137,3 +137,5 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-09: Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX.
 - 2026-04-09: Refactored BuyerMistakes to move pagination dots to vertical alignment on the right edge of the card, moving from a top-horizontal layout.
 - 2026-04-10: Mapped 'Style beds' staging checklist item to its respective interactive media.
+- 2026-04-11: Updated the footer logo to use the new SWS Primary Logo White and Gold TRANSPARENT.
+- 2026-04-11: Introduced interactive bio-panel hover images on the About page 'Built on Trust' section.

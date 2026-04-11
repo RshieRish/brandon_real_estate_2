@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import Image from 'next/image';
 import { motion, useInView, AnimatePresence } from 'framer-motion';
 import {
@@ -271,9 +271,18 @@ function StatsStrip() {
 
 // ─── Section: Bio Deep Dive ────────────────────────────────────────────────────
 
+type BioTab = 'foundation' | 'expert' | 'leader';
+
+const BIO_IMAGES: Record<BioTab, string> = {
+  foundation: '/headshots/Brandon Sweeney Headshot Zoomed In.png',
+  expert: '/headshots/expert.jpg',
+  leader: '/headshots/leader.jpg',
+};
+
 function BioSection() {
   const ref = useRef<HTMLElement>(null);
   const inView = useInView(ref, { once: true, margin: '-80px' });
+  const [activeTab, setActiveTab] = useState<BioTab>('foundation');
 
   return (
     <section
@@ -326,13 +335,24 @@ function BioSection() {
                 className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-gold/70 via-gold/30 to-transparent z-10"
                 aria-hidden="true"
               />
-              <Image
-                src="/headshots/Brandon Sweeney Headshot Zoomed In.png"
-                alt="Brandon Sweeney close-up portrait"
-                fill
-                className="object-cover object-center"
-                sizes="(max-width: 1024px) 80vw, 400px"
-              />
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeTab}
+                  initial={{ opacity: 0, scale: 1.05 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.4 }}
+                  className="absolute inset-0"
+                >
+                  <Image
+                    src={BIO_IMAGES[activeTab]}
+                    alt="Brandon Sweeney close-up portrait"
+                    fill
+                    className="object-cover object-center"
+                    sizes="(max-width: 1024px) 80vw, 400px"
+                  />
+                </motion.div>
+              </AnimatePresence>
             </motion.div>
           </div>
 
@@ -341,7 +361,10 @@ function BioSection() {
             {/* Bio block 1 */}
             <motion.div
               variants={fadeUp}
-              className="glass border border-dark-border p-8 relative overflow-hidden"
+              className={`glass border p-8 relative overflow-hidden transition-colors duration-300 ${
+                activeTab === 'foundation' ? 'border-gold/35 bg-white/5' : 'border-dark-border'
+              }`}
+              onMouseEnter={() => setActiveTab('foundation')}
             >
               {/* Inner refraction border */}
               <div
@@ -369,7 +392,10 @@ function BioSection() {
             {/* Bio block 2 */}
             <motion.div
               variants={fadeUp}
-              className="glass border border-dark-border p-8 relative overflow-hidden"
+              className={`glass border p-8 relative overflow-hidden transition-colors duration-300 ${
+                activeTab === 'expert' ? 'border-gold/35 bg-white/5' : 'border-dark-border'
+              }`}
+              onMouseEnter={() => setActiveTab('expert')}
             >
               <div
                 className="absolute inset-px pointer-events-none"
@@ -396,7 +422,10 @@ function BioSection() {
             {/* Bio block 3 */}
             <motion.div
               variants={fadeUp}
-              className="glass border border-dark-border p-8 relative overflow-hidden"
+              className={`glass border p-8 relative overflow-hidden transition-colors duration-300 ${
+                activeTab === 'leader' ? 'border-gold/35 bg-white/5' : 'border-dark-border'
+              }`}
+              onMouseEnter={() => setActiveTab('leader')}
             >
               <div
                 className="absolute inset-px pointer-events-none"

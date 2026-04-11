@@ -39,7 +39,7 @@ export default function Footer() {
           {/* Column 1: Brand */}
           <div className="flex flex-col gap-6">
             <Image
-              src="/logos/sws-logo-white-gold.png"
+              src="/logos/sws-primary-white-gold.png"
               alt="Sold With Sweeney & Co."
               width={200}
               height={56}

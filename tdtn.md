@@ -448,3 +448,6 @@ Completed Checklist Video Integration
   - Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX, addressing user complaint about sliding sideways.
   - Updated BuyerMistakes UI: moved the top horizontal pagination strip into a vertical alignment flush to the right edge with the index number stacked underneath.
   - Mapped the 'Style beds' staging checklist item on the /sell page to the newly added video.
+  - Removed video file exclusions from .gitignore and pushed all previously ignored videos/frames to the repo origin.
+  - Replaced the primary logo in the Footer with the new designated SWS Primary Logo White and Gold TRANSPARENT asset.
+  - Added interactive hover states to the 'Built on Trust' section on the About page that dynamically swaps the side headshot based on the active bio panel.
