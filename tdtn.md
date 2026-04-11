@@ -474,3 +474,4 @@ Completed Checklist Video Integration
   - Added interactive hover states to the 'Built on Trust' section on the About page that dynamically swaps the side headshot based on the active bio panel.
   - Updated text split and display for the 'REALTOR Of The Year' statistic in the About section.
   - Added 'imageClassName' visibility filters to the designation logos on the Home page (TrustSection) to match the high-contrast look from the About page.
+  - Converted the static team image in the About page Team Section into an interactive 4500ms cross-fading carousel.

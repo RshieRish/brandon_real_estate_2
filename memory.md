@@ -142,3 +142,4 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-11: Introduced interactive bio-panel hover images on the About page 'Built on Trust' section.
 - 2026-04-11: Updated text split layout for 'REALTOR Of The Year' statistic on the About page.
 - 2026-04-11: Aligned visibility styling for designation logos in the home page TrustSection with the About page.
+- 2026-04-11: Updated the About page team image to an animated carousel featuring 3 team shots.

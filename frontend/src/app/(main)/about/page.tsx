@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import Image from 'next/image';
 import { motion, useInView, AnimatePresence } from 'framer-motion';
 import {
@@ -783,9 +783,23 @@ function MSisBSSection() {
 
 // ─── Section: The Team ─────────────────────────────────────────────────────────
 
+const TEAM_IMAGES = [
+  '/headshots/brandon-and-paige-maine-gala.jpeg',
+  '/headshots/sws-team-casual.png',
+  '/headshots/sws-team-formal.png',
+];
+
 function TeamSection() {
   const ref = useRef<HTMLElement>(null);
   const inView = useInView(ref, { once: true, margin: '-80px' });
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentImageIndex((prev) => (prev + 1) % TEAM_IMAGES.length);
+    }, 4500);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <section
@@ -815,13 +829,24 @@ function TeamSection() {
             className="relative overflow-hidden rounded-xl border border-white/10 shadow-2xl"
             style={{ aspectRatio: '4/5' }}
           >
-            <Image
-              src="/headshots/brandon-and-paige-maine-gala.jpeg"
-              alt="Brandon and Paige at the Maine gala"
-              fill
-              className="object-cover object-center"
-              sizes="(max-width: 1024px) 100vw, 50vw"
-            />
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={currentImageIndex}
+                initial={{ opacity: 0, scale: 1.05 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.8, ease: "easeInOut" }}
+                className="absolute inset-0"
+              >
+                <Image
+                  src={TEAM_IMAGES[currentImageIndex]}
+                  alt="Sold With Sweeney & Co. Team"
+                  fill
+                  className="object-cover object-center"
+                  sizes="(max-width: 1024px) 100vw, 50vw"
+                />
+              </motion.div>
+            </AnimatePresence>
           </motion.div>
 
           {/* Right: text */}
