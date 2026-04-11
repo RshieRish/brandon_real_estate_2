@@ -136,3 +136,4 @@
 Added interactive videos to Seller Staging Checklist
 - 2026-04-09: Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX.
 - 2026-04-09: Refactored BuyerMistakes to move pagination dots to vertical alignment on the right edge of the card, moving from a top-horizontal layout.
+- 2026-04-10: Mapped 'Style beds' staging checklist item to its respective interactive media.

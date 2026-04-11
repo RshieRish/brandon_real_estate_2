@@ -447,3 +447,4 @@ Last Updated: 2026-03-27
 Completed Checklist Video Integration
   - Fixed BuyerMistakes animation to slide purely upwards (y axis) instead of using rotateX, addressing user complaint about sliding sideways.
   - Updated BuyerMistakes UI: moved the top horizontal pagination strip into a vertical alignment flush to the right edge with the index number stacked underneath.
+  - Mapped the 'Style beds' staging checklist item on the /sell page to the newly added video.

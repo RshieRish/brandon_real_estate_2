@@ -12,7 +12,7 @@ const CHECKLIST_ITEMS = [
   { id: 'counters', label: 'Clear countertops', video: '/videos/Countertops_cleared_of_202603311934.mp4' },
   { id: 'declutter', label: 'Declutter all spaces', video: '/videos/Decluttering_transformation_of_202603311933.mp4' },
   { id: 'lawn', label: 'Manicure the lawn', video: '/videos/Manicure_the_lawn_202603311933.mp4' },
-  { id: 'beds', label: 'Style beds with fresh linens', video: undefined },
+  { id: 'beds', label: 'Style beds with fresh linens', video: '/videos/styling-beds.mp4' },
   { id: 'closets', label: 'Organize closets', video: '/videos/Closet_organizes_itself_202603311934.mp4' },
   { id: 'cords', label: 'Hide cords and cables', video: '/videos/Hide_cords_and_202603311935.mp4' },
   { id: 'fixtures', label: 'Clean or replace light fixtures', video: '/videos/Clean_or_Replace_202603311935.mp4' },
