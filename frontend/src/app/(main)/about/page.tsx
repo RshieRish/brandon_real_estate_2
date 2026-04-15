@@ -195,7 +195,16 @@ function HeroSection() {
 const stats = [
   { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
   { value: '2025', label: 'NEAR President', detail: 'Leading advocacy and standards for the association.' },
-  { value: ['REALTOR\u00ae', 'Of The', 'Year'], label: 'Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' },
+  { 
+    value: [
+      <span key="r" className="relative inline-block">
+        REALTOR
+        <sup className="absolute" style={{ fontSize: '0.45em', top: '-0.2em', right: '-0.9em' }}>&reg;</sup>
+      </span>, 
+      'Of The Year'
+    ], 
+    label: 'Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' 
+  },
   { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
 
@@ -238,8 +247,8 @@ function StatsStrip() {
                     textShadow: '0 0 30px rgba(234,196,105,0.25)',
                   }}
                 >
-                  {value.map((line) => (
-                    <span key={line} className="block">
+                  {value.map((line, idx) => (
+                    <span key={idx} className="block">
                       {line}
                     </span>
                   ))}
@@ -495,6 +504,7 @@ const awards = [
   { icon: Trophy, title: '2025 NEAR REALTOR\u00ae Of The Year', sub: 'The Northeast Association of REALTORS\u00ae highest annual honor.' },
   { icon: Star, title: '2025 NEAR President', sub: 'Helping guide standards, leadership, and advocacy for the association.' },
   { icon: Certificate, title: 'MAR Good Neighbor Award', sub: 'Recognized for community-first leadership and charitable impact.' },
+  { icon: Trophy, title: 'Heavy Hitter Award', sub: 'Recognized for selling over $10 million in real estate in a single year.' },
   { icon: Heart, title: 'NEAR Good Neighbor Recognition', sub: 'Honoring real local impact through service and giving back.' },
   { icon: Users, title: 'Distinguished Young Professional', sub: 'Celebrating standout leadership early in a high-growth career.' },
 ];

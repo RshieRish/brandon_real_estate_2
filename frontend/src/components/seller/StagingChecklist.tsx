@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle } from '@phosphor-icons/react';
@@ -78,6 +78,12 @@ export default function StagingChecklist() {
   const progressPercent = Math.round((completedCount / totalCount) * 100);
   const isComplete = completedCount === totalCount;
 
+  useEffect(() => {
+    if (isComplete) {
+      setActiveVideo('/videos/{__title____Property_202604151846.mp4');
+    }
+  }, [isComplete]);
+
   return (
     <section className="relative bg-dark-card py-24 md:py-32 overflow-hidden">
       {/* Halftone */}
@@ -118,40 +124,7 @@ export default function StagingChecklist() {
               prepare your home for market — Brandon&apos;s team is here to guide every step.
             </p>
 
-            {/* Progress */}
-            <div className="mt-8">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-semibold text-white/50 uppercase tracking-widest">
-                  Progress
-                </span>
-                <span className="text-xs font-bold text-gold tabular-nums">
-                  {completedCount} / {totalCount}
-                </span>
-              </div>
-              <div className="h-2 bg-dark-border rounded-full overflow-hidden">
-                <motion.div
-                  className="h-full bg-gold rounded-full"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${progressPercent}%` }}
-                  transition={{ type: 'spring', stiffness: 80, damping: 20 }}
-                />
-              </div>
 
-              <AnimatePresence>
-                {isComplete && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-                    className="mt-4 flex items-center gap-2 text-gold text-sm font-semibold"
-                  >
-                    <CheckCircle weight="fill" className="w-5 h-5" />
-                    Your home is ready to list — reach out to Brandon!
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
             <p className="text-white/30 text-xs font-light mt-6 leading-relaxed">
               This is a standard tool. For a dedicated list based on your home, reach out to Brandon.
             </p>
@@ -258,6 +231,41 @@ export default function StagingChecklist() {
                 );
               })}
             </ul>
+
+            {/* Progress */}
+            <div className="mt-8 pt-6 border-t border-dark-border">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-semibold text-white/50 uppercase tracking-widest">
+                  Progress
+                </span>
+                <span className="text-xs font-bold text-gold tabular-nums">
+                  {completedCount} / {totalCount}
+                </span>
+              </div>
+              <div className="h-2 bg-dark-border rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-gold rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${progressPercent}%` }}
+                  transition={{ type: 'spring', stiffness: 80, damping: 20 }}
+                />
+              </div>
+
+              <AnimatePresence>
+                {isComplete && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+                    className="mt-4 flex items-center gap-2 text-gold text-sm font-semibold"
+                  >
+                    <CheckCircle weight="fill" className="w-5 h-5" />
+                    Your home is ready to list — reach out to Brandon!
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </motion.div>
         </div>
       </div>

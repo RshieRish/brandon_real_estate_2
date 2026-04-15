@@ -43,7 +43,7 @@ export default function Footer() {
               alt="Sold With Sweeney & Co."
               width={300}
               height={80}
-              className="object-contain object-left h-20 w-auto"
+              className="object-contain object-left h-20 w-auto -ml-4"
             />
             <p className="text-sm text-gray leading-relaxed max-w-xs">
               Premium real estate representation across Massachusetts &amp; New Hampshire. Driven by integrity, results-obsessed.

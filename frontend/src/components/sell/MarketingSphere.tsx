@@ -18,7 +18,7 @@ const channels = [
   { name: 'Email', color: '#eac469', icon: 'mail' },
   { name: 'Open Houses', color: '#eac469', icon: 'house' },
   { name: 'Video', color: '#eac469', icon: 'play' },
-  { name: 'Flyers', color: '#eac469', icon: 'doc' },
+  { name: 'Print', color: '#eac469', icon: 'doc' },
   { name: 'Signage', color: '#eac469', icon: 'sign' },
   { name: 'Networking', color: '#eac469', icon: 'nodes' },
 ];
