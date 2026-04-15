@@ -6,14 +6,14 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const channels = [
-  { name: 'Facebook', color: '#eac469', logo: '/facebook_logo.png' },
-  { name: 'Homes.com', color: '#eac469', logo: '/homes_com_logo.png' },
-  { name: 'Instagram', color: '#eac469', logo: '/insta_logo.png' },
-  { name: 'LinkedIn', color: '#eac469', logo: '/linkedin_logo.png' },
-  { name: 'MLS', color: '#eac469', logo: '/mls_logo.png' },
-  { name: 'Realtor.com', color: '#eac469', logo: '/realtor.com_logo.png' },
-  { name: 'Trulia', color: '#eac469', logo: '/turlia_logo.png' }, // Note spelling matches user's string
-  { name: 'Zillow', color: '#eac469', logo: '/zillow_logo.png' },
+  { name: 'Facebook', color: '#eac469', logo: '/logos/dyson-sphere/facebook-icon-logo-svgrepo-com.svg' },
+  { name: 'Homes.com', color: '#eac469', logo: '/logos/dyson-sphere/Homes.com.svg' },
+  { name: 'Instagram', color: '#eac469', logo: '/logos/dyson-sphere/instagram-2-1-logo-svgrepo-com.svg' },
+  { name: 'LinkedIn', color: '#eac469', logo: '/logos/dyson-sphere/linkedin-svgrepo-com.svg' },
+  { name: 'MLS', color: '#eac469', logo: '/logos/dyson-sphere/mls-realtor.svg' },
+  { name: 'Realtor.com', color: '#eac469', logo: '/logos/dyson-sphere/realtor_com.svg' },
+  { name: 'Trulia', color: '#eac469', icon: 'house' },
+  { name: 'Zillow', color: '#eac469', logo: '/logos/dyson-sphere/zillow.svg' },
   { name: 'Local Groups', color: '#eac469', icon: 'users' },
   { name: 'Email', color: '#eac469', icon: 'mail' },
   { name: 'Open Houses', color: '#eac469', icon: 'house' },
@@ -86,6 +86,7 @@ export default function MarketingSphere() {
     scene.add(pointLight);
 
 
+
     // --- House Loading ---
     const homeGroup = new THREE.Group();
     homeGroup.position.y = -1.5;
@@ -124,120 +125,211 @@ export default function MarketingSphere() {
     const constellationGroup = new THREE.Group();
     scene.add(constellationGroup);
 
-    function createIconTexture(channel: { name: string; color: string; logo?: string; icon?: string }) {
+    // --- Helper: Load SVG to high-res canvas texture (preserves original colors) ---
+    function loadLogoTexture(url: string): THREE.CanvasTexture {
+      const size = 512;
       const canvas = document.createElement('canvas');
-      canvas.width = 256;
-      canvas.height = 320;
-      const ctx = canvas.getContext('2d');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
       const texture = new THREE.CanvasTexture(canvas);
       texture.minFilter = THREE.LinearFilter;
-      
-      if (!ctx) return texture;
+      texture.magFilter = THREE.LinearFilter;
+      texture.colorSpace = THREE.SRGBColorSpace; // Preserve original SVG colors!
 
-      // Draw standard glowing background
-      ctx.beginPath();
-      ctx.arc(128, 128, 90, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(10, 10, 10, 0.9)'; // Brand black tint
-      ctx.fill();
-
-      // Gold rim
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = channel.color;
-      ctx.shadowColor = channel.color;
-      ctx.shadowBlur = 25;
-      ctx.stroke();
-
-      ctx.shadowBlur = 0; // reset
-
-      // Base style for vectors
-      ctx.fillStyle = channel.color;
-      ctx.strokeStyle = channel.color;
-      ctx.lineWidth = 8;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if (channel.logo) {
-        // Load the external brand logo image
-        const img = new Image();
-        img.src = channel.logo;
-        img.onload = () => {
-          // Draw the loaded image in the center. We scale it nicely to fit the 180px circle.
-          // Drawing size: 100x100
-          ctx.drawImage(img, 128 - 50, 128 - 50, 100, 100);
-          texture.needsUpdate = true; // Tell Three.js the canvas changed!
-        };
-      } else if (channel.icon) {
-        // Draw the vector shapes exactly like user provided
-        ctx.save();
-        ctx.translate(128, 128);
-
-        if (channel.icon === 'camera') {
-          ctx.strokeRect(-40, -35, 80, 70);
-          ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.stroke();
-          ctx.beginPath(); ctx.arc(22, -18, 4, 0, Math.PI * 2); ctx.fill();
-        } else if (channel.icon === 'users') {
-          ctx.beginPath(); ctx.arc(-15, -15, 15, 0, Math.PI * 2); ctx.stroke();
-          ctx.beginPath(); ctx.arc(20, -5, 12, 0, Math.PI * 2); ctx.stroke();
-          ctx.beginPath(); ctx.arc(-15, 40, 25, Math.PI, 0); ctx.stroke();
-          ctx.beginPath(); ctx.arc(20, 40, 20, Math.PI, 0); ctx.stroke();
-        } else if (channel.icon === 'mail') {
-          ctx.strokeRect(-45, -30, 90, 60);
-          ctx.beginPath(); ctx.moveTo(-45, -30); ctx.lineTo(0, 5); ctx.lineTo(45, -30); ctx.stroke();
-        } else if (channel.icon === 'house') {
-          ctx.beginPath(); ctx.moveTo(-40, 40); ctx.lineTo(-40, 0); ctx.lineTo(0, -40); ctx.lineTo(40, 0); ctx.lineTo(40, 40); ctx.closePath(); ctx.stroke();
-          ctx.strokeRect(-15, 10, 30, 30);
-        } else if (channel.icon === 'play') {
-          ctx.beginPath(); ctx.moveTo(-15, -30); ctx.lineTo(30, 0); ctx.lineTo(-15, 30); ctx.closePath(); ctx.stroke(); ctx.fill();
-        } else if (channel.icon === 'doc') {
-          ctx.strokeRect(-35, -45, 70, 90);
-          ctx.beginPath(); ctx.moveTo(-15, -20); ctx.lineTo(15, -20); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(15, 0); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(-15, 20); ctx.lineTo(5, 20); ctx.stroke();
-        } else if (channel.icon === 'sign') {
-          ctx.beginPath(); ctx.moveTo(0, -40); ctx.lineTo(0, 40); ctx.stroke();
-          ctx.fillStyle = channel.color;
-          ctx.fillRect(-40, -30, 80, 40);
-        } else if (channel.icon === 'nodes') {
-          ctx.beginPath(); ctx.arc(0, -20, 10, 0, Math.PI * 2); ctx.fill();
-          ctx.beginPath(); ctx.arc(-25, 20, 10, 0, Math.PI * 2); ctx.fill();
-          ctx.beginPath(); ctx.arc(25, 20, 10, 0, Math.PI * 2); ctx.fill();
-          ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-25, 20); ctx.lineTo(25, 20); ctx.closePath(); ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      // Draw subtle label below icon (Gold)
-      ctx.font = '700 24px "Montserrat", sans-serif'; 
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = channel.color;
-      ctx.fillText(channel.name.toUpperCase(), 128, 260);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = url;
+      img.onload = () => {
+        // Draw logo centered at full canvas size with padding
+        const pad = 40;
+        const drawSize = size - pad * 2;
+        ctx.drawImage(img, pad, pad, drawSize, drawSize);
+        texture.needsUpdate = true;
+      };
 
       return texture;
     }
 
+    // --- Helper: Create icon canvas texture for vector-drawn channels ---
+    function createIconCanvas(icon: string, color: string): THREE.CanvasTexture {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 14;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      ctx.save();
+      ctx.translate(size / 2, size / 2);
+      const s = 1.8; // scale up for larger canvas
+      ctx.scale(s, s);
+
+      if (icon === 'camera') {
+        ctx.strokeRect(-40, -35, 80, 70);
+        ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(22, -18, 4, 0, Math.PI * 2); ctx.fill();
+      } else if (icon === 'users') {
+        ctx.beginPath(); ctx.arc(-15, -15, 15, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(20, -5, 12, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(-15, 40, 25, Math.PI, 0); ctx.stroke();
+        ctx.beginPath(); ctx.arc(20, 40, 20, Math.PI, 0); ctx.stroke();
+      } else if (icon === 'mail') {
+        ctx.strokeRect(-45, -30, 90, 60);
+        ctx.beginPath(); ctx.moveTo(-45, -30); ctx.lineTo(0, 5); ctx.lineTo(45, -30); ctx.stroke();
+      } else if (icon === 'house') {
+        ctx.beginPath(); ctx.moveTo(-40, 40); ctx.lineTo(-40, 0); ctx.lineTo(0, -40); ctx.lineTo(40, 0); ctx.lineTo(40, 40); ctx.closePath(); ctx.stroke();
+        ctx.strokeRect(-15, 10, 30, 30);
+      } else if (icon === 'play') {
+        ctx.beginPath(); ctx.moveTo(-15, -30); ctx.lineTo(30, 0); ctx.lineTo(-15, 30); ctx.closePath(); ctx.stroke(); ctx.fill();
+      } else if (icon === 'doc') {
+        ctx.strokeRect(-35, -45, 70, 90);
+        ctx.beginPath(); ctx.moveTo(-15, -20); ctx.lineTo(15, -20); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(15, 0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-15, 20); ctx.lineTo(5, 20); ctx.stroke();
+      } else if (icon === 'sign') {
+        ctx.beginPath(); ctx.moveTo(0, -40); ctx.lineTo(0, 40); ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.fillRect(-40, -30, 80, 40);
+      } else if (icon === 'nodes') {
+        ctx.beginPath(); ctx.arc(0, -20, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(-25, 20, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(25, 20, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-25, 20); ctx.lineTo(25, 20); ctx.closePath(); ctx.stroke();
+      }
+      ctx.restore();
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      return texture;
+    }
+
+    // --- Helper: Create text label sprite ---
+    function createTextSprite(text: string) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d')!;
+      ctx.font = '800 42px "Montserrat", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur = 12;
+      ctx.fillText(text.toUpperCase(), 256, 64);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.minFilter = THREE.LinearFilter;
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+      const sprite = new THREE.Sprite(mat);
+      sprite.scale.set(8, 2, 1);
+      return sprite;
+    }
+
+    // --- Glass sphere material (Fresnel shader — works with alpha:true renderer) ---
+    const glassVertexShader = `
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewPosition = -mvPosition.xyz;
+        vNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+    const glassFragmentShader = `
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+      uniform vec3 uRimColor;
+      uniform float uRimPower;
+      uniform float uRimIntensity;
+      uniform float uCenterOpacity;
+      void main() {
+        vec3 viewDir = normalize(vViewPosition);
+        float fresnel = pow(1.0 - abs(dot(viewDir, vNormal)), uRimPower);
+        // Specular highlight
+        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+        vec3 halfDir = normalize(viewDir + lightDir);
+        float spec = pow(max(dot(vNormal, halfDir), 0.0), 64.0) * 0.4;
+        vec3 color = uRimColor * fresnel * uRimIntensity + vec3(spec);
+        float alpha = fresnel * 0.6 + uCenterOpacity + spec * 0.5;
+        gl_FragColor = vec4(color, alpha);
+      }
+    `;
+    const glassMaterial = new THREE.ShaderMaterial({
+      vertexShader: glassVertexShader,
+      fragmentShader: glassFragmentShader,
+      uniforms: {
+        uRimColor: { value: new THREE.Color(0xeac469) },
+        uRimPower: { value: 2.5 },
+        uRimIntensity: { value: 1.0 },
+        uCenterOpacity: { value: 0.03 },
+      },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+    });
+    const glassGeo = new THREE.SphereGeometry(2.8, 32, 32);
+
     const sphereRadius = 22;
+    const nodeGroups: THREE.Group[] = [];
 
     for (let i = 0; i < channels.length; i++) {
-      const phi = Math.acos(-1 + (2 * i) / channels.length); // Latitude
-      const theta = Math.sqrt(channels.length * Math.PI) * phi; // Longitude
+      const phi = Math.acos(-1 + (2 * i) / channels.length);
+      const theta = Math.sqrt(channels.length * Math.PI) * phi;
 
       const x = sphereRadius * Math.cos(theta) * Math.sin(phi);
       const y = sphereRadius * Math.sin(theta) * Math.sin(phi);
       const z = sphereRadius * Math.cos(phi);
 
-      // Icon sprite
-      const spriteMat = new THREE.SpriteMaterial({
-        map: createIconTexture(channels[i]),
-        transparent: true,
-        blending: THREE.NormalBlending, // Normal instead of Additive makes solid PNG logos pop properly without burning out
-      });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.scale.set(7, 8.75, 1);
-      sprite.position.set(x, y, z);
-      constellationGroup.add(sprite);
+      const nodeGroup = new THREE.Group();
+      nodeGroup.position.set(x, y, z);
 
-      // Tether
+      // 1) Glass sphere — renders AFTER logos so glass overlays them
+      const glassSphere = new THREE.Mesh(glassGeo, glassMaterial);
+      glassSphere.renderOrder = 2;
+      nodeGroup.add(glassSphere);
+
+      // 2) Logo/icon plane BEHIND the glass (MeshBasicMaterial = full color vibrancy)
+      if (channels[i].logo) {
+        const logoTex = loadLogoTexture(channels[i].logo!);
+        const logoMat = new THREE.MeshBasicMaterial({
+          map: logoTex,
+          transparent: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const logoPlane = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), logoMat);
+        logoPlane.renderOrder = 1;
+        logoPlane.position.z = 0.1; // Slightly forward to avoid z-fighting
+        nodeGroup.add(logoPlane);
+      } else if (channels[i].icon) {
+        const iconTex = createIconCanvas(channels[i].icon!, channels[i].color);
+        const iconMat = new THREE.MeshBasicMaterial({
+          map: iconTex,
+          transparent: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const iconPlane = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), iconMat);
+        iconPlane.renderOrder = 1;
+        iconPlane.position.z = 0.1;
+        nodeGroup.add(iconPlane);
+      }
+
+      // 3) Text label sprite below
+      const textSprite = createTextSprite(channels[i].name);
+      textSprite.position.y = -4.2;
+      nodeGroup.add(textSprite);
+
+      constellationGroup.add(nodeGroup);
+      nodeGroups.push(nodeGroup);
+
+      // 4) Tether line
       const tetherGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 0, 0),
         new THREE.Vector3(x, y, z),
@@ -265,6 +357,11 @@ export default function MarketingSphere() {
       constellationGroup.rotation.y += 0.0015;
       constellationGroup.rotation.x = Math.sin(time * 0.1) * 0.05;
       constellationGroup.rotation.z = Math.cos(time * 0.08) * 0.05;
+
+      // Billboard each node group to face camera (logos always readable)
+      for (const node of nodeGroups) {
+        node.lookAt(camera.position);
+      }
 
       controls.update();
       renderer.render(scene, camera);

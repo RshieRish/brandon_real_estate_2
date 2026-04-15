@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "claude-d3js-skill": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "45535337456473af6178cebde498dd8bb255ea65fd41db7baa3e851e6947778f"
+    }
+  }
+}

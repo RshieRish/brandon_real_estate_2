@@ -12,24 +12,54 @@ import type {
   InvestorLeadCapture,
 } from './report-types';
 
-const DEFAULT_INPUTS: InvestorInputs = {
-  purchasePrice: 300000,
-  rehabCost: 40000,
-  arv: 420000,
-  holdMonths: 4,
-  rentalIncome: 2400,
-  propertyTax: 4800,
-  insurance: 1500,
-  downPaymentPct: 25,
-  interestRate: 7,
-  loanTermYears: 30,
+type InvestorInputValues = Record<keyof InvestorInputs, string>;
+
+const EMPTY_INPUTS: InvestorInputValues = {
+  purchasePrice: '',
+  rehabCost: '',
+  arv: '',
+  holdMonths: '',
+  rentalIncome: '',
+  propertyTax: '',
+  insurance: '',
+  downPaymentPct: '',
+  interestRate: '',
+  loanTermYears: '',
 };
+
+const POSITIVE_FIELDS: Array<keyof InvestorInputs> = [
+  'purchasePrice',
+  'arv',
+  'holdMonths',
+  'loanTermYears',
+];
+
+function parseInvestorInputs(values: InvestorInputValues): InvestorInputs | null {
+  const parsed = Object.entries(values).reduce<Partial<InvestorInputs>>((acc, [key, value]) => {
+    const typedKey = key as keyof InvestorInputs;
+    const trimmed = value.trim();
+    if (!trimmed) return acc;
+    const numeric = Number(trimmed);
+    if (!Number.isFinite(numeric)) return acc;
+    return { ...acc, [typedKey]: numeric };
+  }, {});
+
+  const hasEveryField = (Object.keys(EMPTY_INPUTS) as Array<keyof InvestorInputs>).every(
+    (key) => typeof parsed[key] === 'number',
+  );
+  if (!hasEveryField) return null;
+
+  const hasValidRequiredValues = POSITIVE_FIELDS.every((key) => (parsed[key] ?? 0) > 0);
+  if (!hasValidRequiredValues) return null;
+
+  return parsed as InvestorInputs;
+}
 
 interface InputFieldProps {
   label: string;
   name: keyof InvestorInputs;
-  value: number;
-  onChange: (name: keyof InvestorInputs, value: number) => void;
+  value: string;
+  onChange: (name: keyof InvestorInputs, value: string) => void;
   prefix?: string;
   suffix?: string;
   step?: number;
@@ -55,7 +85,7 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
           type="number"
           step={step}
           value={value}
-          onChange={(e) => onChange(name, parseFloat(e.target.value) || 0)}
+          onChange={(e) => onChange(name, e.target.value)}
           className={`
             w-full bg-dark-surface border border-dark-border text-white text-sm
             ${prefix ? 'pl-7' : 'pl-4'} ${suffix ? 'pr-10' : 'pr-4'} py-2.5
@@ -73,18 +103,21 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
 }
 
 export default function InvestorCalculator() {
-  const [inputs, setInputs] = useState<InvestorInputs>(DEFAULT_INPUTS);
+  const [inputs, setInputs] = useState<InvestorInputValues>(EMPTY_INPUTS);
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
   const engagementRetryTimeoutRef = useRef<number | null>(null);
 
-  const metrics = useMemo(() => calculateMetrics(inputs), [inputs]);
+  const parsedInputs = useMemo(() => parseInvestorInputs(inputs), [inputs]);
+  const metrics = useMemo(
+    () => (parsedInputs ? calculateMetrics(parsedInputs) : null),
+    [parsedInputs],
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
-    const hasChanged = JSON.stringify(inputs) !== JSON.stringify(DEFAULT_INPUTS);
     const alreadySent = window.sessionStorage.getItem('investor_engagement_sent') === '1';
-    if (!hasChanged || alreadySent) return undefined;
+    if (!parsedInputs || alreadySent) return undefined;
 
     const existingKey = window.sessionStorage.getItem('investor_engagement_key');
     const sessionKey = existingKey || window.crypto?.randomUUID?.() || `investor-${Date.now()}`;
@@ -98,10 +131,10 @@ export default function InvestorCalculator() {
       try {
         await apiPost<{ queued: boolean }>('/api/v1/investor/engagement', {
           session_key: sessionKey,
-          purchase_price: inputs.purchasePrice,
-          rehab_costs: inputs.rehabCost,
-          arv: inputs.arv,
-          hold_months: inputs.holdMonths,
+          purchase_price: parsedInputs.purchasePrice,
+          rehab_costs: parsedInputs.rehabCost,
+          arv: parsedInputs.arv,
+          hold_months: parsedInputs.holdMonths,
         });
         window.sessionStorage.setItem('investor_engagement_sent', '1');
       } catch {
@@ -118,29 +151,31 @@ export default function InvestorCalculator() {
         window.clearTimeout(engagementRetryTimeoutRef.current);
       }
     };
-  }, [inputs]);
+  }, [parsedInputs]);
 
-  function handleChange(name: keyof InvestorInputs, value: number) {
+  function handleChange(name: keyof InvestorInputs, value: string) {
     setInputs((prev) => ({ ...prev, [name]: value }));
     setFullReport(null);
   }
 
   async function handleUnlock(contact: InvestorLeadCapture) {
+    if (!parsedInputs) return;
+
     const response = await apiPost<InvestorAnalysisResponse>('/api/v1/investor/analyze', {
       property_type: 'single_family',
       units: 1,
-      purchase_price: inputs.purchasePrice,
-      down_payment_pct: inputs.downPaymentPct,
-      interest_rate: inputs.interestRate,
-      loan_term_years: inputs.loanTermYears,
-      monthly_rent_total: inputs.rentalIncome,
-      rehab_costs: inputs.rehabCost,
-      annual_taxes: inputs.propertyTax,
-      annual_insurance: inputs.insurance,
+      purchase_price: parsedInputs.purchasePrice,
+      down_payment_pct: parsedInputs.downPaymentPct,
+      interest_rate: parsedInputs.interestRate,
+      loan_term_years: parsedInputs.loanTermYears,
+      monthly_rent_total: parsedInputs.rentalIncome,
+      rehab_costs: parsedInputs.rehabCost,
+      annual_taxes: parsedInputs.propertyTax,
+      annual_insurance: parsedInputs.insurance,
       monthly_maintenance: 0,
       vacancy_rate_pct: 8,
       mgmt_fee_pct: 0,
-      hold_years: Math.max(1, Math.ceil(inputs.holdMonths / 12)),
+      hold_years: Math.max(1, Math.ceil(parsedInputs.holdMonths / 12)),
       appreciation_rate_pct: 3,
       name: contact.name || undefined,
       email: contact.email,
@@ -268,13 +303,29 @@ export default function InvestorCalculator() {
           <p className="text-white/50 text-sm font-light mb-5">
             These headline numbers update immediately. The gated step below is only for the deeper AI report.
           </p>
-          <AnalysisResults metrics={metrics} />
+          {metrics ? (
+            <AnalysisResults metrics={metrics} />
+          ) : (
+            <div className="glass border border-dark-border rounded-xl p-6 md:p-8 text-center">
+              <p className="text-gold text-xs font-semibold tracking-[0.18em] uppercase mb-3">
+                Waiting On Deal Inputs
+              </p>
+              <h4 className="text-white font-black text-lg tracking-tight mb-3">
+                Your snapshot will appear here
+              </h4>
+              <p className="text-white/45 text-sm font-light leading-relaxed max-w-sm mx-auto">
+                Fill out the deal parameters on the left to reveal the instant numbers. The full AI report still unlocks only after email capture.
+              </p>
+            </div>
+          )}
         </div>
 
-        <MeetingGate
-          fullReport={fullReport}
-          onUnlock={handleUnlock}
-        />
+        {metrics && (
+          <MeetingGate
+            fullReport={fullReport}
+            onUnlock={handleUnlock}
+          />
+        )}
       </motion.div>
     </div>
   );

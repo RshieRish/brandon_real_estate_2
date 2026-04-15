@@ -687,10 +687,7 @@ function MSisBSSection() {
               variants={fadeUp}
               className="text-white/60 text-base leading-relaxed font-light mb-10"
             >
-              When you close with Brandon, he grants{' '}
-              <span className="text-gold font-semibold">$200 to MS is BS New England, Inc.</span> — or{' '}
-              <span className="text-gold font-semibold">$100 to a charity of your choice</span>
-              . Every transaction becomes part of something bigger.
+              When you close with Brandon, a portion of the sale is donated to a charity. Every transaction becomes part of something bigger.
             </motion.p>
 
             <motion.div variants={fadeUp}>

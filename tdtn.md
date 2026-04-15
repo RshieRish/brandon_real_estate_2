@@ -1,7 +1,25 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-04-11
+Last Updated: 2026-04-13
+
+### 2026-04-13 — Investor Calculator 80% Rule + Blank Inputs
+- What was built: Updated the investor calculator's max-offer metric to an 80% rule and removed prefilled deal values so instant pricing only appears after visitors enter their own numbers.
+- Files modified:
+  - `frontend/src/lib/investor-calc.ts`
+  - `frontend/src/components/investor/InvestorCalculator.tsx`
+  - `frontend/src/components/investor/AnalysisResults.tsx`
+- Key decisions:
+  - Changed the offer cap formula from `ARV x 70% - rehab` to `ARV x 80% - rehab`.
+  - Renamed the metric label to `80% Rule Offer Cap`.
+  - Added helper copy explaining that the cap is a conservative max purchase offer, calculated as `ARV x 80% minus rehab`.
+  - Confirmed the user's example now returns `$570,000 x 80% - $50,000 = $406,000`.
+  - Converted the calculator inputs from prefilled numeric state to blank string state, with parsing only after all fields have valid values.
+  - The instant snapshot and full-report gate now stay hidden until a complete set of deal inputs is entered.
+- Verification:
+  - `frontend`: direct calculator smoke check confirmed the offer cap is `$406,000` for the user's sample.
+  - `frontend`: `npm run typecheck` passed.
+- Status: Complete locally
 
 ### 2026-04-11 — Investor Calculator Short-Term Loan Fix
 - What was built: Updated the investment calculator so one-year fix-and-flip style loans use interest-only debt service instead of being fully amortized over 12 months.
@@ -475,3 +493,6 @@ Completed Checklist Video Integration
   - Updated text split and display for the 'REALTOR Of The Year' statistic in the About section.
   - Added 'imageClassName' visibility filters to the designation logos on the Home page (TrustSection) to match the high-contrast look from the About page.
   - Converted the static team image in the About page Team Section into an interactive 4500ms cross-fading carousel.
+  - Converted the marketing node network on the Sell page (MarketingSphere) entirely to true 3D extruded SVGs.
+  - Fixed MarketingSphere Instagram and Homes.com node colors, swapped generic icons, and fixed text sprite rotations to always face downwards.
+  - Swapped Instagram SVG to Phosphor to fix ExtrudeGeometry solid-blob bug.

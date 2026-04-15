@@ -1,10 +1,14 @@
 import type { Metadata } from 'next';
-import { ArrowDown } from '@phosphor-icons/react/dist/ssr';
+import {
+  ArrowDown,
+  Phone,
+} from '@phosphor-icons/react/dist/ssr';
 import InvestorCalculator from '@/components/investor/InvestorCalculator';
 import FlipCaseStudy from '@/components/investor/FlipCaseStudy';
 import ReviewCard from '@/components/shared/ReviewCard';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
+import LeadCaptureForm from '@/components/shared/LeadCaptureForm';
 
 export const metadata: Metadata = {
   title: 'Invest in Real Estate | Brandon Sweeney, REALTOR\u00ae | Sold With Sweeney & Co.',
@@ -256,53 +260,72 @@ export default function InvestPage() {
         </div>
       </section>
 
-      {/* ── FINAL CTA ── */}
-      <section className="relative bg-dark-surface py-24 md:py-32 overflow-hidden">
-        {/* Gold radial glow */}
+      {/* ── LEAD CAPTURE ── */}
+      <section className="relative py-24 px-6 md:px-12 bg-dark-surface overflow-hidden">
+        {/* Gold glow top */}
         <div
-          className="absolute inset-0"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 60% at 50% 100%, rgba(234,196,105,0.07) 0%, transparent 70%)',
-          }}
+          className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px"
+          style={{ background: 'linear-gradient(90deg, transparent, rgba(234,196,105,0.6), transparent)' }}
           aria-hidden="true"
         />
         <HalftoneOverlay opacity={0.03} />
 
-        <div className="relative z-10 max-w-3xl mx-auto px-6 md:px-12 text-center">
-          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-            Take Action
-          </p>
-          <h2
-            className="font-black text-white leading-tight tracking-tight mb-6"
-            style={{ fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}
-          >
-            Ready to Find Your Next Deal?
-          </h2>
-          <p className="text-white/60 text-base font-light leading-relaxed mb-10 max-w-xl mx-auto">
-            Schedule a free investor strategy call with Brandon. Bring your deal — he will help you
-            run the numbers, validate your strategy, and move fast.
-          </p>
+        <div className="relative max-w-7xl mx-auto">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
+            {/* Left copy */}
+            <div>
+              <span className="inline-block border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-3 py-1 mb-6">
+                Ready to Invest?
+              </span>
+              <h2
+                className="font-black text-white leading-tight tracking-tight mb-6"
+                style={{ fontSize: 'clamp(1.75rem, 4.5vw, 3rem)' }}
+              >
+                Find Deals.{' '}
+                <span className="text-gold" style={{ textShadow: '0 0 24px rgba(234,196,105,0.3)' }}>
+                  Build Wealth.
+                </span>
+              </h2>
+              <p className="text-gray text-sm leading-relaxed mb-8 max-w-md">
+                Fill out the form and Brandon will reach out to schedule your free investor strategy
+                call. Bring your deal or let him help you find one — no pressure, just numbers.
+              </p>
 
-          <div className="flex flex-wrap gap-4 justify-center">
-            <CTAButton href="tel:9789872806" external variant="gold">
-              Call (978) 987-2806
-            </CTAButton>
-            <CTAButton href="#calculator" variant="outline">
-              Analyze a Deal
-            </CTAButton>
+              {/* Phone CTA */}
+              <a
+                href="tel:9789872806"
+                className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+              >
+                <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200">
+                  <Phone weight="bold" className="w-4 h-4" />
+                </span>
+                <div>
+                  <p className="text-xs text-gray uppercase tracking-widest font-medium">Call Direct</p>
+                  <p className="font-bold tracking-wide">(978) 987-2806</p>
+                </div>
+              </a>
+            </div>
+
+            {/* Right form */}
+            <div className="bg-[#0a0a0a] border border-dark-border p-8">
+              <LeadCaptureForm
+                source="investor-page"
+                leadType="investor"
+                ctaText="Book a Free Investor Strategy Call"
+              />
+            </div>
           </div>
-
-          {/* KW Legal Disclaimer */}
-          <p className="text-white/20 text-xs font-light mt-12 leading-relaxed max-w-2xl mx-auto">
-            Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. Deal
-            analysis results are estimates for informational purposes only and do not constitute
-            financial, legal, or investment advice. Actual returns depend on market conditions,
-            financing, property condition, and other factors. Equal Housing Opportunity. &copy;{' '}
-            {new Date().getFullYear()} Sold With Sweeney &amp; Co. All rights reserved. Keller
-            Williams Realty, Inc. is not responsible for the accuracy of third-party data.
-          </p>
         </div>
+
+        {/* KW Legal disclaimer */}
+        <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
+          Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. Deal
+          analysis results are estimates for informational purposes only and do not constitute
+          financial, legal, or investment advice. Actual returns depend on market conditions,
+          financing, property condition, and other factors. Equal Housing Opportunity. &copy;{' '}
+          {new Date().getFullYear()} Sold With Sweeney &amp; Co. All rights reserved. Keller
+          Williams Realty, Inc. is not responsible for the accuracy of third-party data.
+        </p>
       </section>
     </>
   );

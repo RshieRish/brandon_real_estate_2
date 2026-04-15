@@ -108,7 +108,7 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
           />
           <MetricCard
             eyebrow="Flip"
-            label="Max Allowable Offer"
+            label="80% Rule Offer Cap"
             value={fmt(maxAllowableOffer)}
           />
           <MetricCard
@@ -134,6 +134,9 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
           {loanStructure === 'interest_only'
             ? 'Short-term loan terms of 1-2 years are modeled as interest-only bridge or fix-and-flip debt.'
             : 'Loan terms of 3+ years are modeled with amortized payments.'}
+          {' '}
+          The 80% Rule Offer Cap is a conservative max purchase offer, not total project cost:
+          ARV x 80% minus rehab.
         </p>
       </div>
 

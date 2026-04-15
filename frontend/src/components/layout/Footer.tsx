@@ -41,9 +41,9 @@ export default function Footer() {
             <Image
               src="/logos/sws-primary-white-gold.png"
               alt="Sold With Sweeney & Co."
-              width={200}
-              height={56}
-              className="object-contain object-left h-12 w-auto"
+              width={300}
+              height={80}
+              className="object-contain object-left h-20 w-auto"
             />
             <p className="text-sm text-gray leading-relaxed max-w-xs">
               Premium real estate representation across Massachusetts &amp; New Hampshire. Driven by integrity, results-obsessed.

@@ -104,6 +104,7 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-13: Updated the investor calculator offer cap from 70% to 80%, renamed the card to `80% Rule Offer Cap`, and removed prefilled deal values so the instant snapshot and full-report gate only appear after users enter a complete deal.
 - 2026-04-11: Fixed the investor calculator short-term loan bug. Terms of 1-2 years now model interest-only bridge / fix-and-flip debt, while 3+ year terms stay amortized; regression coverage lives in `backend/tests/test_investor_metrics.py`.
 - 2026-04-10: Wrote the durable notification queue design at `docs/superpowers/specs/2026-04-10-brandon-notification-queue-design.md`.
 - 2026-04-10: Wrote the implementation plan at `docs/superpowers/plans/2026-04-10-brandon-notification-queue.md`.
@@ -143,3 +144,5 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-11: Updated text split layout for 'REALTOR Of The Year' statistic on the About page.
 - 2026-04-11: Aligned visibility styling for designation logos in the home page TrustSection with the About page.
 - 2026-04-11: Updated the About page team image to an animated carousel featuring 3 team shots.
+- 2026-04-11: Implemented SVGLoader and ExtrudeGeometry for all nodes on the MarketingSphere on the Sell page, making them true 3D.
+- 2026-04-11: Fixed SVG colors in MarketingSphere and correctly aligned node text sprites to the global Y axis.

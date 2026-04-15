@@ -17,7 +17,7 @@ export interface InvestorMetrics {
   flipProfit: number;
   flipROI: number;          // %
   flipAnnualizedROI: number; // %
-  maxAllowableOffer: number; // 70% rule
+  maxAllowableOffer: number; // 80% rule
   holdingCosts: number;
   closingCosts: number;
   totalProjectCost: number;
@@ -73,7 +73,7 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   const cashInvestedFlip = downPayment + rehabCost + holdingCosts + closingCosts;
   const flipROI = safeDivide(flipProfit, cashInvestedFlip) * 100;
   const flipAnnualizedROI = (flipROI / holdMonths) * 12;
-  const maxAllowableOffer = arv * 0.7 - rehabCost;
+  const maxAllowableOffer = arv * 0.8 - rehabCost;
 
   // Rental
   const monthlyExpenses = (propertyTax + insurance) / 12;
