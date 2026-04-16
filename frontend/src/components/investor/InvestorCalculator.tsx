@@ -38,16 +38,12 @@ function parseInvestorInputs(values: InvestorInputValues): InvestorInputs | null
   const parsed = Object.entries(values).reduce<Partial<InvestorInputs>>((acc, [key, value]) => {
     const typedKey = key as keyof InvestorInputs;
     const trimmed = value.trim();
-    if (!trimmed) return acc;
-    const numeric = Number(trimmed);
-    if (!Number.isFinite(numeric)) return acc;
+    const numeric = trimmed ? Number(trimmed) : 0;
+    if (!Number.isFinite(numeric)) {
+      return { ...acc, [typedKey]: 0 };
+    }
     return { ...acc, [typedKey]: numeric };
   }, {});
-
-  const hasEveryField = (Object.keys(EMPTY_INPUTS) as Array<keyof InvestorInputs>).every(
-    (key) => typeof parsed[key] === 'number',
-  );
-  if (!hasEveryField) return null;
 
   const hasValidRequiredValues = POSITIVE_FIELDS.every((key) => (parsed[key] ?? 0) > 0);
   if (!hasValidRequiredValues) return null;
