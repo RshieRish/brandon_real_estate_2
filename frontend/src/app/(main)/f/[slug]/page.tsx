@@ -58,7 +58,7 @@ export default async function FunnelPage({ params }: Props) {
             Avg. Rating
           </div>
           <div className="flex items-center gap-2 text-white/60 text-sm font-medium tracking-wide">
-            <span className="text-gold font-black text-lg">2025</span> REALTOR&#174; of the Year
+            <span className="text-gold font-black text-lg">2025</span> REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> of the Year
           </div>
           <div className="flex items-center gap-2 text-white/60 text-sm font-medium tracking-wide">
             <span className="text-gold font-black text-lg">MA + NH</span> Markets

@@ -112,8 +112,8 @@ function HeroSection() {
               >
                 Brandon Sweeney is the CEO of Sold With Sweeney &amp; Co. — a top-producing team
                 at Keller Williams Realty Success. Named{' '}
-                <span className="text-gold font-medium">2025 NEAR REALTOR&#174; Of The Year</span>{' '}
-                and 2025 NEAR President, Brandon has built his career on market expertise, honest
+                <span className="text-gold font-medium">2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>{' '}
+                and 2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President, Brandon has built his career on market expertise, honest
                 communication, and an unwavering commitment to the Merrimack Valley community where
                 he grew up.
               </motion.p>
@@ -198,16 +198,15 @@ function HeroSection() {
 
 const stats = [
   { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
-  { value: '2025', label: 'NEAR President', detail: 'Leading advocacy and standards for the association.' },
+  { value: '2025', label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, detail: 'Leading advocacy and standards for the association.' },
   { 
     value: [
-      <span key="r" className="relative inline-block">
-        REALTOR
-        <sup className="absolute" style={{ fontSize: '0.45em', top: '-0.2em', right: '-0.9em' }}>&reg;</sup>
+      <span key="r">
+        Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>
       </span>, 
-      'Of The Year'
+      ' Of The Year'
     ], 
-    label: 'Award 2025', detail: 'Recognized with NEAR’s highest annual honor.' 
+    label: 'Award 2025', detail: <>Recognized with the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</> 
   },
   { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
@@ -455,9 +454,9 @@ function BioSection() {
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
                   In 2025, Brandon was named{' '}
-                  <span className="text-gold font-medium">NEAR REALTOR&#174; Of The Year</span> —
-                  the highest honor awarded by the Northeast Association of Realtors&#174;. He
-                  also serves as the 2025 NEAR President, guiding the direction of real estate
+                  <span className="text-gold font-medium">Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span> —
+                  the highest honor awarded by the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>. He
+                  also serves as the 2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President, guiding the direction of real estate
                   standards and advocacy across Massachusetts.
                 </p>
               </div>
@@ -474,8 +473,8 @@ function BioSection() {
 const designations = [
   {
     src: '/logos/Designations-Associations/NEAR.png',
-    alt: 'NEAR',
-    label: 'Northeast Association of Realtors\u00ae',
+    alt: 'Northeast Association of REALTORS®',
+    label: 'Northeast Association of REALTORS®',
     imageClassName: 'brightness-125 saturate-110',
   },
   {
@@ -508,7 +507,7 @@ const awards = [
   {
     id: 'near-realtor-of-the-year-2025',
     icon: Trophy,
-    title: <span>2025 NEAR REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>,
+    title: <span>2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>,
     sub: <span>The Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</span>,
   },
   {
@@ -532,7 +531,7 @@ const awards = [
   {
     id: 'near-good-neighbor-recognition',
     icon: Heart,
-    title: 'NEAR Good Neighbor Recognition',
+    title: 'Northeast Association of REALTORS® Good Neighbor Recognition',
     sub: 'Honoring real local impact through service and giving back.',
   },
   {

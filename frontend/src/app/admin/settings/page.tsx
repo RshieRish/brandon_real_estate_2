@@ -282,7 +282,7 @@ export default function SettingsPage() {
           {[
             { label: 'Site Name', value: 'SoldWithSweeney.com' },
             { label: 'Agent Name', value: 'Brandon Sweeney' },
-            { label: 'License', value: 'REALTOR\u00AE \u2014 Licensed in MA & NH' },
+            { label: 'License', value: <>REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> &mdash; Licensed in MA &amp; NH</> },
           ].map(({ label, value }) => (
             <div key={label} className="flex items-start justify-between gap-4">
               <p className="text-white/40 text-xs uppercase tracking-widest flex-shrink-0 mt-0.5">

@@ -236,7 +236,7 @@ export default function FunnelHero({ funnel }: FunnelHeroProps) {
               </div>
               <div className="border-b border-dark-border pb-5 mb-5">
                 <p className="text-gold font-black text-4xl leading-none">2025</p>
-                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">REALTOR&reg; of the Year</p>
+                <p className="text-gray text-xs tracking-wide mt-1 uppercase font-medium">REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> of the Year</p>
               </div>
               <div>
                 <p className="text-gold font-black text-4xl leading-none">MA+NH</p>

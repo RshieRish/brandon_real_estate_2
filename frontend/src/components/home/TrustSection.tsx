@@ -55,7 +55,7 @@ const reviews = [
 const designations = [
   {
     src: '/logos/Designations-Associations/NEAR.png',
-    alt: 'NEAR — New England Association of REALTORS®',
+    alt: 'Northeast Association of REALTORS®',
     imageClassName: 'brightness-125 saturate-110',
   },
   {
