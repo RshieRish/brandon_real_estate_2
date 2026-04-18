@@ -121,12 +121,16 @@ function HeroSection() {
               {/* Bio detail chips */}
               <motion.div variants={fadeUp} className="flex flex-wrap gap-3 mt-8">
                 {[
-                  { icon: CalendarBlank, label: 'Licensed salesperson since 2017' },
-                  { icon: Trophy, label: <span key="l">REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year 2025</span> },
-                  { icon: Star, label: 'MA & NH Licensed' },
-                ].map(({ icon: Icon, label }) => (
+                  { id: 'licensed-since-2017', icon: CalendarBlank, label: 'Licensed salesperson since 2017' },
+                  {
+                    id: 'realtor-of-the-year',
+                    icon: Trophy,
+                    label: <span>REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year 2025</span>,
+                  },
+                  { id: 'ma-nh-licensed', icon: Star, label: 'MA & NH Licensed' },
+                ].map(({ id, icon: Icon, label }) => (
                   <span
-                    key={label}
+                    key={id}
                     className="inline-flex items-center gap-2 glass border border-dark-border px-4 py-2 text-xs text-white/60 font-medium tracking-wide"
                   >
                     <Icon weight="bold" className="w-3.5 h-3.5 text-gold" />
@@ -501,12 +505,42 @@ const designations = [
 ];
 
 const awards = [
-  { icon: Trophy, title: <span key="r">2025 NEAR REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>, sub: <span key="rs">The Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</span> },
-  { icon: Star, title: '2025 NEAR President', sub: 'Helping guide standards, leadership, and advocacy for the association.' },
-  { icon: Certificate, title: 'MAR Good Neighbor Award', sub: 'Recognized for community-first leadership and charitable impact.' },
-  { icon: Trophy, title: 'Heavy Hitter Award', sub: 'Recognized for selling over $10 million in real estate in a single year.' },
-  { icon: Heart, title: 'NEAR Good Neighbor Recognition', sub: 'Honoring real local impact through service and giving back.' },
-  { icon: Users, title: 'Distinguished Young Professional', sub: 'Celebrating standout leadership early in a high-growth career.' },
+  {
+    id: 'near-realtor-of-the-year-2025',
+    icon: Trophy,
+    title: <span>2025 NEAR REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>,
+    sub: <span>The Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</span>,
+  },
+  {
+    id: 'near-president-2025',
+    icon: Star,
+    title: '2025 NEAR President',
+    sub: 'Helping guide standards, leadership, and advocacy for the association.',
+  },
+  {
+    id: 'mar-good-neighbor-award',
+    icon: Certificate,
+    title: 'MAR Good Neighbor Award',
+    sub: 'Recognized for community-first leadership and charitable impact.',
+  },
+  {
+    id: 'heavy-hitter-award',
+    icon: Trophy,
+    title: 'Heavy Hitter Award',
+    sub: 'Recognized for selling over $10 million in real estate in a single year.',
+  },
+  {
+    id: 'near-good-neighbor-recognition',
+    icon: Heart,
+    title: 'NEAR Good Neighbor Recognition',
+    sub: 'Honoring real local impact through service and giving back.',
+  },
+  {
+    id: 'distinguished-young-professional',
+    icon: Users,
+    title: 'Distinguished Young Professional',
+    sub: 'Celebrating standout leadership early in a high-growth career.',
+  },
 ];
 
 function DesignationsSection() {
@@ -595,9 +629,9 @@ function DesignationsSection() {
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
         >
-          {awards.map(({ icon: Icon, title, sub }) => (
+          {awards.map(({ id, icon: Icon, title, sub }) => (
             <motion.div
-              key={title}
+              key={id}
               variants={fadeUp}
               className="glass border border-gold/20 p-6 md:p-8 flex items-start gap-5 relative overflow-hidden"
             >

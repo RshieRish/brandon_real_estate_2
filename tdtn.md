@@ -3,6 +3,21 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-04-18
 
+### 2026-04-18 — Frontend Vercel Typecheck Fix
+- What was fixed: Resolved the deployment-blocking TypeScript errors from the About page and buyer journey component.
+- Files modified:
+  - `frontend/src/app/(main)/about/page.tsx`
+  - `frontend/src/components/buyer/MonopolyJourney.tsx`
+- Key decisions:
+  - Kept the REALTOR® JSX formatting, but stopped using rendered JSX labels as React keys.
+  - Added stable string ids for About-page bio chips and award cards.
+  - Updated the buyer journey step type to allow rendered text and gave each step a stable string key.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - `frontend`: `npm run build` passed.
+  - Build still logs non-fatal fallback warnings when the local backend content API is unavailable and the Instagram token is invalid.
+- Status: Complete
+
 ### 2026-04-18 — Chatbot Booking Next Available Times
 - What was built: Updated the chatbot calendar picker so an empty selected date no longer dead-ends the booking flow.
 - Files modified:
@@ -13,9 +28,9 @@ Last Updated: 2026-04-18
   - Suggested time buttons include both the date and time, and selecting one updates the booking confirmation date automatically.
   - In-person suggestions preserve the entered location and remain filtered by travel-time checks.
 - Verification:
-  - `frontend`: `npm run typecheck` is currently blocked by unrelated existing errors in `frontend/src/app/(main)/about/page.tsx` and `frontend/src/components/buyer/MonopolyJourney.tsx`.
   - `frontend`: No `CalendarPickerCard.tsx` type errors were reported in the typecheck output.
-- Status: Complete locally
+  - `frontend`: The unrelated About-page and buyer journey type errors were fixed later on 2026-04-18.
+- Status: Complete
 
 ### 2026-04-13 — Investor Calculator 80% Rule + Blank Inputs
 - What was built: Updated the investor calculator's max-offer metric to an 80% rule and removed prefilled deal values so instant pricing only appears after visitors enter their own numbers.

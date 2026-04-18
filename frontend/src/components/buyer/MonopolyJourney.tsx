@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { DeviceMobile, HeartStraight, House, CaretDown, CheckCircle } from '@phosphor-icons/react';
 
@@ -9,7 +10,7 @@ interface Phase {
   label: string;
   title: string;
   description: string;
-  steps: string[];
+  steps: ReactNode[];
   Icon: React.ElementType;
 }
 
@@ -22,7 +23,7 @@ const PHASES: Phase[] = [
       'Before you start swiping Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
     steps: [
       'Pre-Approval for Budget',
-      <span key="r">Meet with Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup></span>,
+      <span>Meet with Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup></span>,
       'Utilize Your Pre-Approval',
     ],
     Icon: DeviceMobile,
@@ -163,7 +164,7 @@ export default function MonopolyJourney() {
                         <ul className="flex flex-col gap-3">
                           {phase.steps.map((step, sIdx) => (
                             <motion.li
-                              key={step}
+                              key={`${phase.id}-${sIdx}`}
                               initial={{ opacity: 0, x: -12 }}
                               animate={{ opacity: 1, x: 0 }}
                               transition={{ ...SPRING, delay: sIdx * 0.07 }}
