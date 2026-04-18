@@ -104,6 +104,7 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-18: Updated the chatbot booking calendar card so if Brandon has no availability on the selected date, it scans the next 10 business days and displays up to 6 next available time options.
 - 2026-04-13: Updated the investor calculator offer cap from 70% to 80%, renamed the card to `80% Rule Offer Cap`, and removed prefilled deal values so the instant snapshot and full-report gate only appear after users enter a complete deal.
 - 2026-04-11: Fixed the investor calculator short-term loan bug. Terms of 1-2 years now model interest-only bridge / fix-and-flip debt, while 3+ year terms stay amortized; regression coverage lives in `backend/tests/test_investor_metrics.py`.
 - 2026-04-10: Wrote the durable notification queue design at `docs/superpowers/specs/2026-04-10-brandon-notification-queue-design.md`.

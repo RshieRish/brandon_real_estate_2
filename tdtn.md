@@ -1,7 +1,21 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-04-13
+Last Updated: 2026-04-18
+
+### 2026-04-18 — Chatbot Booking Next Available Times
+- What was built: Updated the chatbot calendar picker so an empty selected date no longer dead-ends the booking flow.
+- Files modified:
+  - `frontend/src/components/chat/CalendarPickerCard.tsx`
+- Key decisions:
+  - Reused the existing `/api/v1/booking/available-slots` endpoint so Google Calendar remains the source of truth.
+  - When a selected date has no slots, the widget now scans the next 10 business days and shows up to 6 next available time options.
+  - Suggested time buttons include both the date and time, and selecting one updates the booking confirmation date automatically.
+  - In-person suggestions preserve the entered location and remain filtered by travel-time checks.
+- Verification:
+  - `frontend`: `npm run typecheck` is currently blocked by unrelated existing errors in `frontend/src/app/(main)/about/page.tsx` and `frontend/src/components/buyer/MonopolyJourney.tsx`.
+  - `frontend`: No `CalendarPickerCard.tsx` type errors were reported in the typecheck output.
+- Status: Complete locally
 
 ### 2026-04-13 — Investor Calculator 80% Rule + Blank Inputs
 - What was built: Updated the investor calculator's max-offer metric to an 80% rule and removed prefilled deal values so instant pricing only appears after visitors enter their own numbers.

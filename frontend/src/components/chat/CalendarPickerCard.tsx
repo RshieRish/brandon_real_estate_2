@@ -28,6 +28,10 @@ interface Slot {
   available: boolean;
 }
 
+interface SuggestedSlot extends Slot {
+  dateLabel: string;
+}
+
 const MEETING_TYPES: { key: MeetingType; label: string; icon: typeof Phone }[] = [
   { key: 'phone', label: 'Phone Call', icon: Phone },
   { key: 'video', label: 'Video Call', icon: VideoCamera },
@@ -43,6 +47,19 @@ function getNextDays(count: number): Date[] {
     // Skip weekends
     if (d.getDay() !== 0 && d.getDay() !== 6) {
       days.push(d);
+    }
+    if (days.length >= count) break;
+  }
+  return days;
+}
+
+function getNextBusinessDaysAfter(date: Date, count: number): Date[] {
+  const days: Date[] = [];
+  const cursor = new Date(date);
+  for (let i = 1; i <= count + 10; i++) {
+    cursor.setDate(cursor.getDate() + 1);
+    if (cursor.getDay() !== 0 && cursor.getDay() !== 6) {
+      days.push(new Date(cursor));
     }
     if (days.length >= count) break;
   }
@@ -70,6 +87,7 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [location, setLocation] = useState('');
   const [slots, setSlots] = useState<Slot[]>([]);
+  const [suggestedSlots, setSuggestedSlots] = useState<SuggestedSlot[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
@@ -80,26 +98,64 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
 
   const days = getNextDays(14);
 
+  const fetchAvailabilityForDate = async (
+    date: Date,
+    type: MeetingType,
+    loc: string,
+  ): Promise<Slot[]> => {
+    const dateStr = formatDateParam(date);
+    const params = new URLSearchParams({
+      date: dateStr,
+      meeting_type: type,
+      location: loc,
+    });
+    const res = await fetch(`${API_URL}/api/v1/booking/available-slots?${params}`);
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null) as { detail?: string } | null;
+      throw new Error(payload?.detail || 'Failed to fetch slots');
+    }
+    const data = await res.json() as { slots?: Slot[] };
+    return data.slots || [];
+  };
+
+  const fetchNextAvailableSlots = async (
+    date: Date,
+    type: MeetingType,
+    loc: string,
+  ): Promise<SuggestedSlot[]> => {
+    const upcomingDays = getNextBusinessDaysAfter(date, 10);
+    const nextSlots: SuggestedSlot[] = [];
+
+    for (const day of upcomingDays) {
+      const daySlots = await fetchAvailabilityForDate(day, type, loc);
+      nextSlots.push(
+        ...daySlots.slice(0, 3).map((slot) => ({
+          ...slot,
+          dateLabel: formatDate(day),
+        })),
+      );
+      if (nextSlots.length >= 6) break;
+    }
+
+    return nextSlots.slice(0, 6);
+  };
+
   const fetchSlots = async (date: Date, type: MeetingType, loc: string) => {
     setLoading(true);
     setSlots([]);
+    setSuggestedSlots([]);
     setError('');
     try {
-      const dateStr = formatDateParam(date);
-      const params = new URLSearchParams({
-        date: dateStr,
-        meeting_type: type,
-        location: loc,
-      });
-      const res = await fetch(`${API_URL}/api/v1/booking/available-slots?${params}`);
-      if (!res.ok) {
-        const payload = await res.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(payload?.detail || 'Failed to fetch slots');
-      }
-      const data = await res.json();
-      setSlots(data.slots || []);
-      if ((data.slots || []).length === 0) {
-        setError('No available slots for this date. Try another day.');
+      const daySlots = await fetchAvailabilityForDate(date, type, loc);
+      setSlots(daySlots);
+      if (daySlots.length === 0) {
+        const nextAvailableSlots = await fetchNextAvailableSlots(date, type, loc);
+        setSuggestedSlots(nextAvailableSlots);
+        setError(
+          nextAvailableSlots.length > 0
+            ? 'Brandon is booked on that date. Here are the next available times.'
+            : 'No available times found in the next two business weeks. Try another meeting type or call Brandon directly.',
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load availability. Please try again.');
@@ -110,6 +166,9 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
 
   const handleSelectType = (type: MeetingType) => {
     setMeetingType(type);
+    setSlots([]);
+    setSuggestedSlots([]);
+    setSelectedSlot(null);
     if (type === 'in_person') {
       setStep('date');
     } else {
@@ -120,6 +179,8 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
 
   const handleSelectDate = (date: Date) => {
     setSelectedDate(date);
+    setSelectedSlot(null);
+    setSuggestedSlots([]);
     if (meetingType === 'in_person' && !location) {
       // Need location first for in-person
       setStep('details');
@@ -132,12 +193,14 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
   const handleLocationSubmit = () => {
     if (!location.trim()) return;
     if (selectedDate) {
+      setSuggestedSlots([]);
       fetchSlots(selectedDate, meetingType, location);
       setStep('time');
     }
   };
 
   const handleSelectSlot = (slot: Slot) => {
+    setSelectedDate(new Date(slot.start));
     setSelectedSlot(slot);
     setStep('confirm');
   };
@@ -304,9 +367,7 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
                     {meetingType === 'in_person' ? 'Checking travel times...' : 'Loading availability...'}
                   </span>
                 </div>
-              ) : error ? (
-                <p className="text-red-400 text-xs text-center py-4">{error}</p>
-              ) : (
+              ) : slots.length > 0 ? (
                 <div className="grid grid-cols-3 gap-1.5 max-h-[180px] overflow-y-auto">
                   {slots.map((slot, i) => (
                     <button
@@ -319,8 +380,31 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
                     </button>
                   ))}
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  {error && (
+                    <p className="text-gold text-xs text-center leading-relaxed">{error}</p>
+                  )}
+                  {suggestedSlots.length > 0 && (
+                    <div className="grid grid-cols-1 gap-1.5 max-h-[220px] overflow-y-auto">
+                      {suggestedSlots.map((slot, i) => (
+                        <button
+                          key={`${slot.start}-${i}`}
+                          onClick={() => handleSelectSlot(slot)}
+                          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-dark-border text-xs text-white/70 hover:border-gold/50 hover:text-white transition-colors"
+                        >
+                          <span className="font-semibold text-white/80">{slot.dateLabel}</span>
+                          <span className="flex items-center gap-1 text-gold">
+                            <Clock className="w-3 h-3" />
+                            {formatTime(slot.start)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
-              {meetingType === 'in_person' && location && !loading && slots.length > 0 && (
+              {meetingType === 'in_person' && location && !loading && (slots.length > 0 || suggestedSlots.length > 0) && (
                 <p className="text-white/30 text-[10px] mt-2 text-center">
                   Slots filtered by travel time to {location}
                 </p>
