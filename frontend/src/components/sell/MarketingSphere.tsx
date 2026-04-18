@@ -431,6 +431,27 @@ export default function MarketingSphere() {
           Brandon broadcasts your property across 15+ premium channels simultaneously. Drag to explore the omnichannel constellation.
         </p>
       </div>
+
+      {/* Scroll Button */}
+      <button
+        onClick={() => {
+          if (mountRef.current) {
+            const parent = mountRef.current.parentElement;
+            if (parent) {
+              window.scrollTo({
+                top: window.scrollY + parent.getBoundingClientRect().bottom,
+                behavior: 'smooth'
+              });
+            }
+          }
+        }}
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-gold/60 hover:text-gold transition-colors z-30 cursor-pointer"
+      >
+        <span className="text-[10px] font-bold tracking-[0.2em] uppercase">Scroll</span>
+        <svg className="w-5 h-5 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
     </div>
   );
 }

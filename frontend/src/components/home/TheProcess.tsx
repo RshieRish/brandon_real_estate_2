@@ -13,7 +13,7 @@ const phases = [
     description: 'Before you start swiping Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
     bullets: [
       'Pre-Approval for Budget',
-      'Meet with Your REALTOR®',
+      <span key="r">Meet with Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup></span>,
       'Utilize Your Pre-Approval',
     ],
     image: '/frames/phase-1-swiping.jpg',

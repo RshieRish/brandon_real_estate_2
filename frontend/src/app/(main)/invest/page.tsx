@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import {
   ArrowDown,
   Phone,
+  ChatCircleText,
+  EnvelopeSimple,
 } from '@phosphor-icons/react/dist/ssr';
 import InvestorCalculator from '@/components/investor/InvestorCalculator';
 import FlipCaseStudy from '@/components/investor/FlipCaseStudy';
@@ -291,19 +293,47 @@ export default function InvestPage() {
                 call. Bring your deal or let him help you find one — no pressure, just numbers.
               </p>
 
-              {/* Phone CTA */}
-              <a
-                href="tel:9789872806"
-                className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
-              >
-                <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200">
-                  <Phone weight="bold" className="w-4 h-4" />
-                </span>
-                <div>
-                  <p className="text-xs text-gray uppercase tracking-widest font-medium">Call Direct</p>
-                  <p className="font-bold tracking-wide">(978) 987-2806</p>
-                </div>
-              </a>
+              {/* Contact Options */}
+              <div className="flex flex-col sm:flex-row flex-wrap gap-4 mt-2">
+                <a
+                  href="tel:9789872806"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <Phone weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Call Direct</p>
+                    <p className="text-sm font-bold tracking-wide">(978) 987-2806</p>
+                  </div>
+                </a>
+                
+                <a
+                  href="sms:9789872806"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <ChatCircleText weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Text Direct</p>
+                    <p className="text-sm font-bold tracking-wide">(978) 987-2806</p>
+                  </div>
+                </a>
+
+                <a
+                  href="mailto:brandon@soldwithsweeney.com"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <EnvelopeSimple weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Email</p>
+                    <p className="text-sm font-bold tracking-wide">brandon@soldwithsweeney.com</p>
+                  </div>
+                </a>
+              </div>
             </div>
 
             {/* Right form */}
@@ -319,7 +349,7 @@ export default function InvestPage() {
 
         {/* KW Legal disclaimer */}
         <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
-          Brandon Sweeney is a licensed REALTOR&#174; with Keller Williams Realty Success. Deal
+          Brandon Sweeney is a licensed REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> with Keller Williams Realty Success. Deal
           analysis results are estimates for informational purposes only and do not constitute
           financial, legal, or investment advice. Actual returns depend on market conditions,
           financing, property condition, and other factors. Equal Housing Opportunity. &copy;{' '}

@@ -22,7 +22,7 @@ const PHASES: Phase[] = [
       'Before you start swiping Zillow, get your financial foundation in place. This is where serious buyers separate themselves from window shoppers.',
     steps: [
       'Pre-Approval for Budget',
-      'Meet with Your REALTOR\u00ae',
+      <span key="r">Meet with Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup></span>,
       'Utilize Your Pre-Approval',
     ],
     Icon: DeviceMobile,

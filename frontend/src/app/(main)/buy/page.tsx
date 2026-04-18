@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { ArrowDown, Phone } from '@phosphor-icons/react/dist/ssr';
+import { ArrowDown, Phone, ChatCircleText, EnvelopeSimple } from '@phosphor-icons/react/dist/ssr';
 import CTAButton from '@/components/shared/CTAButton';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 import ReviewCard from '@/components/shared/ReviewCard';
@@ -14,13 +14,13 @@ export const metadata: Metadata = {
 };
 
 const TEAM_MEMBERS = [
-  'Your REALTOR\u00ae (Brandon)',
-  'Lender / Loan Officer',
-  'Real Estate Attorney',
-  'Estate Planning Attorney',
-  'Insurance Agent',
-  'Financial Advisor',
-  'Accountant',
+  { id: 'realtor', node: <>Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> (Brandon)</> },
+  { id: 'lender', node: 'Lender / Loan Officer' },
+  { id: 'attorney', node: 'Real Estate Attorney' },
+  { id: 'estate', node: 'Estate Planning Attorney' },
+  { id: 'insurance', node: 'Insurance Agent' },
+  { id: 'financial', node: 'Financial Advisor' },
+  { id: 'accountant', node: 'Accountant' },
 ];
 
 const REVIEWS = [
@@ -114,7 +114,7 @@ export default function BuyPage() {
 
               <p className="text-white/65 text-base md:text-lg leading-relaxed mb-10 max-w-xl font-light">
                 Buying a home is the biggest financial decision of your life. Brandon Sweeney,
-                REALTOR&#174;, takes you from pre-approval to closing — protecting your interests
+                REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>, takes you from pre-approval to closing — protecting your interests
                 every step of the way in MA &amp; NH.
               </p>
 
@@ -201,20 +201,20 @@ export default function BuyPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {TEAM_MEMBERS.slice(0, 4).map((member) => (
               <span
-                key={member}
+                key={member.id}
                 className="flex items-center justify-center text-center px-4 py-4 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200 min-h-[64px]"
               >
-                {member}
+                {member.node}
               </span>
             ))}
           </div>
           <div className="grid grid-cols-3 gap-3 mt-3">
             {TEAM_MEMBERS.slice(4).map((member) => (
               <span
-                key={member}
+                key={member.id}
                 className="flex items-center justify-center text-center px-4 py-4 border border-gold/30 text-gold text-sm font-semibold tracking-wide bg-dark-card hover:border-gold/70 hover:bg-gold/5 transition-colors duration-200 min-h-[64px]"
               >
-                {member}
+                {member.node}
               </span>
             ))}
           </div>
@@ -290,19 +290,47 @@ export default function BuyPage() {
                 call. No pressure — just a straight conversation about your goals.
               </p>
 
-              {/* Phone CTA */}
-              <a
-                href="tel:9789872806"
-                className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
-              >
-                <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200">
-                  <Phone weight="bold" className="w-4 h-4" />
-                </span>
-                <div>
-                  <p className="text-xs text-gray uppercase tracking-widest font-medium">Call Direct</p>
-                  <p className="font-bold tracking-wide">(978) 987-2806</p>
-                </div>
-              </a>
+              {/* Contact Options */}
+              <div className="flex flex-col sm:flex-row flex-wrap gap-4 mt-2">
+                <a
+                  href="tel:9789872806"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <Phone weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Call Direct</p>
+                    <p className="text-sm font-bold tracking-wide">(978) 987-2806</p>
+                  </div>
+                </a>
+                
+                <a
+                  href="sms:9789872806"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <ChatCircleText weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Text Direct</p>
+                    <p className="text-sm font-bold tracking-wide">(978) 987-2806</p>
+                  </div>
+                </a>
+
+                <a
+                  href="mailto:brandon@soldwithsweeney.com"
+                  className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
+                >
+                  <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
+                    <EnvelopeSimple weight="bold" className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Email</p>
+                    <p className="text-sm font-bold tracking-wide">brandon@soldwithsweeney.com</p>
+                  </div>
+                </a>
+              </div>
             </div>
 
             {/* Right form */}

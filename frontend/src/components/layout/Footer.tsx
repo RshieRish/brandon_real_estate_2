@@ -132,7 +132,7 @@ export default function Footer() {
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-gray/50 text-center sm:text-left">
-            &copy; {new Date().getFullYear()} Sold With Sweeney &amp; Co. Brandon Sweeney, REALTOR&reg;. All rights reserved. REALTOR&reg; is a federally registered collective membership mark which identifies a real estate professional who is a member of the National Association of REALTORS&reg; and subscribes to its strict Code of Ethics.
+            &copy; {new Date().getFullYear()} Sold With Sweeney &amp; Co. Brandon Sweeney, REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>. All rights reserved. REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> is a federally registered collective membership mark which identifies a real estate professional who is a member of the National Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> and subscribes to its strict Code of Ethics.
           </p>
           <nav className="flex flex-wrap items-center gap-x-4 gap-y-1 shrink-0">
             {legalLinks.map((l) => (

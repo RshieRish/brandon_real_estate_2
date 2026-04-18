@@ -122,7 +122,7 @@ function HeroSection() {
               <motion.div variants={fadeUp} className="flex flex-wrap gap-3 mt-8">
                 {[
                   { icon: CalendarBlank, label: 'Licensed salesperson since 2017' },
-                  { icon: Trophy, label: 'REALTOR\u00ae Of The Year 2025' },
+                  { icon: Trophy, label: <span key="l">REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year 2025</span> },
                   { icon: Star, label: 'MA & NH Licensed' },
                 ].map(({ icon: Icon, label }) => (
                   <span
@@ -501,7 +501,7 @@ const designations = [
 ];
 
 const awards = [
-  { icon: Trophy, title: '2025 NEAR REALTOR\u00ae Of The Year', sub: 'The Northeast Association of REALTORS\u00ae highest annual honor.' },
+  { icon: Trophy, title: <span key="r">2025 NEAR REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>, sub: <span key="rs">The Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</span> },
   { icon: Star, title: '2025 NEAR President', sub: 'Helping guide standards, leadership, and advocacy for the association.' },
   { icon: Certificate, title: 'MAR Good Neighbor Award', sub: 'Recognized for community-first leadership and charitable impact.' },
   { icon: Trophy, title: 'Heavy Hitter Award', sub: 'Recognized for selling over $10 million in real estate in a single year.' },
