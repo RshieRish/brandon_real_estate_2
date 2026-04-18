@@ -172,16 +172,26 @@ export default function BuyerMistakes() {
 
                 <div className="relative flex min-h-[420px] flex-col justify-between p-6 md:min-h-[500px] md:p-8">
                   {/* Right side vertical indicator */}
-                  <div className="absolute right-5 top-1/2 flex -translate-y-1/2 flex-col items-center gap-6 md:right-8">
-                    <div className="flex flex-col items-center gap-2">
+                  <div className="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col items-center gap-4 md:right-6 z-20">
+                    <div className="flex flex-col items-center gap-1">
                       {MISTAKES.map((item, index) => (
-                        <span
+                        <button
                           key={item.id}
-                          className={`w-1.5 rounded-full transition-all duration-300 ${
-                            index === rotationIndex ? 'h-8 bg-gold' : 'h-1.5 bg-white/15'
-                          }`}
-                          aria-hidden="true"
-                        />
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRotationIndex(index);
+                          }}
+                          className="p-2 group focus:outline-none"
+                          aria-label={`View mistake ${index + 1}`}
+                        >
+                          <span
+                            className={`block w-1.5 rounded-full transition-all duration-300 group-hover:bg-gold/60 ${
+                              index === rotationIndex ? 'h-8 bg-gold' : 'h-1.5 bg-white/15'
+                            }`}
+                            aria-hidden="true"
+                          />
+                        </button>
                       ))}
                     </div>
                     <span className="text-[10px] font-semibold uppercase tracking-[0.28em] text-white/30">

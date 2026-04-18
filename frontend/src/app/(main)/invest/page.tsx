@@ -158,11 +158,7 @@ export default function InvestPage() {
           </div>
         </div>
 
-        {/* Scroll nudge */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2 pointer-events-none">
-          <span className="text-white/30 text-xs tracking-[0.2em] uppercase font-medium">Scroll</span>
-          <ArrowDown weight="light" className="w-5 h-5 text-gold/50 animate-bounce" />
-        </div>
+
       </section>
 
       {/* ── CALCULATOR ── */}

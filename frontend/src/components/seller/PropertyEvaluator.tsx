@@ -284,9 +284,10 @@ export default function PropertyEvaluator() {
                   <InputField label="Square Feet">
                     <input
                       type="text"
-                      value={form.sqft}
-                      onChange={(e) => setField('sqft', e.target.value)}
-                      placeholder="e.g. 1850"
+                      inputMode="numeric"
+                      value={form.sqft ? form.sqft.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''}
+                      onChange={(e) => setField('sqft', e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="e.g. 1,850"
                       className={inputClass}
                     />
                   </InputField>

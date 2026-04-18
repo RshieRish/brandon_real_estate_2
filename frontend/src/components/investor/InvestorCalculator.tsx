@@ -62,6 +62,13 @@ interface InputFieldProps {
 }
 
 function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: InputFieldProps) {
+  const displayValue = useMemo(() => {
+    if (!value && value !== '0') return value;
+    const parts = value.toString().split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  }, [value]);
+
   return (
     <div className="flex flex-col gap-1.5">
       <label
@@ -78,10 +85,17 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
         )}
         <input
           id={`input-${name}`}
-          type="number"
-          step={step}
-          value={value}
-          onChange={(e) => onChange(name, e.target.value)}
+          type="text"
+          inputMode="decimal"
+          value={displayValue}
+          onChange={(e) => {
+            let raw = e.target.value.replace(/[^0-9.]/g, '');
+            const parts = raw.split('.');
+            if (parts.length > 2) {
+              raw = parts[0] + '.' + parts.slice(1).join('');
+            }
+            onChange(name, raw);
+          }}
           className={`
             w-full bg-dark-surface border border-dark-border text-white text-sm
             ${prefix ? 'pl-7' : 'pl-4'} ${suffix ? 'pr-10' : 'pr-4'} py-2.5
