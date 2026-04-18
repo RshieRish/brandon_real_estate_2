@@ -182,7 +182,7 @@ function HeroSection() {
                 <div className="absolute bottom-6 left-6 right-6 glass border border-gold/25 px-5 py-4 z-10">
                   <div className="text-white font-bold text-base tracking-tight">Brandon Sweeney</div>
                   <div className="text-gold text-xs font-semibold tracking-widest uppercase mt-0.5">
-                    CEO, Sold With Sweeney &amp; Co. <span className="text-white/80">|</span> REALTOR&#174;
+                    CEO, Sold With Sweeney &amp; Co. <span className="text-white/80">|</span>&nbsp; REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>
                   </div>
                 </div>
               </div>
