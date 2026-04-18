@@ -3,12 +3,12 @@
 import { motion } from 'framer-motion';
 import { TrendUp } from '@phosphor-icons/react';
 const METRICS = [
-  { label: 'Purchase Price', value: '$285,000' },
-  { label: 'ARV', value: '$415,000' },
+  { label: 'Purchase Price', value: '$415,000' },
+  { label: 'ARV', value: '$570,000' },
   { label: 'Rehab (TRB)', value: '$48,770' },
   { label: 'Holding Cost', value: '$14,983' },
   { label: 'Closing Cost', value: '$13,372' },
-  { label: 'Net Profit', value: '$52,875' },
+  { label: 'Net Profit', value: '$77,875' },
 ];
 
 export default function FlipCaseStudy() {
