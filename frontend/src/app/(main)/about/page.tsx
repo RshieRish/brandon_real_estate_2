@@ -94,7 +94,7 @@ function HeroSection() {
                   AVERAGE
                 </span>
                 <br />
-                REALTOR&#174;
+                REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>
               </motion.h1>
 
               {/* Subheading */}
