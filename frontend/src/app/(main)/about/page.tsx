@@ -197,14 +197,28 @@ function HeroSection() {
 // ─── Section: Stats Strip ──────────────────────────────────────────────────────
 
 const stats = [
-  { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
-  { value: '2025', label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, detail: 'Leading advocacy and standards for the association.' },
+  { id: 'licensed', value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
+  { id: 'president', value: '2025', label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, detail: 'Leading advocacy and standards for the association.' },
   { 
-    value: '2025', 
-    label: <>REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year Award</>, 
+    id: 'award',
+    value: (
+      <span className="flex flex-col items-center gap-1.5 min-h-[3.5rem] justify-center mt-1">
+        <span className="text-white text-[0.45em] font-bold tracking-[0.2em] leading-none" style={{ textShadow: 'none' }}>
+          2025
+        </span>
+        <span className="text-center leading-[0.95] whitespace-nowrap">
+          REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup><br />
+          Of The Year
+        </span>
+        <span className="text-white/60 text-[0.4em] font-bold tracking-[0.25em] uppercase leading-none mt-1" style={{ textShadow: 'none' }}>
+          Award
+        </span>
+      </span>
+    ),
+    label: null, 
     detail: <>Recognized with the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</> 
   },
-  { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
+  { id: 'ms', value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
 
 function StatsStrip() {
@@ -232,9 +246,9 @@ function StatsStrip() {
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
         >
-          {stats.map(({ value, label, detail }) => (
+          {stats.map(({ id, value, label, detail }) => (
             <motion.div
-              key={label}
+              key={id}
               variants={fadeUp}
               className="glass flex flex-col items-center justify-center text-center px-6 py-10 gap-3"
             >
@@ -263,9 +277,11 @@ function StatsStrip() {
                   {value}
                 </span>
               )}
-              <span className="text-white/50 text-xs font-semibold tracking-[0.2em] uppercase">
-                {label}
-              </span>
+              {label && (
+                <span className="text-white/50 text-xs font-semibold tracking-[0.2em] uppercase">
+                  {label}
+                </span>
+              )}
               <span className="max-w-[14rem] text-white/38 text-[11px] leading-relaxed">
                 {detail}
               </span>
