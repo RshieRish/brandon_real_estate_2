@@ -2,32 +2,13 @@
 
 import { motion } from 'framer-motion';
 import { TrendUp } from '@phosphor-icons/react';
-import { calculateMetrics } from '@/lib/investor-calc';
-
-const CHEEVER_DEAL = calculateMetrics({
-  purchasePrice: 285000,
-  rehabCost: 42000,
-  arv: 410000,
-  holdMonths: 4,
-  rentalIncome: 0,
-  propertyTax: 0,
-  insurance: 0,
-  downPaymentPct: 25,
-  interestRate: 7,
-  loanTermYears: 30,
-});
-
-const fmtCurrency = (v: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
-const fmtPct = (v: number) => v.toFixed(1) + '%';
-
 const METRICS = [
   { label: 'Purchase Price', value: '$285,000' },
-  { label: 'Rehab Cost', value: '$42,000' },
-  { label: 'ARV', value: '$410,000' },
-  { label: 'Profit', value: fmtCurrency(CHEEVER_DEAL.flipProfit) },
-  { label: 'ROI', value: fmtPct(CHEEVER_DEAL.flipROI) },
-  { label: 'Annualized ROI', value: fmtPct(CHEEVER_DEAL.flipAnnualizedROI) },
+  { label: 'ARV', value: '$415,000' },
+  { label: 'Rehab (TRB)', value: '$48,770' },
+  { label: 'Holding Cost', value: '$14,983' },
+  { label: 'Closing Cost', value: '$13,372' },
+  { label: 'Net Profit', value: '$52,875' },
 ];
 
 export default function FlipCaseStudy() {
