@@ -200,13 +200,9 @@ const stats = [
   { value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
   { value: '2025', label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, detail: 'Leading advocacy and standards for the association.' },
   { 
-    value: [
-      <span key="r">
-        Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>
-      </span>, 
-      ' Of The Year'
-    ], 
-    label: 'Award 2025', detail: <>Recognized with the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</> 
+    value: '2025', 
+    label: <>REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year Award</>, 
+    detail: <>Recognized with the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</> 
   },
   { value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
