@@ -198,25 +198,10 @@ function HeroSection() {
 
 const stats = [
   { id: 'licensed', value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
-  { id: 'president', value: '2025', label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, detail: 'Leading advocacy and standards for the association.' },
-  { 
-    id: 'award',
-    value: (
-      <span className="flex flex-col items-center gap-1.5 min-h-[3.5rem] justify-center mt-1">
-        <span className="text-white text-[0.45em] font-bold tracking-[0.2em] leading-none" style={{ textShadow: 'none' }}>
-          2025
-        </span>
-        <span className="text-center leading-[0.95] whitespace-nowrap">
-          REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup><br />
-          Of The Year
-        </span>
-        <span className="text-white/60 text-[0.4em] font-bold tracking-[0.25em] uppercase leading-none mt-1" style={{ textShadow: 'none' }}>
-          Award
-        </span>
-      </span>
-    ),
-    label: null, 
-    detail: <>Recognized with the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> highest annual honor.</> 
+    id: 'president', 
+    value: '2025', 
+    label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, 
+    detail: 'Leading advocacy and standards for the association.' 
   },
   { id: 'ms', value: '$300K+', label: 'Raised For MS Is BS', detail: 'Grassroots impact fueled through closings and events.' },
 ];
@@ -241,7 +226,7 @@ function StatsStrip() {
 
       <div className="max-w-7xl mx-auto px-6 md:px-12 py-12">
         <motion.div
-          className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-dark-border"
+          className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-dark-border"
           variants={containerVariants}
           initial="hidden"
           animate={inView ? 'show' : 'hidden'}
