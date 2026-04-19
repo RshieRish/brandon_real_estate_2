@@ -198,7 +198,7 @@ function HeroSection() {
 
 const stats = [
   { id: 'licensed', value: '2017', label: 'Licensed Since', detail: 'Started building his client base at 22.' },
-    id: 'president', 
+  { id: 'president', 
     value: '2025', 
     label: <>Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President</>, 
     detail: 'Leading advocacy and standards for the association.' 
