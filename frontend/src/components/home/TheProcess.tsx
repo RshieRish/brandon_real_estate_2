@@ -105,7 +105,7 @@ export default function TheProcess() {
                         exit={{ height: 0, opacity: 0 }}
                         transition={{ duration: 0.4, ease: [0.04, 0.62, 0.23, 0.98] }}
                       >
-                        <div className="pb-8 pr-12">
+                        <div className="pb-8 lg:pr-12">
                           <p className="text-white/60 text-base leading-relaxed font-light mb-6">
                             {phase.description}
                           </p>
@@ -118,6 +118,18 @@ export default function TheProcess() {
                               </li>
                             ))}
                           </ul>
+
+                          {/* Mobile Inline Image */}
+                          <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-white/5 shadow-2xl mt-8 lg:hidden">
+                            <Image
+                              src={phase.image}
+                              alt={phase.title}
+                              fill
+                              className="object-cover"
+                              sizes="(max-width: 1024px) 100vw, 50vw"
+                              unoptimized={true}
+                            />
+                          </div>
                         </div>
                       </motion.div>
                     )}
@@ -127,8 +139,8 @@ export default function TheProcess() {
             })}
           </div>
 
-          {/* Right: Dynamic Image */}
-          <div className="relative aspect-[3/4] lg:aspect-auto lg:h-[700px] rounded-2xl overflow-hidden bg-white/5 shadow-2xl">
+          {/* Right: Dynamic Image (Desktop Only) */}
+          <div className="hidden lg:block relative lg:h-[700px] rounded-2xl overflow-hidden bg-white/5 shadow-2xl">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activePhase}
