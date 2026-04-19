@@ -4,6 +4,7 @@ import { useState, useCallback, useRef } from 'react';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export type ChatWidget = 'calendar_picker';
+export type ChatWidgetMode = 'guided' | 'next_available';
 
 export interface ChatAction {
   type: 'send_message' | 'navigate' | 'open_widget';
@@ -20,6 +21,7 @@ export interface Message {
   timestamp: Date;
   actions?: ChatAction[];
   widget?: ChatWidget;
+  widgetMode?: ChatWidgetMode;
 }
 
 interface ChatApiResponse {
@@ -171,13 +173,17 @@ export function useChat() {
     }
   }, []);
 
-  const triggerBooking = useCallback((content = "Let me pull up Brandon's availability for you!") => {
+  const triggerBooking = useCallback((
+    content = "Here are Brandon's next available times. Pick the one that works, then add your details to book it.",
+    widgetMode: ChatWidgetMode = 'next_available',
+  ) => {
     const bookingMsg: Message = {
       id: crypto.randomUUID(),
       role: 'assistant',
       content,
       timestamp: new Date(),
       widget: 'calendar_picker',
+      widgetMode,
     };
     const withBooking = [...messagesRef.current, bookingMsg];
     messagesRef.current = withBooking;

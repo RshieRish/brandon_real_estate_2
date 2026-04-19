@@ -104,6 +104,7 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-18: Book Brandon CTAs now open the persistent chatbot directly into a `next_available` calendar picker mode; a browser smoke test confirmed the homepage CTA opened chat and displayed live next available slot buttons from `/api/v1/booking/available-slots`.
 - 2026-04-18: Fixed the Vercel frontend typecheck blocker by replacing JSX-derived React keys in the About page with stable string ids and typing buyer journey steps as `ReactNode`; `npm run typecheck` and `npm run build` both pass locally.
 - 2026-04-18: Updated the chatbot booking calendar card so if Brandon has no availability on the selected date, it scans the next 10 business days and displays up to 6 next available time options.
 - 2026-04-13: Updated the investor calculator offer cap from 70% to 80%, renamed the card to `80% Rule Offer Cap`, and removed prefilled deal values so the instant snapshot and full-report gate only appear after users enter a complete deal.

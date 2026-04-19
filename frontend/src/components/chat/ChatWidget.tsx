@@ -1,17 +1,34 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatCircleDots, X } from '@phosphor-icons/react';
 import ChatPanel from './ChatPanel';
+import { OPEN_BOOKING_CHAT_EVENT } from '@/lib/booking-chat';
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
+  const [bookingRequestId, setBookingRequestId] = useState(0);
+
+  useEffect(() => {
+    const handleOpenBookingChat = () => {
+      setBookingRequestId((current) => current + 1);
+      setIsOpen(true);
+    };
+
+    window.addEventListener(OPEN_BOOKING_CHAT_EVENT, handleOpenBookingChat);
+    return () => window.removeEventListener(OPEN_BOOKING_CHAT_EVENT, handleOpenBookingChat);
+  }, []);
 
   return (
     <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 50 }}>
       <AnimatePresence>
-        {isOpen && <ChatPanel onClose={() => setIsOpen(false)} />}
+        {isOpen && (
+          <ChatPanel
+            onClose={() => setIsOpen(false)}
+            bookingRequestId={bookingRequestId}
+          />
+        )}
       </AnimatePresence>
 
       <motion.button

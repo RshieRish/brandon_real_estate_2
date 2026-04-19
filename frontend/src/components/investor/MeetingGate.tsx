@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { LockSimple, LockOpen } from '@phosphor-icons/react';
 import FullReportResults from './FullReportResults';
 import type { InvestorAiReport, InvestorLeadCapture } from './report-types';
+import { openBookingChat } from '@/lib/booking-chat';
 
 interface MeetingGateProps {
   fullReport: InvestorAiReport | null;
@@ -162,8 +163,9 @@ export default function MeetingGate({ fullReport, onUnlock }: MeetingGateProps) 
           {fullReport && <FullReportResults report={fullReport} />}
 
           {/* Book CTA */}
-          <motion.a
-            href="tel:9789872806"
+          <motion.button
+            type="button"
+            onClick={() => openBookingChat('investor-full-report-strategy-call')}
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
@@ -174,7 +176,7 @@ export default function MeetingGate({ fullReport, onUnlock }: MeetingGateProps) 
             "
           >
             Book a Strategy Call With Brandon
-          </motion.a>
+          </motion.button>
         </motion.div>
       )}
     </AnimatePresence>

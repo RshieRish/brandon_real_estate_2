@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { ArrowDown, Phone, ChatCircleText, EnvelopeSimple } from '@phosphor-icons/react/dist/ssr';
-import CTAButton from '@/components/shared/CTAButton';
+import BookBrandonCTA from '@/components/shared/BookBrandonCTA';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 import ReviewCard from '@/components/shared/ReviewCard';
 import LeadCaptureForm from '@/components/shared/LeadCaptureForm';
@@ -118,15 +118,14 @@ export default function BuyPage() {
                 every step of the way in MA &amp; NH.
               </p>
 
-              <CTAButton
-                href="tel:9789872806"
-                external
+              <BookBrandonCTA
                 variant="gold"
                 className="gap-3"
+                source="buy-hero-strategy-call"
               >
                 <Phone weight="bold" className="w-4 h-4" />
                 Book a Strategy Call
-              </CTAButton>
+              </BookBrandonCTA>
 
               <div className="mt-5">
                 <a

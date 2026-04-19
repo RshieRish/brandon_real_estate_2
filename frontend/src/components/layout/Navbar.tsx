@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { List, X } from '@phosphor-icons/react';
+import { openBookingChat } from '@/lib/booking-chat';
 
 const navLinks = [
   { label: 'Buy', href: '/buy' },
@@ -64,13 +65,14 @@ export default function Navbar() {
 
           {/* Desktop CTA */}
           <div className="hidden md:flex">
-            <a
-              href="tel:9789872806"
+            <button
+              type="button"
+              onClick={() => openBookingChat('navbar-desktop')}
               className="inline-flex items-center px-5 py-2 rounded-none text-sm font-bold tracking-widest uppercase bg-gold text-black hover:bg-gold-hover transition-colors duration-200"
               style={{ letterSpacing: '0.12em' }}
             >
               Book Brandon
-            </a>
+            </button>
           </div>
 
           {/* Mobile hamburger */}
@@ -123,14 +125,17 @@ export default function Navbar() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: navLinks.length * 0.07, type: 'spring', stiffness: 100, damping: 20 }}
               >
-                <a
-                  href="tel:9789872806"
-                  onClick={() => setMobileOpen(false)}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileOpen(false);
+                    openBookingChat('navbar-mobile');
+                  }}
                   className="inline-flex items-center px-8 py-3 text-base font-bold tracking-widest uppercase bg-gold text-black hover:bg-gold-hover transition-colors duration-200"
                   style={{ letterSpacing: '0.12em' }}
                 >
                   Book Brandon
-                </a>
+                </button>
               </motion.div>
             </nav>
           </motion.div>

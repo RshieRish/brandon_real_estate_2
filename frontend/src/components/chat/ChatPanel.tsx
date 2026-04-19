@@ -10,6 +10,7 @@ import CalendarPickerCard from './CalendarPickerCard';
 
 interface ChatPanelProps {
   onClose: () => void;
+  bookingRequestId?: number;
 }
 
 const QUICK_REPLIES = [
@@ -18,10 +19,14 @@ const QUICK_REPLIES = [
   'Is now a good time to invest?',
 ];
 
-export default function ChatPanel({ onClose }: ChatPanelProps) {
+const DIRECT_BOOKING_MESSAGE =
+  "Here are Brandon's next available times. Pick the one that works, then add your details to book it.";
+
+export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelProps) {
   const { messages, isLoading, error, sendMessage, triggerBooking, addMessage } = useChat();
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const handledBookingRequestRef = useRef(0);
   const router = useRouter();
 
   useEffect(() => {
@@ -35,6 +40,13 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!bookingRequestId || handledBookingRequestRef.current === bookingRequestId) return;
+
+    handledBookingRequestRef.current = bookingRequestId;
+    triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available');
+  }, [bookingRequestId, triggerBooking]);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -69,7 +81,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
     }
 
     if (action.type === 'open_widget' && action.widget === 'calendar_picker') {
-      triggerBooking("Let me pull up Brandon's availability for you!");
+      triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available');
     }
   };
 
@@ -136,7 +148,7 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
               ))}
               {/* Book a Call quick action */}
               <button
-                onClick={() => triggerBooking()}
+                onClick={() => triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available')}
                 className="text-xs text-gold border border-gold/30 rounded-full px-3 py-1.5 hover:border-gold/60 hover:bg-gold/5 transition-colors text-left flex items-center gap-1.5"
               >
                 <CalendarBlank weight="fill" className="w-3 h-3" />
@@ -191,7 +203,10 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
                 {/* Render CalendarPickerCard inline after the message */}
                 {msg.widget === 'calendar_picker' && (
                   <div className="mt-2">
-                    <CalendarPickerCard onBooked={handleBookingComplete} />
+                    <CalendarPickerCard
+                      onBooked={handleBookingComplete}
+                      initialMode={msg.widgetMode ?? 'next_available'}
+                    />
                   </div>
                 )}
               </div>

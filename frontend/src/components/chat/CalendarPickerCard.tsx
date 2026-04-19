@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Phone,
@@ -17,6 +17,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 interface CalendarPickerCardProps {
   onBooked: (summary: string) => void;
+  initialMode?: 'guided' | 'next_available';
+  initialMeetingType?: MeetingType;
 }
 
 type MeetingType = 'phone' | 'video' | 'in_person';
@@ -81,10 +83,16 @@ function formatDateParam(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps) {
-  const [step, setStep] = useState<Step>('type');
-  const [meetingType, setMeetingType] = useState<MeetingType>('phone');
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+export default function CalendarPickerCard({
+  onBooked,
+  initialMode = 'guided',
+  initialMeetingType = 'phone',
+}: CalendarPickerCardProps) {
+  const [step, setStep] = useState<Step>(initialMode === 'next_available' ? 'time' : 'type');
+  const [meetingType, setMeetingType] = useState<MeetingType>(initialMeetingType);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(
+    initialMode === 'next_available' ? new Date() : null,
+  );
   const [location, setLocation] = useState('');
   const [slots, setSlots] = useState<Slot[]>([]);
   const [suggestedSlots, setSuggestedSlots] = useState<SuggestedSlot[]>([]);
@@ -95,6 +103,7 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [bookingDone, setBookingDone] = useState(false);
+  const didAutoLoadRef = useRef(false);
 
   const days = getNextDays(14);
 
@@ -122,8 +131,11 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
     date: Date,
     type: MeetingType,
     loc: string,
+    includeStartDate = false,
   ): Promise<SuggestedSlot[]> => {
-    const upcomingDays = getNextBusinessDaysAfter(date, 10);
+    const upcomingDays = includeStartDate
+      ? [new Date(date), ...getNextBusinessDaysAfter(date, 10)]
+      : getNextBusinessDaysAfter(date, 10);
     const nextSlots: SuggestedSlot[] = [];
 
     for (const day of upcomingDays) {
@@ -138,6 +150,29 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
     }
 
     return nextSlots.slice(0, 6);
+  };
+
+  const fetchInstantNextAvailableSlots = async (type: MeetingType, loc: string) => {
+    const searchStart = new Date();
+    setLoading(true);
+    setSlots([]);
+    setSuggestedSlots([]);
+    setSelectedSlot(null);
+    setSelectedDate(searchStart);
+    setError('');
+    setStep('time');
+
+    try {
+      const nextAvailableSlots = await fetchNextAvailableSlots(searchStart, type, loc, true);
+      setSuggestedSlots(nextAvailableSlots);
+      if (nextAvailableSlots.length === 0) {
+        setError('No available times found in the next two business weeks. Try another meeting type or call Brandon directly.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load availability. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchSlots = async (date: Date, type: MeetingType, loc: string) => {
@@ -163,6 +198,14 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialMode !== 'next_available' || didAutoLoadRef.current) return;
+
+    didAutoLoadRef.current = true;
+    setMeetingType(initialMeetingType);
+    void fetchInstantNextAvailableSlots(initialMeetingType, '');
+  }, [initialMeetingType, initialMode]);
 
   const handleSelectType = (type: MeetingType) => {
     setMeetingType(type);
@@ -382,6 +425,11 @@ export default function CalendarPickerCard({ onBooked }: CalendarPickerCardProps
                 </div>
               ) : (
                 <div className="space-y-3">
+                  {suggestedSlots.length > 0 && (
+                    <p className="text-white/50 text-[11px] text-center leading-relaxed">
+                      Next available {MEETING_TYPES.find(t => t.key === meetingType)?.label.toLowerCase()} times
+                    </p>
+                  )}
                   {error && (
                     <p className="text-gold text-xs text-center leading-relaxed">{error}</p>
                   )}

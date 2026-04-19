@@ -15,6 +15,7 @@ import {
   Users,
   CalendarBlank,
 } from '@phosphor-icons/react';
+import BookBrandonCTA from '@/components/shared/BookBrandonCTA';
 import HalftoneOverlay from '@/components/shared/HalftoneOverlay';
 
 // ─── Animation variants ────────────────────────────────────────────────────────
@@ -1068,18 +1069,13 @@ function ContactSection() {
 
           {/* CTA button */}
           <motion.div variants={fadeUp}>
-            <a href="tel:9789872806">
-              <motion.span
-                className="inline-flex items-center gap-3 px-8 py-4 bg-gold text-[#0a0a0a] font-black text-sm tracking-widest uppercase hover:bg-gold-hover transition-colors duration-200"
-                style={{ letterSpacing: '0.14em' }}
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-              >
-                <Phone weight="bold" className="w-4 h-4" />
-                Book a Call with Brandon
-              </motion.span>
-            </a>
+            <BookBrandonCTA
+              className="gap-3 px-8 py-4 font-black"
+              source="about-contact-book-call"
+            >
+              <Phone weight="bold" className="w-4 h-4" />
+              Book a Call with Brandon
+            </BookBrandonCTA>
           </motion.div>
         </motion.div>
       </div>

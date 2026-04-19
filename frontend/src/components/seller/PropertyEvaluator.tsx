@@ -12,6 +12,7 @@ import {
 } from '@phosphor-icons/react';
 import { apiPost } from '@/lib/api';
 import CTAButton from '@/components/shared/CTAButton';
+import BookBrandonCTA from '@/components/shared/BookBrandonCTA';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -565,10 +566,10 @@ export default function PropertyEvaluator() {
 
             {/* CTAs */}
             <div className="flex flex-wrap gap-4 pt-2">
-              <CTAButton href="tel:9789872806" external variant="gold">
+              <BookBrandonCTA variant="gold" source="seller-evaluator-free-valuation">
                 <Phone weight="fill" className="w-4 h-4" />
                 Book Brandon for a Free Valuation
-              </CTAButton>
+              </BookBrandonCTA>
               <CTAButton onClick={handleReset} variant="outline">
                 <ArrowCounterClockwise weight="bold" className="w-4 h-4" />
                 Run Another Estimate

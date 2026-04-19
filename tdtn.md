@@ -3,6 +3,32 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-04-18
 
+### 2026-04-18 — Book Brandon CTA Opens Chatbot Booking Slots
+- What was built: Updated booking CTAs so visitors are sent directly into the chatbot booking flow with Brandon's next available calendar slots.
+- Files created:
+  - `frontend/src/lib/booking-chat.ts`
+  - `frontend/src/components/shared/BookBrandonCTA.tsx`
+- Files modified:
+  - `frontend/src/components/layout/Navbar.tsx`
+  - `frontend/src/components/chat/ChatWidget.tsx`
+  - `frontend/src/components/chat/ChatPanel.tsx`
+  - `frontend/src/components/chat/CalendarPickerCard.tsx`
+  - `frontend/src/hooks/useChat.ts`
+  - `frontend/src/app/(main)/buy/page.tsx`
+  - `frontend/src/app/(main)/about/page.tsx`
+  - `frontend/src/components/seller/PropertyEvaluator.tsx`
+  - `frontend/src/components/investor/MeetingGate.tsx`
+- Key decisions:
+  - Added a global `sws:open-booking-chat` client event so any CTA can open the persistent chat widget without prop-drilling through the layout.
+  - Added a reusable `BookBrandonCTA` client wrapper for server-rendered pages that need to open chatbot booking.
+  - Calendar picker now supports `next_available` mode, which searches from today forward and shows the first available phone-call slots immediately.
+  - Left explicit `Call Direct` and `Call Brandon` phone links as phone links; only booking/strategy/valuation CTAs now launch the chatbot booking path.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+  - `frontend`: `npm run build` passed.
+  - Browser smoke test passed: homepage `Book Brandon` opened the chatbot, showed the direct booking message, called `/api/v1/booking/available-slots`, and displayed next available slot buttons.
+- Status: Complete locally
+
 ### 2026-04-18 — Frontend Vercel Typecheck Fix
 - What was fixed: Resolved the deployment-blocking TypeScript errors from the About page and buyer journey component.
 - Files modified:
