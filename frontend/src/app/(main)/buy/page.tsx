@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 };
 
 const TEAM_MEMBERS = [
-  { id: 'realtor', node: <>Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> (Brandon)</> },
+  { id: 'realtor', node: <><span className="whitespace-nowrap">Your REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup></span><br /><span className="text-[0.9em] opacity-80">(Brandon)</span></> },
   { id: 'lender', node: 'Lender / Loan Officer' },
   { id: 'attorney', node: 'Real Estate Attorney' },
   { id: 'estate', node: 'Estate Planning Attorney' },
