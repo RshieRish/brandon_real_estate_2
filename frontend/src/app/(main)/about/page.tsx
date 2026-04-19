@@ -450,8 +450,8 @@ function BioSection() {
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
                   In 2025, Brandon was named{' '}
-                  <span className="text-gold font-medium">Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span> —
-                  the highest honor awarded by the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup>. He
+                  <span className="text-gold font-medium">REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span> by the Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> —
+                  the highest honor awarded by the association. He
                   also serves as the 2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President, guiding the direction of real estate
                   standards and advocacy across Massachusetts.
                 </p>
