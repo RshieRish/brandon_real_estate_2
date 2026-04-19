@@ -111,10 +111,10 @@ function HeroSection() {
                 className="text-white/65 text-base md:text-lg leading-relaxed font-light max-w-xl"
               >
                 Brandon Sweeney is the CEO of Sold With Sweeney &amp; Co. — a top-producing team
-                at Keller Williams Realty Success. Named{' '}
+                powered by Keller Williams Realty Success. Named{' '}
                 <span className="text-gold font-medium">2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>{' '}
                 and 2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President, Brandon has built his career on market expertise, honest
-                communication, and an unwavering commitment to the Merrimack Valley community where
+                communication, and an unwavering commitment to the Northern Massachusetts and Southern New Hampshire community where
                 he grew up.
               </motion.p>
 
@@ -390,7 +390,7 @@ function BioSection() {
                   The Foundation
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
-                  Brandon grew up in Dracut, MA — deeply embedded in the Merrimack Valley community.
+                  Brandon grew up in Dracut, MA — deeply embedded in the Northern Massachusetts and Southern New Hampshire community.
                   He started his career in sales at 18 and earned his real estate license at 22 in 2017.
                   Licensed as a salesperson in MA and NH, he has built a reputation rooted in integrity and
                   results.
@@ -420,9 +420,8 @@ function BioSection() {
                   The Expert
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
-                  As CEO of Sold With Sweeney &amp; Co. at Keller Williams Realty Success, Brandon
-                  specializes in residential and investment real estate across the
-                  Merrimack Valley. His clients trust him for deep market knowledge, direct honest
+                  As CEO of Sold With Sweeney &amp; Co. powered by Keller Williams Realty Success, Brandon
+                  specializes in residential and investment real estate across Northern Massachusetts and Southern New Hampshire. His clients trust him for deep market knowledge, direct honest
                   communication, and a commitment to going above and beyond — every single time.
                 </p>
               </div>
@@ -908,7 +907,7 @@ function TeamSection() {
               variants={fadeUp}
               className="text-white/60 text-base md:text-lg leading-relaxed font-light mb-6"
             >
-              Brandon doesn&apos;t work alone. The Sold With Sweeney &amp; Co. team at Keller
+              Brandon doesn&apos;t work alone. The Sold With Sweeney &amp; Co. team powered by Keller
               Williams Realty Success is a curated group of driven, client-first professionals who
               share Brandon&apos;s commitment to excellence and community.
             </motion.p>
@@ -925,7 +924,7 @@ function TeamSection() {
             {/* Team highlights */}
             <motion.div variants={fadeUp} className="flex flex-col gap-4">
               {[
-                'Merrimack Valley specialists — MA & NH',
+                'Northern Massachusetts and Southern New Hampshire specialists',
                 'Residential, Investment & Commercial expertise',
                 'Dedicated buyer & seller representation',
               ].map((point) => (

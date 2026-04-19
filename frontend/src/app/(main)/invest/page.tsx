@@ -214,8 +214,8 @@ export default function InvestPage() {
                 </span>
               </h2>
               <p className="text-white/50 text-sm font-light leading-relaxed">
-                Brandon has a proven record helping investors execute profitable deals in the
-                Merrimack Valley and southern NH. Here is one real example.
+                Brandon has a proven record helping investors execute profitable deals in
+                Northern Massachusetts and Southern New Hampshire. Here is one real example.
               </p>
             </div>
 
