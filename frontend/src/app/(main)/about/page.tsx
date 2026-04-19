@@ -101,9 +101,9 @@ function HeroSection() {
               {/* Subheading */}
               <motion.p
                 variants={fadeUp}
-                className="text-gold/70 text-sm font-semibold tracking-[0.18em] uppercase mb-6"
+                className="text-gold/70 text-sm font-semibold tracking-[0.18em] uppercase mb-6 leading-relaxed"
               >
-                Licensed since 2017&nbsp;&nbsp;|&nbsp;&nbsp;MA &amp; NH&nbsp;&nbsp;|&nbsp;&nbsp;Keller Williams Realty Success
+                Licensed since 2017 <span className="mx-1.5 opacity-50">|</span> MA &amp; NH <span className="mx-1.5 opacity-50">|</span> Keller Williams Realty Success
               </motion.p>
 
               {/* Intro paragraph */}
@@ -113,8 +113,7 @@ function HeroSection() {
               >
                 Brandon Sweeney is the CEO of Sold With Sweeney &amp; Co. — a top-producing team
                 powered by Keller Williams Realty Success. Named{' '}
-                <span className="text-gold font-medium">2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>{' '}
-                and 2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President, Brandon has built his career on market expertise, honest
+                <span className="text-gold font-medium">2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President &amp; REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>, Brandon has built his career on market expertise, honest
                 communication, and an unwavering commitment to the Northern Massachusetts and Southern New Hampshire community where
                 he grew up.
               </motion.p>
