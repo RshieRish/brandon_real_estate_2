@@ -36,7 +36,7 @@ interface SuggestedSlot extends Slot {
 
 const MEETING_TYPES: { key: MeetingType; label: string; icon: typeof Phone }[] = [
   { key: 'phone', label: 'Phone Call', icon: Phone },
-  { key: 'video', label: 'Video Call', icon: VideoCamera },
+  { key: 'video', label: 'Google Meet', icon: VideoCamera },
   { key: 'in_person', label: 'In Person', icon: MapPin },
 ];
 

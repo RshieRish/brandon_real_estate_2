@@ -1,7 +1,27 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-04-18
+Last Updated: 2026-04-20
+
+### 2026-04-20 — Chat Booking Options + Same-Day Past Slot Filtering
+- What was fixed: Restored all three booking format options in the chatbot booking flow and removed already-started same-day appointment times from availability.
+- Files modified:
+  - `frontend/src/components/chat/CalendarPickerCard.tsx`
+  - `frontend/src/components/chat/ChatPanel.tsx`
+  - `frontend/src/hooks/useChat.ts`
+  - `backend/services/calendar_service.py`
+  - `backend/tests/test_booking_calendar.py`
+- Key decisions:
+  - `Book Brandon` chat entry now opens the booking chooser in guided mode instead of forcing a phone-only next-available shortcut.
+  - Renamed the video option to `Google Meet` so the three visible choices are `Phone Call`, `Google Meet`, and `In Person`.
+  - Added a backend `_current_eastern_time()` helper so same-day slot generation can skip any slot whose start time is already at or before the current Eastern time.
+  - Hardened booking validation so already-started appointment times are rejected even if a stale client somehow submits one.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest tests.test_booking_calendar -v` passed.
+  - `frontend`: `npm run typecheck` passed.
+  - Browser smoke test passed: homepage `Book Brandon` opened chat with `Phone Call`, `Google Meet`, and `In Person` buttons visible.
+  - Backend slot-filter smoke check passed: with the clock pinned to `2:16 PM ET`, available phone slots started at `3:00 PM`.
+- Status: Complete locally
 
 ### 2026-04-18 — Book Brandon CTA Opens Chatbot Booking Slots
 - What was built: Updated booking CTAs so visitors are sent directly into the chatbot booking flow with Brandon's next available calendar slots.

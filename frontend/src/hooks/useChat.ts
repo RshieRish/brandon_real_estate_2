@@ -174,8 +174,8 @@ export function useChat() {
   }, []);
 
   const triggerBooking = useCallback((
-    content = "Here are Brandon's next available times. Pick the one that works, then add your details to book it.",
-    widgetMode: ChatWidgetMode = 'next_available',
+    content = 'How would you like to meet Brandon? Choose phone call, Google Meet, or in person to keep booking.',
+    widgetMode: ChatWidgetMode = 'guided',
   ) => {
     const bookingMsg: Message = {
       id: crypto.randomUUID(),

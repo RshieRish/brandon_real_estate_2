@@ -176,6 +176,10 @@ def _as_eastern(dt: datetime) -> datetime:
     return dt.astimezone(EASTERN_TZ)
 
 
+def _current_eastern_time() -> datetime:
+    return datetime.now(EASTERN_TZ)
+
+
 def _normalize_requested_day(target_date: datetime) -> datetime:
     if (
         target_date.tzinfo is not None
@@ -339,6 +343,7 @@ async def get_available_slots(
     day_end = target_day.replace(
         hour=WORK_END_HOUR, minute=0, second=0, microsecond=0
     )
+    now = _current_eastern_time()
 
     # Fetch existing events for the day (with padding for travel)
     fetch_start = day_start - timedelta(hours=2)
@@ -350,6 +355,10 @@ async def get_available_slots(
     current = day_start
     while current + timedelta(minutes=SLOT_DURATION_MINUTES) <= day_end:
         slot_end = current + timedelta(minutes=SLOT_DURATION_MINUTES)
+
+        if target_day.date() == now.date() and current <= now:
+            current = slot_end
+            continue
 
         # Check if this slot overlaps with any existing event
         is_busy = any(
@@ -398,9 +407,13 @@ async def ensure_booking_slot_available(
     """Validate that a booking time is inside office hours and still free."""
     slot_start = _as_eastern(scheduled_at)
     slot_end = slot_start + timedelta(minutes=SLOT_DURATION_MINUTES)
+    now = _current_eastern_time()
 
     if slot_start.weekday() >= 5:
         raise BookingValidationError("Appointments are only available Monday through Friday.")
+
+    if slot_start <= now:
+        raise BookingValidationError("Appointments must be booked for a future time on Brandon's calendar.")
 
     if (
         slot_start.hour < WORK_START_HOUR

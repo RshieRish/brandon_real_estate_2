@@ -103,6 +103,31 @@ class CalendarAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("2026-04-13 09:00", starts)
 
+    async def test_get_available_slots_skips_same_day_slots_that_already_started(self):
+        target_date = datetime(2026, 4, 13, 12, 0, tzinfo=EASTERN)
+        mocked_now = datetime(2026, 4, 13, 14, 16, tzinfo=EASTERN)
+
+        with patch.object(
+            calendar_service,
+            "_current_eastern_time",
+            return_value=mocked_now,
+        ), patch.object(
+            calendar_service,
+            "get_events",
+            AsyncMock(return_value=[]),
+        ):
+            slots = await calendar_service.get_available_slots(
+                target_date=target_date,
+                meeting_type="phone",
+            )
+
+        starts = {
+            datetime.fromisoformat(slot["start"]).astimezone(EASTERN).strftime("%H:%M")
+            for slot in slots
+        }
+        self.assertNotIn("14:00", starts)
+        self.assertIn("15:00", starts)
+
     async def test_get_events_raises_when_calendar_service_is_unavailable(self):
         start = datetime(2026, 4, 13, 9, 0, tzinfo=EASTERN)
         end = datetime(2026, 4, 13, 18, 0, tzinfo=EASTERN)
@@ -117,6 +142,21 @@ class CalendarAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CreateBookingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ensure_booking_slot_available_rejects_already_started_slot(self):
+        scheduled_at = datetime(2026, 4, 13, 14, 0, tzinfo=EASTERN)
+        mocked_now = datetime(2026, 4, 13, 14, 16, tzinfo=EASTERN)
+
+        with patch.object(
+            calendar_service,
+            "_current_eastern_time",
+            return_value=mocked_now,
+        ):
+            with self.assertRaises(calendar_service.BookingValidationError):
+                await calendar_service.ensure_booking_slot_available(
+                    scheduled_at=scheduled_at,
+                    meeting_type="phone",
+                )
+
     async def test_create_booking_raises_if_google_calendar_event_is_not_created(self):
         db = _FakeDB()
         payload = BookingCreate(

@@ -20,7 +20,7 @@ const QUICK_REPLIES = [
 ];
 
 const DIRECT_BOOKING_MESSAGE =
-  "Here are Brandon's next available times. Pick the one that works, then add your details to book it.";
+  'How would you like to meet Brandon? Choose phone call, Google Meet, or in person to keep booking.';
 
 export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelProps) {
   const { messages, isLoading, error, sendMessage, triggerBooking, addMessage } = useChat();
@@ -45,7 +45,7 @@ export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelPr
     if (!bookingRequestId || handledBookingRequestRef.current === bookingRequestId) return;
 
     handledBookingRequestRef.current = bookingRequestId;
-    triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available');
+    triggerBooking(DIRECT_BOOKING_MESSAGE, 'guided');
   }, [bookingRequestId, triggerBooking]);
 
   const handleSend = () => {
@@ -81,7 +81,7 @@ export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelPr
     }
 
     if (action.type === 'open_widget' && action.widget === 'calendar_picker') {
-      triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available');
+      triggerBooking(DIRECT_BOOKING_MESSAGE, 'guided');
     }
   };
 
@@ -148,11 +148,11 @@ export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelPr
               ))}
               {/* Book a Call quick action */}
               <button
-                onClick={() => triggerBooking(DIRECT_BOOKING_MESSAGE, 'next_available')}
+                onClick={() => triggerBooking(DIRECT_BOOKING_MESSAGE, 'guided')}
                 className="text-xs text-gold border border-gold/30 rounded-full px-3 py-1.5 hover:border-gold/60 hover:bg-gold/5 transition-colors text-left flex items-center gap-1.5"
               >
                 <CalendarBlank weight="fill" className="w-3 h-3" />
-                Book a call with Brandon
+                Book time with Brandon
               </button>
             </div>
           </div>
