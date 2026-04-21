@@ -166,7 +166,7 @@ class NotificationQueueTests(unittest.IsolatedAsyncioTestCase):
             payload={"name": "Jane Doe", "email": "jane@example.com"},
         )
         self.assertEqual(job.status, "pending")
-        self.assertEqual(job.recipient, "brandon@soldwithsweeney.com")
+        self.assertEqual(job.recipient, "info@soldwithsweeney.com")
 
     async def test_send_job_marks_delivered_on_success(self):
         job = NotificationJob(...)
@@ -193,7 +193,7 @@ Expected: FAIL because the queue service functions do not exist yet.
 - [ ] **Step 3: Add the queue service and low-level send function**
 
 ```python
-BRANDON_NOTIFICATION_EMAIL = "brandon@soldwithsweeney.com"
+BRANDON_NOTIFICATION_EMAIL = "info@soldwithsweeney.com"
 
 async def send_internal_email(*, subject: str, body_html: str, to: str = BRANDON_NOTIFICATION_EMAIL) -> None:
     await aiosmtplib.send(

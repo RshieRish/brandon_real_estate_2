@@ -19,7 +19,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-BRANDON_EMAIL = "brandon@soldwithsweeney.com"
+BRANDON_EMAIL = "info@soldwithsweeney.com"
 
 
 async def send_internal_email(subject: str, body_html: str, to: str = BRANDON_EMAIL) -> None:

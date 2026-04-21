@@ -1,7 +1,45 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-04-20
+Last Updated: 2026-04-21
+
+### 2026-04-21 — Email Address Normalization
+- What was changed: Updated hardcoded Sold With Sweeney email references across the app, backend services, seed defaults, tests, and supporting docs to `info@soldwithsweeney.com`.
+- Files modified:
+  - `frontend/src/app/(main)/about/page.tsx`
+  - `frontend/src/app/(main)/buy/page.tsx`
+  - `frontend/src/app/(main)/sell/page.tsx`
+  - `frontend/src/app/(main)/invest/page.tsx`
+  - `backend/services/email_service.py`
+  - `backend/services/gemini.py`
+  - `backend/seed.py`
+  - `backend/tests/test_notification_service.py`
+  - `BRANDON_RE_SPEC.md`
+  - `docs/superpowers/plans/2026-03-18-brandon-re-platform.md`
+  - `docs/superpowers/plans/2026-03-23-full-e2e-qa-polish.md`
+  - `docs/superpowers/plans/2026-04-10-brandon-notification-queue.md`
+  - `tdtn.md`
+  - `memory.md`
+- Key decisions:
+  - Swapped public contact email copy and mailto links to `info@soldwithsweeney.com`.
+  - Updated the internal notification recipient constant and the seeded default admin email to the same address for consistency.
+  - Kept historical task notes accurate by removing specific old-email references where needed instead of pretending a new live verification already happened.
+- Verification:
+  - `backend`: `./.venv/bin/python -m unittest tests.test_notification_service tests.test_seed_admin_user -v` passed.
+  - `frontend`: `npm run typecheck` passed.
+- Status: Complete locally
+
+### 2026-04-20 — Chat Booking Label Copy Update
+- What was changed: Renamed the chatbot's `Google Meet` booking label back to `Video Call`.
+- Files modified:
+  - `frontend/src/components/chat/CalendarPickerCard.tsx`
+  - `frontend/src/components/chat/ChatPanel.tsx`
+  - `frontend/src/hooks/useChat.ts`
+- Key decisions:
+  - Updated both the visible meeting-type button label and the guided booking prompt copy so the chatbot uses the same wording everywhere.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+- Status: Complete locally
 
 ### 2026-04-20 — Chat Booking Options + Same-Day Past Slot Filtering
 - What was fixed: Restored all three booking format options in the chatbot booking flow and removed already-started same-day appointment times from availability.
@@ -13,13 +51,13 @@ Last Updated: 2026-04-20
   - `backend/tests/test_booking_calendar.py`
 - Key decisions:
   - `Book Brandon` chat entry now opens the booking chooser in guided mode instead of forcing a phone-only next-available shortcut.
-  - Renamed the video option to `Google Meet` so the three visible choices are `Phone Call`, `Google Meet`, and `In Person`.
+  - The three visible booking choices are `Phone Call`, `Video Call`, and `In Person`.
   - Added a backend `_current_eastern_time()` helper so same-day slot generation can skip any slot whose start time is already at or before the current Eastern time.
   - Hardened booking validation so already-started appointment times are rejected even if a stale client somehow submits one.
 - Verification:
   - `backend`: `./.venv/bin/python -m unittest tests.test_booking_calendar -v` passed.
   - `frontend`: `npm run typecheck` passed.
-  - Browser smoke test passed: homepage `Book Brandon` opened chat with `Phone Call`, `Google Meet`, and `In Person` buttons visible.
+  - Browser smoke test passed: homepage `Book Brandon` opened chat with `Phone Call`, `Video Call`, and `In Person` buttons visible.
   - Backend slot-filter smoke check passed: with the clock pinned to `2:16 PM ET`, available phone slots started at `3:00 PM`.
 - Status: Complete locally
 
@@ -257,7 +295,7 @@ Last Updated: 2026-04-20
   - Ran the updated seed against the connected database so the live Brandon admin row was resynced immediately.
 - Verification:
   - `backend`: `./.venv/bin/python -m unittest tests.test_seed_admin_user -v` passed (`2` tests).
-  - `backend`: direct database verification confirmed `pwd_context.verify("changeme123!", user.hashed_password) == True` for `brandon@soldwithsweeney.com`.
+  - `backend`: direct database verification confirmed `pwd_context.verify("changeme123!", user.hashed_password) == True` for the seeded admin account.
   - `backend`: direct ASGI smoke test to `POST /api/v1/auth/login` with Brandon's seeded credentials returned `200` and a bearer token.
 - Root cause:
   - `seed.py` previously only created the admin user if it did not exist, so an older password hash in the live database could persist forever even though the seed file still advertised `changeme123!`.

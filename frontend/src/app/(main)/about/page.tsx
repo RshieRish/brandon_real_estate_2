@@ -1041,10 +1041,10 @@ function ContactSection() {
                     Email
                   </div>
                   <a
-                    href="mailto:info@SoldWithSweeney.com"
+                    href="mailto:info@soldwithsweeney.com"
                     className="text-white font-semibold text-sm hover:text-gold transition-colors duration-200 break-all"
                   >
-                    info@SoldWithSweeney.com
+                    info@soldwithsweeney.com
                   </a>
                 </div>
               </div>

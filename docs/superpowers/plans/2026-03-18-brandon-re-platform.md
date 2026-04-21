@@ -969,9 +969,9 @@ async def seed():
 
     async with AsyncSessionLocal() as db:
         # Admin user
-        result = await db.execute(select(AdminUser).where(AdminUser.email == "brandon@soldwithsweeney.com"))
+        result = await db.execute(select(AdminUser).where(AdminUser.email == "info@soldwithsweeney.com"))
         if not result.scalar_one_or_none():
-            db.add(AdminUser(email="brandon@soldwithsweeney.com", hashed_password=pwd_context.hash("changeme123!")))
+            db.add(AdminUser(email="info@soldwithsweeney.com", hashed_password=pwd_context.hash("changeme123!")))
 
         # Content blocks
         for item in DEFAULT_CONTENT:
@@ -980,7 +980,7 @@ async def seed():
                 db.add(ContentBlock(**item, content_type="text"))
 
         await db.commit()
-    print("Seed complete. Admin: brandon@soldwithsweeney.com / changeme123!")
+    print("Seed complete. Admin: info@soldwithsweeney.com / changeme123!")
 
 if __name__ == "__main__":
     asyncio.run(seed())
@@ -1285,7 +1285,7 @@ SCOPE: Only discuss Brandon's real estate business. Never act as general assista
 
 PERSONALITY: Friendly, professional, warm, concise, proactive about booking.
 
-CONTACT: Phone (978) 987-2806 | Email info@SoldWithSweeney.com | 101 Broadway Rd #21, Dracut, MA"""
+CONTACT: Phone (978) 987-2806 | Email info@soldwithsweeney.com | 101 Broadway Rd #21, Dracut, MA"""
 
 async def chat_response(messages: list[dict], use_pro: bool = False) -> str:
     model_name = "gemini-1.5-pro" if use_pro else "gemini-1.5-flash"
@@ -1940,7 +1940,7 @@ export default function Footer() {
               <span className="block">Brandon Sweeney, REALTOR®</span>
               <span className="block">101 Broadway Rd. #21, Dracut, MA 01826</span>
               <span className="block">(978) 987-2806</span>
-              <span className="block">info@SoldWithSweeney.com</span>
+              <span className="block">info@soldwithsweeney.com</span>
             </p>
           </div>
           {/* Socials + Logos */}
@@ -4242,7 +4242,7 @@ export default function SettingsPage() {
         <div className="flex flex-col gap-4">
           <div>
             <p className="text-xs text-gray-400 mb-1">Admin Email</p>
-            <p className="text-white text-sm">brandon@soldwithsweeney.com</p>
+            <p className="text-white text-sm">info@soldwithsweeney.com</p>
           </div>
           <div className="border-t border-dark-border pt-4">
             <p className="text-xs text-gray-400 mb-1">Google Calendar</p>
@@ -4350,7 +4350,7 @@ export default async function FunnelPage({ params }: { params: { slug: string } 
 
       {/* Footer */}
       <div className="border-t border-dark-border py-8 px-4 text-center">
-        <p className="text-xs text-gray-600">Sold With Sweeney & Co. | Brandon Sweeney, REALTOR® | (978) 987-2806 | info@SoldWithSweeney.com</p>
+        <p className="text-xs text-gray-600">Sold With Sweeney & Co. | Brandon Sweeney, REALTOR® | (978) 987-2806 | info@soldwithsweeney.com</p>
         <p className="text-xs text-gray-700 mt-1">MA #9589032 | NH #072734 | Powered by Keller Williams Realty Success</p>
       </div>
     </div>

@@ -20,7 +20,7 @@ const QUICK_REPLIES = [
 ];
 
 const DIRECT_BOOKING_MESSAGE =
-  'How would you like to meet Brandon? Choose phone call, Google Meet, or in person to keep booking.';
+  'How would you like to meet Brandon? Choose phone call, video call, or in person to keep booking.';
 
 export default function ChatPanel({ onClose, bookingRequestId = 0 }: ChatPanelProps) {
   const { messages, isLoading, error, sendMessage, triggerBooking, addMessage } = useChat();

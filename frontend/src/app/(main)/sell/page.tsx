@@ -303,7 +303,7 @@ export default function SellPage() {
                 </a>
 
                 <a
-                  href="mailto:brandon@soldwithsweeney.com"
+                  href="mailto:info@soldwithsweeney.com"
                   className="inline-flex items-center gap-3 text-gold hover:text-white transition-colors duration-200 group"
                 >
                   <span className="w-10 h-10 flex items-center justify-center border border-gold/40 group-hover:border-gold/80 transition-colors duration-200 shrink-0">
@@ -311,7 +311,7 @@ export default function SellPage() {
                   </span>
                   <div>
                     <p className="text-[10px] text-gray uppercase tracking-widest font-medium">Email</p>
-                    <p className="text-sm font-bold tracking-wide">brandon@soldwithsweeney.com</p>
+                    <p className="text-sm font-bold tracking-wide">info@soldwithsweeney.com</p>
                   </div>
                 </a>
               </div>

@@ -40,7 +40,7 @@ Expected: "Running upgrade -> 8fa950e372a8, initial schema" (or already at head)
 cd /Users/rishabnandi/brandon-real-estate/backend
 python seed.py
 ```
-Expected: Creates admin user `brandon@soldwithsweeney.com` + 9 content blocks (or skips if already exist)
+Expected: Creates admin user `info@soldwithsweeney.com` + 9 content blocks (or skips if already exist)
 
 - [ ] **Step 4: Start FastAPI server on port 8001**
 
@@ -68,7 +68,7 @@ Expected: `{"status":"ok"}` or similar 200 response
 ```bash
 curl -s -X POST http://localhost:8001/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"brandon@soldwithsweeney.com","password":"changeme123!"}' | python3 -m json.tool
+  -d '{"email":"info@soldwithsweeney.com","password":"changeme123!"}' | python3 -m json.tool
 ```
 Expected: `{"access_token":"<jwt>","token_type":"bearer"}`
 Save the token for subsequent auth requests.
@@ -80,7 +80,7 @@ TOKEN="<from step 1>"
 curl -s http://localhost:8001/api/v1/auth/me \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
-Expected: `{"id":1,"email":"brandon@soldwithsweeney.com"}`
+Expected: `{"id":1,"email":"info@soldwithsweeney.com"}`
 
 - [ ] **Step 3: Test /me without token (should 401)**
 
@@ -502,7 +502,7 @@ Open http://localhost:3000/f/first-time-homebuyer-workshop — verify funnel ren
 
 - [ ] **Step 7: Test admin panel**
 
-Open http://localhost:3000/admin/login — login with brandon@soldwithsweeney.com / changeme123!. Verify redirect to dashboard. Navigate to Leads — verify test leads appear. Navigate to Funnels — verify created funnels appear.
+Open http://localhost:3000/admin/login — login with info@soldwithsweeney.com / changeme123!. Verify redirect to dashboard. Navigate to Leads — verify test leads appear. Navigate to Funnels — verify created funnels appear.
 
 - [ ] **Step 8: Fix any integration issues** (CORS, endpoint mismatches, missing error handling)
 

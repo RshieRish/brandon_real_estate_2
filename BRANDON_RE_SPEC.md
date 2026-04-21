@@ -53,7 +53,7 @@ Turn every visitor into a qualified meeting with Brandon across three audience p
 - **Cell**: (978) 987-2806
 - **SWS Phone (Twilio)**: (603) 505-8321
 - **KW Office**: (978) 475-2111
-- **Email**: info@SoldWithSweeney.com
+- **Email**: info@soldwithsweeney.com
 - **Website**: www.SoldWithSweeney.com
 - **Association Memberships**: NAR, MAR (Massachusetts Association of REALTORS®), NEAR (Northeast Association of REALTORS®)
 - **Key Achievements**:
@@ -794,7 +794,7 @@ Then route to the Google Calendar booking integration.
 
 CONTACT INFO TO SHARE:
 - Phone: (978) 987-2806
-- Email: info@SoldWithSweeney.com
+- Email: info@soldwithsweeney.com
 - Website: www.SoldWithSweeney.com
 - Office: 101 Broadway Rd. #21, Dracut, MA 01826
 ```

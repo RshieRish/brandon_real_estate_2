@@ -15,7 +15,7 @@ from models.admin_user import AdminUser
 from models.content_block import ContentBlock
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-DEFAULT_ADMIN_EMAIL = "brandon@soldwithsweeney.com"
+DEFAULT_ADMIN_EMAIL = "info@soldwithsweeney.com"
 DEFAULT_ADMIN_PASSWORD = "changeme123!"
 
 DEFAULT_CONTENT = [
@@ -79,7 +79,7 @@ async def seed():
 
         await db.commit()
 
-    print("Seed complete. Admin account created: brandon@soldwithsweeney.com — change the password immediately.")
+    print("Seed complete. Admin account created: info@soldwithsweeney.com — change the password immediately.")
 
 
 async def ensure_admin_user(

@@ -174,7 +174,7 @@ export function useChat() {
   }, []);
 
   const triggerBooking = useCallback((
-    content = 'How would you like to meet Brandon? Choose phone call, Google Meet, or in person to keep booking.',
+    content = 'How would you like to meet Brandon? Choose phone call, video call, or in person to keep booking.',
     widgetMode: ChatWidgetMode = 'guided',
   ) => {
     const bookingMsg: Message = {

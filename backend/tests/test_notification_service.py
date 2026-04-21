@@ -56,7 +56,7 @@ class NotificationQueueTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(job.status, "pending")
-        self.assertEqual(job.recipient, "brandon@soldwithsweeney.com")
+        self.assertEqual(job.recipient, "info@soldwithsweeney.com")
         self.assertEqual(job.subject, "New Lead Captured — Lead")
         self.assertEqual(json.loads(job.payload_json)["email"], "jane@example.com")
         self.assertEqual(db.added, [job])
@@ -66,7 +66,7 @@ class NotificationQueueTests(unittest.IsolatedAsyncioTestCase):
         job = NotificationJob(
             event_type="lead_captured",
             status="pending",
-            recipient="brandon@soldwithsweeney.com",
+            recipient="info@soldwithsweeney.com",
             subject="New Lead Captured — Lead",
             payload_json=json.dumps({"name": "Jane Doe"}),
             attempt_count=0,
@@ -86,7 +86,7 @@ class NotificationQueueTests(unittest.IsolatedAsyncioTestCase):
         job = NotificationJob(
             event_type="lead_captured",
             status="pending",
-            recipient="brandon@soldwithsweeney.com",
+            recipient="info@soldwithsweeney.com",
             subject="New Lead Captured — Lead",
             payload_json=json.dumps({"name": "Jane Doe"}),
             attempt_count=0,

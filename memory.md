@@ -37,7 +37,7 @@
 ## Admin Auth Notes
 - As of 2026-04-10, the Brandon admin login issue was traced to seed drift: the `admin_users` row already existed in the live database with an older hash that did not match `changeme123!`.
 - `backend/seed.py` now uses `ensure_admin_user(...)` to create the Brandon admin account if missing and also refresh the stored hash if the existing row no longer matches the expected seeded password.
-- The connected database was reseeded on 2026-04-10, and a direct `/api/v1/auth/login` smoke test succeeded for `brandon@soldwithsweeney.com` with the seeded password from `seed.py`.
+- The connected database was reseeded on 2026-04-10, and a direct `/api/v1/auth/login` smoke test succeeded for the seeded admin account from `seed.py`.
 
 ## Chatbot Architecture
 - Chat widget is mounted globally from `frontend/src/components/layout/ClientWidgets.tsx`, so it appears across public pages.
@@ -104,7 +104,9 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
-- 2026-04-20: `Book Brandon` now opens the chatbot in guided booking mode again, with `Phone Call`, `Google Meet`, and `In Person` visible before slot selection.
+- 2026-04-21: Hardcoded Sold With Sweeney email references now use `info@soldwithsweeney.com`, including public contact copy, internal notification recipient defaults, and the seeded default admin email.
+- 2026-04-20: The chatbot booking chooser label was changed from `Google Meet` back to `Video Call`, and the guided booking prompt copy was updated to match.
+- 2026-04-20: `Book Brandon` now opens the chatbot in guided booking mode again, with `Phone Call`, `Video Call`, and `In Person` visible before slot selection.
 - 2026-04-20: Same-day booking availability now filters out any slot whose start time is already past in Eastern time, and booking validation rejects already-started times server-side too.
 - 2026-04-18: Book Brandon CTAs now open the persistent chatbot directly into a `next_available` calendar picker mode; a browser smoke test confirmed the homepage CTA opened chat and displayed live next available slot buttons from `/api/v1/booking/available-slots`.
 - 2026-04-18: Fixed the Vercel frontend typecheck blocker by replacing JSX-derived React keys in the About page with stable string ids and typing buyer journey steps as `ReactNode`; `npm run typecheck` and `npm run build` both pass locally.
