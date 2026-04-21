@@ -3,6 +3,18 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-04-21
 
+### 2026-04-21 — Homepage Hero Award Copy Update
+- What was changed: Updated the homepage hero award badge copy to read `Northeast Association of REALTORS® Realtor Of The Year 2025`.
+- Files modified:
+  - `frontend/src/components/home/Hero.tsx`
+  - `tdtn.md`
+  - `memory.md`
+- Key decisions:
+  - Kept the existing layout and styling intact and changed only the requested wording in the hero eyebrow badge.
+- Verification:
+  - `frontend`: `npm run typecheck` passed.
+- Status: Complete locally
+
 ### 2026-04-21 — Email Address Normalization
 - What was changed: Updated hardcoded Sold With Sweeney email references across the app, backend services, seed defaults, tests, and supporting docs to `info@soldwithsweeney.com`.
 - Files modified:

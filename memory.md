@@ -104,6 +104,7 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-21: The homepage hero eyebrow badge now reads `Northeast Association of REALTORS® Realtor Of The Year 2025` per the latest copy request.
 - 2026-04-21: Hardcoded Sold With Sweeney email references now use `info@soldwithsweeney.com`, including public contact copy, internal notification recipient defaults, and the seeded default admin email.
 - 2026-04-20: The chatbot booking chooser label was changed from `Google Meet` back to `Video Call`, and the guided booking prompt copy was updated to match.
 - 2026-04-20: `Book Brandon` now opens the chatbot in guided booking mode again, with `Phone Call`, `Video Call`, and `In Person` visible before slot selection.
