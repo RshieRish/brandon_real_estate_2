@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { House, CurrencyDollar, ChartLine, ArrowDown } from '@phosphor-icons/react';
@@ -50,15 +50,31 @@ const ctaButtons = [
 export default function Hero() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [videoSrc, setVideoSrc] = useState('/assets/aerial_drone_shot.mp4');
+
+  useEffect(() => {
+    // Check location for dynamic video
+    fetch('https://get.geojs.io/v1/ip/geo.json')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.city === 'Dracut') {
+          setVideoSrc('/assets/Dracut%20Drone%20Vid%20Hi%20Res.mp4');
+        } else if (data.city === 'Andover') {
+          setVideoSrc('/assets/Andover_drone.mp4');
+        }
+      })
+      .catch((err) => console.error('Failed to get location:', err));
+  }, []);
 
   return (
     <AnimatePresence>
       <section className="relative min-h-[100dvh] flex flex-col justify-center overflow-hidden bg-[#0a0a0a]">
         {/* Background video */}
         <video
+          key={videoSrc}
           ref={videoRef}
           className="absolute inset-0 w-full h-full object-cover"
-          src="/assets/aerial_drone_shot.mp4"
+          src={videoSrc}
           preload="auto"
           autoPlay
           muted

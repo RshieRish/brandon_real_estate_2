@@ -104,6 +104,9 @@
 - Settings page Google Calendar card is dynamic as of 2026-04-10: it fetches live connection status, can open the Google Calendar OAuth flow, and supports status refresh after authorization.
 
 ## Last Session Context
+- 2026-04-21: Reviewed the live spec + implementation to produce a current feature inventory for the app, including chatbot, booking, funnels, analytics, admin tools, scroll/video experiences, and the Zapier-based KW Command CRM handoff.
+- 2026-04-21: CRM integration should be described as a Zapier webhook flow rather than a direct Keller Williams API integration.
+- 2026-04-21: The booking system description should explicitly mention Google Maps travel-time checks for in-person meetings so only feasible time slots are shown based on Brandon's surrounding calendar commitments and the requested location.
 - 2026-04-21: The homepage hero eyebrow badge now reads `Northeast Association of REALTORS® Realtor Of The Year 2025` per the latest copy request.
 - 2026-04-21: Hardcoded Sold With Sweeney email references now use `info@soldwithsweeney.com`, including public contact copy, internal notification recipient defaults, and the seeded default admin email.
 - 2026-04-20: The chatbot booking chooser label was changed from `Google Meet` back to `Video Call`, and the guided booking prompt copy was updated to match.
@@ -154,3 +157,5 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-11: Updated the About page team image to an animated carousel featuring 3 team shots.
 - 2026-04-11: Implemented SVGLoader and ExtrudeGeometry for all nodes on the MarketingSphere on the Sell page, making them true 3D.
 - 2026-04-11: Fixed SVG colors in MarketingSphere and correctly aligned node text sprites to the global Y axis.
+- 2026-04-28: Added Cookie Consent component to the main layout which persists consent state in localStorage.
+- 2026-04-28: Added a silent client-side IP-based location check to the homepage Hero component (via geojs.io) that switches the background video to the high-res Dracut Drone video if the user's city is strictly 'Dracut', and 'Andover_drone.mp4' if the city is 'Andover'.

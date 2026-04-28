@@ -3,6 +3,19 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-04-21
 
+### 2026-04-21 — Application Feature Inventory Review
+- What was changed: Reviewed the current spec, project memory, public pages, backend routers, admin surfaces, chatbot flow, booking flow, and Zapier CRM wiring to prepare an accurate feature inventory for the application.
+- Files modified:
+  - `tdtn.md`
+  - `memory.md`
+- Key decisions:
+  - Feature descriptions are based on implemented code paths and current project notes, not just the original specification.
+  - CRM routing should be described as Zapier-based KW Command handoff rather than a direct Keller Williams API integration.
+  - In-person booking availability should explicitly be described as Google Maps travel-time-aware, not just generic calendar availability.
+- Verification:
+  - Cross-checked the inventory against `BRANDON_RE_SPEC.md`, `memory.md`, frontend route/component files, and backend router/service files.
+- Status: Complete locally
+
 ### 2026-04-21 — Homepage Hero Award Copy Update
 - What was changed: Updated the homepage hero award badge copy to read `Northeast Association of REALTORS® Realtor Of The Year 2025`.
 - Files modified:
@@ -621,3 +634,16 @@ Completed Checklist Video Integration
   - Converted the marketing node network on the Sell page (MarketingSphere) entirely to true 3D extruded SVGs.
   - Fixed MarketingSphere Instagram and Homes.com node colors, swapped generic icons, and fixed text sprite rotations to always face downwards.
   - Swapped Instagram SVG to Phosphor to fix ExtrudeGeometry solid-blob bug.
+
+### 2026-04-28 — Cookie Consent & Dynamic Location Hero Video
+- What was built: Added a global Cookie Consent banner and updated the homepage Hero component to show a custom Dracut drone video if the user's IP is located in Dracut.
+- Files modified:
+  - `frontend/src/app/(main)/layout.tsx`
+  - `frontend/src/components/home/Hero.tsx`
+- Files created:
+  - `frontend/src/components/shared/CookieConsent.tsx`
+- Key decisions: 
+  - Utilized `geojs.io` for a silent client-side IP-based location check to avoid intrusive permission prompts.
+  - Saved consent choice to `localStorage`.
+  - Added additional logic for users in Andover to see `Andover_drone.mp4`.
+- Status: Complete
