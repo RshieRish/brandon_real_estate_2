@@ -68,12 +68,18 @@ export default function Hero() {
       .catch((err) => console.error('Failed to get location:', err));
   }, []);
 
+  useEffect(() => {
+    // When the src changes, tell the video element to load the new source
+    if (videoRef.current) {
+      videoRef.current.load();
+    }
+  }, [videoSrc]);
+
   return (
     <AnimatePresence>
       <section className="relative min-h-[100dvh] flex flex-col justify-center overflow-hidden bg-[#0a0a0a]">
         {/* Background video */}
         <video
-          key={videoSrc}
           ref={videoRef}
           className="absolute inset-0 w-full h-full object-cover"
           src={videoSrc}
@@ -83,6 +89,8 @@ export default function Hero() {
           loop
           playsInline
           onLoadedData={() => setVideoReady(true)}
+          onCanPlay={() => setVideoReady(true)}
+          onPlaying={() => setVideoReady(true)}
           style={{
             opacity: videoReady ? 1 : 0,
             transition: 'opacity 480ms ease',
