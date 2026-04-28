@@ -57,12 +57,12 @@ export default function Hero() {
     fetch('https://get.geojs.io/v1/ip/geo.json')
       .then((res) => res.json())
       .then((data) => {
-        if (data.city === 'Dracut') {
+        if (data.city === 'Dracut' || data.city === 'Lowell') {
           setVideoReady(false);
-          setVideoSrc('/assets/Dracut Drone Vid Hi Res.mp4');
+          setVideoSrc('/assets/Dracut_compressed.mp4');
         } else if (data.city === 'Andover') {
           setVideoReady(false);
-          setVideoSrc('/assets/Andover_drone.mp4');
+          setVideoSrc('/assets/Andover_compressed.mp4');
         }
       })
       .catch((err) => console.error('Failed to get location:', err));
