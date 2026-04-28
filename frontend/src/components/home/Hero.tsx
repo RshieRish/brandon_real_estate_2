@@ -58,8 +58,10 @@ export default function Hero() {
       .then((res) => res.json())
       .then((data) => {
         if (data.city === 'Dracut') {
-          setVideoSrc('/assets/Dracut%20Drone%20Vid%20Hi%20Res.mp4');
+          setVideoReady(false);
+          setVideoSrc('/assets/Dracut Drone Vid Hi Res.mp4');
         } else if (data.city === 'Andover') {
+          setVideoReady(false);
           setVideoSrc('/assets/Andover_drone.mp4');
         }
       })
