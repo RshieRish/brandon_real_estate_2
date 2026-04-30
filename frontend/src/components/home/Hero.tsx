@@ -72,6 +72,11 @@ export default function Hero() {
     // When the src changes, tell the video element to load the new source
     if (videoRef.current) {
       videoRef.current.load();
+      videoRef.current.play().catch((e) => console.log('Autoplay prevented:', e));
+      
+      if (videoRef.current.readyState >= 3) {
+        setVideoReady(true);
+      }
     }
   }, [videoSrc]);
 
