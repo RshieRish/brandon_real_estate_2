@@ -50,7 +50,7 @@ const ctaButtons = [
 export default function Hero() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoReady, setVideoReady] = useState(false);
-  const [videoSrc, setVideoSrc] = useState('/assets/aerial_drone_shot.mp4');
+  const [videoSrc, setVideoSrc] = useState('/assets/aerial_drone_shot.mp4?v=3');
 
   useEffect(() => {
     // Check location for dynamic video
@@ -59,10 +59,10 @@ export default function Hero() {
       .then((data) => {
         if (data.city === 'Dracut' || data.city === 'Lowell') {
           setVideoReady(false);
-          setVideoSrc('/assets/Dracut_compressed.mp4');
+          setVideoSrc('/assets/Dracut_compressed.mp4?v=3');
         } else if (data.city === 'Andover') {
           setVideoReady(false);
-          setVideoSrc('/assets/Andover_compressed.mp4');
+          setVideoSrc('/assets/Andover_compressed.mp4?v=3');
         }
       })
       .catch((err) => console.error('Failed to get location:', err));

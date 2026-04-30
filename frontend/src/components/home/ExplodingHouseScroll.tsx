@@ -200,7 +200,7 @@ export default function ExplodingHouseScroll() {
         <video
           ref={forwardVideoRef}
           className="absolute inset-0 w-full h-full object-cover"
-          src="/assets/house_blast_forward_kf.mp4"
+          src="/assets/house_blast_forward_kf.mp4?v=3"
           muted
           playsInline
           preload="auto"
