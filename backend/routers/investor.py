@@ -11,6 +11,7 @@ from models.analytics_event import AnalyticsEvent
 from models.lead import Lead
 from services.notification_service import enqueue_notification, run_notification_retry_pass
 from services.investor_service import generate_investor_analysis
+from services.rentcast_service import get_full_property_data
 
 router = APIRouter()
 
@@ -178,3 +179,69 @@ async def track_engagement(
     await db.commit()
     await run_notification_retry_pass(limit=5)
     return {"queued": True}
+
+
+class LookupRequest(BaseModel):
+    address: str
+
+
+@router.post("/lookup")
+async def lookup_property(req: LookupRequest):
+    """Fetch property data from RentCast to auto-fill investor calculator fields."""
+    if not req.address or len(req.address.strip()) < 5:
+        raise HTTPException(status_code=422, detail="A valid property address is required.")
+
+    data = await get_full_property_data(req.address.strip())
+
+    if data["data_source"] == "none":
+        raise HTTPException(status_code=404, detail="Property not found. Try entering the full street address, city, state, and ZIP.")
+
+    prop = data["property_record"] or {}
+    value = data["value_estimate"] or {}
+    rent = data["rent_estimate"] or {}
+    subject = value.get("subjectProperty", {})
+
+    # Extract the most recent tax assessment
+    tax_assessments = prop.get("taxAssessments", {})
+    property_taxes = prop.get("propertyTaxes", {})
+    latest_tax_year = max(property_taxes.keys()) if property_taxes else None
+    annual_taxes = property_taxes.get(latest_tax_year, {}).get("total", 0) if latest_tax_year else 0
+
+    # Estimate insurance from value (~0.5% of AVM)
+    avm_price = value.get("price", 0)
+    estimated_insurance = round(avm_price * 0.005) if avm_price else 0
+
+    # Format comparable sales
+    sale_comps = []
+    for comp in value.get("comparables", [])[:5]:
+        sale_comps.append({
+            "address": comp.get("formattedAddress", ""),
+            "price": comp.get("price"),
+            "bedrooms": comp.get("bedrooms"),
+            "bathrooms": comp.get("bathrooms"),
+            "sqft": comp.get("squareFootage"),
+            "distance_miles": round(comp.get("distance", 0), 2),
+            "correlation": round(comp.get("correlation", 0), 4),
+        })
+
+    return {
+        "address": subject.get("formattedAddress") or prop.get("formattedAddress") or req.address,
+        "property_type": subject.get("propertyType") or prop.get("propertyType", "Single Family"),
+        "bedrooms": subject.get("bedrooms") or prop.get("bedrooms"),
+        "bathrooms": subject.get("bathrooms") or prop.get("bathrooms"),
+        "sqft": subject.get("squareFootage") or prop.get("squareFootage"),
+        "year_built": subject.get("yearBuilt") or prop.get("yearBuilt"),
+        "lot_size": prop.get("lotSize"),
+        "purchase_price": avm_price,
+        "price_range_low": value.get("priceRangeLow"),
+        "price_range_high": value.get("priceRangeHigh"),
+        "monthly_rent": rent.get("rent"),
+        "rent_range_low": rent.get("rentRangeLow"),
+        "rent_range_high": rent.get("rentRangeHigh"),
+        "annual_taxes": annual_taxes,
+        "estimated_insurance": estimated_insurance,
+        "last_sale_date": subject.get("lastSaleDate") or prop.get("lastSaleDate"),
+        "last_sale_price": subject.get("lastSalePrice") or prop.get("lastSalePrice"),
+        "comparables": sale_comps,
+        "data_source": "rentcast",
+    }

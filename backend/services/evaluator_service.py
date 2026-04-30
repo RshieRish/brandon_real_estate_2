@@ -1,4 +1,9 @@
 import httpx
+import logging
+
+from services.rentcast_service import get_value_estimate, get_property_record
+
+logger = logging.getLogger(__name__)
 
 
 MARKET_BASE_PPSF = {
@@ -215,8 +220,99 @@ def calculate_property_estimate(data: dict, geo: dict | None = None) -> dict:
         "confidence": confidence,
         "explanation": explanation,
         "key_factors": factors[:4],
+        "data_source": "heuristic_model",
+        "comparables": [],
     }
 
 
+def _format_comparables(comps_raw: list[dict]) -> list[dict]:
+    """Format RentCast comparable listings into a clean frontend-ready shape."""
+    formatted = []
+    for comp in (comps_raw or [])[:8]:
+        formatted.append({
+            "address": comp.get("formattedAddress", ""),
+            "price": comp.get("price"),
+            "bedrooms": comp.get("bedrooms"),
+            "bathrooms": comp.get("bathrooms"),
+            "sqft": comp.get("squareFootage"),
+            "year_built": comp.get("yearBuilt"),
+            "distance_miles": round(comp.get("distance", 0), 2),
+            "correlation": round(comp.get("correlation", 0), 4),
+            "days_on_market": comp.get("daysOnMarket"),
+            "status": comp.get("status", ""),
+            "listed_date": comp.get("listedDate"),
+        })
+    return formatted
+
+
 async def evaluate_property(data: dict, geo: dict | None = None) -> dict:
+    """
+    Try RentCast AVM first for real market data. Fall back to heuristic model.
+    """
+    address = data.get("address") or ""
+
+    if address:
+        try:
+            value_data = await get_value_estimate(address)
+            if value_data and "price" in value_data:
+                prop_data = await get_property_record(address)
+
+                # Build response from RentCast AVM
+                price = value_data["price"]
+                price_low = value_data.get("priceRangeLow", int(price * 0.9))
+                price_high = value_data.get("priceRangeHigh", int(price * 1.1))
+
+                # Build comparables
+                comps = _format_comparables(value_data.get("comparables", []))
+                num_comps = len(comps)
+
+                # Subject property details (auto-fill enrichment)
+                subject = value_data.get("subjectProperty", {})
+                prop_type = subject.get("propertyType", "Single Family")
+                sqft = subject.get("squareFootage") or (prop_data or {}).get("squareFootage")
+                bedrooms = subject.get("bedrooms") or (prop_data or {}).get("bedrooms")
+                bathrooms = subject.get("bathrooms") or (prop_data or {}).get("bathrooms")
+                year_built = subject.get("yearBuilt") or (prop_data or {}).get("yearBuilt")
+                formatted_addr = subject.get("formattedAddress", address)
+
+                # Key factors from real data
+                factors = [
+                    f"Based on {num_comps} comparable recent sales within the local market area.",
+                    f"The estimated value for this {prop_type.lower()} is ${price:,.0f}.",
+                ]
+                if sqft:
+                    ppsf = round(price / sqft)
+                    factors.append(f"At {sqft:,} sq ft, that's approximately ${ppsf}/sq ft.")
+                if year_built:
+                    factors.append(f"Built in {year_built} — age affects buyer demand and maintenance expectations.")
+                if bedrooms and bathrooms:
+                    factors.append(f"{bedrooms} bed / {bathrooms} bath layout compared against similar local properties.")
+
+                explanation = (
+                    f"This estimate is powered by an Automated Valuation Model analyzing "
+                    f"{num_comps} comparable properties sold recently near {formatted_addr}. "
+                    f"For a precise listing price strategy, book a valuation meeting with Brandon."
+                )
+
+                return {
+                    "range_low": int(price_low),
+                    "range_high": int(price_high),
+                    "confidence": "High",
+                    "explanation": explanation,
+                    "key_factors": factors[:5],
+                    "data_source": "rentcast_avm",
+                    "comparables": comps,
+                    "subject_property": {
+                        "address": formatted_addr,
+                        "bedrooms": bedrooms,
+                        "bathrooms": bathrooms,
+                        "sqft": sqft,
+                        "year_built": year_built,
+                        "property_type": prop_type,
+                    },
+                }
+        except Exception as exc:
+            logger.error("RentCast evaluator lookup failed, falling back to heuristic: %s", exc)
+
+    # Fallback to heuristic model
     return calculate_property_estimate(data, geo=geo)

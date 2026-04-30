@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     GOOGLE_CALENDAR_REFRESH_TOKEN: str = ""
     BRANDON_DEFAULT_LOCATION: str = "101 Broadway Rd #21, Dracut, MA 01826"
     TRAVEL_BUFFER_MINUTES: int = 10
+    RENTCAST_API_KEY: str = ""
 
 
 settings = Settings()

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
+import { MagnifyingGlass, MapPin, SpinnerGap, CheckCircle, Warning } from '@phosphor-icons/react';
 import { calculateMetrics, type InvestorInputs } from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
 import AnalysisResults from './AnalysisResults';
@@ -34,6 +35,35 @@ const POSITIVE_FIELDS: Array<keyof InvestorInputs> = [
   'loanTermYears',
 ];
 
+interface LookupResult {
+  address: string;
+  property_type: string;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  sqft: number | null;
+  year_built: number | null;
+  purchase_price: number;
+  price_range_low: number | null;
+  price_range_high: number | null;
+  monthly_rent: number | null;
+  rent_range_low: number | null;
+  rent_range_high: number | null;
+  annual_taxes: number;
+  estimated_insurance: number;
+  last_sale_date: string | null;
+  last_sale_price: number | null;
+  comparables: Array<{
+    address: string;
+    price: number;
+    bedrooms: number;
+    bathrooms: number;
+    sqft: number;
+    distance_miles: number;
+    correlation: number;
+  }>;
+  data_source: string;
+}
+
 function parseInvestorInputs(values: InvestorInputValues): InvestorInputs | null {
   const parsed = Object.entries(values).reduce<Partial<InvestorInputs>>((acc, [key, value]) => {
     const typedKey = key as keyof InvestorInputs;
@@ -59,9 +89,10 @@ interface InputFieldProps {
   prefix?: string;
   suffix?: string;
   step?: number;
+  highlight?: boolean;
 }
 
-function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: InputFieldProps) {
+function InputField({ label, name, value, onChange, prefix, suffix, step = 1, highlight }: InputFieldProps) {
   const displayValue = useMemo(() => {
     if (!value && value !== '0') return value;
     const parts = value.toString().split('.');
@@ -97,9 +128,10 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1 }: 
             onChange(name, raw);
           }}
           className={`
-            w-full bg-dark-surface border border-dark-border text-white text-sm
+            w-full bg-dark-surface border text-white text-sm
             ${prefix ? 'pl-7' : 'pl-4'} ${suffix ? 'pr-10' : 'pr-4'} py-2.5
-            focus:outline-none focus:border-gold transition-colors duration-200
+            focus:outline-none focus:border-gold transition-all duration-300
+            ${highlight ? 'border-gold/50 bg-gold/5' : 'border-dark-border'}
           `}
         />
         {suffix && (
@@ -116,6 +148,13 @@ export default function InvestorCalculator() {
   const [inputs, setInputs] = useState<InvestorInputValues>(EMPTY_INPUTS);
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
   const engagementRetryTimeoutRef = useRef<number | null>(null);
+
+  // Address lookup state
+  const [lookupAddress, setLookupAddress] = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [filledFields, setFilledFields] = useState<Set<keyof InvestorInputs>>(new Set());
 
   const parsedInputs = useMemo(() => parseInvestorInputs(inputs), [inputs]);
   const metrics = useMemo(
@@ -166,6 +205,63 @@ export default function InvestorCalculator() {
   function handleChange(name: keyof InvestorInputs, value: string) {
     setInputs((prev) => ({ ...prev, [name]: value }));
     setFullReport(null);
+    // Clear highlight after manual edit
+    setFilledFields((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  }
+
+  async function handleLookup() {
+    if (!lookupAddress.trim()) return;
+    setLookupLoading(true);
+    setLookupError(null);
+    setLookupResult(null);
+    setFilledFields(new Set());
+
+    try {
+      const result = await apiPost<LookupResult>('/api/v1/investor/lookup', {
+        address: lookupAddress.trim(),
+      });
+      setLookupResult(result);
+
+      // Auto-fill fields from lookup
+      const newInputs = { ...inputs };
+      const filled = new Set<keyof InvestorInputs>();
+
+      if (result.purchase_price) {
+        newInputs.purchasePrice = String(result.purchase_price);
+        newInputs.arv = String(result.purchase_price); // ARV defaults to current value
+        filled.add('purchasePrice');
+        filled.add('arv');
+      }
+      if (result.monthly_rent) {
+        newInputs.rentalIncome = String(result.monthly_rent);
+        filled.add('rentalIncome');
+      }
+      if (result.annual_taxes) {
+        newInputs.propertyTax = String(result.annual_taxes);
+        filled.add('propertyTax');
+      }
+      if (result.estimated_insurance) {
+        newInputs.insurance = String(result.estimated_insurance);
+        filled.add('insurance');
+      }
+
+      setInputs(newInputs);
+      setFilledFields(filled);
+      setFullReport(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Lookup failed';
+      if (msg.includes('404')) {
+        setLookupError('Property not found. Try the full address with city, state, and ZIP.');
+      } else {
+        setLookupError('Could not look up this property. Try entering your numbers manually.');
+      }
+    } finally {
+      setLookupLoading(false);
+    }
   }
 
   async function handleUnlock(contact: InvestorLeadCapture) {
@@ -195,148 +291,256 @@ export default function InvestorCalculator() {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-8 lg:gap-12">
-      {/* ── LEFT: Inputs ── */}
+    <div className="space-y-8">
+      {/* ── Address Lookup Bar ── */}
       <motion.div
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
-        className="space-y-4"
+        className="glass border border-dark-border rounded-xl p-5 md:p-6"
       >
-        <div>
-          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-1">
-            Deal Parameters
+        <div className="flex items-center gap-2 mb-3">
+          <MapPin weight="fill" className="w-4 h-4 text-gold" />
+          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase">
+            Smart Property Lookup
           </p>
-          <h3 className="text-white font-black text-lg tracking-tight">
-            Enter Your Numbers
-          </h3>
+        </div>
+        <p className="text-white/50 text-sm font-light mb-4">
+          Enter a property address to auto-fill deal parameters from public records, tax data, and market comparables.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            value={lookupAddress}
+            onChange={(e) => setLookupAddress(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleLookup()}
+            placeholder="e.g. 50 Cheever Ave, Dracut, MA 01826"
+            className="flex-1 bg-dark-surface border border-dark-border text-white text-sm px-4 py-2.5 focus:outline-none focus:border-gold transition-colors duration-200 placeholder:text-white/25"
+          />
+          <button
+            onClick={handleLookup}
+            disabled={lookupLoading || !lookupAddress.trim()}
+            className="inline-flex items-center justify-center gap-2 bg-gold text-[#0a0a0a] font-semibold text-sm px-6 py-2.5 hover:bg-gold/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            {lookupLoading ? (
+              <SpinnerGap weight="bold" className="w-4 h-4 animate-spin" />
+            ) : (
+              <MagnifyingGlass weight="bold" className="w-4 h-4" />
+            )}
+            {lookupLoading ? 'Looking Up...' : 'Look Up'}
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <InputField
-            label="Purchase Price"
-            name="purchasePrice"
-            value={inputs.purchasePrice}
-            onChange={handleChange}
-            prefix="$"
-            step={1000}
-          />
-          <InputField
-            label="Rehab / Renovation Cost"
-            name="rehabCost"
-            value={inputs.rehabCost}
-            onChange={handleChange}
-            prefix="$"
-            step={1000}
-          />
-          <InputField
-            label="After-Repair Value (ARV)"
-            name="arv"
-            value={inputs.arv}
-            onChange={handleChange}
-            prefix="$"
-            step={1000}
-          />
-          <InputField
-            label="Hold Period"
-            name="holdMonths"
-            value={inputs.holdMonths}
-            onChange={handleChange}
-            suffix="mo"
-            step={1}
-          />
-          <InputField
-            label="Monthly Rental Income"
-            name="rentalIncome"
-            value={inputs.rentalIncome}
-            onChange={handleChange}
-            prefix="$"
-            step={100}
-          />
-          <InputField
-            label="Property Tax / Year"
-            name="propertyTax"
-            value={inputs.propertyTax}
-            onChange={handleChange}
-            prefix="$"
-            step={100}
-          />
-          <InputField
-            label="Annual Insurance"
-            name="insurance"
-            value={inputs.insurance}
-            onChange={handleChange}
-            prefix="$"
-            step={100}
-          />
-          <InputField
-            label="Down Payment %"
-            name="downPaymentPct"
-            value={inputs.downPaymentPct}
-            onChange={handleChange}
-            suffix="%"
-            step={0.01}
-          />
-          <InputField
-            label="Interest Rate"
-            name="interestRate"
-            value={inputs.interestRate}
-            onChange={handleChange}
-            suffix="%"
-            step={0.001}
-          />
-          <InputField
-            label="Loan Term"
-            name="loanTermYears"
-            value={inputs.loanTermYears}
-            onChange={handleChange}
-            suffix="yr"
-            step={1}
-          />
-        </div>
-      </motion.div>
-
-      {/* ── RIGHT: Preview + Gate ── */}
-      <motion.div
-        initial={{ opacity: 0, x: 20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ type: 'spring' as const, stiffness: 100, damping: 20, delay: 0.1 }}
-        className="space-y-6"
-      >
-        <div>
-          <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-1">
-            Instant Snapshot
-          </p>
-          <h3 className="text-white font-black text-lg tracking-tight mb-3">
-            Live Numbers As You Model The Deal
-          </h3>
-          <p className="text-white/50 text-sm font-light mb-5">
-            These headline numbers update immediately. The gated step below is only for the deeper AI report.
-          </p>
-          {metrics ? (
-            <AnalysisResults metrics={metrics} />
-          ) : (
-            <div className="glass border border-dark-border rounded-xl p-6 md:p-8 text-center">
-              <p className="text-gold text-xs font-semibold tracking-[0.18em] uppercase mb-3">
-                Waiting On Deal Inputs
+        {/* Lookup result summary */}
+        <AnimatePresence>
+          {lookupResult && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.3 }}
+              className="mt-4 pt-4 border-t border-dark-border"
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle weight="fill" className="w-4 h-4 text-green-400" />
+                <p className="text-white text-sm font-medium">
+                  {lookupResult.address}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <span className="text-white/40 uppercase tracking-wider">Est. Value</span>
+                  <p className="text-gold font-bold text-sm mt-0.5">
+                    ${lookupResult.purchase_price?.toLocaleString() || '—'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/40 uppercase tracking-wider">Est. Rent</span>
+                  <p className="text-gold font-bold text-sm mt-0.5">
+                    ${lookupResult.monthly_rent?.toLocaleString() || '—'}/mo
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/40 uppercase tracking-wider">Taxes</span>
+                  <p className="text-white font-medium text-sm mt-0.5">
+                    ${lookupResult.annual_taxes?.toLocaleString() || '—'}/yr
+                  </p>
+                </div>
+                <div>
+                  <span className="text-white/40 uppercase tracking-wider">Details</span>
+                  <p className="text-white font-medium text-sm mt-0.5">
+                    {lookupResult.bedrooms || '?'}bd / {lookupResult.bathrooms || '?'}ba · {lookupResult.sqft?.toLocaleString() || '?'} sqft
+                  </p>
+                </div>
+              </div>
+              <p className="text-white/30 text-[10px] mt-3 tracking-wide uppercase">
+                Data sourced from public records · Fields auto-filled below
               </p>
-              <h4 className="text-white font-black text-lg tracking-tight mb-3">
-                Your snapshot will appear here
-              </h4>
-              <p className="text-white/45 text-sm font-light leading-relaxed max-w-sm mx-auto">
-                Fill out the deal parameters on the left to reveal the instant numbers. The full AI report still unlocks only after email capture.
-              </p>
-            </div>
+            </motion.div>
           )}
-        </div>
-
-        {metrics && (
-          <MeetingGate
-            fullReport={fullReport}
-            onUnlock={handleUnlock}
-          />
-        )}
+          {lookupError && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-4 pt-4 border-t border-dark-border flex items-start gap-2"
+            >
+              <Warning weight="fill" className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-amber-400/80 text-sm">{lookupError}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
+
+      {/* ── Main Calculator Grid ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-8 lg:gap-12">
+        {/* ── LEFT: Inputs ── */}
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ type: 'spring' as const, stiffness: 100, damping: 20 }}
+          className="space-y-4"
+        >
+          <div>
+            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-1">
+              Deal Parameters
+            </p>
+            <h3 className="text-white font-black text-lg tracking-tight">
+              Enter Your Numbers
+            </h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField
+              label="Purchase Price"
+              name="purchasePrice"
+              value={inputs.purchasePrice}
+              onChange={handleChange}
+              prefix="$"
+              step={1000}
+              highlight={filledFields.has('purchasePrice')}
+            />
+            <InputField
+              label="Rehab / Renovation Cost"
+              name="rehabCost"
+              value={inputs.rehabCost}
+              onChange={handleChange}
+              prefix="$"
+              step={1000}
+            />
+            <InputField
+              label="After-Repair Value (ARV)"
+              name="arv"
+              value={inputs.arv}
+              onChange={handleChange}
+              prefix="$"
+              step={1000}
+              highlight={filledFields.has('arv')}
+            />
+            <InputField
+              label="Hold Period"
+              name="holdMonths"
+              value={inputs.holdMonths}
+              onChange={handleChange}
+              suffix="mo"
+              step={1}
+            />
+            <InputField
+              label="Monthly Rental Income"
+              name="rentalIncome"
+              value={inputs.rentalIncome}
+              onChange={handleChange}
+              prefix="$"
+              step={100}
+              highlight={filledFields.has('rentalIncome')}
+            />
+            <InputField
+              label="Property Tax / Year"
+              name="propertyTax"
+              value={inputs.propertyTax}
+              onChange={handleChange}
+              prefix="$"
+              step={100}
+              highlight={filledFields.has('propertyTax')}
+            />
+            <InputField
+              label="Annual Insurance"
+              name="insurance"
+              value={inputs.insurance}
+              onChange={handleChange}
+              prefix="$"
+              step={100}
+              highlight={filledFields.has('insurance')}
+            />
+            <InputField
+              label="Down Payment %"
+              name="downPaymentPct"
+              value={inputs.downPaymentPct}
+              onChange={handleChange}
+              suffix="%"
+              step={0.01}
+            />
+            <InputField
+              label="Interest Rate"
+              name="interestRate"
+              value={inputs.interestRate}
+              onChange={handleChange}
+              suffix="%"
+              step={0.001}
+            />
+            <InputField
+              label="Loan Term"
+              name="loanTermYears"
+              value={inputs.loanTermYears}
+              onChange={handleChange}
+              suffix="yr"
+              step={1}
+            />
+          </div>
+        </motion.div>
+
+        {/* ── RIGHT: Preview + Gate ── */}
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ type: 'spring' as const, stiffness: 100, damping: 20, delay: 0.1 }}
+          className="space-y-6"
+        >
+          <div>
+            <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-1">
+              Instant Snapshot
+            </p>
+            <h3 className="text-white font-black text-lg tracking-tight mb-3">
+              Live Numbers As You Model The Deal
+            </h3>
+            <p className="text-white/50 text-sm font-light mb-5">
+              These headline numbers update immediately. The gated step below is only for the deeper AI report.
+            </p>
+            {metrics ? (
+              <AnalysisResults metrics={metrics} />
+            ) : (
+              <div className="glass border border-dark-border rounded-xl p-6 md:p-8 text-center">
+                <p className="text-gold text-xs font-semibold tracking-[0.18em] uppercase mb-3">
+                  Waiting On Deal Inputs
+                </p>
+                <h4 className="text-white font-black text-lg tracking-tight mb-3">
+                  Your snapshot will appear here
+                </h4>
+                <p className="text-white/45 text-sm font-light leading-relaxed max-w-sm mx-auto">
+                  Fill out the deal parameters on the left to reveal the instant numbers. The full AI report still unlocks only after email capture.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {metrics && (
+            <MeetingGate
+              fullReport={fullReport}
+              onUnlock={handleUnlock}
+            />
+          )}
+        </motion.div>
+      </div>
     </div>
   );
 }

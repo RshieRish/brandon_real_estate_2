@@ -9,6 +9,8 @@ import {
   Warning,
   Phone,
   ArrowCounterClockwise,
+  MapPin,
+  Buildings,
 } from '@phosphor-icons/react';
 import { apiPost } from '@/lib/api';
 import CTAButton from '@/components/shared/CTAButton';
@@ -44,6 +46,28 @@ interface EvaluatorResult {
   explanation: string;
   key_factors: string[];
   disclaimer: string;
+  data_source?: 'rentcast_avm' | 'heuristic_model';
+  comparables?: Array<{
+    address: string;
+    price: number;
+    bedrooms: number;
+    bathrooms: number;
+    sqft: number;
+    year_built: number;
+    distance_miles: number;
+    correlation: number;
+    days_on_market: number;
+    status: string;
+    listed_date: string;
+  }>;
+  subject_property?: {
+    address: string;
+    bedrooms: number;
+    bathrooms: number;
+    sqft: number;
+    year_built: number;
+    property_type: string;
+  };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -515,6 +539,68 @@ export default function PropertyEvaluator() {
             {/* Disclaimer */}
             {result.disclaimer && (
               <p className="text-white/30 text-xs italic leading-relaxed">{result.disclaimer}</p>
+            )}
+
+            {/* Data source badge */}
+            {result.data_source === 'rentcast_avm' && (
+              <div className="flex items-center gap-2">
+                <Buildings weight="fill" className="w-3.5 h-3.5 text-gold/60" />
+                <span className="text-gold/60 text-[10px] font-semibold tracking-[0.15em] uppercase">
+                  Powered by market data &middot; {result.comparables?.length || 0} comparable sales analyzed
+                </span>
+              </div>
+            )}
+
+            {/* Comparable Sales */}
+            {result.comparables && result.comparables.length > 0 && (
+              <div>
+                <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
+                  Comparable Sales
+                </p>
+                <div className="space-y-2">
+                  {result.comparables.map((comp, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.06, type: 'spring', stiffness: 100, damping: 20 }}
+                      className="glass border border-dark-border p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-0 sm:justify-between"
+                    >
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <MapPin weight="fill" className="w-4 h-4 text-gold/60 mt-0.5 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-white text-sm font-medium truncate">{comp.address}</p>
+                          <p className="text-white/40 text-xs mt-0.5">
+                            {comp.bedrooms}bd / {comp.bathrooms}ba
+                            {comp.sqft ? ` · ${comp.sqft.toLocaleString()} sqft` : ''}
+                            {comp.year_built ? ` · Built ${comp.year_built}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 sm:gap-6 pl-7 sm:pl-0">
+                        <div className="text-right">
+                          <p className="text-gold font-bold text-sm">
+                            {comp.price ? formatCurrency(comp.price) : '—'}
+                          </p>
+                          <p className="text-white/30 text-[10px] uppercase tracking-wider">
+                            {comp.distance_miles} mi away
+                          </p>
+                        </div>
+                        {comp.correlation > 0 && (
+                          <div className="text-right">
+                            <p className="text-emerald-400 font-bold text-xs">
+                              {Math.round(comp.correlation * 100)}%
+                            </p>
+                            <p className="text-white/30 text-[10px] uppercase tracking-wider">
+                              Match
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
             )}
 
             {result.calculation_id > 0 && (
