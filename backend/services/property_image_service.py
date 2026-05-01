@@ -64,16 +64,18 @@ def get_map_thumbnail_url(
     height: int = 400,
 ) -> str:
     """
-    Build a static map thumbnail URL using free OpenStreetMap tiles.
-    This generates a URL for a static tile image centered on the property.
+    Build a static map thumbnail URL.
+
+    Uses the direct OSM tile server (tile.openstreetmap.org) which is always
+    available. Computes the center tile x/y from lat/lng using Slippy Map math.
+    Returns a single 256x256 tile centered on the property.
     """
-    # Use the free OSM static map service
-    return (
-        f"https://staticmap.openstreetmap.de/staticmap.php"
-        f"?center={lat},{lng}&zoom={zoom}&size={width}x{height}"
-        f"&markers={lat},{lng},red-pushpin"
-        f"&maptype=mapnik"
-    )
+    import math
+    n = 2 ** zoom
+    x = int((lng + 180.0) / 360.0 * n)
+    lat_rad = math.radians(lat)
+    y = int((1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
+    return f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png"
 
 
 async def get_property_image_url(
