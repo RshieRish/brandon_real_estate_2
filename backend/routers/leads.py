@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -42,7 +44,7 @@ async def create_lead(
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
 
     # Fire-and-forget: push to Zapier → KW Command in the background
     background_tasks.add_task(

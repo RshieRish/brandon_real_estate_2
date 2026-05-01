@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -189,5 +191,5 @@ async def register_for_funnel(slug: str, req: RegisterRequest, db: AsyncSession 
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     return {"ok": True, "message": "Registered successfully"}

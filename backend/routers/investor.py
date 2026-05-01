@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Optional
 
@@ -124,7 +125,7 @@ async def full_analysis(inp: InvestorInputs, db: AsyncSession = Depends(get_db))
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     ai_report = await generate_investor_analysis(inp.model_dump(), metrics)
     return {"metrics": metrics, "report": ai_report}
 
@@ -178,7 +179,7 @@ async def track_engagement(
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     return {"queued": True}
 
 

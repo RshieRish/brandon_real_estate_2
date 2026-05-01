@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Literal
@@ -91,7 +93,8 @@ async def evaluate(req: EvaluatorRequest, db: AsyncSession = Depends(get_db)):
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    # Fire-and-forget: don't block response waiting for email delivery
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     result["calculation_id"] = calculation_event.id
     return result
 
@@ -130,5 +133,5 @@ async def submit_rating(
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     return {"ok": True}

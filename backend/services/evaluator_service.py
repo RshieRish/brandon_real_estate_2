@@ -91,15 +91,21 @@ PROPERTY_LABELS = {
 
 async def geocode_address(address: str) -> dict:
     """Basic geocode using Nominatim (free)."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": address, "format": "json", "limit": 1},
-            headers={"User-Agent": "SoldWithSweeney/1.0"}
-        )
-        results = resp.json()
-        if results:
-            return {"lat": results[0]["lat"], "lon": results[0]["lon"], "display": results[0]["display_name"]}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": address, "format": "json", "limit": 1},
+                headers={"User-Agent": "SoldWithSweeney/1.0"}
+            )
+            if resp.status_code != 200:
+                logger.warning("Nominatim returned status %d for %s", resp.status_code, address)
+                return {}
+            results = resp.json()
+            if results:
+                return {"lat": results[0]["lat"], "lon": results[0]["lon"], "display": results[0]["display_name"]}
+    except Exception as exc:
+        logger.warning("Geocode failed for %s: %s", address, exc)
     return {}
 
 

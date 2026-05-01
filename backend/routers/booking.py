@@ -1,5 +1,6 @@
 """Booking router — travel-time-aware scheduling via Google Calendar + Maps."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -370,6 +371,6 @@ async def create_booking(data: BookingCreate, db: AsyncSession = Depends(get_db)
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
 
     return booking

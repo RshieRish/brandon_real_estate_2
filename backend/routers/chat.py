@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Literal
@@ -84,5 +86,5 @@ async def capture_lead_from_chat(req: CaptureLeadRequest, db: AsyncSession = Dep
         },
     )
     await db.commit()
-    await run_notification_retry_pass(limit=5)
+    asyncio.create_task(run_notification_retry_pass(limit=5))
     return {"id": lead.id, "message": "Lead captured"}
