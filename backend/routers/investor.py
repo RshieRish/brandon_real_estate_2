@@ -12,6 +12,7 @@ from models.lead import Lead
 from services.notification_service import enqueue_notification, run_notification_retry_pass
 from services.investor_service import generate_investor_analysis
 from services.rentcast_service import get_full_property_data
+from services.property_image_service import get_map_thumbnail_url, get_streetview_url
 
 router = APIRouter()
 
@@ -214,14 +215,27 @@ async def lookup_property(req: LookupRequest):
     # Format comparable sales
     sale_comps = []
     for comp in value.get("comparables", [])[:5]:
+        comp_lat = comp.get("latitude")
+        comp_lng = comp.get("longitude")
+        comp_addr = comp.get("formattedAddress", "")
+
+        # Generate property image URL
+        image_url = None
+        sv_url = get_streetview_url(comp_addr) if comp_addr else None
+        if sv_url:
+            image_url = sv_url
+        elif comp_lat and comp_lng:
+            image_url = get_map_thumbnail_url(comp_lat, comp_lng)
+
         sale_comps.append({
-            "address": comp.get("formattedAddress", ""),
+            "address": comp_addr,
             "price": comp.get("price"),
             "bedrooms": comp.get("bedrooms"),
             "bathrooms": comp.get("bathrooms"),
             "sqft": comp.get("squareFootage"),
             "distance_miles": round(comp.get("distance", 0), 2),
             "correlation": round(comp.get("correlation", 0), 4),
+            "image_url": image_url,
         })
 
     return {

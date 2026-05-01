@@ -2,6 +2,7 @@ import httpx
 import logging
 
 from services.rentcast_service import get_value_estimate, get_property_record
+from services.property_image_service import get_map_thumbnail_url, get_streetview_url
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +230,20 @@ def _format_comparables(comps_raw: list[dict]) -> list[dict]:
     """Format RentCast comparable listings into a clean frontend-ready shape."""
     formatted = []
     for comp in (comps_raw or [])[:8]:
+        lat = comp.get("latitude")
+        lng = comp.get("longitude")
+        address = comp.get("formattedAddress", "")
+
+        # Generate property image URL
+        image_url = None
+        streetview_url = get_streetview_url(address) if address else None
+        if streetview_url:
+            image_url = streetview_url
+        elif lat and lng:
+            image_url = get_map_thumbnail_url(lat, lng)
+
         formatted.append({
-            "address": comp.get("formattedAddress", ""),
+            "address": address,
             "price": comp.get("price"),
             "bedrooms": comp.get("bedrooms"),
             "bathrooms": comp.get("bathrooms"),
@@ -241,6 +254,9 @@ def _format_comparables(comps_raw: list[dict]) -> list[dict]:
             "days_on_market": comp.get("daysOnMarket"),
             "status": comp.get("status", ""),
             "listed_date": comp.get("listedDate"),
+            "image_url": image_url,
+            "latitude": lat,
+            "longitude": lng,
         })
     return formatted
 

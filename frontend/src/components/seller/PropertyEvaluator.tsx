@@ -59,6 +59,9 @@ interface EvaluatorResult {
     days_on_market: number;
     status: string;
     listed_date: string;
+    image_url?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
   }>;
   subject_property?: {
     address: string;
@@ -557,45 +560,64 @@ export default function PropertyEvaluator() {
                 <p className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
                   Comparable Sales
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {result.comparables.map((comp, i) => (
                     <motion.div
                       key={i}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.06, type: 'spring', stiffness: 100, damping: 20 }}
-                      className="glass border border-dark-border p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-0 sm:justify-between"
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.07, type: 'spring', stiffness: 100, damping: 20 }}
+                      className="glass border border-dark-border overflow-hidden flex flex-col sm:flex-row"
                     >
-                      <div className="flex items-start gap-3 min-w-0 flex-1">
-                        <MapPin weight="fill" className="w-4 h-4 text-gold/60 mt-0.5 flex-shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-white text-sm font-medium truncate">{comp.address}</p>
-                          <p className="text-white/40 text-xs mt-0.5">
-                            {comp.bedrooms}bd / {comp.bathrooms}ba
-                            {comp.sqft ? ` · ${comp.sqft.toLocaleString()} sqft` : ''}
-                            {comp.year_built ? ` · Built ${comp.year_built}` : ''}
-                          </p>
+                      {/* Property Image */}
+                      {comp.image_url && (
+                        <div className="sm:w-[180px] h-[140px] sm:h-auto flex-shrink-0 relative overflow-hidden bg-dark-surface">
+                          <img
+                            src={comp.image_url}
+                            alt={`Property at ${comp.address}`}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.style.display = 'none';
+                            }}
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent to-[#0a0a0a]/40 pointer-events-none" />
                         </div>
-                      </div>
-                      <div className="flex items-center gap-4 sm:gap-6 pl-7 sm:pl-0">
-                        <div className="text-right">
-                          <p className="text-gold font-bold text-sm">
-                            {comp.price ? formatCurrency(comp.price) : '—'}
-                          </p>
-                          <p className="text-white/30 text-[10px] uppercase tracking-wider">
-                            {comp.distance_miles} mi away
-                          </p>
-                        </div>
-                        {comp.correlation > 0 && (
-                          <div className="text-right">
-                            <p className="text-emerald-400 font-bold text-xs">
-                              {Math.round(comp.correlation * 100)}%
-                            </p>
-                            <p className="text-white/30 text-[10px] uppercase tracking-wider">
-                              Match
+                      )}
+                      {/* Details */}
+                      <div className="flex-1 p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-0 sm:justify-between">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
+                          <MapPin weight="fill" className="w-4 h-4 text-gold/60 mt-0.5 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-white text-sm font-medium truncate">{comp.address}</p>
+                            <p className="text-white/40 text-xs mt-0.5">
+                              {comp.bedrooms}bd / {comp.bathrooms}ba
+                              {comp.sqft ? ` · ${comp.sqft.toLocaleString()} sqft` : ''}
+                              {comp.year_built ? ` · Built ${comp.year_built}` : ''}
                             </p>
                           </div>
-                        )}
+                        </div>
+                        <div className="flex items-center gap-4 sm:gap-6 pl-7 sm:pl-0">
+                          <div className="text-right">
+                            <p className="text-gold font-bold text-sm">
+                              {comp.price ? formatCurrency(comp.price) : '—'}
+                            </p>
+                            <p className="text-white/30 text-[10px] uppercase tracking-wider">
+                              {comp.distance_miles} mi away
+                            </p>
+                          </div>
+                          {comp.correlation > 0 && (
+                            <div className="text-right">
+                              <p className="text-emerald-400 font-bold text-xs">
+                                {Math.round(comp.correlation * 100)}%
+                              </p>
+                              <p className="text-white/30 text-[10px] uppercase tracking-wider">
+                                Match
+                              </p>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </motion.div>
                   ))}

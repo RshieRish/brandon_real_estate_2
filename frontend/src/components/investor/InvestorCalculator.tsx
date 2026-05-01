@@ -60,6 +60,7 @@ interface LookupResult {
     sqft: number;
     distance_miles: number;
     correlation: number;
+    image_url?: string | null;
   }>;
   data_source: string;
 }
