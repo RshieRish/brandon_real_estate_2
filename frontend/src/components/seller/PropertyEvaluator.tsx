@@ -15,6 +15,7 @@ import {
 import { apiPost } from '@/lib/api';
 import CTAButton from '@/components/shared/CTAButton';
 import BookBrandonCTA from '@/components/shared/BookBrandonCTA';
+import AddressAutocomplete from '@/components/shared/AddressAutocomplete';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -284,11 +285,10 @@ export default function PropertyEvaluator() {
               </p>
               <div className="grid grid-cols-1 gap-4">
                 <InputField label="Property Address" required>
-                  <input
-                    type="text"
+                  <AddressAutocomplete
                     value={form.address}
-                    onChange={(e) => setField('address', e.target.value)}
-                    placeholder="123 Main St, Nashua, NH 03060"
+                    onChange={(val) => setField('address', val)}
+                    placeholder="Start typing an address..."
                     required
                     className={inputClass}
                   />

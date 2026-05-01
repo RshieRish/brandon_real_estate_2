@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MagnifyingGlass, MapPin, SpinnerGap, CheckCircle, Warning } from '@phosphor-icons/react';
 import { calculateMetrics, type InvestorInputs } from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
+import AddressAutocomplete from '@/components/shared/AddressAutocomplete';
 import AnalysisResults from './AnalysisResults';
 import MeetingGate from './MeetingGate';
 import type {
@@ -310,15 +311,24 @@ export default function InvestorCalculator() {
           Enter a property address to auto-fill deal parameters from public records, tax data, and market comparables.
         </p>
         <div className="flex flex-col sm:flex-row gap-3">
-          <input
-            type="text"
-            value={lookupAddress}
-            onChange={(e) => setLookupAddress(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleLookup()}
-            placeholder="e.g. 50 Cheever Ave, Dracut, MA 01826"
-            className="flex-1 bg-dark-surface border border-dark-border text-white text-sm px-4 py-2.5 focus:outline-none focus:border-gold transition-colors duration-200 placeholder:text-white/25"
-          />
+          <div className="flex-1">
+            <AddressAutocomplete
+              value={lookupAddress}
+              onChange={setLookupAddress}
+              onSelect={(suggestion) => {
+                setLookupAddress(suggestion.formatted_address);
+                // Auto-trigger lookup after selecting from dropdown
+                setTimeout(() => {
+                  const btn = document.getElementById('investor-lookup-btn');
+                  btn?.click();
+                }, 100);
+              }}
+              placeholder="Start typing an address..."
+              className="w-full bg-dark-surface border border-dark-border text-white text-sm px-4 py-2.5 focus:outline-none focus:border-gold transition-colors duration-200 placeholder:text-white/25"
+            />
+          </div>
           <button
+            id="investor-lookup-btn"
             onClick={handleLookup}
             disabled={lookupLoading || !lookupAddress.trim()}
             className="inline-flex items-center justify-center gap-2 bg-gold text-[#0a0a0a] font-semibold text-sm px-6 py-2.5 hover:bg-gold/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"

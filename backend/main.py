@@ -15,6 +15,7 @@ from routers import (
     crm,
     evaluator,
     funnels,
+    geocode,
     investor,
     leads,
 )
@@ -44,6 +45,7 @@ app.include_router(booking.router, prefix="/api/v1/booking", tags=["booking"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(content.router, prefix="/api/v1/content", tags=["content"])
 app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
+app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 
 
 async def _notification_retry_loop() -> None:
