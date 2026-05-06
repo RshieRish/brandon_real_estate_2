@@ -18,6 +18,7 @@ from routers import (
     geocode,
     investor,
     leads,
+    link_pack,
 )
 from services.notification_service import (
     NOTIFICATION_RETRY_INTERVAL_SECONDS,
@@ -39,6 +40,7 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(leads.router, prefix="/api/v1/leads", tags=["leads"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 app.include_router(funnels.router, prefix="/api/v1/funnels", tags=["funnels"])
+app.include_router(link_pack.router, prefix="/api/v1/link-pack", tags=["link-pack"])
 app.include_router(evaluator.router, prefix="/api/v1/evaluator", tags=["evaluator"])
 app.include_router(investor.router, prefix="/api/v1/investor", tags=["investor"])
 app.include_router(booking.router, prefix="/api/v1/booking", tags=["booking"])
