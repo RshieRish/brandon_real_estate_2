@@ -69,3 +69,18 @@ class ItemValidationTests(unittest.IsolatedAsyncioTestCase):
         fake_parent = LinkPackItem(id=5, kind="classic", title="not a group", position=0, animation="none", is_active=True)
         with self.assertRaises(Exception):
             _validate_item_invariants(ItemIn(kind="classic", title="x", parent_id=5), parent=fake_parent)
+
+
+class ReorderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reorder_assigns_sequential_positions(self):
+        from routers.link_pack import _apply_reorder
+        from models.link_pack import LinkPackItem
+
+        items = [
+            LinkPackItem(id=1, parent_id=None, position=0, kind="classic", title="a", animation="none", is_active=True),
+            LinkPackItem(id=2, parent_id=None, position=1, kind="classic", title="b", animation="none", is_active=True),
+            LinkPackItem(id=3, parent_id=None, position=2, kind="classic", title="c", animation="none", is_active=True),
+        ]
+        _apply_reorder(items, ordered_ids=[3, 1, 2])
+        positions = {it.id: it.position for it in items}
+        self.assertEqual(positions, {3: 0, 1: 1, 2: 2})

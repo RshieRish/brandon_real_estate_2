@@ -284,6 +284,37 @@ ALLOWED_PDF_MIMES = {"application/pdf"}
 MAX_PDF_SIZE = 10 * 1024 * 1024
 
 
+from schemas.link_pack import ReorderIn
+
+
+def _apply_reorder(items: list[LinkPackItem], ordered_ids: list[int]) -> None:
+    by_id = {it.id: it for it in items}
+    if set(ordered_ids) != set(by_id.keys()):
+        raise HTTPException(400, "ordered_ids must exactly match the items in this parent")
+    for new_pos, item_id in enumerate(ordered_ids):
+        by_id[item_id].position = new_pos
+
+
+@router.post("/items/reorder")
+async def reorder_items(
+    data: ReorderIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    stmt = select(LinkPackItem)
+    if data.parent_id is None:
+        stmt = stmt.where(LinkPackItem.parent_id.is_(None))
+    else:
+        stmt = stmt.where(LinkPackItem.parent_id == data.parent_id)
+    result = await db.execute(stmt)
+    items = list(result.scalars().all())
+    _apply_reorder(items, data.ordered_ids)
+    pack = await get_or_create_pack(db)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}
+
+
 @router.post("/items/{item_id}/thumbnail")
 async def upload_item_thumbnail(
     item_id: int,
