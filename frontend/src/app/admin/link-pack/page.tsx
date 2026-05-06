@@ -6,6 +6,7 @@ import Tabs from '@/components/admin/link-pack/Tabs';
 import StatusBar from '@/components/admin/link-pack/StatusBar';
 import ProfileTab from '@/components/admin/link-pack/ProfileTab';
 import SocialTab from '@/components/admin/link-pack/SocialTab';
+import ThemeTab from '@/components/admin/link-pack/ThemeTab';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -92,7 +93,13 @@ export default function LinkPackAdminPage() {
         )}
         {tab === 'social' && <SocialTab initial={draft.live.social} onSaved={refresh} />}
         {tab === 'links' && <p className="text-white/60 text-sm">Links tab — Task 31</p>}
-        {tab === 'theme' && <p className="text-white/60 text-sm">Theme tab — Task 30</p>}
+        {tab === 'theme' && (
+          <ThemeTab
+            initial={draft.live.theme}
+            backgroundImageUrl={draft.live.background_image_url}
+            onSaved={refresh}
+          />
+        )}
       </div>
     </div>
   );
