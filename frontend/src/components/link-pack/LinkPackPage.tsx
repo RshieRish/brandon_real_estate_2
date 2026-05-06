@@ -2,6 +2,7 @@ import type { LinkPackSnapshot } from '@/lib/link-pack/types';
 import { themeStyle } from '@/lib/link-pack/theme-css';
 import { imageUrl } from '@/lib/link-pack/api';
 import Avatar from './Avatar';
+import LinkPackSocialRow from './LinkPackSocialRow';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -55,6 +56,7 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
             {snapshot.profile.bio}
           </p>
         )}
+        <LinkPackSocialRow social={snapshot.social} />
       </div>
     </main>
   );
