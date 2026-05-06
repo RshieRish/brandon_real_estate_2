@@ -25,7 +25,7 @@ async def get_draft(
     _=Depends(require_admin),
 ):
     pack = await get_or_create_pack(db)
-    items_result = await db.execute(select(LinkPackItem))
+    items_result = await db.execute(select(LinkPackItem).where(LinkPackItem.link_pack_id == pack.id))
     items = list(items_result.scalars().all())
     snapshot = build_snapshot(pack, items)
     return {
