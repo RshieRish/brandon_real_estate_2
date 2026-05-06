@@ -47,31 +47,38 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
           1829px+ of content.
         */}
         {useImageBg && (
+          // Outer wrapper handles `position: fixed` + horizontal centering so
+          // the banner stays anchored to the viewport while content scrolls
+          // over it (matches Linktree). Inner div owns the bg image and the
+          // drift animation — keeping the animation's `transform` separate
+          // from the wrapper's centering `transform` so they don't conflict.
           <div
             aria-hidden
-            className="lp-banner-drift"
             style={{
-              position: 'absolute',
+              position: 'fixed',
               top: 0,
-              left: 0,
-              right: 0,
-              // 909px = Linktree's column height (matches their `100dvh`
-              // container). The source image has TWO gold-particle swooshes
-              // — one at the top of the image and one near the bottom — and
-              // a 909-tall banner shows both. Items render on top of the
-              // banner (z-index 1) starting after the bio/social row, so
-              // SWS AVAILABLE HOMES and the property card naturally overlap
-              // the lower portion of the banner image, exactly like Linktree.
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '100%',
+              maxWidth: 580,
               height: 909,
-              backgroundImage: `url(${bgUrl})`,
-              backgroundSize: 'cover',
-              backgroundPosition: '50% 0%',
-              backgroundRepeat: 'no-repeat',
               zIndex: -1,
               pointerEvents: 'none',
-              willChange: 'transform',
             }}
-          />
+          >
+            <div
+              className="lp-banner-drift"
+              style={{
+                width: '100%',
+                height: '100%',
+                backgroundImage: `url(${bgUrl})`,
+                backgroundSize: 'cover',
+                backgroundPosition: '50% 0%',
+                backgroundRepeat: 'no-repeat',
+                willChange: 'transform',
+              }}
+            />
+          </div>
         )}
         <Avatar
           photoUrl={imageUrl(snapshot.profile.photo_url)}
