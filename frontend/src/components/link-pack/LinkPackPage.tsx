@@ -5,6 +5,7 @@ import Avatar from './Avatar';
 import LinkPackSocialRow from './LinkPackSocialRow';
 import LinkPackButton from './LinkPackButton';
 import LinkPackThumbnailCard from './LinkPackThumbnailCard';
+import LinkPackGroup from './LinkPackGroup';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -62,7 +63,8 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
           {snapshot.items.filter(i => i.is_active).map(item => {
             if (item.kind === 'classic') return <LinkPackButton key={item.id} item={item} />;
             if (item.kind === 'thumbnail') return <LinkPackThumbnailCard key={item.id} item={item} />;
-            return null; // other kinds added in Tasks 21-22
+            if (item.kind === 'group') return <LinkPackGroup key={item.id} item={item} />;
+            return null; // other kinds added in Task 22
           })}
         </div>
         <LinkPackSocialRow social={snapshot.social} />
