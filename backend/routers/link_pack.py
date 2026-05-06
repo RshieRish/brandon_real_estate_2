@@ -1,6 +1,6 @@
 import base64
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,3 +134,46 @@ async def update_theme(
     pack.has_unpublished_changes = True
     await db.flush()
     return {"ok": True}
+
+
+ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
+
+async def _read_image(file: UploadFile) -> tuple[bytes, str]:
+    if file.content_type not in ALLOWED_IMAGE_MIMES:
+        raise HTTPException(400, f"Invalid image type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_MIMES))}")
+    data = await file.read()
+    if len(data) > MAX_IMAGE_SIZE:
+        raise HTTPException(400, "Image too large. Maximum 5MB.")
+    return data, file.content_type
+
+
+@router.post("/profile-photo")
+async def upload_profile_photo(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    data, mime = await _read_image(file)
+    pack = await get_or_create_pack(db)
+    pack.profile_photo_data = data
+    pack.profile_photo_mime = mime
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True, "url": "/api/v1/link-pack/images/profile"}
+
+
+@router.post("/background-image")
+async def upload_background_image(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    data, mime = await _read_image(file)
+    pack = await get_or_create_pack(db)
+    pack.background_image_data = data
+    pack.background_image_mime = mime
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True, "url": "/api/v1/link-pack/images/background"}
