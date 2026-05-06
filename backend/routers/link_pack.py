@@ -376,3 +376,105 @@ async def upload_gated_file(
     pack.has_unpublished_changes = True
     await db.flush()
     return {"ok": True, "filename": item.gated_filename}
+
+
+import asyncio
+import json as _json
+
+from models.analytics_event import AnalyticsEvent
+from models.lead import Lead
+from schemas.link_pack import EmailGateSubmit
+from services.link_pack_service import mint_gate_token, verify_gate_token
+from services.notification_service import enqueue_notification, run_notification_retry_pass
+
+
+@router.post("/items/{item_id}/track-click")
+async def track_click(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    item.click_count = (item.click_count or 0) + 1
+    db.add(AnalyticsEvent(
+        event_type="link_pack_click",
+        metadata_json=_json.dumps({"item_id": item.id, "title": item.title, "url": item.url}),
+    ))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/items/{item_id}/email-gate")
+async def submit_email_gate(
+    item_id: int,
+    data: EmailGateSubmit,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item or item.kind != "email_gate":
+        raise HTTPException(404, "Email-gate item not found")
+    if not item.gated_file_data:
+        raise HTTPException(503, "File not yet uploaded for this gate")
+
+    lead = Lead(
+        name=data.name,
+        email=data.email,
+        phone=data.phone,
+        source=f"link-pack:{item.id}",
+        lead_type="link_pack",
+        metadata_json=_json.dumps({"item_id": item.id, "item_title": item.title}),
+    )
+    db.add(lead)
+    await enqueue_notification(
+        db,
+        event_type="link_pack_lead",
+        payload={
+            "item_id": item.id,
+            "item_title": item.title,
+            "name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+        },
+    )
+    db.add(AnalyticsEvent(
+        event_type="link_pack_lead",
+        metadata_json=_json.dumps({"item_id": item.id, "title": item.title, "email": data.email}),
+    ))
+    await db.commit()
+    asyncio.create_task(run_notification_retry_pass(limit=5))
+
+    token = mint_gate_token(item_id=item.id)
+    return {
+        "file_url": f"/api/v1/link-pack/gated/{item.id}?token={token}",
+        "filename": item.gated_filename or "download.pdf",
+    }
+
+
+@router.get("/gated/{item_id}")
+async def serve_gated_file(
+    item_id: int,
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        token_item_id = verify_gate_token(token)
+    except ValueError:
+        raise HTTPException(401, "Invalid or expired token")
+    if token_item_id != item_id:
+        raise HTTPException(401, "Token mismatch")
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item or not item.gated_file_data:
+        raise HTTPException(404, "File not found")
+    filename = item.gated_filename or "download.pdf"
+    return Response(
+        content=item.gated_file_data,
+        media_type=item.gated_file_mime or "application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
