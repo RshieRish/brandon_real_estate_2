@@ -10,6 +10,7 @@ import LinkPackEmailGate from './LinkPackEmailGate';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
+  const useImageBg = snapshot.theme.background.type === 'image' && !!bgUrl;
   return (
     <main
       className="lp-root"
@@ -23,24 +24,11 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
         overflowX: 'hidden',
       }}
     >
-      {snapshot.theme.background.type === 'image' && bgUrl && (
-        <div
-          aria-hidden
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundImage: `url(${bgUrl})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            zIndex: 0,
-          }}
-        />
-      )}
       <div
         style={{
           position: 'relative',
           zIndex: 1,
-          maxWidth: 640,
+          maxWidth: 580,
           margin: '0 auto',
           padding: '56px 20px 64px',
           display: 'flex',
@@ -49,18 +37,47 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
           gap: 16,
         }}
       >
+        {/*
+          Background image bound to the column width AND viewport height.
+          Linktree's container is `100dvh` so its `background-size: cover` only
+          covers ~580×909. Our content column is taller than viewport, so we
+          can't put the bg on the column itself or the image scales to fit
+          1829px+ of content.
+        */}
+        {useImageBg && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: '100dvh',
+              maxHeight: 909,
+              backgroundImage: `url(${bgUrl})`,
+              backgroundSize: 'cover',
+              backgroundPosition: '50% 0%',
+              backgroundRepeat: 'no-repeat',
+              zIndex: -1,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
         <Avatar
           photoUrl={imageUrl(snapshot.profile.photo_url)}
           name={snapshot.profile.name}
           isVerified={snapshot.profile.is_verified}
         />
-        <h1 style={{ fontSize: 18, fontWeight: 700, margin: '12px 0 0' }}>{snapshot.profile.name}</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: '12px 0 0', textAlign: 'center' }}>
+          {snapshot.profile.name}
+        </h1>
         {snapshot.profile.bio && (
-          <p style={{ fontSize: 14, fontWeight: 400, margin: '8px 0 0', textAlign: 'center', maxWidth: 600 }}>
+          <p style={{ fontSize: 14, fontWeight: 400, margin: '8px 0 0', textAlign: 'center', maxWidth: 600, lineHeight: 1.4 }}>
             {snapshot.profile.bio}
           </p>
         )}
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, marginTop: 24 }}>
+        <LinkPackSocialRow social={snapshot.social} />
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
           {snapshot.items.filter(i => i.is_active).map(item => {
             if (item.kind === 'classic') return <LinkPackButton key={item.id} item={item} />;
             if (item.kind === 'thumbnail') return <LinkPackThumbnailCard key={item.id} item={item} />;
@@ -69,7 +86,6 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
             return null;
           })}
         </div>
-        <LinkPackSocialRow social={snapshot.social} />
       </div>
     </main>
   );

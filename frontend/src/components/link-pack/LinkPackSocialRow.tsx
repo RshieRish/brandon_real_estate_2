@@ -22,7 +22,7 @@ export default function LinkPackSocialRow({ social }: { social: LinkPackSnapshot
     .filter((x): x is { key: keyof typeof ICONS; value: string } => Boolean(x.value));
   if (items.length === 0) return null;
   return (
-    <div style={{ display: 'flex', gap: 24, justifyContent: 'center', marginTop: 32 }}>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
       {items.map(({ key, value }) => {
         const { Icon, label, urlFn } = ICONS[key];
         return (
@@ -30,11 +30,20 @@ export default function LinkPackSocialRow({ social }: { social: LinkPackSnapshot
             key={key}
             href={urlFn(value)}
             aria-label={label}
-            style={{ color: 'var(--lp-social-color)', display: 'grid', placeItems: 'center' }}
+            style={{
+              color: 'var(--lp-social-color)',
+              display: 'grid',
+              placeItems: 'center',
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              border: '1.5px solid var(--lp-social-color)',
+              transition: 'background 120ms',
+            }}
             target={key === 'phone' || key === 'email' ? undefined : '_blank'}
             rel="noreferrer noopener"
           >
-            <Icon size={28} weight="regular" />
+            <Icon size={20} weight="regular" />
           </a>
         );
       })}

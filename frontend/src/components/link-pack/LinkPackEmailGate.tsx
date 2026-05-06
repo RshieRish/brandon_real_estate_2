@@ -57,11 +57,11 @@ export default function LinkPackEmailGate({ item }: { item: LinkPackItem }) {
           background: 'var(--lp-btn-bg)',
           color: 'var(--lp-btn-text)',
           borderRadius: 'var(--lp-btn-radius)',
-          padding: '16px 24px',
-          fontSize: 15,
-          fontWeight: 600,
+          padding: '14px 24px',
+          fontSize: 14,
+          fontWeight: 700,
           boxShadow: '0 6px 0 0 var(--lp-btn-shadow)',
-          border: 'none',
+          border: '2px solid var(--lp-btn-shadow)',
           cursor: 'pointer',
         }}
       >
