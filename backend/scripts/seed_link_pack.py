@@ -81,29 +81,24 @@ async def main() -> None:
         thumb_50_frank, thumb_50_frank_mime = await _fetch(LISTING_50_FRANK_THUMB)
         thumb_37_saint_paul, thumb_37_saint_paul_mime = await _fetch(LISTING_37_SAINT_PAUL_THUMB)
 
-        # Top-level items in display order
+        # Top-level items match the Linktree hierarchy:
+        # 3 section groups (each containing their own listings/resources) + 4 classic links.
         items: list[tuple[dict, list[dict]]] = [
-            ({
-                "kind": "thumbnail",
-                "title": "50 Frank St #50, Dracut, MA 01826 | Keller Williams",
-                "url": "https://soldwithsweeney.kw.com/property/50-Frank-St-50-Dracut-MA-01826/2100015566681408",
-                "thumbnail_data": thumb_50_frank,
-                "thumbnail_mime": thumb_50_frank_mime,
-            }, []),
-            ({
-                "kind": "email_gate",
-                "title": "SELLERS SURVIVAL GUIDE",
-                "gate_modal_headline": "Get the Sellers Survival Guide",
-                "gate_modal_subtext": "Drop your details and we'll email it to you.",
-            }, []),
-            ({
-                "kind": "classic",
-                "title": "BUYERS SURVIVAL GUIDE",
-                "url": "https://drive.google.com/file/d/13EVVYhKqdlEQkht1-CZXcrqFOF3acgmm/view?usp=sharing",
-            }, []),
             ({
                 "kind": "group",
                 "title": "SWS AVAILABLE HOMES",
+            }, [
+                {
+                    "kind": "thumbnail",
+                    "title": "50 Frank St #50, Dracut, MA 01826 | Keller Williams",
+                    "url": "https://soldwithsweeney.kw.com/property/50-Frank-St-50-Dracut-MA-01826/2100015566681408",
+                    "thumbnail_data": thumb_50_frank,
+                    "thumbnail_mime": thumb_50_frank_mime,
+                },
+            ]),
+            ({
+                "kind": "group",
+                "title": "SWS UNDER CONTRACT HOMES",
             }, [
                 {
                     "kind": "thumbnail",
@@ -113,8 +108,22 @@ async def main() -> None:
                     "thumbnail_mime": thumb_37_saint_paul_mime,
                 },
             ]),
-            ({"kind": "group", "title": "SWS UNDER CONTRACT HOMES"}, []),
-            ({"kind": "group", "title": "FREE RESOURCES"}, []),
+            ({
+                "kind": "group",
+                "title": "FREE RESOURCES",
+            }, [
+                {
+                    "kind": "email_gate",
+                    "title": "SELLERS SURVIVAL GUIDE",
+                    "gate_modal_headline": "Get the Sellers Survival Guide",
+                    "gate_modal_subtext": "Drop your details and we'll email it to you.",
+                },
+                {
+                    "kind": "classic",
+                    "title": "BUYERS SURVIVAL GUIDE",
+                    "url": "https://drive.google.com/file/d/13EVVYhKqdlEQkht1-CZXcrqFOF3acgmm/view?usp=sharing",
+                },
+            ]),
             ({
                 "kind": "classic",
                 "title": "WHAT'S MY HOME WORTH? \U0001f4b8",

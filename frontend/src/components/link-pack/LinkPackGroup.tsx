@@ -1,75 +1,61 @@
 'use client';
-import { useState, useId } from 'react';
-import { CaretDown } from '@phosphor-icons/react';
 import type { LinkPackItem } from '@/lib/link-pack/types';
 import LinkPackButton from './LinkPackButton';
 import LinkPackThumbnailCard from './LinkPackThumbnailCard';
+import LinkPackEmailGate from './LinkPackEmailGate';
 
+/**
+ * Renders a section header with its children stacked inline beneath it.
+ *
+ * Mirrors Linktree's `layoutOption: "stack"` group style: the title is a
+ * small uppercase header (not a clickable button), and the items in the
+ * group are rendered directly underneath, no expand/collapse interaction.
+ */
 export default function LinkPackGroup({ item }: { item: LinkPackItem }) {
-  const [open, setOpen] = useState(false);
-  const panelId = useId();
   const activeChildren = (item.children || []).filter(c => c.is_active);
-  const isEmpty = activeChildren.length === 0;
+  if (activeChildren.length === 0) {
+    // Empty section — render the header alone, dimmed, so admins/users can
+    // see the section is intentional but currently empty.
+    return (
+      <div style={{ width: '100%' }}>
+        <h2
+          style={{
+            color: 'var(--lp-text-color)',
+            fontSize: 13,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            textAlign: 'center',
+            margin: '8px 0 4px',
+            opacity: 0.5,
+          }}
+        >
+          {item.title}
+        </h2>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ width: '100%' }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        disabled={isEmpty}
-        onClick={() => !isEmpty && setOpen(o => !o)}
-        className={`lp-btn lp-anim-${item.animation}`}
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2
         style={{
-          width: '100%',
-          background: 'var(--lp-btn-bg)',
-          color: 'var(--lp-btn-text)',
-          borderRadius: 'var(--lp-btn-radius)',
-          padding: '16px 24px',
-          fontSize: 15,
-          fontWeight: 600,
-          boxShadow: isEmpty ? 'none' : '0 6px 0 0 var(--lp-btn-shadow)',
-          opacity: isEmpty ? 0.6 : 1,
-          cursor: isEmpty ? 'default' : 'pointer',
-          border: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          position: 'relative',
+          color: 'var(--lp-text-color)',
+          fontSize: 13,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          textAlign: 'center',
+          margin: '8px 0 0',
         }}
       >
-        <span>{item.title}</span>
-        {!isEmpty && (
-          <CaretDown
-            size={16}
-            weight="bold"
-            style={{
-              position: 'absolute',
-              right: 24,
-              transition: 'transform 200ms',
-              transform: open ? 'rotate(180deg)' : 'rotate(0)',
-            }}
-          />
-        )}
-      </button>
-      <div
-        id={panelId}
-        style={{
-          display: 'grid',
-          gridTemplateRows: open ? '1fr' : '0fr',
-          transition: 'grid-template-rows 250ms ease',
-        }}
-      >
-        <div style={{ overflow: 'hidden' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 12px 0' }}>
-            {activeChildren.map(child => {
-              if (child.kind === 'thumbnail') return <LinkPackThumbnailCard key={child.id} item={child} />;
-              return <LinkPackButton key={child.id} item={child} />;
-            })}
-          </div>
-        </div>
-      </div>
+        {item.title}
+      </h2>
+      {activeChildren.map(child => {
+        if (child.kind === 'thumbnail') return <LinkPackThumbnailCard key={child.id} item={child} />;
+        if (child.kind === 'email_gate') return <LinkPackEmailGate key={child.id} item={child} />;
+        return <LinkPackButton key={child.id} item={child} />;
+      })}
     </div>
   );
 }
