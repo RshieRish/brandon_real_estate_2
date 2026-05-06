@@ -6,6 +6,7 @@ import LinkPackSocialRow from './LinkPackSocialRow';
 import LinkPackButton from './LinkPackButton';
 import LinkPackThumbnailCard from './LinkPackThumbnailCard';
 import LinkPackGroup from './LinkPackGroup';
+import LinkPackEmailGate from './LinkPackEmailGate';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -64,7 +65,8 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
             if (item.kind === 'classic') return <LinkPackButton key={item.id} item={item} />;
             if (item.kind === 'thumbnail') return <LinkPackThumbnailCard key={item.id} item={item} />;
             if (item.kind === 'group') return <LinkPackGroup key={item.id} item={item} />;
-            return null; // other kinds added in Task 22
+            if (item.kind === 'email_gate') return <LinkPackEmailGate key={item.id} item={item} />;
+            return null;
           })}
         </div>
         <LinkPackSocialRow social={snapshot.social} />
