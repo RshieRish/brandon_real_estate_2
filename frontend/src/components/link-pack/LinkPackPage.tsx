@@ -17,7 +17,9 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
       style={{
         ...themeStyle(snapshot.theme),
         minHeight: '100dvh',
-        background: 'var(--lp-bg-color)',
+        // Dark body matches Linktree's "luminance: DARK" rendering — the
+        // bg image only appears in the column-banner; outside is solid dark.
+        background: '#000000',
         color: 'var(--lp-text-color)',
         fontFamily: 'var(--lp-font), system-ui, sans-serif',
         position: 'relative',
@@ -52,8 +54,11 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
               top: 0,
               left: 0,
               right: 0,
-              height: '100dvh',
-              maxHeight: 909,
+              // The banner ends just below the avatar — Linktree's gold-arrow
+              // hero only occupies the top ~280px; the rest of the page is
+              // dark body. Setting a fixed banner height here prevents the
+              // bg image from overlapping the bio + social row + items.
+              height: 280,
               backgroundImage: `url(${bgUrl})`,
               backgroundSize: 'cover',
               backgroundPosition: '50% 0%',
