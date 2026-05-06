@@ -55,3 +55,81 @@ class GateTokenTests(unittest.TestCase):
     def test_verify_rejects_wrong_signature(self):
         with self.assertRaises(ValueError):
             verify_gate_token("not-a-jwt")
+
+
+from unittest.mock import AsyncMock
+
+
+class _FakeDB:
+    """Async DB stub matching the pattern from test_evaluator_router."""
+
+    def __init__(self):
+        self.added: list = []
+        self.flush = AsyncMock()
+        self.refresh = AsyncMock()
+        self._pack_in_db = None  # set by tests
+
+    def add(self, item):
+        self.added.append(item)
+        # Auto-track: if test pre-set None and add() is called with a LinkPack, treat as inserted
+        if item.__class__.__name__ == "LinkPack":
+            self._pack_in_db = item
+
+    async def execute(self, _stmt):
+        return _Result(self._pack_in_db)
+
+
+class _Result:
+    def __init__(self, pack):
+        self._pack = pack
+
+    def scalar_one_or_none(self):
+        return self._pack
+
+
+class GetOrCreatePackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_existing_pack_when_present(self):
+        from services.link_pack_service import get_or_create_pack
+        db = _FakeDB()
+        existing = LinkPack(id=1, profile_name="Existing", theme={"k": "v"})
+        db._pack_in_db = existing
+
+        result = await get_or_create_pack(db)
+        self.assertIs(result, existing)
+        self.assertEqual(db.added, [])  # did NOT create a new row
+        db.flush.assert_not_awaited()
+
+    async def test_creates_pack_with_default_theme_when_missing(self):
+        from services.link_pack_service import get_or_create_pack
+        from schemas.link_pack import DEFAULT_THEME
+        db = _FakeDB()
+        db._pack_in_db = None  # no existing row
+
+        result = await get_or_create_pack(db)
+        self.assertEqual(len(db.added), 1)
+        self.assertIsInstance(db.added[0], LinkPack)
+        self.assertEqual(result.id, 1)
+        self.assertEqual(result.theme, DEFAULT_THEME)
+        db.flush.assert_awaited_once()
+        db.refresh.assert_awaited_once_with(result)
+
+
+class MarkDirtyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sets_has_unpublished_changes_on_existing(self):
+        from services.link_pack_service import mark_dirty
+        db = _FakeDB()
+        existing = LinkPack(id=1, has_unpublished_changes=False)
+        db._pack_in_db = existing
+
+        await mark_dirty(db)
+        self.assertTrue(existing.has_unpublished_changes)
+
+    async def test_creates_pack_then_marks_dirty_when_missing(self):
+        from services.link_pack_service import mark_dirty
+        db = _FakeDB()
+        db._pack_in_db = None
+
+        await mark_dirty(db)
+        self.assertEqual(len(db.added), 1)
+        created = db.added[0]
+        self.assertTrue(created.has_unpublished_changes)
