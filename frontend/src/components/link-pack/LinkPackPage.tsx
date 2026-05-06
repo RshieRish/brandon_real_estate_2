@@ -3,6 +3,7 @@ import { themeStyle } from '@/lib/link-pack/theme-css';
 import { imageUrl } from '@/lib/link-pack/api';
 import Avatar from './Avatar';
 import LinkPackSocialRow from './LinkPackSocialRow';
+import LinkPackButton from './LinkPackButton';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -56,6 +57,12 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
             {snapshot.profile.bio}
           </p>
         )}
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, marginTop: 24 }}>
+          {snapshot.items.filter(i => i.is_active).map(item => {
+            if (item.kind === 'classic') return <LinkPackButton key={item.id} item={item} />;
+            return null; // other kinds added in Tasks 20-22
+          })}
+        </div>
         <LinkPackSocialRow social={snapshot.social} />
       </div>
     </main>
