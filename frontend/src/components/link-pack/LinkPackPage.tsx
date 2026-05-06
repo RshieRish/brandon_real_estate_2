@@ -1,6 +1,7 @@
 import type { LinkPackSnapshot } from '@/lib/link-pack/types';
 import { themeStyle } from '@/lib/link-pack/theme-css';
 import { imageUrl } from '@/lib/link-pack/api';
+import Avatar from './Avatar';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -43,8 +44,17 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
           gap: 16,
         }}
       >
-        {/* Avatar, Name, Bio, Items, Social row added in Tasks 17-22 */}
-        <div style={{ color: 'var(--lp-text-color)' }}>{snapshot.profile.name}</div>
+        <Avatar
+          photoUrl={imageUrl(snapshot.profile.photo_url)}
+          name={snapshot.profile.name}
+          isVerified={snapshot.profile.is_verified}
+        />
+        <h1 style={{ fontSize: 18, fontWeight: 700, margin: '12px 0 0' }}>{snapshot.profile.name}</h1>
+        {snapshot.profile.bio && (
+          <p style={{ fontSize: 14, fontWeight: 400, margin: '8px 0 0', textAlign: 'center', maxWidth: 600 }}>
+            {snapshot.profile.bio}
+          </p>
+        )}
       </div>
     </main>
   );
