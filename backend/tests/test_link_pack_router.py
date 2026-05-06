@@ -84,3 +84,38 @@ class ReorderTests(unittest.IsolatedAsyncioTestCase):
         _apply_reorder(items, ordered_ids=[3, 1, 2])
         positions = {it.id: it.position for it in items}
         self.assertEqual(positions, {3: 0, 1: 1, 2: 2})
+
+
+class PublishTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publish_writes_snapshot_and_clears_dirty(self):
+        from models.link_pack import LinkPack, LinkPackItem
+        pack = LinkPack(id=1, profile_name="B", profile_bio="bio", theme={}, has_unpublished_changes=True)
+        item = LinkPackItem(id=1, parent_id=None, position=0, kind="classic", title="x", url="https://y", animation="none", is_active=True)
+
+        class _PackResult:
+            def scalar_one_or_none(self):
+                return pack
+
+        class _ItemsResult:
+            def scalars(self):
+                class _S:
+                    def all(self_inner):
+                        return [item]
+                return _S()
+
+        from unittest.mock import AsyncMock
+        db = _FakeDB()
+        calls = {"n": 0}
+
+        async def _execute(stmt):
+            calls["n"] += 1
+            return _PackResult() if calls["n"] == 1 else _ItemsResult()
+
+        db.execute = _execute
+        db.flush = AsyncMock()
+        result = await lp_router.publish(db=db)
+        self.assertTrue(result["ok"])
+        self.assertIsNotNone(pack.published_snapshot)
+        self.assertEqual(pack.published_snapshot["profile"]["name"], "B")
+        self.assertFalse(pack.has_unpublished_changes)
+        self.assertIsNotNone(pack.published_at)

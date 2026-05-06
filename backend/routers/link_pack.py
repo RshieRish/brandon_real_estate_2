@@ -335,6 +335,24 @@ async def upload_item_thumbnail(
     return {"ok": True, "url": f"/api/v1/link-pack/images/items/{item_id}/thumbnail"}
 
 
+from datetime import datetime, timezone
+
+
+@router.post("/publish")
+async def publish(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    pack = await get_or_create_pack(db)
+    items_result = await db.execute(select(LinkPackItem).where(LinkPackItem.link_pack_id == pack.id))
+    items = list(items_result.scalars().all())
+    pack.published_snapshot = build_snapshot(pack, items)
+    pack.published_at = datetime.now(timezone.utc)
+    pack.has_unpublished_changes = False
+    await db.flush()
+    return {"ok": True, "published_at": pack.published_at.isoformat()}
+
+
 @router.post("/items/{item_id}/gated-file")
 async def upload_gated_file(
     item_id: int,
