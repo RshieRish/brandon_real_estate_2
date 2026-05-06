@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { CircleNotch, WarningCircle } from '@phosphor-icons/react';
 import Tabs from '@/components/admin/link-pack/Tabs';
 import StatusBar from '@/components/admin/link-pack/StatusBar';
+import ProfileTab from '@/components/admin/link-pack/ProfileTab';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -77,7 +78,17 @@ export default function LinkPackAdminPage() {
       <Tabs current={tab} onChange={setTab} />
 
       <div className="bg-dark-card border border-dark-border p-6">
-        {tab === 'profile' && <p className="text-white/60 text-sm">Profile tab — Task 28</p>}
+        {tab === 'profile' && (
+          <ProfileTab
+            initial={{
+              name: draft.live.profile.name,
+              bio: draft.live.profile.bio,
+              photo_url: draft.live.profile.photo_url,
+              is_verified: draft.live.profile.is_verified,
+            }}
+            onSaved={refresh}
+          />
+        )}
         {tab === 'social' && <p className="text-white/60 text-sm">Social tab — Task 29</p>}
         {tab === 'links' && <p className="text-white/60 text-sm">Links tab — Task 31</p>}
         {tab === 'theme' && <p className="text-white/60 text-sm">Theme tab — Task 30</p>}
