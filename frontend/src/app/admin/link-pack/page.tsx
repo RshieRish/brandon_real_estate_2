@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { CircleNotch, WarningCircle } from '@phosphor-icons/react';
 import Tabs from '@/components/admin/link-pack/Tabs';
+import StatusBar from '@/components/admin/link-pack/StatusBar';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -65,17 +66,13 @@ export default function LinkPackAdminPage() {
 
   return (
     <div className="p-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-white font-black text-2xl">Link Pack</h1>
-        <a
-          href="/links?preview=1"
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-white/60 border border-dark-border hover:border-white/30 px-4 py-2 cursor-pointer"
-        >
-          Preview
-        </a>
-      </div>
+      <h1 className="text-white font-black text-2xl">Link Pack</h1>
+      <StatusBar
+        hasUnpublishedChanges={draft.status.has_unpublished_changes}
+        publishedAt={draft.status.published_at}
+        isPublished={draft.status.is_published}
+        onPublished={refresh}
+      />
 
       <Tabs current={tab} onChange={setTab} />
 
