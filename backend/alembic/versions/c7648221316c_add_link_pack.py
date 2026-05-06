@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -35,20 +36,21 @@ def upgrade() -> None:
         sa.Column("social_website", sa.String(255), nullable=True),
         sa.Column("social_tiktok", sa.String(255), nullable=True),
         sa.Column("social_x", sa.String(255), nullable=True),
-        sa.Column("theme", sa.JSON(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("theme", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("background_image_data", sa.LargeBinary(), nullable=True),
         sa.Column("background_image_mime", sa.String(100), nullable=True),
-        sa.Column("published_snapshot", sa.JSON(), nullable=True),
+        sa.Column("published_snapshot", postgresql.JSONB(), nullable=True),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("has_unpublished_changes", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
 
     op.create_table(
         "link_pack_items",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("link_pack_id", sa.Integer(), sa.ForeignKey("link_pack.id", ondelete="CASCADE"), nullable=False, server_default="1"),
+        # link_pack_id is always 1 in v1 (singleton); the application layer sets this explicitly.
+        sa.Column("link_pack_id", sa.Integer(), sa.ForeignKey("link_pack.id", ondelete="CASCADE"), nullable=False),
         sa.Column("parent_id", sa.Integer(), sa.ForeignKey("link_pack_items.id", ondelete="CASCADE"), nullable=True),
         sa.Column("position", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("kind", sa.String(20), nullable=False),
@@ -64,8 +66,8 @@ def upgrade() -> None:
         sa.Column("animation", sa.String(20), nullable=False, server_default="none"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("click_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
     op.create_index("ix_link_pack_items_parent", "link_pack_items", ["parent_id", "position"])
 
