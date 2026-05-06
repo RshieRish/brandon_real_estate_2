@@ -11,7 +11,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 
 from database import Base
 
@@ -92,7 +92,6 @@ class LinkPackItem(Base):
     children: Mapped[list["LinkPackItem"]] = relationship(
         "LinkPackItem",
         cascade="all, delete-orphan",
-        backref="parent",
-        remote_side="LinkPackItem.parent_id",
+        backref=backref("parent", remote_side="LinkPackItem.id"),
         order_by="LinkPackItem.position",
     )
