@@ -177,3 +177,104 @@ async def upload_background_image(
     pack.has_unpublished_changes = True
     await db.flush()
     return {"ok": True, "url": "/api/v1/link-pack/images/background"}
+
+
+from schemas.link_pack import ItemIn, ItemPatch
+
+
+def _validate_item_invariants(data: ItemIn, parent: LinkPackItem | None = None) -> None:
+    if data.kind == "group" and data.parent_id is not None:
+        raise HTTPException(400, "Groups cannot be nested (max 1 level deep).")
+    if data.parent_id is not None:
+        if parent is None:
+            raise HTTPException(400, "Parent item not found.")
+        if parent.kind != "group":
+            raise HTTPException(400, "Parent must be a group.")
+
+
+async def _next_position(db: AsyncSession, parent_id: int | None) -> int:
+    from sqlalchemy import func as sqlfunc
+    stmt = select(sqlfunc.coalesce(sqlfunc.max(LinkPackItem.position), -1)).where(
+        LinkPackItem.parent_id.is_(parent_id) if parent_id is None else LinkPackItem.parent_id == parent_id
+    )
+    result = await db.execute(stmt)
+    return int(result.scalar_one()) + 1
+
+
+@router.post("/items")
+async def create_item(
+    data: ItemIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    parent = None
+    if data.parent_id is not None:
+        result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == data.parent_id))
+        parent = result.scalar_one_or_none()
+    _validate_item_invariants(data, parent=parent)
+
+    pack = await get_or_create_pack(db)
+    position = await _next_position(db, data.parent_id)
+    item = LinkPackItem(
+        link_pack_id=pack.id,
+        parent_id=data.parent_id,
+        position=position,
+        kind=data.kind,
+        title=data.title,
+        url=data.url,
+        animation=data.animation,
+        is_active=data.is_active,
+        gate_modal_headline=data.gate_modal_headline,
+        gate_modal_subtext=data.gate_modal_subtext,
+    )
+    db.add(item)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    await db.refresh(item)
+    return {
+        "id": item.id,
+        "parent_id": item.parent_id,
+        "position": item.position,
+        "kind": item.kind,
+        "title": item.title,
+        "url": item.url,
+        "animation": item.animation,
+        "is_active": item.is_active,
+    }
+
+
+@router.patch("/items/{item_id}")
+async def patch_item(
+    item_id: int,
+    data: ItemPatch,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    payload = data.model_dump(exclude_unset=True)
+    for k, v in payload.items():
+        setattr(item, k, v)
+    pack = await get_or_create_pack(db)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}
+
+
+@router.delete("/items/{item_id}")
+async def delete_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    await db.delete(item)
+    pack = await get_or_create_pack(db)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}

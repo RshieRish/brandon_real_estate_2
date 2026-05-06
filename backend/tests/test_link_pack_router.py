@@ -53,3 +53,19 @@ class PublicGetTests(unittest.IsolatedAsyncioTestCase):
         db.execute = AsyncMock(return_value=_Result(pack))
         result = await lp_router.get_public(db=db)
         self.assertEqual(result["profile"]["name"], "B")
+
+
+class ItemValidationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_group_with_parent_rejected(self):
+        from schemas.link_pack import ItemIn
+        from routers.link_pack import _validate_item_invariants
+        with self.assertRaises(Exception):
+            _validate_item_invariants(ItemIn(kind="group", title="x", parent_id=5))
+
+    async def test_classic_with_parent_to_non_group_rejected(self):
+        from routers.link_pack import _validate_item_invariants
+        from schemas.link_pack import ItemIn
+        from models.link_pack import LinkPackItem
+        fake_parent = LinkPackItem(id=5, kind="classic", title="not a group", position=0, animation="none", is_active=True)
+        with self.assertRaises(Exception):
+            _validate_item_invariants(ItemIn(kind="classic", title="x", parent_id=5), parent=fake_parent)
