@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { fetchPublicLinkPack, imageUrl } from '@/lib/link-pack/api';
 import LinkPackPage from '@/components/link-pack/LinkPackPage';
+import PreviewLoader from './preview-loader';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,48 +30,39 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-function buildJsonLd(snap: Awaited<ReturnType<typeof fetchPublicLinkPack>>) {
-  if (!snap) return null;
-  const sameAs = [
-    snap.social.instagram, snap.social.facebook, snap.social.youtube,
-    snap.social.website, snap.social.tiktok, snap.social.x,
-  ].filter((v): v is string => Boolean(v));
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'Person',
-    name: snap.profile.name,
-    image: imageUrl(snap.profile.photo_url) ?? undefined,
-    url: 'https://soldwithsweeney.com/links',
-    jobTitle: 'Realtor',
-    sameAs,
-  };
+interface PageProps {
+  searchParams: Promise<{ preview?: string }>;
 }
 
-export default async function Page() {
+export default async function Page({ searchParams }: PageProps) {
+  const params = await searchParams;
+  if (params.preview === '1') {
+    return <PreviewLoader />;
+  }
   const snapshot = await fetchPublicLinkPack();
   if (!snapshot) {
     return (
-      <main style={{
-        minHeight: '100dvh',
-        display: 'grid',
-        placeItems: 'center',
-        background: '#c78829',
-        color: '#fff',
-        fontFamily: 'system-ui, sans-serif',
-      }}>
+      <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', background: '#c78829', color: '#fff' }}>
         <p>Coming soon.</p>
       </main>
     );
   }
-  const ld = buildJsonLd(snapshot);
+  const sameAs = [
+    snapshot.social.instagram, snapshot.social.facebook, snapshot.social.youtube,
+    snapshot.social.website, snapshot.social.tiktok, snapshot.social.x,
+  ].filter((v): v is string => Boolean(v));
+  const ld = {
+    '@context': 'https://schema.org',
+    '@type': 'Person',
+    name: snapshot.profile.name,
+    image: imageUrl(snapshot.profile.photo_url) ?? undefined,
+    url: 'https://soldwithsweeney.com/links',
+    jobTitle: 'Realtor',
+    sameAs,
+  };
   return (
     <>
-      {ld && (
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(ld) }}
-        />
-      )}
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ld) }} />
       <LinkPackPage snapshot={snapshot} />
     </>
   );
