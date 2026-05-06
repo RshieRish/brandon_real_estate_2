@@ -5,9 +5,8 @@ import re
 
 
 HEX_COLOR_RE = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ALLOWED_FONTS = {"Montserrat", "Inter", "Roboto", "Poppins", "Playfair Display"}
-ALLOWED_KINDS = {"classic", "thumbnail", "group", "email_gate"}
-ALLOWED_ANIMATIONS = {"none", "pulse", "wobble", "shake", "breathe", "bounce"}
 
 
 DEFAULT_THEME: dict = {
@@ -82,7 +81,7 @@ class ThemeIn(BaseModel):
 
 
 class ProfileIn(BaseModel):
-    profile_name: str = Field(max_length=255)
+    profile_name: str = Field(min_length=1, max_length=255)
     profile_bio: str = ""
     is_verified: bool = False
 
@@ -125,8 +124,15 @@ class ReorderIn(BaseModel):
 
 class EmailGateSubmit(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    email: str = Field(min_length=3, max_length=255)
+    email: str = Field(max_length=255)
     phone: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        if not EMAIL_RE.match(v):
+            raise ValueError("must be a valid email address")
+        return v
 
 
 class ItemOut(BaseModel):
