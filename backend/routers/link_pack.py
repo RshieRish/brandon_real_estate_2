@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from middleware.auth import require_admin
 from models.link_pack import LinkPack, LinkPackItem
+from schemas.link_pack import ProfileIn, SocialIn, ThemeIn
 from services.link_pack_service import build_snapshot, get_or_create_pack
 
 router = APIRouter()
@@ -88,3 +89,48 @@ async def get_item_thumbnail(item_id: int, db: AsyncSession = Depends(get_db)):
         item.thumbnail_data if item else None,
         item.thumbnail_mime if item else None,
     )
+
+
+@router.put("/profile")
+async def update_profile(
+    data: ProfileIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    pack = await get_or_create_pack(db)
+    pack.profile_name = data.profile_name
+    pack.profile_bio = data.profile_bio
+    pack.is_verified = data.is_verified
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}
+
+
+@router.put("/social")
+async def update_social(
+    data: SocialIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    pack = await get_or_create_pack(db)
+    for field in (
+        "social_phone", "social_email", "social_instagram", "social_facebook",
+        "social_youtube", "social_website", "social_tiktok", "social_x",
+    ):
+        setattr(pack, field, getattr(data, field))
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}
+
+
+@router.put("/theme")
+async def update_theme(
+    data: ThemeIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    pack = await get_or_create_pack(db)
+    pack.theme = data.model_dump()
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True}
