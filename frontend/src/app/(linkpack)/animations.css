@@ -16,3 +16,43 @@
   transform: translateY(2px);
   box-shadow: 0 4px 0 0 var(--lp-btn-shadow) !important;
 }
+
+@keyframes lp-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+@keyframes lp-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-2deg); }
+  75% { transform: rotate(2deg); }
+}
+@keyframes lp-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+@keyframes lp-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+@keyframes lp-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.lp-anim-none { animation: none; }
+.lp-anim-pulse { animation: lp-pulse 2.4s ease-in-out infinite; }
+.lp-anim-wobble { animation: lp-wobble 2s ease-in-out infinite; }
+.lp-anim-shake { animation: lp-shake 0.6s ease-in-out infinite; }
+.lp-anim-breathe { animation: lp-breathe 3s ease-in-out infinite; }
+.lp-anim-bounce { animation: lp-bounce 1.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-anim-pulse,
+  .lp-anim-wobble,
+  .lp-anim-shake,
+  .lp-anim-breathe,
+  .lp-anim-bounce {
+    animation: none !important;
+  }
+}
