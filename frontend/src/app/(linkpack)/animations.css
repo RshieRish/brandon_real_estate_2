@@ -47,12 +47,31 @@
 .lp-anim-breathe { animation: lp-breathe 3s ease-in-out infinite; }
 .lp-anim-bounce { animation: lp-bounce 1.4s ease-in-out infinite; }
 
+/*
+ * Banner drift — subtle horizontal sway + scale to make the gold-particle
+ * swooshes feel alive without becoming distracting. Slow 18s cycle so the
+ * motion is barely perceptible at any single moment but visible over time.
+ */
+@keyframes lp-banner-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1.00); }
+  25%  { transform: translate3d(-6px, 2px, 0) scale(1.015); }
+  50%  { transform: translate3d(0, 4px, 0) scale(1.02); }
+  75%  { transform: translate3d(6px, 2px, 0) scale(1.015); }
+  100% { transform: translate3d(0, 0, 0) scale(1.00); }
+}
+
+.lp-banner-drift {
+  animation: lp-banner-drift 18s ease-in-out infinite;
+  transform-origin: center top;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lp-anim-pulse,
   .lp-anim-wobble,
   .lp-anim-shake,
   .lp-anim-breathe,
-  .lp-anim-bounce {
+  .lp-anim-bounce,
+  .lp-banner-drift {
     animation: none !important;
   }
 }

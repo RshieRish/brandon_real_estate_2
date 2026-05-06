@@ -49,22 +49,27 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
         {useImageBg && (
           <div
             aria-hidden
+            className="lp-banner-drift"
             style={{
               position: 'absolute',
               top: 0,
               left: 0,
               right: 0,
-              // The banner ends just below the avatar — Linktree's gold-arrow
-              // hero only occupies the top ~280px; the rest of the page is
-              // dark body. Setting a fixed banner height here prevents the
-              // bg image from overlapping the bio + social row + items.
-              height: 280,
+              // 909px = Linktree's column height (matches their `100dvh`
+              // container). The source image has TWO gold-particle swooshes
+              // — one at the top of the image and one near the bottom — and
+              // a 909-tall banner shows both. Items render on top of the
+              // banner (z-index 1) starting after the bio/social row, so
+              // SWS AVAILABLE HOMES and the property card naturally overlap
+              // the lower portion of the banner image, exactly like Linktree.
+              height: 909,
               backgroundImage: `url(${bgUrl})`,
               backgroundSize: 'cover',
               backgroundPosition: '50% 0%',
               backgroundRepeat: 'no-repeat',
               zIndex: -1,
               pointerEvents: 'none',
+              willChange: 'transform',
             }}
           />
         )}
