@@ -4,6 +4,7 @@ import { imageUrl } from '@/lib/link-pack/api';
 import Avatar from './Avatar';
 import LinkPackSocialRow from './LinkPackSocialRow';
 import LinkPackButton from './LinkPackButton';
+import LinkPackThumbnailCard from './LinkPackThumbnailCard';
 
 export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot }) {
   const bgUrl = imageUrl(snapshot.background_image_url);
@@ -60,7 +61,8 @@ export default function LinkPackPage({ snapshot }: { snapshot: LinkPackSnapshot 
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, marginTop: 24 }}>
           {snapshot.items.filter(i => i.is_active).map(item => {
             if (item.kind === 'classic') return <LinkPackButton key={item.id} item={item} />;
-            return null; // other kinds added in Tasks 20-22
+            if (item.kind === 'thumbnail') return <LinkPackThumbnailCard key={item.id} item={item} />;
+            return null; // other kinds added in Tasks 21-22
           })}
         </div>
         <LinkPackSocialRow social={snapshot.social} />
