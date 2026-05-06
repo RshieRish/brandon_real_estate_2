@@ -278,3 +278,52 @@ async def delete_item(
     pack.has_unpublished_changes = True
     await db.flush()
     return {"ok": True}
+
+
+ALLOWED_PDF_MIMES = {"application/pdf"}
+MAX_PDF_SIZE = 10 * 1024 * 1024
+
+
+@router.post("/items/{item_id}/thumbnail")
+async def upload_item_thumbnail(
+    item_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    data, mime = await _read_image(file)
+    item.thumbnail_data = data
+    item.thumbnail_mime = mime
+    pack = await get_or_create_pack(db)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True, "url": f"/api/v1/link-pack/images/items/{item_id}/thumbnail"}
+
+
+@router.post("/items/{item_id}/gated-file")
+async def upload_gated_file(
+    item_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    result = await db.execute(select(LinkPackItem).where(LinkPackItem.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if file.content_type not in ALLOWED_PDF_MIMES:
+        raise HTTPException(400, "Only PDF files are allowed.")
+    data = await file.read()
+    if len(data) > MAX_PDF_SIZE:
+        raise HTTPException(400, "PDF too large. Maximum 10MB.")
+    item.gated_file_data = data
+    item.gated_file_mime = file.content_type
+    item.gated_filename = file.filename or "download.pdf"
+    pack = await get_or_create_pack(db)
+    pack.has_unpublished_changes = True
+    await db.flush()
+    return {"ok": True, "filename": item.gated_filename}
