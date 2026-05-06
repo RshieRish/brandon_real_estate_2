@@ -5,6 +5,7 @@ import { CircleNotch, WarningCircle } from '@phosphor-icons/react';
 import Tabs from '@/components/admin/link-pack/Tabs';
 import StatusBar from '@/components/admin/link-pack/StatusBar';
 import ProfileTab from '@/components/admin/link-pack/ProfileTab';
+import SocialTab from '@/components/admin/link-pack/SocialTab';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -89,7 +90,7 @@ export default function LinkPackAdminPage() {
             onSaved={refresh}
           />
         )}
-        {tab === 'social' && <p className="text-white/60 text-sm">Social tab — Task 29</p>}
+        {tab === 'social' && <SocialTab initial={draft.live.social} onSaved={refresh} />}
         {tab === 'links' && <p className="text-white/60 text-sm">Links tab — Task 31</p>}
         {tab === 'theme' && <p className="text-white/60 text-sm">Theme tab — Task 30</p>}
       </div>
