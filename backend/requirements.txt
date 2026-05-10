@@ -6,6 +6,7 @@ alembic==1.14.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
 google-generativeai==0.8.3
+google-genai>=1.0.0
 google-auth-oauthlib==1.2.1
 google-api-python-client==2.157.0
 python-jose[cryptography]==3.3.0
@@ -15,3 +16,6 @@ python-multipart==0.0.20
 aiosmtplib==3.0.2
 httpx==0.28.1
 python-dotenv==1.0.1
+requests==2.32.3
+boto3==1.35.0
+psycopg2-binary==2.9.9

@@ -63,6 +63,12 @@ export default function Hero() {
         } else if (data.city === 'Andover') {
           setVideoReady(false);
           setVideoSrc('/assets/Andover_compressed.mp4?v=3');
+        } else if (data.city === 'Londonderry') {
+          setVideoReady(false);
+          setVideoSrc('/assets/Londonderry_compressed.mp4?v=3');
+        } else if (data.city === 'Derry') {
+          setVideoReady(false);
+          setVideoSrc('/assets/Derry_compressed.mp4?v=3');
         }
       })
       .catch((err) => console.error('Failed to get location:', err));

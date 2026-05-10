@@ -11,6 +11,7 @@ import {
   FunnelSimple,
   ArrowRight,
   WarningCircle,
+  Article,
 } from '@phosphor-icons/react';
 
 interface DashboardStats {
@@ -23,6 +24,7 @@ interface DashboardStats {
 const quickActions = [
   { label: 'Manage Leads', href: '/admin/leads', icon: Users },
   { label: 'Edit Content', href: '/admin/content', icon: TextT },
+  { label: 'Blog Control', href: '/admin/blog', icon: Article },
   { label: 'View Funnels', href: '/admin/funnels', icon: FunnelSimple },
   { label: 'Analytics', href: '/admin/analytics', icon: ChartBar },
 ];

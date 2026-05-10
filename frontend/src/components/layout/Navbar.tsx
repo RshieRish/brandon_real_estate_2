@@ -12,6 +12,7 @@ const navLinks = [
   { label: 'Sell', href: '/sell' },
   { label: 'Invest', href: '/invest' },
   { label: 'About', href: '/about' },
+  { label: 'Blog', href: '/blog' },
 ];
 
 export default function Navbar() {

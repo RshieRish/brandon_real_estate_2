@@ -9,6 +9,7 @@ from config import settings
 from routers import (
     analytics,
     auth,
+    blog,
     booking,
     chat,
     content,
@@ -48,6 +49,7 @@ app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytic
 app.include_router(content.router, prefix="/api/v1/content", tags=["content"])
 app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
+app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 
 
 async def _notification_retry_loop() -> None:

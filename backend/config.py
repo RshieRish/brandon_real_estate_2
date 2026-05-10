@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     BRANDON_DEFAULT_LOCATION: str = "101 Broadway Rd #21, Dracut, MA 01826"
     TRAVEL_BUFFER_MINUTES: int = 10
     RENTCAST_API_KEY: str = ""
+    # Blog image storage (Cloudflare R2 — optional, falls back to public/ dir)
+    R2_ENDPOINT: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET_NAME: str = "sweeney-public"
+    R2_PUBLIC_URL: str = ""
+    R2_REGION: str = "auto"
 
 
 settings = Settings()

@@ -12,12 +12,14 @@ import {
   Gear,
   SignOut,
   LinkSimple,
+  Article,
 } from '@phosphor-icons/react';
 
 const navItems = [
   { label: 'Dashboard', href: '/admin', icon: Gauge },
   { label: 'Leads', href: '/admin/leads', icon: Users },
   { label: 'Content', href: '/admin/content', icon: TextT },
+  { label: 'Blog', href: '/admin/blog', icon: Article },
   { label: 'Funnels', href: '/admin/funnels', icon: FunnelSimple },
   { label: 'Link Pack', href: '/admin/link-pack', icon: LinkSimple },
   { label: 'Analytics', href: '/admin/analytics', icon: ChartBar },
