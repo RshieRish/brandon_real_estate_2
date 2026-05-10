@@ -3,10 +3,12 @@ import {
   calculateBuyHoldMetrics,
   calculateFlipMetrics,
   calculateStrMetrics,
+  calculateBrrrrMetrics,
   calculateMetrics,
   type BuyHoldInputs,
   type FlipInputs,
   type StrInputs,
+  type BrrrrInputs,
 } from './investor-calc';
 
 describe('calculateBuyHoldMetrics', () => {
@@ -136,5 +138,55 @@ describe('calculateStrMetrics', () => {
     const m = calculateStrMetrics({ ...baseStr, occupancyPct: 0 });
     expect(Number.isFinite(m.monthlyCashFlow)).toBe(true);
     expect(m.monthlyRevenue).toBe(0);
+  });
+});
+
+describe('calculateBrrrrMetrics', () => {
+  const baseBrrrr: BrrrrInputs = {
+    strategy: 'brrrr',
+    purchasePrice: 200000,
+    rehabCost: 60000,
+    arv: 360000,
+    rentalIncome: 2800,
+    propertyTax: 4500,
+    insurance: 1200,
+    downPaymentPct: 20,        // initial
+    interestRate: 10,           // initial hard money
+    loanTermYears: 1,           // initial term
+    refiLtvPct: 75,
+    refiRate: 7.25,
+    refiTermYears: 30,
+    holdMonthsBeforeRefi: 6,
+  };
+
+  it('refi loan amount is ARV × refi LTV', () => {
+    const m = calculateBrrrrMetrics(baseBrrrr);
+    expect(m.refiLoanAmount).toBeCloseTo(270000, 0);
+  });
+
+  it('cash recovered = refi loan − initial loan − rehab − holding', () => {
+    const m = calculateBrrrrMetrics(baseBrrrr);
+    // initial loan = 0.8 × 200,000 = 160,000
+    // refi loan = 270,000
+    // refi proceeds replace initial loan: net cash to investor = 270,000 − 160,000 = 110,000
+    expect(m.cashRecoveredAtRefi).toBeGreaterThan(100000);
+    expect(m.cashRecoveredAtRefi).toBeLessThan(115000);
+  });
+
+  it('flags infinite ROI when cash left in deal ≤ 0', () => {
+    const m = calculateBrrrrMetrics({ ...baseBrrrr, refiLtvPct: 90 });
+    expect(m.cashLeftInDeal).toBeLessThanOrEqual(0);
+    expect(m.isInfiniteRoi).toBe(true);
+  });
+
+  it('post-refi cash flow uses 30y amortized at refi rate', () => {
+    const m = calculateBrrrrMetrics(baseBrrrr);
+    // amortized 270,000 @ 7.25% / 30y ≈ 1,841/mo
+    expect(m.postRefiMonthlyMortgage).toBeCloseTo(1841, -1);
+  });
+
+  it('handles infinite-ROI case without NaN in CoC', () => {
+    const m = calculateBrrrrMetrics({ ...baseBrrrr, refiLtvPct: 90 });
+    expect(Number.isFinite(m.postRefiCashOnCash) || m.postRefiCashOnCash === Infinity).toBe(true);
   });
 });

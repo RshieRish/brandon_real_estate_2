@@ -279,6 +279,71 @@ export function calculateStrMetrics(inputs: StrInputs): StrMetrics {
   };
 }
 
+// ─── BRRRR (Buy, Rehab, Rent, Refinance, Repeat) ───────────────────────────
+export function calculateBrrrrMetrics(inputs: BrrrrInputs): BrrrrMetrics {
+  const initialDownPayment = inputs.purchasePrice * (inputs.downPaymentPct / 100);
+  const initialLoanAmount = inputs.purchasePrice - initialDownPayment;
+  const { monthlyMortgage: initialMortgage, loanStructure } = computeMonthlyMortgage({
+    loanAmount: initialLoanAmount,
+    interestRatePct: inputs.interestRate,
+    termYears: inputs.loanTermYears,
+  });
+
+  // Holding costs through hold-before-refi
+  const monthlyHoldExpenses = (inputs.propertyTax + inputs.insurance) / 12;
+  const initialHoldingCosts =
+    (initialMortgage + monthlyHoldExpenses) * inputs.holdMonthsBeforeRefi;
+
+  // Refi
+  const refiLoanAmount = inputs.arv * (inputs.refiLtvPct / 100);
+  // Refi closing fees ≈ 1.5% of refi loan
+  const refiClosingCosts = refiLoanAmount * 0.015;
+  // Cash investor receives at refi: refi loan minus the initial loan that gets paid off,
+  // minus refi closing costs.
+  const refiNetProceeds = refiLoanAmount - initialLoanAmount - refiClosingCosts;
+  // Cash investor put in: down payment + rehab + holding costs.
+  const cashIntoDealUpfront = initialDownPayment + inputs.rehabCost + initialHoldingCosts;
+  const cashRecoveredAtRefi = refiNetProceeds;
+  const cashLeftInDeal = cashIntoDealUpfront - cashRecoveredAtRefi;
+
+  // Post-refi rental
+  const { monthlyMortgage: postRefiMortgage } = computeMonthlyMortgage({
+    loanAmount: refiLoanAmount,
+    interestRatePct: inputs.refiRate,
+    termYears: inputs.refiTermYears,
+  });
+  const vacancyAllowance = inputs.rentalIncome * 0.08;
+  const monthlyNOI = inputs.rentalIncome - vacancyAllowance - monthlyHoldExpenses;
+  const noi = monthlyNOI * 12;
+  const postRefiMonthlyCashFlow = monthlyNOI - postRefiMortgage;
+  const postRefiAnnualCashFlow = postRefiMonthlyCashFlow * 12;
+
+  const isInfiniteRoi = cashLeftInDeal <= 0;
+  const postRefiCashOnCash = isInfiniteRoi
+    ? Infinity
+    : (postRefiAnnualCashFlow / cashLeftInDeal) * 100;
+  const capRate = safeDivide(noi, inputs.purchasePrice + inputs.rehabCost) * 100;
+
+  return {
+    strategy: 'brrrr',
+    loanStructure,
+    monthlyMortgage: initialMortgage,
+    downPayment: initialDownPayment,
+    loanAmount: initialLoanAmount,
+    initialHoldingCosts,
+    cashIntoDealUpfront,
+    refiLoanAmount,
+    cashRecoveredAtRefi,
+    cashLeftInDeal,
+    isInfiniteRoi,
+    postRefiMonthlyMortgage: postRefiMortgage,
+    postRefiMonthlyCashFlow,
+    postRefiCashOnCash,
+    capRate,
+    noi,
+  };
+}
+
 // ─── Dispatch wrapper (will grow as strategies are added) ───────────────────
 export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   switch (inputs.strategy) {
@@ -288,8 +353,11 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
       return calculateFlipMetrics(inputs);
     case 'str':
       return calculateStrMetrics(inputs);
-    default:
-      // Other strategies not yet implemented in this task
-      throw new Error(`Strategy "${inputs.strategy}" not implemented yet`);
+    case 'brrrr':
+      return calculateBrrrrMetrics(inputs);
+    default: {
+      const _exhaustive: never = inputs;
+      throw new Error(`Strategy "${(_exhaustive as InvestorInputs).strategy}" not implemented yet`);
+    }
   }
 }
