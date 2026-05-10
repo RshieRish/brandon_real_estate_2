@@ -116,6 +116,10 @@ function parseInputs(strategy: Strategy, values: InputValues): InvestorInputs | 
         refiTermYears: num(values, 'refiTermYears'),
         holdMonthsBeforeRefi: num(values, 'holdMonthsBeforeRefi'),
       } satisfies BrrrrInputs;
+    default: {
+      const _exhaustive: never = strategy;
+      return _exhaustive;
+    }
   }
 }
 
@@ -229,6 +233,8 @@ export default function InvestorCalculator() {
   }));
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
   const engagementRetryTimeoutRef = useRef<number | null>(null);
+  const inputsRef = useRef<InputValues>(inputs);
+  const strategyRef = useRef<Strategy>(strategy);
 
   // Address lookup state
   const [lookupAddress, setLookupAddress] = useState('');
@@ -265,6 +271,15 @@ export default function InvestorCalculator() {
     [parsedInputs],
   );
 
+  // Keep refs current with latest state
+  useEffect(() => {
+    inputsRef.current = inputs;
+  }, [inputs]);
+
+  useEffect(() => {
+    strategyRef.current = strategy;
+  }, [strategy]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
@@ -281,18 +296,18 @@ export default function InvestorCalculator() {
 
     const sendEngagement = async () => {
       try {
-        const arvVal = num(inputs, 'arv') || num(inputs, 'purchasePrice');
+        const arvVal = num(inputsRef.current, 'arv') || num(inputsRef.current, 'purchasePrice');
         const holdMonthsVal =
-          strategy === 'flip'
-            ? num(inputs, 'holdMonths')
-            : strategy === 'brrrr'
-              ? num(inputs, 'holdMonthsBeforeRefi')
-              : num(inputs, 'holdYears') * 12;
+          strategyRef.current === 'flip'
+            ? num(inputsRef.current, 'holdMonths')
+            : strategyRef.current === 'brrrr'
+              ? num(inputsRef.current, 'holdMonthsBeforeRefi')
+              : num(inputsRef.current, 'holdYears') * 12;
 
         await apiPost<{ queued: boolean }>('/api/v1/investor/engagement', {
           session_key: sessionKey,
-          purchase_price: num(inputs, 'purchasePrice'),
-          rehab_costs: num(inputs, 'rehabCost'),
+          purchase_price: num(inputsRef.current, 'purchasePrice'),
+          rehab_costs: num(inputsRef.current, 'rehabCost'),
           arv: arvVal,
           hold_months: holdMonthsVal,
         });
@@ -311,7 +326,7 @@ export default function InvestorCalculator() {
         window.clearTimeout(engagementRetryTimeoutRef.current);
       }
     };
-  }, [parsedInputs, inputs, strategy]);
+  }, [parsedInputs]);
 
   function handleChange(name: string, value: string) {
     setInputs((prev) => ({ ...prev, [name]: value }));
