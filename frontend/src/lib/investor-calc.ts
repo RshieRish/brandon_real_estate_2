@@ -183,11 +183,53 @@ export function calculateBuyHoldMetrics(inputs: BuyHoldInputs): BuyHoldMetrics {
   };
 }
 
+// ─── Flip ──────────────────────────────────────────────────────────────────
+export function calculateFlipMetrics(inputs: FlipInputs): FlipMetrics {
+  const downPayment = inputs.purchasePrice * (inputs.downPaymentPct / 100);
+  const loanAmount = inputs.purchasePrice - downPayment;
+  const { monthlyMortgage, loanStructure } = computeMonthlyMortgage({
+    loanAmount,
+    interestRatePct: inputs.interestRate,
+    termYears: inputs.loanTermYears,
+  });
+
+  const monthlyHoldingExpenses = (inputs.propertyTax + inputs.insurance) / 12;
+  const holdingCosts = (monthlyMortgage + monthlyHoldingExpenses) * inputs.holdMonths;
+  const closingCosts = inputs.purchasePrice * 0.015 + inputs.arv * 0.0125;
+  const totalProjectCost =
+    inputs.purchasePrice + inputs.rehabCost + holdingCosts + closingCosts;
+  const flipProfit = inputs.arv - totalProjectCost;
+  const cashInvestedFlip =
+    downPayment + inputs.rehabCost + holdingCosts + closingCosts;
+  const flipROI = safeDivide(flipProfit, cashInvestedFlip) * 100;
+  const flipAnnualizedROI = safeDivide(flipROI, inputs.holdMonths) * 12;
+  const maxAllowableOffer70 = inputs.arv * 0.7 - inputs.rehabCost;
+  const maxAllowableOffer80 = inputs.arv * 0.8 - inputs.rehabCost;
+
+  return {
+    strategy: 'flip',
+    loanStructure,
+    monthlyMortgage,
+    downPayment,
+    loanAmount,
+    flipProfit,
+    flipROI,
+    flipAnnualizedROI,
+    maxAllowableOffer70,
+    maxAllowableOffer80,
+    holdingCosts,
+    closingCosts,
+    totalProjectCost,
+  };
+}
+
 // ─── Dispatch wrapper (will grow as strategies are added) ───────────────────
 export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   switch (inputs.strategy) {
     case 'buy_hold':
       return calculateBuyHoldMetrics(inputs);
+    case 'flip':
+      return calculateFlipMetrics(inputs);
     default:
       // Other strategies not yet implemented in this task
       throw new Error(`Strategy "${inputs.strategy}" not implemented yet`);

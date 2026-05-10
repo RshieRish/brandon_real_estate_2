@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateBuyHoldMetrics,
+  calculateFlipMetrics,
   calculateMetrics,
   type BuyHoldInputs,
+  type FlipInputs,
 } from './investor-calc';
 
 describe('calculateBuyHoldMetrics', () => {
@@ -52,5 +54,44 @@ describe('calculateBuyHoldMetrics', () => {
   it('dispatch wrapper routes buy_hold inputs correctly', () => {
     const m = calculateMetrics(baseInputs);
     expect(m.strategy).toBe('buy_hold');
+  });
+});
+
+describe('calculateFlipMetrics', () => {
+  const baseFlip: FlipInputs = {
+    strategy: 'flip',
+    purchasePrice: 300000,
+    rehabCost: 50000,
+    arv: 450000,
+    holdMonths: 6,
+    propertyTax: 4800,
+    insurance: 1200,
+    downPaymentPct: 20,
+    interestRate: 11, // hard money
+    loanTermYears: 1,
+  };
+
+  it('computes positive flip profit on a clean deal', () => {
+    const m = calculateFlipMetrics(baseFlip);
+    expect(m.flipProfit).toBeGreaterThan(0);
+  });
+
+  it('reports both the 70% and 80% rule MAOs', () => {
+    const m = calculateFlipMetrics(baseFlip);
+    // 70% × 450k − 50k = 265k
+    expect(m.maxAllowableOffer70).toBeCloseTo(265000, 0);
+    // 80% × 450k − 50k = 310k
+    expect(m.maxAllowableOffer80).toBeCloseTo(310000, 0);
+  });
+
+  it('uses interest-only mortgage for 1-year hard money', () => {
+    const m = calculateFlipMetrics(baseFlip);
+    expect(m.loanStructure).toBe('interest_only');
+  });
+
+  it('annualized ROI scales with hold months', () => {
+    const m6 = calculateFlipMetrics(baseFlip);
+    const m12 = calculateFlipMetrics({ ...baseFlip, holdMonths: 12 });
+    expect(m6.flipAnnualizedROI).toBeGreaterThan(m12.flipAnnualizedROI);
   });
 });
