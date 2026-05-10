@@ -136,6 +136,10 @@ def _confidence(rentcast_data: Optional[dict], range_tightness: Optional[float])
 
 
 async def estimate_rent(req: EstimateRentRequest) -> dict:
+    # Validate STR requirements upfront, before any IO
+    if req.mode == "str" and not req.market_type:
+        raise ValueError("market_type is required when mode == 'str'")
+
     rentcast = await get_rent_estimate(req.address)
     if rentcast and "rent" in rentcast and rentcast["rent"]:
         baseline = float(rentcast["rent"])
@@ -207,8 +211,6 @@ async def estimate_rent(req: EstimateRentRequest) -> dict:
     }
 
     if req.mode == "str":
-        if not req.market_type:
-            raise ValueError("market_type is required when mode == 'str'")
         market_mult = STR_MARKET_MULTIPLIERS[req.market_type]
         suggested_occ = STR_SUGGESTED_OCCUPANCY[req.market_type]
         nightly_median = round(
