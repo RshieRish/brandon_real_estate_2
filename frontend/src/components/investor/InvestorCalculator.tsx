@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MagnifyingGlass, MapPin, SpinnerGap, CheckCircle, Warning } from '@phosphor-icons/react';
-import { calculateMetrics, type InvestorInputs } from '@/lib/investor-calc';
+import { calculateMetrics, type BuyHoldInputs } from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
 import AddressAutocomplete from '@/components/shared/AddressAutocomplete';
 import AnalysisResults from './AnalysisResults';
@@ -14,25 +14,23 @@ import type {
   InvestorLeadCapture,
 } from './report-types';
 
-type InvestorInputValues = Record<keyof InvestorInputs, string>;
+type BuyHoldInputValues = Record<Exclude<keyof BuyHoldInputs, 'strategy'>, string>;
 
-const EMPTY_INPUTS: InvestorInputValues = {
+const EMPTY_INPUTS: BuyHoldInputValues = {
   purchasePrice: '',
   rehabCost: '',
-  arv: '',
-  holdMonths: '',
   rentalIncome: '',
   propertyTax: '',
   insurance: '',
   downPaymentPct: '',
   interestRate: '',
   loanTermYears: '',
+  holdYears: '',
 };
 
-const POSITIVE_FIELDS: Array<keyof InvestorInputs> = [
+const POSITIVE_FIELDS: Array<keyof BuyHoldInputValues> = [
   'purchasePrice',
-  'arv',
-  'holdMonths',
+  'holdYears',
   'loanTermYears',
 ];
 
@@ -66,28 +64,22 @@ interface LookupResult {
   data_source: string;
 }
 
-function parseInvestorInputs(values: InvestorInputValues): InvestorInputs | null {
-  const parsed = Object.entries(values).reduce<Partial<InvestorInputs>>((acc, [key, value]) => {
-    const typedKey = key as keyof InvestorInputs;
+function parseBuyHoldInputs(values: BuyHoldInputValues): BuyHoldInputs | null {
+  const parsed = Object.entries(values).reduce<Partial<BuyHoldInputs>>((acc, [key, value]) => {
     const trimmed = value.trim();
     const numeric = trimmed ? Number(trimmed) : 0;
-    if (!Number.isFinite(numeric)) {
-      return { ...acc, [typedKey]: 0 };
-    }
-    return { ...acc, [typedKey]: numeric };
+    return { ...acc, [key]: Number.isFinite(numeric) ? numeric : 0 };
   }, {});
-
-  const hasValidRequiredValues = POSITIVE_FIELDS.every((key) => (parsed[key] ?? 0) > 0);
-  if (!hasValidRequiredValues) return null;
-
-  return parsed as InvestorInputs;
+  const hasValid = POSITIVE_FIELDS.every((k) => (parsed[k] ?? 0) > 0);
+  if (!hasValid) return null;
+  return { ...parsed, strategy: 'buy_hold' } as BuyHoldInputs;
 }
 
 interface InputFieldProps {
   label: string;
-  name: keyof InvestorInputs;
+  name: keyof BuyHoldInputValues;
   value: string;
-  onChange: (name: keyof InvestorInputs, value: string) => void;
+  onChange: (name: keyof BuyHoldInputValues, value: string) => void;
   prefix?: string;
   suffix?: string;
   step?: number;
@@ -147,7 +139,7 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1, hi
 }
 
 export default function InvestorCalculator() {
-  const [inputs, setInputs] = useState<InvestorInputValues>(EMPTY_INPUTS);
+  const [inputs, setInputs] = useState<BuyHoldInputValues>(EMPTY_INPUTS);
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
   const engagementRetryTimeoutRef = useRef<number | null>(null);
 
@@ -156,9 +148,9 @@ export default function InvestorCalculator() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
-  const [filledFields, setFilledFields] = useState<Set<keyof InvestorInputs>>(new Set());
+  const [filledFields, setFilledFields] = useState<Set<keyof BuyHoldInputValues>>(new Set());
 
-  const parsedInputs = useMemo(() => parseInvestorInputs(inputs), [inputs]);
+  const parsedInputs = useMemo(() => parseBuyHoldInputs(inputs), [inputs]);
   const metrics = useMemo(
     () => (parsedInputs ? calculateMetrics(parsedInputs) : null),
     [parsedInputs],
@@ -184,8 +176,8 @@ export default function InvestorCalculator() {
           session_key: sessionKey,
           purchase_price: parsedInputs.purchasePrice,
           rehab_costs: parsedInputs.rehabCost,
-          arv: parsedInputs.arv,
-          hold_months: parsedInputs.holdMonths,
+          arv: 0, // placeholder until Flip strategy returns in Task 7
+          hold_months: parsedInputs.holdYears * 12,
         });
         window.sessionStorage.setItem('investor_engagement_sent', '1');
       } catch {
@@ -204,7 +196,7 @@ export default function InvestorCalculator() {
     };
   }, [parsedInputs]);
 
-  function handleChange(name: keyof InvestorInputs, value: string) {
+  function handleChange(name: keyof BuyHoldInputValues, value: string) {
     setInputs((prev) => ({ ...prev, [name]: value }));
     setFullReport(null);
     // Clear highlight after manual edit
@@ -230,13 +222,11 @@ export default function InvestorCalculator() {
 
       // Auto-fill fields from lookup
       const newInputs = { ...inputs };
-      const filled = new Set<keyof InvestorInputs>();
+      const filled = new Set<keyof BuyHoldInputValues>();
 
       if (result.purchase_price) {
         newInputs.purchasePrice = String(result.purchase_price);
-        newInputs.arv = String(result.purchase_price); // ARV defaults to current value
         filled.add('purchasePrice');
-        filled.add('arv');
       }
       if (result.monthly_rent) {
         newInputs.rentalIncome = String(result.monthly_rent);
@@ -283,7 +273,7 @@ export default function InvestorCalculator() {
       monthly_maintenance: 0,
       vacancy_rate_pct: 8,
       mgmt_fee_pct: 0,
-      hold_years: Math.max(1, Math.ceil(parsedInputs.holdMonths / 12)),
+      hold_years: parsedInputs.holdYears,
       appreciation_rate_pct: 3,
       name: contact.name || undefined,
       email: contact.email,
@@ -440,20 +430,11 @@ export default function InvestorCalculator() {
               step={1000}
             />
             <InputField
-              label="After-Repair Value (ARV)"
-              name="arv"
-              value={inputs.arv}
+              label="Hold Period (Years)"
+              name="holdYears"
+              value={inputs.holdYears}
               onChange={handleChange}
-              prefix="$"
-              step={1000}
-              highlight={filledFields.has('arv')}
-            />
-            <InputField
-              label="Hold Period"
-              name="holdMonths"
-              value={inputs.holdMonths}
-              onChange={handleChange}
-              suffix="mo"
+              suffix="yr"
               step={1}
             />
             <InputField

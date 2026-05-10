@@ -57,93 +57,16 @@ function MetricCard({ label, value, valueColor = 'text-white', eyebrow }: Metric
 }
 
 export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
-  const {
-    loanStructure,
-    flipProfit,
-    flipROI,
-    flipAnnualizedROI,
-    maxAllowableOffer,
-    holdingCosts,
-    closingCosts,
-    totalProjectCost,
-    monthlyCashFlow,
-    cashOnCashReturn,
-    capRate,
-    grm,
-  } = metrics;
-
-  const cashFlowColor =
-    monthlyCashFlow < 0 ? 'text-red-400' : 'text-white';
-  const cocColor =
-    cashOnCashReturn >= 8 ? 'text-emerald-400' : 'text-white';
+  if (metrics.strategy !== 'buy_hold') {
+    return null; // Other strategies' result blocks added in Task 8
+  }
+  const { monthlyCashFlow, cashOnCashReturn, capRate, grm } = metrics;
 
   return (
     <div className="space-y-8">
-      {/* Flip Analysis */}
       <div>
         <h3 className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-          Flip Analysis
-        </h3>
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="grid grid-cols-2 gap-3"
-        >
-          <MetricCard
-            eyebrow="Flip"
-            label="Estimated Profit"
-            value={fmt(flipProfit)}
-            valueColor={flipProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="ROI"
-            value={pct(flipROI)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Annualized ROI"
-            value={pct(flipAnnualizedROI)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="80% Rule Offer Cap"
-            value={fmt(maxAllowableOffer)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Holding Costs"
-            value={fmt(holdingCosts)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Closing Costs"
-            value={fmt(closingCosts)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Total Project Cost"
-            value={fmt(totalProjectCost)}
-            valueColor="text-gold"
-          />
-        </motion.div>
-        <p className="mt-3 text-white/35 text-xs font-light leading-relaxed">
-          Flip math assumes 1.5% buy-side closing costs and 1.25% sell-side closing costs.
-          {' '}
-          {loanStructure === 'interest_only'
-            ? 'Short-term loan terms of 1-2 years are modeled as interest-only bridge or fix-and-flip debt.'
-            : 'Loan terms of 3+ years are modeled with amortized payments.'}
-          {' '}
-          The 80% Rule Offer Cap is a conservative max purchase offer, not total project cost:
-          ARV x 80% minus rehab.
-        </p>
-      </div>
-
-      {/* Rental / BRRRR Analysis */}
-      <div>
-        <h3 className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-          Rental / BRRRR Analysis
+          Buy &amp; Hold Analysis
         </h3>
         <motion.div
           variants={containerVariants}
@@ -155,13 +78,13 @@ export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
             eyebrow="Rental"
             label="Monthly Cash Flow"
             value={fmt(monthlyCashFlow)}
-            valueColor={cashFlowColor}
+            valueColor={monthlyCashFlow < 0 ? 'text-red-400' : 'text-white'}
           />
           <MetricCard
             eyebrow="Rental"
             label="Cash-on-Cash Return"
             value={pct(cashOnCashReturn)}
-            valueColor={cocColor}
+            valueColor={cashOnCashReturn >= 8 ? 'text-emerald-400' : 'text-white'}
           />
           <MetricCard
             eyebrow="Rental"
