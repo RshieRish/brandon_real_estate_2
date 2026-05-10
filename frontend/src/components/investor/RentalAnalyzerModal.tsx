@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle, SpinnerGap, Warning, House } from '@phosphor-icons/react';
 import { apiPost } from '@/lib/api';
@@ -55,9 +55,28 @@ export default function RentalAnalyzerModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EstimateRentResponse | null>(null);
 
-  // Reset when reopened
+  const addressInputRef = useRef<HTMLInputElement>(null);
+  const prevOpenRef = useRef(false);
+
+  // ESC to close + auto-focus address input on open
   useEffect(() => {
-    if (open) {
+    if (!open) return undefined;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEsc);
+    // Auto-focus the first input after a tick (lets the open transition land first)
+    const timeout = setTimeout(() => addressInputRef.current?.focus(), 100);
+    return () => {
+      window.removeEventListener('keydown', handleEsc);
+      clearTimeout(timeout);
+    };
+  }, [open, onClose]);
+
+  // Reset when reopened (only on false → true transition)
+  useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      // Modal just opened — apply prefill
       setAddress(prefill?.address ?? '');
       setBedrooms(prefill?.bedrooms?.toString() ?? '');
       setBathrooms(prefill?.bathrooms?.toString() ?? '');
@@ -66,6 +85,7 @@ export default function RentalAnalyzerModal({
       setResult(null);
       setError(null);
     }
+    prevOpenRef.current = open;
   }, [open, prefill]);
 
   function toggleUpgrade(u: string) {
@@ -155,6 +175,7 @@ export default function RentalAnalyzerModal({
                   Address
                 </label>
                 <input
+                  ref={addressInputRef}
                   type="text"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
@@ -164,13 +185,13 @@ export default function RentalAnalyzerModal({
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <input placeholder="Beds" value={bedrooms} onChange={(e) => setBedrooms(e.target.value)}
+                <input type="number" inputMode="numeric" min={0} placeholder="Beds" value={bedrooms} onChange={(e) => setBedrooms(e.target.value)}
                   className="bg-dark-surface border border-dark-border text-white text-sm px-3 py-2.5 focus:outline-none focus:border-gold" />
-                <input placeholder="Baths" value={bathrooms} onChange={(e) => setBathrooms(e.target.value)}
+                <input type="number" inputMode="numeric" min={0} step={0.5} placeholder="Baths" value={bathrooms} onChange={(e) => setBathrooms(e.target.value)}
                   className="bg-dark-surface border border-dark-border text-white text-sm px-3 py-2.5 focus:outline-none focus:border-gold" />
-                <input placeholder="Sqft" value={sqft} onChange={(e) => setSqft(e.target.value)}
+                <input type="number" inputMode="numeric" min={0} placeholder="Sqft" value={sqft} onChange={(e) => setSqft(e.target.value)}
                   className="bg-dark-surface border border-dark-border text-white text-sm px-3 py-2.5 focus:outline-none focus:border-gold" />
-                <input placeholder="Year" value={yearBuilt} onChange={(e) => setYearBuilt(e.target.value)}
+                <input type="number" inputMode="numeric" min={1800} max={2030} placeholder="Year" value={yearBuilt} onChange={(e) => setYearBuilt(e.target.value)}
                   className="bg-dark-surface border border-dark-border text-white text-sm px-3 py-2.5 focus:outline-none focus:border-gold" />
               </div>
 
@@ -262,6 +283,14 @@ export default function RentalAnalyzerModal({
                 {loading ? <SpinnerGap weight="bold" className="w-4 h-4 animate-spin" /> : <House weight="bold" className="w-4 h-4" />}
                 {loading ? 'Analyzing…' : 'Estimate'}
               </button>
+
+              {!loading && (!address.trim() || !condition || (mode === 'str' && !market)) && (address || condition || market) && (
+                <p className="text-white/40 text-xs">
+                  {!address.trim() && 'Address required. '}
+                  {!condition && 'Pick a condition. '}
+                  {mode === 'str' && !market && 'Pick a market type.'}
+                </p>
+              )}
 
               {error && (
                 <div className="flex items-start gap-2 text-amber-400/80 text-sm">
