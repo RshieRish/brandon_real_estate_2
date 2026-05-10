@@ -1,22 +1,35 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MagnifyingGlass, MapPin, SpinnerGap, CheckCircle, Warning } from '@phosphor-icons/react';
-import { calculateMetrics, type BuyHoldInputs } from '@/lib/investor-calc';
+import {
+  calculateMetrics,
+  type BuyHoldInputs,
+  type BrrrrInputs,
+  type FlipInputs,
+  type StrInputs,
+  type Strategy,
+  type InvestorInputs,
+} from '@/lib/investor-calc';
 import { apiPost } from '@/lib/api';
 import AddressAutocomplete from '@/components/shared/AddressAutocomplete';
 import AnalysisResults from './AnalysisResults';
 import MeetingGate from './MeetingGate';
+import StrategyToggle from './StrategyToggle';
+import { STRATEGY_DEFAULTS, isStrategy } from './strategy-defaults';
 import type {
   InvestorAiReport,
   InvestorAnalysisResponse,
   InvestorLeadCapture,
 } from './report-types';
 
-type BuyHoldInputValues = Record<Exclude<keyof BuyHoldInputs, 'strategy'>, string>;
+// Internal flat input record — we don't strongly type each strategy here because
+// the same component renders different field sets depending on strategy.
+type InputValues = Record<string, string>;
 
-const EMPTY_INPUTS: BuyHoldInputValues = {
+const EMPTY_INPUTS: InputValues = {
   purchasePrice: '',
   rehabCost: '',
   rentalIncome: '',
@@ -25,14 +38,86 @@ const EMPTY_INPUTS: BuyHoldInputValues = {
   downPaymentPct: '',
   interestRate: '',
   loanTermYears: '',
+  // Strategy-specific (start empty)
   holdYears: '',
+  holdMonths: '',
+  arv: '',
+  nightlyRate: '',
+  occupancyPct: '',
+  cleaningFeePerNight: '',
+  strMgmtPct: '',
+  monthlyUtilities: '',
+  refiLtvPct: '',
+  refiRate: '',
+  refiTermYears: '',
+  holdMonthsBeforeRefi: '',
 };
 
-const POSITIVE_FIELDS: Array<keyof BuyHoldInputValues> = [
-  'purchasePrice',
-  'holdYears',
-  'loanTermYears',
-];
+function num(values: InputValues, key: string): number {
+  const trimmed = (values[key] ?? '').trim();
+  if (!trimmed) return 0;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseInputs(strategy: Strategy, values: InputValues): InvestorInputs | null {
+  const required: Record<Strategy, string[]> = {
+    buy_hold: ['purchasePrice', 'holdYears', 'loanTermYears'],
+    str: ['purchasePrice', 'nightlyRate', 'loanTermYears'],
+    flip: ['purchasePrice', 'arv', 'holdMonths', 'loanTermYears'],
+    brrrr: ['purchasePrice', 'arv', 'holdMonthsBeforeRefi', 'refiTermYears', 'loanTermYears'],
+  };
+  const missing = required[strategy].some((k) => num(values, k) <= 0);
+  if (missing) return null;
+
+  const baseFields = {
+    purchasePrice: num(values, 'purchasePrice'),
+    rehabCost: num(values, 'rehabCost'),
+    propertyTax: num(values, 'propertyTax'),
+    insurance: num(values, 'insurance'),
+    downPaymentPct: num(values, 'downPaymentPct'),
+    interestRate: num(values, 'interestRate'),
+    loanTermYears: num(values, 'loanTermYears'),
+  };
+
+  switch (strategy) {
+    case 'buy_hold':
+      return {
+        strategy: 'buy_hold',
+        ...baseFields,
+        rentalIncome: num(values, 'rentalIncome'),
+        holdYears: num(values, 'holdYears'),
+      } satisfies BuyHoldInputs;
+    case 'str':
+      return {
+        strategy: 'str',
+        ...baseFields,
+        nightlyRate: num(values, 'nightlyRate'),
+        occupancyPct: num(values, 'occupancyPct'),
+        cleaningFeePerNight: num(values, 'cleaningFeePerNight'),
+        strMgmtPct: num(values, 'strMgmtPct'),
+        monthlyUtilities: num(values, 'monthlyUtilities'),
+      } satisfies StrInputs;
+    case 'flip':
+      return {
+        strategy: 'flip',
+        ...baseFields,
+        arv: num(values, 'arv'),
+        holdMonths: num(values, 'holdMonths'),
+      } satisfies FlipInputs;
+    case 'brrrr':
+      return {
+        strategy: 'brrrr',
+        ...baseFields,
+        arv: num(values, 'arv'),
+        rentalIncome: num(values, 'rentalIncome'),
+        refiLtvPct: num(values, 'refiLtvPct'),
+        refiRate: num(values, 'refiRate'),
+        refiTermYears: num(values, 'refiTermYears'),
+        holdMonthsBeforeRefi: num(values, 'holdMonthsBeforeRefi'),
+      } satisfies BrrrrInputs;
+  }
+}
 
 interface LookupResult {
   address: string;
@@ -64,29 +149,18 @@ interface LookupResult {
   data_source: string;
 }
 
-function parseBuyHoldInputs(values: BuyHoldInputValues): BuyHoldInputs | null {
-  const parsed = Object.entries(values).reduce<Partial<BuyHoldInputs>>((acc, [key, value]) => {
-    const trimmed = value.trim();
-    const numeric = trimmed ? Number(trimmed) : 0;
-    return { ...acc, [key]: Number.isFinite(numeric) ? numeric : 0 };
-  }, {});
-  const hasValid = POSITIVE_FIELDS.every((k) => (parsed[k] ?? 0) > 0);
-  if (!hasValid) return null;
-  return { ...parsed, strategy: 'buy_hold' } as BuyHoldInputs;
-}
-
 interface InputFieldProps {
   label: string;
-  name: keyof BuyHoldInputValues;
+  name: string;
   value: string;
-  onChange: (name: keyof BuyHoldInputValues, value: string) => void;
+  onChange: (name: string, value: string) => void;
   prefix?: string;
   suffix?: string;
   step?: number;
   highlight?: boolean;
 }
 
-function InputField({ label, name, value, onChange, prefix, suffix, step = 1, highlight }: InputFieldProps) {
+function InputField({ label, name, value, onChange, prefix, suffix, highlight }: InputFieldProps) {
   const displayValue = useMemo(() => {
     if (!value && value !== '0') return value;
     const parts = value.toString().split('.');
@@ -139,7 +213,20 @@ function InputField({ label, name, value, onChange, prefix, suffix, step = 1, hi
 }
 
 export default function InvestorCalculator() {
-  const [inputs, setInputs] = useState<BuyHoldInputValues>(EMPTY_INPUTS);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const initialStrategy: Strategy = (() => {
+    const fromUrl = searchParams.get('strategy');
+    return isStrategy(fromUrl) ? fromUrl : 'buy_hold';
+  })();
+
+  const [strategy, setStrategyState] = useState<Strategy>(initialStrategy);
+  const [inputs, setInputs] = useState<InputValues>(() => ({
+    ...EMPTY_INPUTS,
+    ...STRATEGY_DEFAULTS[initialStrategy],
+  }));
   const [fullReport, setFullReport] = useState<InvestorAiReport | null>(null);
   const engagementRetryTimeoutRef = useRef<number | null>(null);
 
@@ -148,9 +235,31 @@ export default function InvestorCalculator() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
-  const [filledFields, setFilledFields] = useState<Set<keyof BuyHoldInputValues>>(new Set());
+  const [filledFields, setFilledFields] = useState<Set<string>>(new Set());
 
-  const parsedInputs = useMemo(() => parseBuyHoldInputs(inputs), [inputs]);
+  function setStrategy(next: Strategy) {
+    setStrategyState(next);
+    setFullReport(null);
+    setInputs((prev) => {
+      // Preserve all overlapping field values; layer in defaults only for empty fields.
+      const merged = { ...prev };
+      for (const [key, def] of Object.entries(STRATEGY_DEFAULTS[next])) {
+        if (!merged[key] || merged[key].trim() === '') merged[key] = def;
+      }
+      return merged;
+    });
+    // URL sync
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === 'buy_hold') {
+      params.delete('strategy');
+    } else {
+      params.set('strategy', next);
+    }
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }
+
+  const parsedInputs = useMemo(() => parseInputs(strategy, inputs), [strategy, inputs]);
   const metrics = useMemo(
     () => (parsedInputs ? calculateMetrics(parsedInputs) : null),
     [parsedInputs],
@@ -172,12 +281,20 @@ export default function InvestorCalculator() {
 
     const sendEngagement = async () => {
       try {
+        const arvVal = num(inputs, 'arv') || num(inputs, 'purchasePrice');
+        const holdMonthsVal =
+          strategy === 'flip'
+            ? num(inputs, 'holdMonths')
+            : strategy === 'brrrr'
+              ? num(inputs, 'holdMonthsBeforeRefi')
+              : num(inputs, 'holdYears') * 12;
+
         await apiPost<{ queued: boolean }>('/api/v1/investor/engagement', {
           session_key: sessionKey,
-          purchase_price: parsedInputs.purchasePrice,
-          rehab_costs: parsedInputs.rehabCost,
-          arv: 0, // placeholder until Flip strategy returns in Task 7
-          hold_months: parsedInputs.holdYears * 12,
+          purchase_price: num(inputs, 'purchasePrice'),
+          rehab_costs: num(inputs, 'rehabCost'),
+          arv: arvVal,
+          hold_months: holdMonthsVal,
         });
         window.sessionStorage.setItem('investor_engagement_sent', '1');
       } catch {
@@ -194,13 +311,13 @@ export default function InvestorCalculator() {
         window.clearTimeout(engagementRetryTimeoutRef.current);
       }
     };
-  }, [parsedInputs]);
+  }, [parsedInputs, inputs, strategy]);
 
-  function handleChange(name: keyof BuyHoldInputValues, value: string) {
+  function handleChange(name: string, value: string) {
     setInputs((prev) => ({ ...prev, [name]: value }));
     setFullReport(null);
-    // Clear highlight after manual edit
     setFilledFields((prev) => {
+      if (!prev.has(name)) return prev;
       const next = new Set(prev);
       next.delete(name);
       return next;
@@ -222,11 +339,13 @@ export default function InvestorCalculator() {
 
       // Auto-fill fields from lookup
       const newInputs = { ...inputs };
-      const filled = new Set<keyof BuyHoldInputValues>();
+      const filled = new Set<string>();
 
       if (result.purchase_price) {
         newInputs.purchasePrice = String(result.purchase_price);
+        newInputs.arv = String(result.purchase_price); // ARV defaults to current value (used by Flip/BRRRR)
         filled.add('purchasePrice');
+        filled.add('arv');
       }
       if (result.monthly_rent) {
         newInputs.rentalIncome = String(result.monthly_rent);
@@ -259,31 +378,43 @@ export default function InvestorCalculator() {
   async function handleUnlock(contact: InvestorLeadCapture) {
     if (!parsedInputs) return;
 
+    const purchasePriceVal = num(inputs, 'purchasePrice');
+    const rentVal = num(inputs, 'rentalIncome'); // 0 for flip/str
+    const holdYears =
+      strategy === 'flip'
+        ? Math.max(1, Math.ceil(num(inputs, 'holdMonths') / 12))
+        : strategy === 'brrrr'
+          ? Math.max(1, Math.ceil(num(inputs, 'holdMonthsBeforeRefi') / 12))
+          : Math.max(1, num(inputs, 'holdYears'));
+
     const response = await apiPost<InvestorAnalysisResponse>('/api/v1/investor/analyze', {
       property_type: 'single_family',
       units: 1,
-      purchase_price: parsedInputs.purchasePrice,
-      down_payment_pct: parsedInputs.downPaymentPct,
-      interest_rate: parsedInputs.interestRate,
-      loan_term_years: parsedInputs.loanTermYears,
-      monthly_rent_total: parsedInputs.rentalIncome,
-      rehab_costs: parsedInputs.rehabCost,
-      annual_taxes: parsedInputs.propertyTax,
-      annual_insurance: parsedInputs.insurance,
+      purchase_price: purchasePriceVal,
+      down_payment_pct: num(inputs, 'downPaymentPct'),
+      interest_rate: num(inputs, 'interestRate'),
+      loan_term_years: num(inputs, 'loanTermYears'),
+      monthly_rent_total: rentVal,
+      rehab_costs: num(inputs, 'rehabCost'),
+      annual_taxes: num(inputs, 'propertyTax'),
+      annual_insurance: num(inputs, 'insurance'),
       monthly_maintenance: 0,
       vacancy_rate_pct: 8,
       mgmt_fee_pct: 0,
-      hold_years: parsedInputs.holdYears,
+      hold_years: holdYears,
       appreciation_rate_pct: 3,
       name: contact.name || undefined,
       email: contact.email,
       phone: contact.phone || undefined,
+      strategy, // NEW: thread strategy into the AI report
     });
     setFullReport(response.report);
   }
 
   return (
     <div className="space-y-8">
+      <StrategyToggle value={strategy} onChange={setStrategy} />
+
       {/* ── Address Lookup Bar ── */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -307,7 +438,6 @@ export default function InvestorCalculator() {
               onChange={setLookupAddress}
               onSelect={(suggestion) => {
                 setLookupAddress(suggestion.formatted_address);
-                // Auto-trigger lookup after selecting from dropdown
                 setTimeout(() => {
                   const btn = document.getElementById('investor-lookup-btn');
                   btn?.click();
@@ -412,82 +542,81 @@ export default function InvestorCalculator() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Common fields — always shown */}
+            <InputField label="Purchase Price" name="purchasePrice" value={inputs.purchasePrice}
+              onChange={handleChange} prefix="$" highlight={filledFields.has('purchasePrice')} />
+            <InputField label="Rehab / Renovation Cost" name="rehabCost" value={inputs.rehabCost}
+              onChange={handleChange} prefix="$" />
+
+            {/* Buy & Hold + BRRRR: monthly rent */}
+            {(strategy === 'buy_hold' || strategy === 'brrrr') && (
+              <InputField label="Monthly Rental Income" name="rentalIncome" value={inputs.rentalIncome}
+                onChange={handleChange} prefix="$" highlight={filledFields.has('rentalIncome')} />
+            )}
+
+            {/* Flip + BRRRR: ARV */}
+            {(strategy === 'flip' || strategy === 'brrrr') && (
+              <InputField label="After-Repair Value (ARV)" name="arv" value={inputs.arv}
+                onChange={handleChange} prefix="$" highlight={filledFields.has('arv')} />
+            )}
+
+            {/* STR-only fields */}
+            {strategy === 'str' && (
+              <>
+                <InputField label="Nightly Rate" name="nightlyRate" value={inputs.nightlyRate}
+                  onChange={handleChange} prefix="$" />
+                <InputField label="Occupancy %" name="occupancyPct" value={inputs.occupancyPct}
+                  onChange={handleChange} suffix="%" />
+                <InputField label="Cleaning Fee / Night" name="cleaningFeePerNight"
+                  value={inputs.cleaningFeePerNight} onChange={handleChange} prefix="$" />
+                <InputField label="STR Mgmt %" name="strMgmtPct" value={inputs.strMgmtPct}
+                  onChange={handleChange} suffix="%" />
+                <InputField label="Monthly Utilities" name="monthlyUtilities"
+                  value={inputs.monthlyUtilities} onChange={handleChange} prefix="$" />
+              </>
+            )}
+
+            {/* Flip-only field */}
+            {strategy === 'flip' && (
+              <InputField label="Hold Period" name="holdMonths" value={inputs.holdMonths}
+                onChange={handleChange} suffix="mo" />
+            )}
+
+            {/* Buy & Hold-only field */}
+            {strategy === 'buy_hold' && (
+              <InputField label="Hold Period" name="holdYears" value={inputs.holdYears}
+                onChange={handleChange} suffix="yr" />
+            )}
+
+            {/* BRRRR-only fields */}
+            {strategy === 'brrrr' && (
+              <>
+                <InputField label="Hold Months Before Refi" name="holdMonthsBeforeRefi"
+                  value={inputs.holdMonthsBeforeRefi} onChange={handleChange} suffix="mo" />
+                <InputField label="Refi LTV %" name="refiLtvPct" value={inputs.refiLtvPct}
+                  onChange={handleChange} suffix="%" />
+                <InputField label="Refi Rate" name="refiRate" value={inputs.refiRate}
+                  onChange={handleChange} suffix="%" />
+                <InputField label="Refi Term" name="refiTermYears" value={inputs.refiTermYears}
+                  onChange={handleChange} suffix="yr" />
+              </>
+            )}
+
+            {/* Common financial fields */}
+            <InputField label="Property Tax / Year" name="propertyTax" value={inputs.propertyTax}
+              onChange={handleChange} prefix="$" highlight={filledFields.has('propertyTax')} />
+            <InputField label="Annual Insurance" name="insurance" value={inputs.insurance}
+              onChange={handleChange} prefix="$" highlight={filledFields.has('insurance')} />
+            <InputField label="Down Payment %" name="downPaymentPct" value={inputs.downPaymentPct}
+              onChange={handleChange} suffix="%" />
             <InputField
-              label="Purchase Price"
-              name="purchasePrice"
-              value={inputs.purchasePrice}
-              onChange={handleChange}
-              prefix="$"
-              step={1000}
-              highlight={filledFields.has('purchasePrice')}
-            />
+              label={strategy === 'brrrr' ? 'Initial Rate' : 'Interest Rate'}
+              name="interestRate" value={inputs.interestRate}
+              onChange={handleChange} suffix="%" />
             <InputField
-              label="Rehab / Renovation Cost"
-              name="rehabCost"
-              value={inputs.rehabCost}
-              onChange={handleChange}
-              prefix="$"
-              step={1000}
-            />
-            <InputField
-              label="Hold Period (Years)"
-              name="holdYears"
-              value={inputs.holdYears}
-              onChange={handleChange}
-              suffix="yr"
-              step={1}
-            />
-            <InputField
-              label="Monthly Rental Income"
-              name="rentalIncome"
-              value={inputs.rentalIncome}
-              onChange={handleChange}
-              prefix="$"
-              step={100}
-              highlight={filledFields.has('rentalIncome')}
-            />
-            <InputField
-              label="Property Tax / Year"
-              name="propertyTax"
-              value={inputs.propertyTax}
-              onChange={handleChange}
-              prefix="$"
-              step={100}
-              highlight={filledFields.has('propertyTax')}
-            />
-            <InputField
-              label="Annual Insurance"
-              name="insurance"
-              value={inputs.insurance}
-              onChange={handleChange}
-              prefix="$"
-              step={100}
-              highlight={filledFields.has('insurance')}
-            />
-            <InputField
-              label="Down Payment %"
-              name="downPaymentPct"
-              value={inputs.downPaymentPct}
-              onChange={handleChange}
-              suffix="%"
-              step={0.01}
-            />
-            <InputField
-              label="Interest Rate"
-              name="interestRate"
-              value={inputs.interestRate}
-              onChange={handleChange}
-              suffix="%"
-              step={0.001}
-            />
-            <InputField
-              label="Loan Term"
-              name="loanTermYears"
-              value={inputs.loanTermYears}
-              onChange={handleChange}
-              suffix="yr"
-              step={1}
-            />
+              label={strategy === 'brrrr' ? 'Initial Term' : 'Loan Term'}
+              name="loanTermYears" value={inputs.loanTermYears}
+              onChange={handleChange} suffix="yr" />
           </div>
         </motion.div>
 

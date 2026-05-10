@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import {
   ArrowDown,
@@ -189,7 +190,9 @@ export default function InvestPage() {
 
           {/* Calculator card */}
           <div className="glass border border-dark-border rounded-xl p-6 md:p-10">
-            <InvestorCalculator />
+            <Suspense fallback={<div className="text-white/40 text-sm">Loading calculator…</div>}>
+              <InvestorCalculator />
+            </Suspense>
           </div>
         </div>
       </section>
