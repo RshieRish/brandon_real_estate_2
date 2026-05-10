@@ -22,7 +22,7 @@ export default function StrategyToggle({ value, onChange }: StrategyToggleProps)
           Investment Strategy
         </p>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2" role="radiogroup" aria-label="Investment Strategy">
         {STRATEGY_LIST.map((s) => {
           const selected = s === value;
           return (
@@ -30,7 +30,8 @@ export default function StrategyToggle({ value, onChange }: StrategyToggleProps)
               key={s}
               type="button"
               onClick={() => onChange(s)}
-              aria-pressed={selected}
+              role="radio"
+              aria-checked={selected}
               className={`px-4 py-3 text-sm font-semibold tracking-wide border transition-colors ${
                 selected
                   ? 'bg-gold text-[#0a0a0a] border-gold'
