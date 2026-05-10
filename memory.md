@@ -159,3 +159,8 @@ Added interactive videos to Seller Staging Checklist
 - 2026-04-11: Fixed SVG colors in MarketingSphere and correctly aligned node text sprites to the global Y axis.
 - 2026-04-28: Added Cookie Consent component to the main layout which persists consent state in localStorage.
 - 2026-04-28: Added a silent client-side IP-based location check to the homepage Hero component (via geojs.io) that switches the background video to the high-res Dracut Drone video if the user's city is strictly 'Dracut', and 'Andover_drone.mp4' if the city is 'Andover'.
+- 2026-05-10: Added 4-strategy investor toggle (Buy & Hold / STR / Flip / BRRRR) at top of /invest with URL sync via ?strategy=. Each strategy has its own input field set, default values, and result panel layout.
+- 2026-05-10: Added RentalAnalyzerModal that estimates monthly rent (LTR) or nightly rate (STR) from condition + upgrade heuristics layered on top of RentCast's AVM. New backend route POST /api/v1/investor/estimate-rent.
+- 2026-05-10: Refactored frontend/src/lib/investor-calc.ts into a discriminated union with 4 calc functions (calculateBuyHoldMetrics / calculateStrMetrics / calculateFlipMetrics / calculateBrrrrMetrics). All exhaustively type-checked.
+- 2026-05-10: Added Vitest to frontend (no test framework existed before). 31 unit tests covering all 4 strategies + parseInputs gate.
+- 2026-05-10: Calibrated STR market multipliers against AirDNA/AirROI/Rabbu — Tourist 2.0× (was 3.0×), Urban 1.3× (was 2.4×), Suburban 1.2× (was 1.8×). Initial multipliers were peak-season optimistic; new values match annualized data. Calibration appendix documented in docs/superpowers/specs/2026-05-10-investor-strategy-toggle-and-rental-analyzer-design.md.

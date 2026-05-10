@@ -8,21 +8,20 @@ interface AnalysisResultsProps {
 }
 
 const fmt = (value: number) =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(value);
+  Number.isFinite(value)
+    ? new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 0,
+      }).format(value)
+    : '∞';
 
-const pct = (value: number) => value.toFixed(1) + '%';
+const pct = (value: number) =>
+  Number.isFinite(value) ? `${value.toFixed(1)}%` : 'Infinite';
 
 const containerVariants = {
   hidden: {},
-  visible: {
-    transition: {
-      staggerChildren: 0.06,
-    },
-  },
+  visible: { transition: { staggerChildren: 0.06 } },
 };
 
 const cardVariants = {
@@ -56,126 +55,119 @@ function MetricCard({ label, value, valueColor = 'text-white', eyebrow }: Metric
   );
 }
 
-export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
-  const {
-    loanStructure,
-    flipProfit,
-    flipROI,
-    flipAnnualizedROI,
-    maxAllowableOffer,
-    holdingCosts,
-    closingCosts,
-    totalProjectCost,
-    monthlyCashFlow,
-    cashOnCashReturn,
-    capRate,
-    grm,
-  } = metrics;
-
-  const cashFlowColor =
-    monthlyCashFlow < 0 ? 'text-red-400' : 'text-white';
-  const cocColor =
-    cashOnCashReturn >= 8 ? 'text-emerald-400' : 'text-white';
-
+function MetricsGrid({ children, title }: { children: React.ReactNode; title: string }) {
   return (
-    <div className="space-y-8">
-      {/* Flip Analysis */}
-      <div>
-        <h3 className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-          Flip Analysis
-        </h3>
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="grid grid-cols-2 gap-3"
-        >
-          <MetricCard
-            eyebrow="Flip"
-            label="Estimated Profit"
-            value={fmt(flipProfit)}
-            valueColor={flipProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="ROI"
-            value={pct(flipROI)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Annualized ROI"
-            value={pct(flipAnnualizedROI)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="80% Rule Offer Cap"
-            value={fmt(maxAllowableOffer)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Holding Costs"
-            value={fmt(holdingCosts)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Closing Costs"
-            value={fmt(closingCosts)}
-          />
-          <MetricCard
-            eyebrow="Flip"
-            label="Total Project Cost"
-            value={fmt(totalProjectCost)}
-            valueColor="text-gold"
-          />
-        </motion.div>
-        <p className="mt-3 text-white/35 text-xs font-light leading-relaxed">
-          Flip math assumes 1.5% buy-side closing costs and 1.25% sell-side closing costs.
-          {' '}
-          {loanStructure === 'interest_only'
-            ? 'Short-term loan terms of 1-2 years are modeled as interest-only bridge or fix-and-flip debt.'
-            : 'Loan terms of 3+ years are modeled with amortized payments.'}
-          {' '}
-          The 80% Rule Offer Cap is a conservative max purchase offer, not total project cost:
-          ARV x 80% minus rehab.
-        </p>
-      </div>
+    <div>
+      <h3 className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">{title}</h3>
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid grid-cols-2 gap-3"
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
+}
 
-      {/* Rental / BRRRR Analysis */}
-      <div>
-        <h3 className="text-gold text-xs font-semibold tracking-[0.2em] uppercase mb-4">
-          Rental / BRRRR Analysis
-        </h3>
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="grid grid-cols-2 gap-3"
-        >
-          <MetricCard
-            eyebrow="Rental"
-            label="Monthly Cash Flow"
-            value={fmt(monthlyCashFlow)}
-            valueColor={cashFlowColor}
-          />
-          <MetricCard
-            eyebrow="Rental"
-            label="Cash-on-Cash Return"
-            value={pct(cashOnCashReturn)}
-            valueColor={cocColor}
-          />
-          <MetricCard
-            eyebrow="Rental"
-            label="Cap Rate"
-            value={pct(capRate)}
-            valueColor="text-gold"
-          />
-          <MetricCard
-            eyebrow="Rental"
-            label="Gross Rent Multiplier"
-            value={grm.toFixed(1)}
-          />
-        </motion.div>
-      </div>
+export default function AnalysisResults({ metrics }: AnalysisResultsProps) {
+  if (metrics.strategy === 'buy_hold') {
+    return (
+      <MetricsGrid title="Buy & Hold Analysis">
+        <MetricCard
+          eyebrow="Rental"
+          label="Monthly Cash Flow"
+          value={fmt(metrics.monthlyCashFlow)}
+          valueColor={metrics.monthlyCashFlow < 0 ? 'text-red-400' : 'text-white'}
+        />
+        <MetricCard
+          eyebrow="Rental"
+          label="Cash-on-Cash Return"
+          value={pct(metrics.cashOnCashReturn)}
+          valueColor={metrics.cashOnCashReturn >= 8 ? 'text-emerald-400' : 'text-white'}
+        />
+        <MetricCard eyebrow="Rental" label="Cap Rate" value={pct(metrics.capRate)} valueColor="text-gold" />
+        <MetricCard eyebrow="Rental" label="GRM" value={metrics.grm.toFixed(1)} />
+        <MetricCard eyebrow="Rental" label="Annual NOI" value={fmt(metrics.noi)} />
+        <MetricCard eyebrow="Rental" label="5-Year Equity" value={fmt(metrics.fiveYearEquityBuild)} />
+      </MetricsGrid>
+    );
+  }
+
+  if (metrics.strategy === 'str') {
+    return (
+      <MetricsGrid title="Short-Term Rental Analysis">
+        <MetricCard eyebrow="STR" label="Monthly Revenue" value={fmt(metrics.monthlyRevenue)} valueColor="text-gold" />
+        <MetricCard
+          eyebrow="STR"
+          label="Monthly Cash Flow"
+          value={fmt(metrics.monthlyCashFlow)}
+          valueColor={metrics.monthlyCashFlow < 0 ? 'text-red-400' : 'text-white'}
+        />
+        <MetricCard eyebrow="STR" label="Cash-on-Cash" value={pct(metrics.cashOnCashReturn)} />
+        <MetricCard
+          eyebrow="STR"
+          label="Break-Even Occupancy"
+          value={pct(metrics.breakEvenOccupancyPct)}
+        />
+        <MetricCard eyebrow="STR" label="Gross / Night" value={fmt(metrics.grossPerNight)} />
+        <MetricCard eyebrow="STR" label="Net / Night" value={fmt(metrics.netPerNight)} />
+      </MetricsGrid>
+    );
+  }
+
+  if (metrics.strategy === 'flip') {
+    return (
+      <MetricsGrid title="Flip Analysis">
+        <MetricCard
+          eyebrow="Flip"
+          label="Estimated Profit"
+          value={fmt(metrics.flipProfit)}
+          valueColor={metrics.flipProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}
+        />
+        <MetricCard eyebrow="Flip" label="ROI" value={pct(metrics.flipROI)} />
+        <MetricCard eyebrow="Flip" label="Annualized ROI" value={pct(metrics.flipAnnualizedROI)} />
+        <MetricCard eyebrow="Flip" label="70% Rule MAO" value={fmt(metrics.maxAllowableOffer70)} valueColor="text-gold" />
+        <MetricCard eyebrow="Flip" label="80% Rule MAO" value={fmt(metrics.maxAllowableOffer80)} />
+        <MetricCard eyebrow="Flip" label="Holding Costs" value={fmt(metrics.holdingCosts)} />
+        <MetricCard eyebrow="Flip" label="Closing Costs" value={fmt(metrics.closingCosts)} />
+        <MetricCard eyebrow="Flip" label="Total Project Cost" value={fmt(metrics.totalProjectCost)} valueColor="text-gold" />
+      </MetricsGrid>
+    );
+  }
+
+  // BRRRR
+  return (
+    <div className="space-y-6">
+      <MetricsGrid title="BRRRR Analysis">
+        <MetricCard eyebrow="BRRRR" label="Cash Into Deal" value={fmt(metrics.cashIntoDealUpfront)} />
+        <MetricCard eyebrow="BRRRR" label="Refi Loan" value={fmt(metrics.refiLoanAmount)} />
+        <MetricCard eyebrow="BRRRR" label="Cash Recovered" value={fmt(metrics.cashRecoveredAtRefi)} valueColor="text-emerald-400" />
+        <MetricCard
+          eyebrow="BRRRR"
+          label="Cash Left In Deal"
+          value={fmt(Math.max(0, metrics.cashLeftInDeal))}
+          valueColor={metrics.isInfiniteRoi ? 'text-emerald-400' : 'text-white'}
+        />
+        <MetricCard
+          eyebrow="BRRRR"
+          label="Post-Refi Cash Flow"
+          value={fmt(metrics.postRefiMonthlyCashFlow)}
+          valueColor={metrics.postRefiMonthlyCashFlow < 0 ? 'text-red-400' : 'text-white'}
+        />
+        <MetricCard
+          eyebrow="BRRRR"
+          label="Post-Refi CoC"
+          value={pct(metrics.postRefiCashOnCash)}
+          valueColor={metrics.isInfiniteRoi ? 'text-emerald-400' : 'text-white'}
+        />
+      </MetricsGrid>
+      {metrics.isInfiniteRoi && (
+        <p className="text-emerald-400 text-xs font-semibold tracking-widest uppercase">
+          Infinite-ROI deal — refi recovers all cash invested
+        </p>
+      )}
     </div>
   );
 }
