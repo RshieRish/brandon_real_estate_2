@@ -316,6 +316,18 @@ export default function InvestorCalculator() {
     strategyRef.current = strategy;
   }, [strategy]);
 
+  // Strip invalid `?strategy=` param on mount so the URL reflects the actual fallback.
+  useEffect(() => {
+    const fromUrl = searchParams.get('strategy');
+    if (fromUrl && !isStrategy(fromUrl)) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('strategy');
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
