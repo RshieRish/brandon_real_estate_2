@@ -647,3 +647,35 @@ Completed Checklist Video Integration
   - Saved consent choice to `localStorage`.
   - Added additional logic for users in Andover to see `Andover_drone.mp4`.
 - Status: Complete
+
+### 2026-05-10 — Investor Strategy Toggle + Rental Analyzer
+- What was built: 4-strategy toggle (Buy & Hold / STR / Flip / BRRRR) at the top of `/invest`, plus a `RentalAnalyzerModal` that estimates monthly rent (LTR) or nightly rate (STR) from condition + upgrade heuristics on top of RentCast's AVM.
+- Files created:
+  - `frontend/src/components/investor/StrategyToggle.tsx`
+  - `frontend/src/components/investor/strategy-defaults.ts`
+  - `frontend/src/components/investor/RentalAnalyzerModal.tsx`
+  - `frontend/src/components/investor/parse-inputs.test.ts`
+  - `frontend/src/lib/rental-analyzer-types.ts`
+  - `frontend/src/lib/investor-calc.test.ts`
+  - `frontend/vitest.config.ts`
+  - `backend/services/rental_analyzer_service.py`
+  - `backend/tests/test_rental_analyzer_service.py`
+  - `backend/tests/test_estimate_rent_router.py`
+- Files modified:
+  - `frontend/src/lib/investor-calc.ts` (discriminated-union refactor + 4 calc functions)
+  - `frontend/src/components/investor/InvestorCalculator.tsx` (strategy state, URL sync, per-strategy fields, modal mount)
+  - `frontend/src/components/investor/AnalysisResults.tsx` (strategy-aware metric grids)
+  - `frontend/src/app/(main)/invest/page.tsx` (Suspense wrap for useSearchParams)
+  - `frontend/package.json` (Vitest devDependencies)
+  - `backend/routers/investor.py` (new /estimate-rent route, strategy field on InvestorInputs)
+  - `backend/services/investor_service.py` (strategy-aware AI prompt)
+  - `docs/superpowers/specs/2026-05-10-investor-strategy-toggle-and-rental-analyzer-design.md` (calibration appendix)
+- Key decisions:
+  - Discriminated-union types so the calc engine and dispatch wrapper are exhaustively type-checked.
+  - URL sync via `?strategy=` so deals are shareable; invalid params fall back to Buy & Hold.
+  - Heuristic adjuster on top of RentCast: condition (-12% to +4%) + upgrades (capped at +8%) clamped to [-20%, +10%].
+  - STR multipliers calibrated against AirDNA / AirROI / Rabbu data — Tourist 2.0×, Urban 1.3×, Suburban 1.2× (down from initial 3.0/2.4/1.8 which proved too aggressive).
+  - Cap rate calculated WITHOUT vacancy in NOI (industry convention); cash flow subtracts vacancy.
+- Tests: 31 frontend Vitest cases + 8 backend pytest cases all passing.
+- Status: Complete
+
