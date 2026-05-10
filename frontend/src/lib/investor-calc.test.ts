@@ -31,7 +31,7 @@ describe('calculateBuyHoldMetrics', () => {
 
   it('computes cap rate against purchase price', () => {
     const m = calculateBuyHoldMetrics(baseInputs);
-    expect(m.capRate).toBeCloseTo(7.7, 0);
+    expect(m.capRate).toBeCloseTo(7.61, 1);
   });
 
   it('flags interest_only loan structure when term ≤ 2 years', () => {
@@ -39,9 +39,13 @@ describe('calculateBuyHoldMetrics', () => {
     expect(m.loanStructure).toBe('interest_only');
   });
 
-  it('handles zero rent without divide-by-zero', () => {
+  it('returns 0 GRM when annual rent is 0', () => {
     const m = calculateBuyHoldMetrics({ ...baseInputs, rentalIncome: 0 });
     expect(m.grm).toBe(0);
+  });
+
+  it('produces finite cashflow with no rental income', () => {
+    const m = calculateBuyHoldMetrics({ ...baseInputs, rentalIncome: 0 });
     expect(Number.isFinite(m.monthlyCashFlow)).toBe(true);
   });
 
