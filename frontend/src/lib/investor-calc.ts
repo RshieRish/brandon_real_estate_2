@@ -223,6 +223,62 @@ export function calculateFlipMetrics(inputs: FlipInputs): FlipMetrics {
   };
 }
 
+// ─── STR (Short-Term Rental) ───────────────────────────────────────────────
+export function calculateStrMetrics(inputs: StrInputs): StrMetrics {
+  const downPayment = inputs.purchasePrice * (inputs.downPaymentPct / 100);
+  const loanAmount = inputs.purchasePrice - downPayment;
+  const { monthlyMortgage, loanStructure } = computeMonthlyMortgage({
+    loanAmount,
+    interestRatePct: inputs.interestRate,
+    termYears: inputs.loanTermYears,
+  });
+
+  const NIGHTS_PER_MONTH = 30.4;
+  const occupiedNights = NIGHTS_PER_MONTH * (inputs.occupancyPct / 100);
+  const monthlyRevenue = inputs.nightlyRate * occupiedNights;
+
+  // STR-specific operating expenses
+  const cleaningCostMonthly = inputs.cleaningFeePerNight * occupiedNights;
+  const mgmtCostMonthly = monthlyRevenue * (inputs.strMgmtPct / 100);
+  const monthlyTaxIns = (inputs.propertyTax + inputs.insurance) / 12;
+  // STR vacancy/seasonal buffer is implicit in occupancy; no extra %.
+  const totalMonthlyOpex =
+    cleaningCostMonthly + mgmtCostMonthly + inputs.monthlyUtilities + monthlyTaxIns;
+
+  const monthlyNetOperating = monthlyRevenue - totalMonthlyOpex;
+  const monthlyCashFlow = monthlyNetOperating - monthlyMortgage;
+  const annualCashFlow = monthlyCashFlow * 12;
+  const cashInvested = downPayment + inputs.rehabCost;
+  const cashOnCashReturn = safeDivide(annualCashFlow, cashInvested) * 100;
+
+  // Break-even occupancy: solve monthlyCashFlow = 0 for occupancy
+  // Let occ = decimal. Revenue = nightly × 30.4 × occ. Cleaning = cleaningFee × 30.4 × occ.
+  // Solve: occ × 30.4 × (nightly × (1 − strMgmt/100) − cleaningFee) = utilities + taxIns + mortgage
+  const occCoefficient =
+    NIGHTS_PER_MONTH * (inputs.nightlyRate * (1 - inputs.strMgmtPct / 100) - inputs.cleaningFeePerNight);
+  const fixedFloor = inputs.monthlyUtilities + monthlyTaxIns + monthlyMortgage;
+  const breakEvenDecimal = safeDivide(fixedFloor, occCoefficient);
+  const breakEvenOccupancyPct = Math.max(0, Math.min(100, breakEvenDecimal * 100));
+
+  const grossPerNight = inputs.nightlyRate;
+  const netPerNight = occupiedNights > 0 ? monthlyNetOperating / occupiedNights : 0;
+
+  return {
+    strategy: 'str',
+    loanStructure,
+    monthlyMortgage,
+    downPayment,
+    loanAmount,
+    monthlyRevenue,
+    monthlyCashFlow,
+    annualCashFlow,
+    cashOnCashReturn,
+    breakEvenOccupancyPct,
+    grossPerNight,
+    netPerNight,
+  };
+}
+
 // ─── Dispatch wrapper (will grow as strategies are added) ───────────────────
 export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
   switch (inputs.strategy) {
@@ -230,6 +286,8 @@ export function calculateMetrics(inputs: InvestorInputs): InvestorMetrics {
       return calculateBuyHoldMetrics(inputs);
     case 'flip':
       return calculateFlipMetrics(inputs);
+    case 'str':
+      return calculateStrMetrics(inputs);
     default:
       // Other strategies not yet implemented in this task
       throw new Error(`Strategy "${inputs.strategy}" not implemented yet`);

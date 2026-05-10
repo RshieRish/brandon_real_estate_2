@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   calculateBuyHoldMetrics,
   calculateFlipMetrics,
+  calculateStrMetrics,
   calculateMetrics,
   type BuyHoldInputs,
   type FlipInputs,
+  type StrInputs,
 } from './investor-calc';
 
 describe('calculateBuyHoldMetrics', () => {
@@ -93,5 +95,46 @@ describe('calculateFlipMetrics', () => {
     const m6 = calculateFlipMetrics(baseFlip);
     const m12 = calculateFlipMetrics({ ...baseFlip, holdMonths: 12 });
     expect(m6.flipAnnualizedROI).toBeGreaterThan(m12.flipAnnualizedROI);
+  });
+});
+
+describe('calculateStrMetrics', () => {
+  const baseStr: StrInputs = {
+    strategy: 'str',
+    purchasePrice: 500000,
+    rehabCost: 25000,
+    nightlyRate: 250,
+    occupancyPct: 65,
+    cleaningFeePerNight: 90,
+    strMgmtPct: 20,
+    monthlyUtilities: 250,
+    propertyTax: 6000,
+    insurance: 2400,
+    downPaymentPct: 25,
+    interestRate: 7.5,
+    loanTermYears: 30,
+  };
+
+  it('computes monthly revenue from nightly rate and occupancy', () => {
+    const m = calculateStrMetrics(baseStr);
+    // 250 × 30.4 × 0.65 = 4,940
+    expect(m.monthlyRevenue).toBeCloseTo(4940, 0);
+  });
+
+  it('break-even occupancy is between 0 and 100', () => {
+    const m = calculateStrMetrics(baseStr);
+    expect(m.breakEvenOccupancyPct).toBeGreaterThanOrEqual(0);
+    expect(m.breakEvenOccupancyPct).toBeLessThanOrEqual(100);
+  });
+
+  it('STR cash flow is lower than equivalent gross because of higher expenses', () => {
+    const m = calculateStrMetrics(baseStr);
+    expect(m.monthlyCashFlow).toBeLessThan(m.monthlyRevenue);
+  });
+
+  it('handles zero occupancy without divide-by-zero', () => {
+    const m = calculateStrMetrics({ ...baseStr, occupancyPct: 0 });
+    expect(Number.isFinite(m.monthlyCashFlow)).toBe(true);
+    expect(m.monthlyRevenue).toBe(0);
   });
 });
