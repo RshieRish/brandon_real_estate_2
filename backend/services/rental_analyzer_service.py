@@ -94,12 +94,6 @@ class EstimateRentRequest(BaseModel):
     purchase_price: Optional[float] = None
 
 
-class BreakdownItem(BaseModel):
-    label: str
-    value_dollars: int
-    pct_delta: Optional[float]
-
-
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 

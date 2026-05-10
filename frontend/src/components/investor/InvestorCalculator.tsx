@@ -29,9 +29,9 @@ import type { RentMode } from '@/lib/rental-analyzer-types';
 
 // Internal flat input record — we don't strongly type each strategy here because
 // the same component renders different field sets depending on strategy.
-type InputValues = Record<string, string>;
+export type InputValues = Record<string, string>;
 
-const EMPTY_INPUTS: InputValues = {
+export const EMPTY_INPUTS: InputValues = {
   purchasePrice: '',
   rehabCost: '',
   rentalIncome: '',
@@ -62,7 +62,7 @@ function num(values: InputValues, key: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseInputs(strategy: Strategy, values: InputValues): InvestorInputs | null {
+export function parseInputs(strategy: Strategy, values: InputValues): InvestorInputs | null {
   const required: Record<Strategy, string[]> = {
     buy_hold: ['purchasePrice', 'holdYears', 'loanTermYears'],
     str: ['purchasePrice', 'nightlyRate', 'loanTermYears'],

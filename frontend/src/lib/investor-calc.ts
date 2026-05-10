@@ -313,9 +313,9 @@ export function calculateBrrrrMetrics(inputs: BrrrrInputs): BrrrrMetrics {
     termYears: inputs.refiTermYears,
   });
   const vacancyAllowance = inputs.rentalIncome * 0.08;
-  const monthlyNOI = inputs.rentalIncome - vacancyAllowance - monthlyHoldExpenses;
+  const monthlyNOI = inputs.rentalIncome - monthlyHoldExpenses;
   const noi = monthlyNOI * 12;
-  const postRefiMonthlyCashFlow = monthlyNOI - postRefiMortgage;
+  const postRefiMonthlyCashFlow = monthlyNOI - vacancyAllowance - postRefiMortgage;
   const postRefiAnnualCashFlow = postRefiMonthlyCashFlow * 12;
 
   const isInfiniteRoi = cashLeftInDeal <= 0;
