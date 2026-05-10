@@ -84,10 +84,11 @@ class RentalAnalyzerTests(unittest.TestCase):
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(rc))):
             result = run(estimate_rent(req))
         self.assertEqual(result["mode"], "str")
-        # urban multiplier 2.4, occupancy 65% → nightly = (3000 × 2.4) / (30.4 × 0.65) ≈ 364
-        self.assertGreater(result["nightly_median"], 320)
-        self.assertLess(result["nightly_median"], 410)
-        self.assertEqual(result["suggested_occupancy_pct"], 65)
+        # urban multiplier 1.3, occupancy 55% → nightly = (3000 × 1.3) / (30.4 × 0.55) ≈ 233
+        # (calibrated 2026-05-10 against AirDNA / AirROI Boston-metro data)
+        self.assertGreater(result["nightly_median"], 210)
+        self.assertLess(result["nightly_median"], 260)
+        self.assertEqual(result["suggested_occupancy_pct"], 55)
 
 
 async def _async(value):

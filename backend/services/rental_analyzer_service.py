@@ -40,16 +40,24 @@ TOTAL_ADJ_CEILING = 0.10
 TOTAL_ADJ_FLOOR = -0.20
 
 # STR market multipliers (effective monthly STR revenue ≈ multiplier × LTR rent).
+# Calibrated 2026-05-10 against AirDNA / AirROI / Rabbu Boston-metro market data:
+#   - Tourist (Cape Cod): ~$272/night × ~50% annual occ ≈ $4,134/mo vs ~$2,300 LTR → 1.8×
+#   - Urban (Boston):     ~$272/night × ~46.7% occ ≈ $3,861/mo vs ~$3,100 LTR → 1.25×
+#   - Suburban (Worcester 2BR): ~$158/night × ~50% occ ≈ $2,400/mo vs ~$2,160 LTR → 1.1×
+# Multipliers rounded slightly above measured values to leave room for well-run hosts.
 STR_MARKET_MULTIPLIERS: dict[str, float] = {
-    "tourist": 3.0,
-    "urban": 2.4,
-    "suburban": 1.8,
+    "tourist": 2.0,
+    "urban": 1.3,
+    "suburban": 1.2,
 }
 
+# Suggested occupancy reflects realistic annualized averages, not peak-season or
+# top-quartile performers. AirDNA puts Boston at ~46.7%, Cape Cod ~50% annualized
+# (peak-loaded, soft shoulder), Worcester ~50%. Rounded to clean values.
 STR_SUGGESTED_OCCUPANCY: dict[str, int] = {
-    "tourist": 70,
-    "urban": 65,
-    "suburban": 55,
+    "tourist": 55,
+    "urban": 55,
+    "suburban": 50,
 }
 
 # Per-bedroom fallback baseline (Boston-metro starting points).
