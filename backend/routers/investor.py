@@ -14,6 +14,7 @@ from services.notification_service import enqueue_notification, run_notification
 from services.investor_service import generate_investor_analysis
 from services.rentcast_service import get_full_property_data
 from services.property_image_service import get_map_thumbnail_url, get_streetview_url
+from services.rental_analyzer_service import EstimateRentRequest, estimate_rent
 
 router = APIRouter()
 
@@ -23,6 +24,8 @@ class InvestorInputs(BaseModel):
     address: Optional[str] = None
     property_type: str = "single_family"
     units: int = 1
+    # Strategy
+    strategy: Optional[str] = None
     # Financials
     purchase_price: float
     down_payment_pct: float = 20.0
@@ -99,7 +102,7 @@ async def full_analysis(inp: InvestorInputs, db: AsyncSession = Depends(get_db))
     if not inp.email:
         raise HTTPException(status_code=422, detail="email is required for analysis")
     metrics = calculate_metrics(inp)
-    lead_meta = json.dumps({"purchase_price": inp.purchase_price, "property_type": inp.property_type, "address": inp.address})
+    lead_meta = json.dumps({"purchase_price": inp.purchase_price, "property_type": inp.property_type, "address": inp.address, "strategy": inp.strategy})
     lead = Lead(
         name=inp.name or "", email=inp.email, phone=inp.phone,
         source="investor_tool", lead_type="investor",
@@ -122,6 +125,7 @@ async def full_analysis(inp: InvestorInputs, db: AsyncSession = Depends(get_db))
             "name": inp.name,
             "email": inp.email,
             "phone": inp.phone,
+            "strategy": inp.strategy,
         },
     )
     await db.commit()
@@ -260,3 +264,12 @@ async def lookup_property(req: LookupRequest):
         "comparables": sale_comps,
         "data_source": "rentcast",
     }
+
+
+@router.post("/estimate-rent")
+async def estimate_rent_route(req: EstimateRentRequest):
+    """Estimate monthly rent (LTR) or nightly rate (STR) from condition + upgrades."""
+    try:
+        return await estimate_rent(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
