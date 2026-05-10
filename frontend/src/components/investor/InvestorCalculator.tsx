@@ -17,6 +17,7 @@ import { apiPost } from '@/lib/api';
 import AddressAutocomplete from '@/components/shared/AddressAutocomplete';
 import AnalysisResults from './AnalysisResults';
 import MeetingGate from './MeetingGate';
+import RentalAnalyzerModal from './RentalAnalyzerModal';
 import StrategyToggle from './StrategyToggle';
 import { STRATEGY_DEFAULTS, isStrategy } from './strategy-defaults';
 import type {
@@ -24,6 +25,7 @@ import type {
   InvestorAnalysisResponse,
   InvestorLeadCapture,
 } from './report-types';
+import type { RentMode } from '@/lib/rental-analyzer-types';
 
 // Internal flat input record — we don't strongly type each strategy here because
 // the same component renders different field sets depending on strategy.
@@ -162,9 +164,11 @@ interface InputFieldProps {
   suffix?: string;
   step?: number;
   highlight?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
-function InputField({ label, name, value, onChange, prefix, suffix, highlight }: InputFieldProps) {
+function InputField({ label, name, value, onChange, prefix, suffix, highlight, actionLabel, onAction }: InputFieldProps) {
   const displayValue = useMemo(() => {
     if (!value && value !== '0') return value;
     const parts = value.toString().split('.');
@@ -174,12 +178,23 @@ function InputField({ label, name, value, onChange, prefix, suffix, highlight }:
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label
-        htmlFor={`input-${name}`}
-        className="text-white/50 text-xs font-medium tracking-widest uppercase"
-      >
-        {label}
-      </label>
+      <div className="flex items-center justify-between">
+        <label
+          htmlFor={`input-${name}`}
+          className="text-white/50 text-xs font-medium tracking-widest uppercase"
+        >
+          {label}
+        </label>
+        {actionLabel && onAction && (
+          <button
+            type="button"
+            onClick={onAction}
+            className="text-gold text-[10px] font-semibold tracking-widest uppercase hover:underline"
+          >
+            {actionLabel}
+          </button>
+        )}
+      </div>
       <div className="relative flex items-center">
         {prefix && (
           <span className="absolute left-3 text-white/40 text-sm pointer-events-none select-none">
@@ -242,6 +257,27 @@ export default function InvestorCalculator() {
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [filledFields, setFilledFields] = useState<Set<string>>(new Set());
+
+  // Rental analyzer modal state
+  const [analyzerOpen, setAnalyzerOpen] = useState(false);
+
+  const analyzerMode: RentMode = strategy === 'str' ? 'str' : 'ltr';
+  const analyzerTargetField = strategy === 'str' ? 'nightlyRate' : 'rentalIncome';
+
+  const analyzerPrefill = useMemo(() => ({
+    address: lookupResult?.address || lookupAddress,
+    property_type: lookupResult?.property_type,
+    bedrooms: lookupResult?.bedrooms ?? undefined,
+    bathrooms: lookupResult?.bathrooms ?? undefined,
+    sqft: lookupResult?.sqft ?? undefined,
+    year_built: lookupResult?.year_built ?? undefined,
+    purchase_price: num(inputs, 'purchasePrice') || undefined,
+  }), [lookupResult, lookupAddress, inputs]);
+
+  function handleAnalyzerApply(value: number) {
+    setInputs((prev) => ({ ...prev, [analyzerTargetField]: String(Math.round(value)) }));
+    setFilledFields((prev) => new Set(prev).add(analyzerTargetField));
+  }
 
   function setStrategy(next: Strategy) {
     setStrategyState(next);
@@ -566,7 +602,9 @@ export default function InvestorCalculator() {
             {/* Buy & Hold + BRRRR: monthly rent */}
             {(strategy === 'buy_hold' || strategy === 'brrrr') && (
               <InputField label="Monthly Rental Income" name="rentalIncome" value={inputs.rentalIncome}
-                onChange={handleChange} prefix="$" highlight={filledFields.has('rentalIncome')} />
+                onChange={handleChange} prefix="$" highlight={filledFields.has('rentalIncome')}
+                actionLabel="Estimate this"
+                onAction={() => setAnalyzerOpen(true)} />
             )}
 
             {/* Flip + BRRRR: ARV */}
@@ -579,7 +617,9 @@ export default function InvestorCalculator() {
             {strategy === 'str' && (
               <>
                 <InputField label="Nightly Rate" name="nightlyRate" value={inputs.nightlyRate}
-                  onChange={handleChange} prefix="$" />
+                  onChange={handleChange} prefix="$"
+                  actionLabel="Estimate this"
+                  onAction={() => setAnalyzerOpen(true)} />
                 <InputField label="Occupancy %" name="occupancyPct" value={inputs.occupancyPct}
                   onChange={handleChange} suffix="%" />
                 <InputField label="Cleaning Fee / Night" name="cleaningFeePerNight"
@@ -677,6 +717,14 @@ export default function InvestorCalculator() {
           )}
         </motion.div>
       </div>
+
+      <RentalAnalyzerModal
+        open={analyzerOpen}
+        onClose={() => setAnalyzerOpen(false)}
+        mode={analyzerMode}
+        prefill={analyzerPrefill}
+        onApply={handleAnalyzerApply}
+      />
     </div>
   );
 }
