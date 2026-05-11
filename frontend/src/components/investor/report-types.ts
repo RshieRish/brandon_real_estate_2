@@ -26,6 +26,7 @@ export interface InvestorAiReport {
   };
   verdict?: string;
   verdict_reason?: string;
+  disclaimer?: string;
 }
 
 export interface InvestorAnalysisResponse {
