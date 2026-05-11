@@ -130,7 +130,12 @@ async def full_analysis(inp: InvestorInputs, db: AsyncSession = Depends(get_db))
     )
     await db.commit()
     asyncio.create_task(run_notification_retry_pass(limit=5))
-    ai_report = await generate_investor_analysis(inp.model_dump(), metrics)
+    ai_report = await generate_investor_analysis(
+        inp.model_dump(),
+        metrics,
+        db=db,
+        lead_id=lead.id,
+    )
     return {"metrics": metrics, "report": ai_report}
 
 
