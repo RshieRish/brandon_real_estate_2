@@ -35,9 +35,10 @@ UPGRADE_BUMPS: dict[str, float] = {
 
 # Cap on additive upgrade bump (does NOT include the condition adjustment).
 UPGRADE_CAP = 0.08
-# Total adjustment is also clamped.
-TOTAL_ADJ_CEILING = 0.10
-TOTAL_ADJ_FLOOR = -0.20
+# Heuristic v2 allows broader combos; clamp widened so property-type + amenities
+# + condition + upgrades can stack without saturating prematurely.
+TOTAL_ADJ_CEILING = 0.25
+TOTAL_ADJ_FLOOR = -0.25
 
 # STR market multipliers (effective monthly STR revenue ≈ multiplier × LTR rent).
 # Calibrated 2026-05-10 against AirDNA / AirROI / Rabbu Boston-metro market data:
@@ -74,6 +75,78 @@ BEDROOM_BASELINE: dict[int, int] = {
 FALLBACK_PERCENT_OF_PRICE = 0.007
 
 NIGHTS_PER_MONTH = 30.4
+
+
+# ─── Heuristic v2 tables (property-type-aware) ──────────────────────────────
+
+# Property-type adjusters applied AFTER the (now type-weighted) baseline.
+PROPERTY_TYPE_ADJUSTMENTS: dict[str, float] = {
+    "single_family":     0.08,
+    "duplex":            0.06,
+    "townhouse":         0.03,
+    "condo":             0.00,
+    "multi_2_4_unit":   -0.02,
+    "multi_5plus_unit": -0.05,
+    "adu":              -0.08,
+}
+
+# Amenity bumps (additive, then capped at AMENITY_CAP).
+# Garage supersedes off_street_parking when both are present.
+AMENITY_BUMPS: dict[str, float] = {
+    "in_unit_laundry":     0.030,
+    "off_street_parking":  0.025,
+    "garage":              0.040,
+    "central_ac":          0.020,
+    "private_outdoor":     0.030,
+    "dishwasher":          0.010,
+    "pet_friendly":        0.015,
+}
+AMENITY_CAP = 0.12
+
+# Bath premium: each bath above 1 = +2.5%, capped at +7.5%.
+BATH_PREMIUM_PER_EXTRA = 0.025
+BATH_PREMIUM_CAP = 0.075
+
+# Year-built tiers (cutoff_year_exclusive, adjustment).
+YEAR_BUILT_TIERS: list[tuple[int, float]] = [
+    (1950, -0.02),   # pre-1950
+    (1990,  0.00),   # 1950-1990
+    (2010,  0.02),   # 1990-2010
+    (9999,  0.05),   # 2010+
+]
+
+# Sqft refinement: ±1% per 100sqft above/below typical for bed count, capped at ±6%.
+SQFT_TYPICAL_PER_BED: dict[int, int] = {
+    1: 700, 2: 950, 3: 1300, 4: 1800, 5: 2200,
+}
+SQFT_ADJ_PER_100SQFT = 0.01
+SQFT_ADJ_CAP = 0.06
+
+# 7×7 property-type similarity matrix for comp re-weighting.
+# Diagonal = 1.0. Symmetric. Used to weight comps when computing the baseline.
+PROPERTY_TYPE_SIMILARITY: dict[str, dict[str, float]] = {
+    "single_family":    {"single_family": 1.00, "duplex": 0.85, "townhouse": 0.70, "condo": 0.55, "multi_2_4_unit": 0.50, "multi_5plus_unit": 0.40, "adu": 0.50},
+    "duplex":           {"single_family": 0.85, "duplex": 1.00, "townhouse": 0.70, "condo": 0.55, "multi_2_4_unit": 0.65, "multi_5plus_unit": 0.45, "adu": 0.55},
+    "townhouse":        {"single_family": 0.70, "duplex": 0.70, "townhouse": 1.00, "condo": 0.70, "multi_2_4_unit": 0.55, "multi_5plus_unit": 0.50, "adu": 0.55},
+    "condo":            {"single_family": 0.55, "duplex": 0.55, "townhouse": 0.70, "condo": 1.00, "multi_2_4_unit": 0.65, "multi_5plus_unit": 0.75, "adu": 0.60},
+    "multi_2_4_unit":   {"single_family": 0.50, "duplex": 0.65, "townhouse": 0.55, "condo": 0.65, "multi_2_4_unit": 1.00, "multi_5plus_unit": 0.75, "adu": 0.60},
+    "multi_5plus_unit": {"single_family": 0.40, "duplex": 0.45, "townhouse": 0.50, "condo": 0.75, "multi_2_4_unit": 0.75, "multi_5plus_unit": 1.00, "adu": 0.55},
+    "adu":              {"single_family": 0.50, "duplex": 0.55, "townhouse": 0.55, "condo": 0.60, "multi_2_4_unit": 0.60, "multi_5plus_unit": 0.55, "adu": 1.00},
+}
+
+# Neutral similarity used when a comp's type is unknown / not in the matrix.
+UNKNOWN_TYPE_SIMILARITY = 0.50
+
+# RentCast's propertyType strings → our canonical taxonomy.
+RENTCAST_TYPE_MAP: dict[str, str] = {
+    "Single Family":  "single_family",
+    "Multi Family":   "multi_2_4_unit",   # RentCast doesn't expose unit count
+    "Condo":          "condo",
+    "Condominium":    "condo",
+    "Townhouse":      "townhouse",
+    "Townhome":       "townhouse",
+    "Apartment":      "multi_5plus_unit",
+}
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────
