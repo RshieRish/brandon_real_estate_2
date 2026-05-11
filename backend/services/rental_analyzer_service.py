@@ -154,13 +154,22 @@ RENTCAST_TYPE_MAP: dict[str, str] = {
 
 class EstimateRentRequest(BaseModel):
     address: str = Field(..., min_length=4)
-    property_type: Optional[str] = "single_family"
+    property_type: Literal[
+        "single_family",
+        "duplex",
+        "townhouse",
+        "condo",
+        "multi_2_4_unit",
+        "multi_5plus_unit",
+        "adu",
+    ]
     bedrooms: Optional[int] = None
     bathrooms: Optional[float] = None
     sqft: Optional[int] = None
     year_built: Optional[int] = None
     condition: Literal["excellent", "good", "fair", "needs_work"]
     upgrades: list[str] = []
+    amenities: list[str] = []
     mode: Literal["ltr", "str"] = "ltr"
     market_type: Optional[Literal["tourist", "urban", "suburban"]] = None
     # Optional context for fallbacks

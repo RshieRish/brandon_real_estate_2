@@ -41,6 +41,7 @@ class RentalAnalyzerTests(unittest.TestCase):
         rc = {"rent": 2400, "rentRangeLow": 2200, "rentRangeHigh": 2600, "comparables": []}
         req = EstimateRentRequest(
             address="50 Cheever Ave, Dracut, MA 01826",
+            property_type="single_family",
             condition="excellent",
             upgrades=["Kitchen"],
             mode="ltr",
@@ -57,7 +58,7 @@ class RentalAnalyzerTests(unittest.TestCase):
     def test_needs_work_drops_rent_below_baseline(self):
         rc = {"rent": 2400, "rentRangeLow": 2300, "rentRangeHigh": 2500, "comparables": []}
         req = EstimateRentRequest(
-            address="XXXX", condition="needs_work", upgrades=[], mode="ltr",
+            address="XXXX", property_type="single_family", condition="needs_work", upgrades=[], mode="ltr",
         )
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(rc))):
             result = run(estimate_rent(req))
@@ -68,6 +69,7 @@ class RentalAnalyzerTests(unittest.TestCase):
         rc = {"rent": 2000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
         req = EstimateRentRequest(
             address="XXXX",
+            property_type="single_family",
             condition="good",
             upgrades=["Kitchen", "Baths", "HVAC", "Flooring", "Roof", "Windows"],
             mode="ltr",
@@ -79,7 +81,7 @@ class RentalAnalyzerTests(unittest.TestCase):
 
     def test_falls_back_when_rentcast_returns_none(self):
         req = EstimateRentRequest(
-            address="XXXX", condition="good", upgrades=[], mode="ltr",
+            address="XXXX", property_type="single_family", condition="good", upgrades=[], mode="ltr",
             bedrooms=2, purchase_price=400000,
         )
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(None))):
@@ -90,7 +92,7 @@ class RentalAnalyzerTests(unittest.TestCase):
     def test_str_mode_returns_nightly_rate(self):
         rc = {"rent": 3000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
         req = EstimateRentRequest(
-            address="XXXX", condition="good", upgrades=[], mode="str", market_type="urban",
+            address="XXXX", property_type="single_family", condition="good", upgrades=[], mode="str", market_type="urban",
         )
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(rc))):
             result = run(estimate_rent(req))

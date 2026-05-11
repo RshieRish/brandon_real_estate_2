@@ -30,6 +30,7 @@ class EstimateRentRouteTests(unittest.TestCase):
                 "/api/v1/investor/estimate-rent",
                 json={
                     "address": "50 Cheever Ave, Dracut, MA 01826",
+                    "property_type": "single_family",
                     "condition": "good",
                     "upgrades": [],
                     "mode": "ltr",
@@ -45,6 +46,7 @@ class EstimateRentRouteTests(unittest.TestCase):
             "/api/v1/investor/estimate-rent",
             json={
                 "address": "50 Cheever Ave, Dracut, MA 01826",
+                "property_type": "single_family",
                 "condition": "good",
                 "upgrades": [],
                 "mode": "str",
