@@ -130,3 +130,47 @@ from services.compliance.rules import ALL_RULES
 def test_good_sentences_have_zero_matches(sentence: str):
     hits = [r.id for r in ALL_RULES if r.pattern.search(sentence)]
     assert hits == [], f"False positive on {sentence!r}: {hits}"
+
+
+from services.compliance.scanner import Violation, scan_text, scan_report
+
+
+def test_scan_text_returns_violations_for_field():
+    violations = scan_text("ai_explanation", "This is a family-friendly area with good schools.")
+    rule_ids = sorted(v.rule_id for v in violations)
+    assert "CP-001" in rule_ids   # family-friendly
+    assert "CP-005" in rule_ids   # good schools
+    assert all(v.field_path == "ai_explanation" for v in violations)
+    assert all(isinstance(v, Violation) for v in violations)
+
+
+def test_scan_text_clean_returns_empty():
+    assert scan_text("verdict_reason", "Cap rate of 6.2% with stable rent comps.") == []
+
+
+def test_scan_report_walks_all_text_fields():
+    report = {
+        "ai_explanation": "A safe neighborhood for empty nesters.",
+        "exit_comparison": {
+            "sell": "Sell at end of hold for a guaranteed profit.",
+            "refinance": "Refinance and hold; consult your CPA on tax impact.",
+            "exchange_1031": "1031 exchange will defer all capital gains.",
+        },
+        "verdict": "MODERATE",
+        "verdict_reason": "Cap rate supports the verdict.",
+        "hold_scenarios": [],
+    }
+    violations_by_field = scan_report(report)
+    assert "ai_explanation" in violations_by_field
+    assert "exit_comparison.sell" in violations_by_field
+    assert "exit_comparison.exchange_1031" in violations_by_field
+    assert "exit_comparison.refinance" not in violations_by_field
+    assert "verdict_reason" not in violations_by_field
+    # spot-check some rule IDs
+    all_ids = {v.rule_id for vs in violations_by_field.values() for v in vs}
+    assert {"CP-004", "FH-006", "AD-002", "AD-003"}.issubset(all_ids)
+
+
+def test_scan_report_missing_fields_are_safe():
+    assert scan_report({}) == {}
+    assert scan_report({"ai_explanation": ""}) == {}
