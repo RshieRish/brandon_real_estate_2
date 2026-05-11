@@ -120,3 +120,13 @@ def test_sl_001_excludes_no_rent_control_negation():
     assert sl_001.pattern.search("Massachusetts has rent control on multi-family.") is not None
     assert sl_001.pattern.search("Massachusetts has no rent control.") is None
     assert sl_001.pattern.search("Boston no rent control here.") is None
+
+
+from tests.fixtures.compliance_good_sentences import GOOD_SENTENCES
+from services.compliance.rules import ALL_RULES
+
+
+@pytest.mark.parametrize("sentence", GOOD_SENTENCES)
+def test_good_sentences_have_zero_matches(sentence: str):
+    hits = [r.id for r in ALL_RULES if r.pattern.search(sentence)]
+    assert hits == [], f"False positive on {sentence!r}: {hits}"
