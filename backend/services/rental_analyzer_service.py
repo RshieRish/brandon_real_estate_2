@@ -352,13 +352,17 @@ async def estimate_rent(req: EstimateRentRequest) -> dict:
         baseline = float(_fallback_baseline(req))
         baseline_label = "Per-bedroom fallback"
 
-    # Range-tightness still derived from RentCast's published range, when present.
+    # Range-tightness derived from RentCast's published median (not our possibly-
+    # re-weighted baseline), so the ratio reflects RentCast's own confidence
+    # interval. Using the weighted baseline as denominator would distort the
+    # ratio when our baseline drifts from RentCast's median.
     range_tightness = None
     if rentcast:
         rc_low = rentcast.get("rentRangeLow")
         rc_high = rentcast.get("rentRangeHigh")
-        if rc_low is not None and rc_high is not None and baseline > 0:
-            range_tightness = (rc_high - rc_low) / baseline
+        rc_median = rentcast.get("rent")
+        if rc_low is not None and rc_high is not None and rc_median and rc_median > 0:
+            range_tightness = (rc_high - rc_low) / float(rc_median)
 
     # ── Adjusters ──
     prop_type_adj = _property_type_adjustment(req.property_type)
