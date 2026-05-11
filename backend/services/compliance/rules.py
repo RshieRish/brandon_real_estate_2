@@ -112,3 +112,77 @@ PROTECTED_CLASS_TERMS: tuple[Rule, ...] = (
         guidance="Do not reference national origin or race.",
     ),
 )
+
+
+CODED_PHRASES: tuple[Rule, ...] = (
+    Rule(
+        id="CP-001",
+        category="coded_phrase",
+        pattern=_ci(r"\bfamily[- ]friendly\b"),
+        severity="hard",
+        guidance="HUD flags 'family-friendly' as familial-status steering. Describe the property's layout (e.g. '3-bedroom with yard') instead.",
+    ),
+    Rule(
+        id="CP-002",
+        category="coded_phrase",
+        pattern=_ci(r"\b(?:good|great|perfect)\s+for\s+young\s+professionals?\b"),
+        severity="hard",
+        guidance="Targets by age. Describe transit, walkability, or amenities instead.",
+    ),
+    Rule(
+        id="CP-003",
+        category="coded_phrase",
+        pattern=_ci(r"\bup[- ]and[- ]coming\s+(?:neighborhood|area|community)\b"),
+        severity="hard",
+        guidance="HUD-flagged code for racial/economic transition. Describe the specific trend (e.g. '15% price appreciation YoY').",
+    ),
+    Rule(
+        id="CP-004",
+        category="coded_phrase",
+        pattern=_ci(r"\bsafe\s+neighborhood\b"),
+        severity="hard",
+        guidance="Race-coded per HUD. Cite an objective metric (crime stats by source) or remove.",
+    ),
+    Rule(
+        id="CP-005",
+        category="coded_phrase",
+        pattern=_ci(r"\bgood\s+schools?\b"),
+        severity="hard",
+        guidance="HUD-flagged. Cite school rating source (e.g. 'MA DESE rating 8/10') or omit.",
+    ),
+    Rule(
+        id="CP-006",
+        category="coded_phrase",
+        pattern=_ci(r"\bwalk(?:ing)?\s+distance\s+to\s+(?:\w+\s+){0,3}?(?:churches?|temples?|mosques?|synagogues?)\b"),
+        severity="hard",
+        guidance="References religion. Describe walkability to non-religious amenities instead.",
+    ),
+    Rule(
+        id="CP-007",
+        category="coded_phrase",
+        pattern=_ci(r"\b(?:exclusive|private)\s+(?:community|neighborhood|enclave)\b"),
+        severity="hard",
+        guidance="Implies social/economic exclusion. Describe physical privacy (lot size, setbacks) instead.",
+    ),
+    Rule(
+        id="CP-008",
+        category="coded_phrase",
+        pattern=_ci(r"\btraditional\s+famil(?:y|ies)\b"),
+        severity="hard",
+        guidance="Familial-status steering. Remove.",
+    ),
+    Rule(
+        id="CP-009",
+        category="coded_phrase",
+        pattern=_ci(r"\bquiet\s+residential\s+pocket\b"),
+        severity="hard",
+        guidance="HUD-flagged code. Describe specific street/lot characteristics instead.",
+    ),
+    Rule(
+        id="CP-010",
+        category="coded_phrase",
+        pattern=_ci(r"\bdesirable\s+demographic\b"),
+        severity="hard",
+        guidance="Explicit demographic targeting. Remove.",
+    ),
+)
