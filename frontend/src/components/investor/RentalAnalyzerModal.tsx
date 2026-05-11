@@ -5,11 +5,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle, SpinnerGap, Warning, House } from '@phosphor-icons/react';
 import { apiPost } from '@/lib/api';
 import {
+  AMENITY_OPTIONS,
   CONDITION_OPTIONS,
   MARKET_OPTIONS,
+  PROPERTY_TYPE_OPTIONS,
   UPGRADE_OPTIONS,
+  type Amenity,
   type EstimateRentPayload,
   type EstimateRentResponse,
+  type PropertyType,
   type RentCondition,
   type RentMode,
   type StrMarketType,
@@ -48,8 +52,10 @@ export default function RentalAnalyzerModal({
   const [bathrooms, setBathrooms] = useState<string>(prefill?.bathrooms?.toString() ?? '');
   const [sqft, setSqft] = useState<string>(prefill?.sqft?.toString() ?? '');
   const [yearBuilt, setYearBuilt] = useState<string>(prefill?.year_built?.toString() ?? '');
+  const [propertyType, setPropertyType] = useState<PropertyType | ''>('');
   const [condition, setCondition] = useState<RentCondition | ''>('');
   const [upgrades, setUpgrades] = useState<string[]>([]);
+  const [amenities, setAmenities] = useState<Amenity[]>([]);
   const [market, setMarket] = useState<StrMarketType | ''>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +88,8 @@ export default function RentalAnalyzerModal({
       setBathrooms(prefill?.bathrooms?.toString() ?? '');
       setSqft(prefill?.sqft?.toString() ?? '');
       setYearBuilt(prefill?.year_built?.toString() ?? '');
+      setPropertyType('');
+      setAmenities([]);
       setResult(null);
       setError(null);
     }
@@ -92,8 +100,12 @@ export default function RentalAnalyzerModal({
     setUpgrades((prev) => (prev.includes(u) ? prev.filter((x) => x !== u) : [...prev, u]));
   }
 
+  function toggleAmenity(a: Amenity) {
+    setAmenities((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
+  }
+
   async function handleAnalyze() {
-    if (!address.trim() || !condition) return;
+    if (!address.trim() || !condition || !propertyType) return;
     if (mode === 'str' && !market) return;
 
     setLoading(true);
@@ -102,13 +114,14 @@ export default function RentalAnalyzerModal({
 
     const payload: EstimateRentPayload = {
       address: address.trim(),
-      property_type: prefill?.property_type,
+      property_type: propertyType,
       bedrooms: bedrooms ? Number(bedrooms) : undefined,
       bathrooms: bathrooms ? Number(bathrooms) : undefined,
       sqft: sqft ? Number(sqft) : undefined,
       year_built: yearBuilt ? Number(yearBuilt) : undefined,
       condition,
       upgrades,
+      amenities,
       mode,
       market_type: mode === 'str' ? (market as StrMarketType) : undefined,
       purchase_price: prefill?.purchase_price,
@@ -197,6 +210,33 @@ export default function RentalAnalyzerModal({
 
               <div>
                 <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
+                  Property Type <span className="text-gold">*</span>
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="radiogroup" aria-label="Property Type">
+                  {PROPERTY_TYPE_OPTIONS.map((opt) => {
+                    const selected = propertyType === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setPropertyType(opt.value)}
+                        className={`px-3 py-2.5 text-xs font-semibold tracking-wide border transition-colors ${
+                          selected
+                            ? 'bg-gold text-[#0a0a0a] border-gold'
+                            : 'bg-dark-surface border-dark-border text-white/60 hover:border-gold/40 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
                   Condition <span className="text-gold">*</span>
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -246,6 +286,37 @@ export default function RentalAnalyzerModal({
                 </div>
               </div>
 
+              <div>
+                <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
+                  Amenities
+                </p>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Amenities (select any that apply)">
+                  {AMENITY_OPTIONS.map((opt) => {
+                    const selected = amenities.includes(opt.value);
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => toggleAmenity(opt.value)}
+                        className={`px-3 py-1.5 text-xs font-semibold tracking-widest uppercase border transition-colors ${
+                          selected
+                            ? 'bg-gold/15 border-gold text-gold'
+                            : 'bg-transparent border-dark-border text-white/50 hover:border-gold/40'
+                        }`}
+                      >
+                        {selected && <CheckCircle weight="fill" className="inline w-3 h-3 mr-1" />}
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {amenities.includes('garage') && amenities.includes('off_street_parking') && (
+                  <p className="text-white/40 text-[10px] mt-2">
+                    Parking supersedes — only the Garage premium applies.
+                  </p>
+                )}
+              </div>
+
               {mode === 'str' && (
                 <div>
                   <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
@@ -277,16 +348,17 @@ export default function RentalAnalyzerModal({
               <button
                 type="button"
                 onClick={handleAnalyze}
-                disabled={loading || !address.trim() || !condition || (mode === 'str' && !market)}
+                disabled={loading || !address.trim() || !condition || !propertyType || (mode === 'str' && !market)}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-gold text-[#0a0a0a] font-semibold text-sm px-6 py-3 hover:bg-gold/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {loading ? <SpinnerGap weight="bold" className="w-4 h-4 animate-spin" /> : <House weight="bold" className="w-4 h-4" />}
                 {loading ? 'Analyzing…' : 'Estimate'}
               </button>
 
-              {!loading && (!address.trim() || !condition || (mode === 'str' && !market)) && (address || condition || market) && (
+              {!loading && (!address.trim() || !condition || !propertyType || (mode === 'str' && !market)) && (address || condition || propertyType || market) && (
                 <p className="text-white/40 text-xs">
                   {!address.trim() && 'Address required. '}
+                  {!propertyType && 'Pick a property type. '}
                   {!condition && 'Pick a condition. '}
                   {mode === 'str' && !market && 'Pick a market type.'}
                 </p>

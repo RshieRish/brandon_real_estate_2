@@ -679,3 +679,22 @@ Completed Checklist Video Integration
 - Tests: 31 frontend Vitest cases + 8 backend pytest cases all passing.
 - Status: Complete
 
+
+### 2026-05-11 — Rental Analyzer v2: Property-Type Awareness + Comp Re-Weighting
+- What was built: Made the rental analyzer property-type aware. A side-by-side duplex 2bd/2ba no longer returns the same estimate as a 5+ unit apartment building 2bd/2ba at the same address. Smoke test confirms +15.4% delta on identical inputs.
+- Files modified:
+  - `backend/services/rental_analyzer_service.py` (heuristic v2 tables, weighted-baseline function, expanded adjuster pipeline, confidence v2 rules)
+  - `backend/tests/test_rental_analyzer_service.py` (5 existing tests updated to use `condo` instead of `single_family` + 25 new tests across 4 new test classes — 33 tests total)
+  - `backend/tests/test_estimate_rent_router.py` (2 router tests updated with property_type)
+  - `frontend/src/lib/rental-analyzer-types.ts` (PropertyType + Amenity literal unions + PROPERTY_TYPE_OPTIONS + AMENITY_OPTIONS constants)
+  - `frontend/src/components/investor/RentalAnalyzerModal.tsx` (Property Type required chip group with radiogroup a11y + Amenities multi-select group + garage/parking helper line)
+- Key decisions:
+  - Comp re-weighting: each RentCast comp weighted by (type_similarity × correlation). Same-type matches dominate; cross-type matches contribute less.
+  - 7-value property-type taxonomy: SFH, duplex, townhouse, condo, small multi (2-4), apartment building (5+), ADU.
+  - Heuristic adjusters layered on the weighted baseline: property type (+8% SFH to -8% ADU), amenities (capped at +12%), bath premium (+2.5%/extra, capped +7.5%), year built (-2% pre-1950 to +5% 2010+), sqft refinement (±1%/100sqft, capped ±6%).
+  - Total adjustment clamped to ±25% (was ±10%) so combos can stack realistically.
+  - Garage supersedes off-street parking when both are selected.
+  - property_type is REQUIRED in the modal (breaking schema change; modal is the only caller).
+  - Range-tightness denominator is RentCast's published median (not our weighted baseline) so confidence thresholds remain semantically consistent.
+- Tests: 33 backend tests + 31 frontend tests, all passing.
+- Status: Complete
