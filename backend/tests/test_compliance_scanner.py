@@ -66,3 +66,25 @@ def test_coded_phrases_match(sentence: str):
     assert hits, f"Expected CODED_PHRASES hit on: {sentence!r}"
     assert all(r.id.startswith("CP-") for r in hits)
     assert all(r.category == "coded_phrase" for r in hits)
+
+
+from services.compliance.rules import ADVICE_PATTERNS
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "You will save $12,000 in tax this year.",
+        "Guaranteed return of 8% annually.",
+        "A 1031 exchange will defer all capital gains tax here.",
+        "This will appreciate at least 5% per year.",
+        "No need to consult an attorney on this transaction.",
+        "Like-kind exchange guarantees you avoid the tax bill.",
+        "This is guaranteed to appreciate.",
+    ],
+)
+def test_advice_patterns_match(sentence: str):
+    hits = [r for r in ADVICE_PATTERNS if r.pattern.search(sentence)]
+    assert hits, f"Expected ADVICE_PATTERNS hit on: {sentence!r}"
+    assert all(r.id.startswith("AD-") for r in hits)
+    assert all(r.category == "unauthorized_advice" for r in hits)

@@ -186,3 +186,56 @@ CODED_PHRASES: tuple[Rule, ...] = (
         guidance="Explicit demographic targeting. Remove.",
     ),
 )
+
+
+ADVICE_PATTERNS: tuple[Rule, ...] = (
+    Rule(
+        id="AD-001",
+        category="unauthorized_advice",
+        pattern=_ci(r"\byou\s+(?:will|should)\s+(?:save|owe|pay)\s+\$[\d,]+\s+in\s+tax"),
+        severity="hard",
+        guidance="Specific tax dollar claims are outside a real estate agent's license. Soften to 'potential tax implications — confirm with a CPA.'",
+    ),
+    Rule(
+        id="AD-002",
+        category="unauthorized_advice",
+        pattern=_ci(r"\bguaranteed\s+(?:return|profit|appreciation|yield)\b"),
+        severity="hard",
+        guidance="Real estate returns are never guaranteed. Use 'projected' or 'historical average'.",
+    ),
+    Rule(
+        id="AD-003",
+        category="unauthorized_advice",
+        pattern=_ci(r"\b(?:1031|like[- ]kind)\s+exchange\s+(?:will|guarantees?)\s+(?:you\s+)?(?:defer|avoid|eliminate)"),
+        severity="hard",
+        guidance="1031 outcomes are not guaranteed and require strict IRS compliance. Rephrase to recommend consulting a qualified intermediary and CPA.",
+    ),
+    Rule(
+        id="AD-004",
+        category="unauthorized_advice",
+        pattern=_ci(r"\b(?:this|the\s+property|it)\s+(?:will|is\s+guaranteed\s+to)\s+appreciate\b"),
+        severity="hard",
+        guidance="Cannot guarantee appreciation. Use 'historically appreciated' with a source, or 'projected appreciation based on'.",
+    ),
+    Rule(
+        id="AD-005",
+        category="unauthorized_advice",
+        pattern=_ci(r"\bno\s+need\s+to\s+consult\s+(?:an?\s+)?(?:attorney|lawyer|cpa|accountant|tax\s+advisor)\b"),
+        severity="hard",
+        guidance="Never discourage professional consultation. Reframe to recommend it.",
+    ),
+    Rule(
+        id="AD-006",
+        category="unauthorized_advice",
+        pattern=_ci(r"\bsection\s+1031\b(?!.{0,100}\bconsult\b)"),
+        severity="hard",
+        guidance="Any 1031 reference must recommend consulting a CPA or qualified intermediary.",
+    ),
+    Rule(
+        id="AD-007",
+        category="unauthorized_advice",
+        pattern=_ci(r"\brisk[- ]free\b"),
+        severity="hard",
+        guidance="No real estate investment is risk-free. Remove or qualify the claim.",
+    ),
+)
