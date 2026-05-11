@@ -212,13 +212,15 @@ export default function RentalAnalyzerModal({
                 <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
                   Property Type <span className="text-gold">*</span>
                 </p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="radiogroup" aria-label="Property Type">
                   {PROPERTY_TYPE_OPTIONS.map((opt) => {
                     const selected = propertyType === opt.value;
                     return (
                       <button
                         key={opt.value}
                         type="button"
+                        role="radio"
+                        aria-checked={selected}
                         onClick={() => setPropertyType(opt.value)}
                         className={`px-3 py-2.5 text-xs font-semibold tracking-wide border transition-colors ${
                           selected
@@ -288,7 +290,7 @@ export default function RentalAnalyzerModal({
                 <p className="text-white/60 text-xs font-semibold tracking-widest uppercase mb-2">
                   Amenities
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Amenities (select any that apply)">
                   {AMENITY_OPTIONS.map((opt) => {
                     const selected = amenities.includes(opt.value);
                     return (
