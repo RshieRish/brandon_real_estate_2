@@ -248,3 +248,14 @@ async def generate_text(prompt: str, use_pro: bool = True) -> str:
     model = genai.GenerativeModel(model_name)
     response = await model.generate_content_async(prompt)
     return response.text
+
+
+async def generate_text_flash_lite(prompt: str) -> str:
+    """Cheap, fast text generation for compliance rewrites.
+
+    Uses ``gemini-3.1-flash-lite-preview`` for short, focused transformations
+    where Gemini Pro would be overkill.
+    """
+    model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
+    response = await model.generate_content_async(prompt)
+    return response.text
