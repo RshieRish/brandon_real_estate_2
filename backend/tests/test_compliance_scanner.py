@@ -88,3 +88,35 @@ def test_advice_patterns_match(sentence: str):
     assert hits, f"Expected ADVICE_PATTERNS hit on: {sentence!r}"
     assert all(r.id.startswith("AD-") for r in hits)
     assert all(r.category == "unauthorized_advice" for r in hits)
+
+
+from services.compliance.rules import MA_NH_LANDMINES
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Rent control protects this Boston property from rent hikes.",
+        "Massachusetts has rent control on most multi-family units.",
+        "Security deposits can be held in any personal account.",
+        "You can keep the entire security deposit on move-out.",
+        "Lead paint disclosure is optional for pre-1978 buildings.",
+        "Standard tenant eviction takes 7 days in MA.",
+        "Short-term rentals are legal everywhere in NH and MA.",
+    ],
+)
+def test_ma_nh_landmines_match(sentence: str):
+    hits = [r for r in MA_NH_LANDMINES if r.pattern.search(sentence)]
+    assert hits, f"Expected MA_NH_LANDMINES hit on: {sentence!r}"
+    assert all(r.id.startswith("SL-") for r in hits)
+    assert all(r.category == "state_specific" for r in hits)
+
+
+def test_sl_001_excludes_no_rent_control_negation():
+    """SL-001 must NOT fire on 'Massachusetts has no rent control'."""
+    from services.compliance.rules import MA_NH_LANDMINES
+    sl_001 = next(r for r in MA_NH_LANDMINES if r.id == "SL-001")
+    assert sl_001.pattern.search("Rent control protects this property.") is not None
+    assert sl_001.pattern.search("Massachusetts has rent control on multi-family.") is not None
+    assert sl_001.pattern.search("Massachusetts has no rent control.") is None
+    assert sl_001.pattern.search("Boston no rent control here.") is None

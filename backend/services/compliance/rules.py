@@ -239,3 +239,61 @@ ADVICE_PATTERNS: tuple[Rule, ...] = (
         guidance="No real estate investment is risk-free. Remove or qualify the claim.",
     ),
 )
+
+
+MA_NH_LANDMINES: tuple[Rule, ...] = (
+    Rule(
+        id="SL-001",
+        category="state_specific",
+        pattern=_ci(r"(?<!\bno )\brent\s+control\b"),
+        severity="hard",
+        guidance="MA banned rent control statewide in 1994 (Ch. 40P). NH has no rent control. Do not reference rent control protections.",
+    ),
+    Rule(
+        id="SL-002",
+        category="state_specific",
+        pattern=_ci(r"\bsecurity\s+deposit(?:s)?\s+(?:can|may)\s+(?:be\s+(?:held|kept)\s+in\s+(?:any|a\s+personal)|simply\s+go\s+into)"),
+        severity="hard",
+        guidance="MA Ch. 186 §15B requires a separate interest-bearing account. Wrong advice triggers treble damages.",
+    ),
+    Rule(
+        id="SL-003",
+        category="state_specific",
+        pattern=_ci(r"\b(?:keep|retain)\s+the\s+(?:entire|whole|full)\s+security\s+deposit\b"),
+        severity="hard",
+        guidance="MA Ch. 186 §15B requires itemized deductions with receipts. Cannot retain blanket deposit.",
+    ),
+    Rule(
+        id="SL-004",
+        category="state_specific",
+        pattern=_ci(r"\blead\s+paint\s+disclosure\s+is\s+optional\b"),
+        severity="hard",
+        guidance="MA and federal law require lead paint disclosure for pre-1978 properties.",
+    ),
+    Rule(
+        id="SL-005",
+        category="state_specific",
+        pattern=_ci(r"\beviction\s+(?:takes|in\s+ma|in\s+nh)\b.{0,40}\b(?:7|seven|10|ten)\s+days?\b"),
+        severity="hard",
+        guidance="MA summary process eviction averages 60-90+ days. Do not understate timelines.",
+    ),
+    Rule(
+        id="SL-006",
+        category="state_specific",
+        pattern=_ci(r"\bshort[- ]term\s+rentals?\s+(?:are|is)\s+legal\s+everywhere\b"),
+        severity="hard",
+        guidance="STR legality is per-municipality in MA (Boston, Cambridge, etc. have restrictions). Do not generalize.",
+    ),
+    Rule(
+        id="SL-007",
+        category="state_specific",
+        pattern=_ci(r"\b(?:no\s+lease\s+required|month[- ]to[- ]month\s+is\s+automatic)\b"),
+        severity="hard",
+        guidance="Tenant-at-will rules in MA/NH have specific notice requirements. Recommend a written lease.",
+    ),
+)
+
+
+ALL_RULES: tuple[Rule, ...] = (
+    PROTECTED_CLASS_TERMS + CODED_PHRASES + ADVICE_PATTERNS + MA_NH_LANDMINES
+)
