@@ -298,18 +298,29 @@ def _weighted_baseline(
     return weighted_sum / total_weight, same_type_count
 
 
-def _confidence(rentcast_data: Optional[dict], range_tightness: Optional[float]) -> str:
+def _confidence_v2(
+    rentcast_data: Optional[dict],
+    same_type_count: int,
+    range_tightness: Optional[float],
+) -> str:
+    """Confidence label for the v2 rental analyzer.
+
+    Rules:
+        High   — ≥2 same-property-type comps AND range tightness < 20%
+        Medium — comps available but <2 same-type matches, OR range tightness 20-30%
+        Low    — no RentCast data, OR range tightness ≥ 30%
+    """
     if not rentcast_data:
         return "Low"
-    has_comps = bool(rentcast_data.get("comparables"))
-    # Tight RentCast range (< 20%) → High confidence even without comps.
-    if range_tightness is not None and range_tightness < 0.20:
-        return "High"
-    if has_comps:
-        return "High"
     if range_tightness is not None and range_tightness >= 0.30:
         return "Low"
+    if same_type_count >= 2 and (range_tightness is None or range_tightness < 0.20):
+        return "High"
     return "Medium"
+
+
+# Backward-compatible alias.
+_confidence = _confidence_v2
 
 
 # ─── Public API ─────────────────────────────────────────────────────────────
@@ -321,63 +332,113 @@ async def estimate_rent(req: EstimateRentRequest) -> dict:
         raise ValueError("market_type is required when mode == 'str'")
 
     rentcast = await get_rent_estimate(req.address)
-    if rentcast and "rent" in rentcast and rentcast["rent"]:
-        baseline = float(rentcast["rent"])
-        rc_low = rentcast.get("rentRangeLow")
-        rc_high = rentcast.get("rentRangeHigh")
-        range_tightness = (
-            (rc_high - rc_low) / baseline
-            if rc_low is not None and rc_high is not None and baseline > 0
-            else None
+    comps = (rentcast or {}).get("comparables") or []
+
+    # ── Baseline (property-type-aware when comps are available) ──
+    same_type_count = 0
+    weighted = None
+    if comps:
+        weighted, same_type_count = _weighted_baseline(comps, req.property_type)
+
+    if weighted is not None:
+        baseline = weighted
+        baseline_label = (
+            f"Weighted baseline ({len(comps)} comps, {same_type_count} same-type)"
         )
+    elif rentcast and rentcast.get("rent"):
+        baseline = float(rentcast["rent"])
+        baseline_label = "RentCast baseline"
     else:
         baseline = float(_fallback_baseline(req))
-        rentcast = None
-        range_tightness = None
+        baseline_label = "Per-bedroom fallback"
 
+    # Range-tightness still derived from RentCast's published range, when present.
+    range_tightness = None
+    if rentcast:
+        rc_low = rentcast.get("rentRangeLow")
+        rc_high = rentcast.get("rentRangeHigh")
+        if rc_low is not None and rc_high is not None and baseline > 0:
+            range_tightness = (rc_high - rc_low) / baseline
+
+    # ── Adjusters ──
+    prop_type_adj = _property_type_adjustment(req.property_type)
     cond_adj = _condition_adjustment(req.condition)
     upgrade_adj = _upgrade_total_pct(req.upgrades)
-    total_adj = _clamp_total(cond_adj + upgrade_adj)
-    monthly_median = round(baseline * (1 + total_adj))
+    amenity_adj = _amenity_total_pct(req.amenities)
+    bath_adj = _bath_premium(req.bathrooms) if req.bathrooms is not None else 0.0
+    year_adj = _year_built_adj(req.year_built) if req.year_built is not None else 0.0
+    sqft_adj = (
+        _sqft_adj(req.sqft, req.bedrooms)
+        if req.sqft is not None and req.bedrooms is not None
+        else 0.0
+    )
+
+    total_adj = (
+        prop_type_adj + cond_adj + upgrade_adj + amenity_adj + bath_adj + year_adj + sqft_adj
+    )
+    total_adj_clamped = _clamp_total(total_adj)
+    monthly_median = round(baseline * (1 + total_adj_clamped))
     monthly_low = round(monthly_median * 0.93)
     monthly_high = round(monthly_median * 1.07)
 
+    # ── Breakdown ──
     breakdown: list[dict] = [
-        {
-            "label": "RentCast baseline" if rentcast else "Per-bedroom fallback",
-            "value_dollars": int(baseline),
-            "pct_delta": None,
-        }
+        {"label": baseline_label, "value_dollars": int(baseline), "pct_delta": None},
     ]
-    if cond_adj != 0:
+
+    def _push(label: str, pct: float) -> None:
+        if pct == 0:
+            return
         breakdown.append({
-            "label": f"Condition: {req.condition.replace('_', ' ').title()}",
-            "value_dollars": int(round(baseline * cond_adj)),
-            "pct_delta": round(cond_adj * 100, 1),
+            "label": label,
+            "value_dollars": int(round(baseline * pct)),
+            "pct_delta": round(pct * 100, 1),
         })
-    for u in req.upgrades:
-        bump = UPGRADE_BUMPS.get(u)
+
+    _push(
+        f"Property type: {req.property_type.replace('_', ' ').title()}",
+        prop_type_adj,
+    )
+    if req.bathrooms is not None and bath_adj > 0:
+        _push(f"Bath count: {req.bathrooms}", bath_adj)
+    if req.year_built is not None and year_adj != 0:
+        _push(f"Year built: {req.year_built}", year_adj)
+    if req.sqft is not None and req.bedrooms is not None and sqft_adj != 0:
+        _push(f"Sqft: {req.sqft} vs typical {SQFT_TYPICAL_PER_BED.get(req.bedrooms, '?')}", sqft_adj)
+    _push(f"Condition: {req.condition.replace('_', ' ').title()}", cond_adj)
+    for upgrade in req.upgrades:
+        bump = UPGRADE_BUMPS.get(upgrade)
         if bump:
-            breakdown.append({
-                "label": f"Upgrade: {u}",
-                "value_dollars": int(round(baseline * bump)),
-                "pct_delta": round(bump * 100, 1),
-            })
+            _push(f"Upgrade: {upgrade}", bump)
+    if amenity_adj > 0:
+        amenity_labels = ", ".join(
+            a.replace("_", " ").title()
+            for a in req.amenities
+            if AMENITY_BUMPS.get(a, 0) > 0
+        )
+        _push(f"Amenities ({amenity_labels})", amenity_adj)
+    if total_adj != total_adj_clamped:
+        breakdown.append({
+            "label": "(clamped to ±25% ceiling)",
+            "value_dollars": 0,
+            "pct_delta": round((total_adj_clamped - total_adj) * 100, 1),
+        })
 
+    # ── Comparables for the UI ──
     comparables = []
-    if rentcast:
-        for comp in (rentcast.get("comparables") or [])[:3]:
-            comparables.append({
-                "address": comp.get("formattedAddress"),
-                "rent": comp.get("price"),
-                "bedrooms": comp.get("bedrooms"),
-                "bathrooms": comp.get("bathrooms"),
-                "sqft": comp.get("squareFootage"),
-                "distance_miles": round(comp.get("distance", 0), 2),
-                "correlation": round(comp.get("correlation", 0), 4),
-            })
+    for comp in comps[:3]:
+        comparables.append({
+            "address": comp.get("formattedAddress"),
+            "rent": comp.get("price"),
+            "bedrooms": comp.get("bedrooms"),
+            "bathrooms": comp.get("bathrooms"),
+            "sqft": comp.get("squareFootage"),
+            "distance_miles": round(comp.get("distance", 0), 2),
+            "correlation": round(comp.get("correlation", 0), 4),
+            "property_type": _normalize_rentcast_type(comp.get("propertyType")),
+        })
 
-    confidence = _confidence(rentcast, range_tightness)
+    confidence = _confidence_v2(rentcast, same_type_count, range_tightness)
 
     response: dict = {
         "mode": req.mode,

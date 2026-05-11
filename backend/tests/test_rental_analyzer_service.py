@@ -41,7 +41,7 @@ class RentalAnalyzerTests(unittest.TestCase):
         rc = {"rent": 2400, "rentRangeLow": 2200, "rentRangeHigh": 2600, "comparables": []}
         req = EstimateRentRequest(
             address="50 Cheever Ave, Dracut, MA 01826",
-            property_type="single_family",
+            property_type="condo",
             condition="excellent",
             upgrades=["Kitchen"],
             mode="ltr",
@@ -53,12 +53,13 @@ class RentalAnalyzerTests(unittest.TestCase):
         self.assertEqual(result["mode"], "ltr")
         self.assertGreaterEqual(result["monthly_median"], 2540)
         self.assertLessEqual(result["monthly_median"], 2560)
-        self.assertEqual(result["confidence"], "High")
+        # v2 confidence: no same-type comps → Medium (not High)
+        self.assertEqual(result["confidence"], "Medium")
 
     def test_needs_work_drops_rent_below_baseline(self):
         rc = {"rent": 2400, "rentRangeLow": 2300, "rentRangeHigh": 2500, "comparables": []}
         req = EstimateRentRequest(
-            address="XXXX", property_type="single_family", condition="needs_work", upgrades=[], mode="ltr",
+            address="XXXX", property_type="condo", condition="needs_work", upgrades=[], mode="ltr",
         )
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(rc))):
             result = run(estimate_rent(req))
@@ -69,7 +70,7 @@ class RentalAnalyzerTests(unittest.TestCase):
         rc = {"rent": 2000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
         req = EstimateRentRequest(
             address="XXXX",
-            property_type="single_family",
+            property_type="condo",
             condition="good",
             upgrades=["Kitchen", "Baths", "HVAC", "Flooring", "Roof", "Windows"],
             mode="ltr",
@@ -92,7 +93,7 @@ class RentalAnalyzerTests(unittest.TestCase):
     def test_str_mode_returns_nightly_rate(self):
         rc = {"rent": 3000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
         req = EstimateRentRequest(
-            address="XXXX", property_type="single_family", condition="good", upgrades=[], mode="str", market_type="urban",
+            address="XXXX", property_type="condo", condition="good", upgrades=[], mode="str", market_type="urban",
         )
         with patch("services.rental_analyzer_service.get_rent_estimate", new=MagicMock(return_value=_async(rc))):
             result = run(estimate_rent(req))
@@ -239,6 +240,153 @@ class AdjusterHelperTests(unittest.TestCase):
 
     def test_sqft_adj_unknown_bed_count_returns_zero(self):
         self.assertEqual(_sqft_adj(1450, 99), 0.0)
+
+
+class V2IntegrationTests(unittest.TestCase):
+    def test_duplex_outperforms_apartment_building_at_same_address(self):
+        # Same RentCast stub, same baseline, same condition/beds/baths.
+        # Only difference: property_type. Duplex should land ≥10% higher than 5+ unit apt.
+        rc = {
+            "rent": 2400,
+            "rentRangeLow": 2300,
+            "rentRangeHigh": 2500,
+            "comparables": [],   # no comps → falls back to RentCast median baseline
+        }
+        duplex_req = EstimateRentRequest(
+            address="50 Cheever Ave, Dracut, MA 01826",
+            property_type="duplex",
+            condition="good",
+            upgrades=[],
+            mode="ltr",
+        )
+        apt_req = EstimateRentRequest(
+            address="50 Cheever Ave, Dracut, MA 01826",
+            property_type="multi_5plus_unit",
+            condition="good",
+            upgrades=[],
+            mode="ltr",
+        )
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            duplex_result = run(estimate_rent(duplex_req))
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            apt_result = run(estimate_rent(apt_req))
+
+        # duplex: 2400 × (1 + 0.06) = 2544
+        # apt:    2400 × (1 + (-0.05)) = 2280
+        # ratio:  2544 / 2280 ≈ 1.116 → ≥10% delta
+        self.assertGreater(duplex_result["monthly_median"], apt_result["monthly_median"])
+        ratio = duplex_result["monthly_median"] / apt_result["monthly_median"]
+        self.assertGreater(ratio, 1.10)
+
+    def test_comp_reweighting_pulls_baseline_toward_same_type(self):
+        # RentCast median is 2400 (their blend), but the comp list is 3 apt comps at $2200
+        # and 2 duplex comps at $2700. Looking up a duplex → weighted baseline ≈ $2445
+        # (verified in WeightedBaselineTests), not $2400.
+        rc = {
+            "rent": 2400,
+            "rentRangeLow": 2300,
+            "rentRangeHigh": 2500,
+            "comparables": [
+                {"price": 2200, "propertyType": "Apartment", "correlation": 0.9,
+                 "formattedAddress": "1 Apt St", "bedrooms": 2, "bathrooms": 1, "squareFootage": 800, "distance": 0.1},
+                {"price": 2200, "propertyType": "Apartment", "correlation": 0.9,
+                 "formattedAddress": "2 Apt St", "bedrooms": 2, "bathrooms": 1, "squareFootage": 800, "distance": 0.1},
+                {"price": 2200, "propertyType": "Apartment", "correlation": 0.9,
+                 "formattedAddress": "3 Apt St", "bedrooms": 2, "bathrooms": 1, "squareFootage": 800, "distance": 0.1},
+                {"price": 2700, "propertyType": "Multi Family", "correlation": 0.9,
+                 "formattedAddress": "4 Duplex St", "bedrooms": 2, "bathrooms": 1, "squareFootage": 1000, "distance": 0.2},
+                {"price": 2700, "propertyType": "Multi Family", "correlation": 0.9,
+                 "formattedAddress": "5 Duplex St", "bedrooms": 2, "bathrooms": 1, "squareFootage": 1000, "distance": 0.2},
+            ],
+        }
+        req = EstimateRentRequest(
+            address="50 Cheever Ave, Dracut, MA 01826",
+            property_type="duplex",
+            condition="good",
+            upgrades=[],
+            mode="ltr",
+        )
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            result = run(estimate_rent(req))
+
+        # weighted baseline ≈ 2445; with +6% duplex = 2592.
+        # Plain RentCast median path would be 2400 × 1.06 = 2544.
+        # So weighted result should land > 2544.
+        self.assertGreater(result["monthly_median"], 2544)
+
+    def test_bath_premium_appears_in_estimate(self):
+        rc = {"rent": 2000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
+        req = EstimateRentRequest(
+            address="XXXX",
+            property_type="condo",   # 0% prop-type adj
+            bathrooms=3.0,
+            condition="good",
+            upgrades=[],
+            mode="ltr",
+        )
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            result = run(estimate_rent(req))
+        # 2 extra baths × 2.5% = 5% → 2000 × 1.05 = 2100.
+        self.assertEqual(result["monthly_median"], 2100)
+
+    def test_amenity_total_lands_in_breakdown(self):
+        rc = {"rent": 2000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
+        req = EstimateRentRequest(
+            address="XXXX",
+            property_type="condo",
+            condition="good",
+            upgrades=[],
+            amenities=["in_unit_laundry", "garage"],
+            mode="ltr",
+        )
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            result = run(estimate_rent(req))
+        # in_unit_laundry 3% + garage 4% = 7% → 2000 × 1.07 = 2140.
+        self.assertEqual(result["monthly_median"], 2140)
+        # And the breakdown should include a single combined "Amenities" line.
+        labels = [b["label"] for b in result["breakdown"]]
+        amenity_rows = [l for l in labels if "Amenities" in l]
+        self.assertEqual(len(amenity_rows), 1)
+
+    def test_total_adjustment_clamps_at_25pct(self):
+        # Stack everything to push past +25%: excellent (+4) + all upgrades capped (+8)
+        # + SFH (+8) + amenities capped (+12) + bath premium (+7.5) + sqft (+6) + 2010+ (+5)
+        # = ~50%, should clamp to +25%.
+        rc = {"rent": 2000, "rentRangeLow": None, "rentRangeHigh": None, "comparables": []}
+        req = EstimateRentRequest(
+            address="XXXX",
+            property_type="single_family",
+            bedrooms=2,
+            bathrooms=5.0,
+            sqft=2000,
+            year_built=2020,
+            condition="excellent",
+            upgrades=["Kitchen", "Baths", "HVAC", "Flooring", "Roof", "Windows"],
+            amenities=list(AMENITY_BUMPS.keys()),
+            mode="ltr",
+        )
+        with patch(
+            "services.rental_analyzer_service.get_rent_estimate",
+            new=MagicMock(return_value=_async(rc)),
+        ):
+            result = run(estimate_rent(req))
+        # 2000 × 1.25 = 2500 (clamped).
+        self.assertEqual(result["monthly_median"], 2500)
 
 
 if __name__ == "__main__":
