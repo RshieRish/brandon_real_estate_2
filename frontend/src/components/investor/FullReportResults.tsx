@@ -145,6 +145,14 @@ export default function FullReportResults({ report }: FullReportResultsProps) {
           </div>
         </div>
       )}
+
+      {report.disclaimer && (
+        <div className="mt-10 pt-6 border-t border-white/10">
+          <p className="text-white/50 text-xs leading-relaxed whitespace-pre-line">
+            {report.disclaimer}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
