@@ -15,6 +15,15 @@ from services.rental_analyzer_service import (
     estimate_rent,
     _weighted_baseline,
     _normalize_rentcast_type,
+    _property_type_adjustment,
+    _amenity_total_pct,
+    _bath_premium,
+    _year_built_adj,
+    _sqft_adj,
+    AMENITY_BUMPS,
+    AMENITY_CAP,
+    BATH_PREMIUM_CAP,
+    SQFT_ADJ_CAP,
 )
 
 
@@ -159,6 +168,75 @@ class NormalizeRentcastTypeTests(unittest.TestCase):
         self.assertIsNone(_normalize_rentcast_type("Mystery Type"))
         self.assertIsNone(_normalize_rentcast_type(None))
         self.assertIsNone(_normalize_rentcast_type(""))
+
+
+class AdjusterHelperTests(unittest.TestCase):
+    def test_property_type_adjustments(self):
+        self.assertAlmostEqual(_property_type_adjustment("single_family"), 0.08)
+        self.assertAlmostEqual(_property_type_adjustment("duplex"), 0.06)
+        self.assertAlmostEqual(_property_type_adjustment("multi_5plus_unit"), -0.05)
+        self.assertEqual(_property_type_adjustment("unknown_type"), 0.0)
+
+    def test_amenity_total_stacks_then_caps(self):
+        # All 7 amenities = 3 + 2.5 + 4 + 2 + 3 + 1 + 1.5 = 17%, but capped at 12%.
+        # Note: garage supersedes off_street_parking, so total = 17 - 2.5 = 14.5%,
+        # still capped at 12%.
+        all_amenities = list(AMENITY_BUMPS.keys())
+        total = _amenity_total_pct(all_amenities)
+        self.assertAlmostEqual(total, AMENITY_CAP)
+
+    def test_garage_supersedes_off_street_parking(self):
+        # Both selected: garage 4% should apply, off_street_parking 2.5% should be removed.
+        total = _amenity_total_pct(["garage", "off_street_parking"])
+        self.assertAlmostEqual(total, 0.04)
+
+    def test_garage_alone_unaffected(self):
+        total = _amenity_total_pct(["garage"])
+        self.assertAlmostEqual(total, 0.04)
+
+    def test_off_street_parking_alone_unaffected(self):
+        total = _amenity_total_pct(["off_street_parking"])
+        self.assertAlmostEqual(total, 0.025)
+
+    def test_unknown_amenity_skipped(self):
+        total = _amenity_total_pct(["in_unit_laundry", "moon_view"])
+        self.assertAlmostEqual(total, 0.030)
+
+    def test_bath_premium_scales_then_caps(self):
+        self.assertAlmostEqual(_bath_premium(1.0), 0.0)
+        self.assertAlmostEqual(_bath_premium(2.0), 0.025)
+        self.assertAlmostEqual(_bath_premium(3.0), 0.05)
+        # 5 baths = 4 extra × 2.5% = 10%, capped at 7.5%.
+        self.assertAlmostEqual(_bath_premium(5.0), BATH_PREMIUM_CAP)
+
+    def test_bath_premium_handles_half_baths(self):
+        # 2.5 baths = 1.5 extra × 2.5% = 3.75%.
+        self.assertAlmostEqual(_bath_premium(2.5), 0.0375)
+
+    def test_year_built_tiers(self):
+        self.assertAlmostEqual(_year_built_adj(1900), -0.02)
+        self.assertAlmostEqual(_year_built_adj(1949), -0.02)
+        self.assertAlmostEqual(_year_built_adj(1950), 0.0)
+        self.assertAlmostEqual(_year_built_adj(1989), 0.0)
+        self.assertAlmostEqual(_year_built_adj(1990), 0.02)
+        self.assertAlmostEqual(_year_built_adj(2009), 0.02)
+        self.assertAlmostEqual(_year_built_adj(2010), 0.05)
+        self.assertAlmostEqual(_year_built_adj(2025), 0.05)
+
+    def test_sqft_adj_above_typical(self):
+        # 2bd unit, typical 950 sqft. 1450 sqft = +500 above = +5%.
+        self.assertAlmostEqual(_sqft_adj(1450, 2), 0.05)
+
+    def test_sqft_adj_below_typical(self):
+        # 2bd, 750 sqft = −200 below = −2%.
+        self.assertAlmostEqual(_sqft_adj(750, 2), -0.02)
+
+    def test_sqft_adj_caps_at_six_percent(self):
+        # 2bd, 2000 sqft = +1050 above = would be +10.5%, capped at +6%.
+        self.assertAlmostEqual(_sqft_adj(2000, 2), SQFT_ADJ_CAP)
+
+    def test_sqft_adj_unknown_bed_count_returns_zero(self):
+        self.assertEqual(_sqft_adj(1450, 99), 0.0)
 
 
 if __name__ == "__main__":

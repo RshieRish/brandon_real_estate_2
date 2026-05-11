@@ -179,6 +179,39 @@ def _upgrade_total_pct(upgrades: list[str]) -> float:
     return min(total, UPGRADE_CAP)
 
 
+def _property_type_adjustment(property_type: str) -> float:
+    return PROPERTY_TYPE_ADJUSTMENTS.get(property_type, 0.0)
+
+
+def _amenity_total_pct(amenities: list[str]) -> float:
+    total = sum(AMENITY_BUMPS.get(a, 0.0) for a in amenities)
+    # Garage supersedes off_street_parking when both are present.
+    if "garage" in amenities and "off_street_parking" in amenities:
+        total -= AMENITY_BUMPS["off_street_parking"]
+    return min(total, AMENITY_CAP)
+
+
+def _bath_premium(bathrooms: float) -> float:
+    extra = max(0.0, bathrooms - 1.0)
+    return min(extra * BATH_PREMIUM_PER_EXTRA, BATH_PREMIUM_CAP)
+
+
+def _year_built_adj(year_built: int) -> float:
+    for cutoff_exclusive, adj in YEAR_BUILT_TIERS:
+        if year_built < cutoff_exclusive:
+            return adj
+    return YEAR_BUILT_TIERS[-1][1]
+
+
+def _sqft_adj(sqft: int, bedrooms: int) -> float:
+    typical = SQFT_TYPICAL_PER_BED.get(bedrooms)
+    if typical is None:
+        return 0.0
+    delta = sqft - typical
+    raw = (delta / 100.0) * SQFT_ADJ_PER_100SQFT
+    return max(-SQFT_ADJ_CAP, min(SQFT_ADJ_CAP, raw))
+
+
 def _clamp_total(total: float) -> float:
     return max(TOTAL_ADJ_FLOOR, min(TOTAL_ADJ_CEILING, total))
 
