@@ -193,6 +193,69 @@ def _fallback_baseline(req: EstimateRentRequest) -> int:
     return max(bd_baseline, price_baseline)
 
 
+def _normalize_rentcast_type(rentcast_type: Optional[str]) -> Optional[str]:
+    """Map RentCast's propertyType string to our canonical taxonomy.
+
+    Returns None when the type is missing or unrecognized — callers should
+    treat unknown comp types as having neutral (0.5) similarity.
+    """
+    if not rentcast_type:
+        return None
+    return RENTCAST_TYPE_MAP.get(rentcast_type)
+
+
+def _weighted_baseline(
+    comps: list[dict],
+    target_type: str,
+) -> tuple[Optional[float], int]:
+    """Compute a property-type-aware weighted baseline from RentCast comps.
+
+    Each comp is weighted by (type_similarity × rentcast_correlation). Comps
+    with no price or zero combined weight are skipped.
+
+    Returns:
+        (baseline_dollars, same_type_count) where baseline is None if no
+        usable comps were available, and same_type_count is the number of
+        comps whose normalized type matches target_type exactly.
+    """
+    weights: list[float] = []
+    prices: list[float] = []
+    same_type_count = 0
+
+    target_row = PROPERTY_TYPE_SIMILARITY.get(target_type, {})
+
+    for comp in comps:
+        price = comp.get("price")
+        if not price or price <= 0:
+            continue
+
+        comp_type = _normalize_rentcast_type(comp.get("propertyType"))
+        if comp_type is None:
+            type_sim = UNKNOWN_TYPE_SIMILARITY
+        else:
+            type_sim = target_row.get(comp_type, UNKNOWN_TYPE_SIMILARITY)
+            if type_sim == 1.0:
+                same_type_count += 1
+
+        correlation = comp.get("correlation")
+        if correlation is None:
+            correlation = 0.5
+
+        weight = type_sim * correlation
+        if weight <= 0:
+            continue
+
+        weights.append(weight)
+        prices.append(float(price))
+
+    if not weights:
+        return None, 0
+
+    weighted_sum = sum(p * w for p, w in zip(prices, weights))
+    total_weight = sum(weights)
+    return weighted_sum / total_weight, same_type_count
+
+
 def _confidence(rentcast_data: Optional[dict], range_tightness: Optional[float]) -> str:
     if not rentcast_data:
         return "Low"

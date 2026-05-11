@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 from services.rental_analyzer_service import (
     EstimateRentRequest,
     estimate_rent,
+    _weighted_baseline,
+    _normalize_rentcast_type,
 )
 
 
@@ -93,6 +95,70 @@ class RentalAnalyzerTests(unittest.TestCase):
 
 async def _async(value):
     return value
+
+
+class WeightedBaselineTests(unittest.TestCase):
+    def test_same_type_comps_dominate(self):
+        # 3 apartment-building comps at $2200, 2 duplex comps at $2700.
+        # Looking up a duplex → weighted baseline should land closer to $2700.
+        comps = [
+            {"price": 2200, "propertyType": "Apartment", "correlation": 0.9},
+            {"price": 2200, "propertyType": "Apartment", "correlation": 0.9},
+            {"price": 2200, "propertyType": "Apartment", "correlation": 0.9},
+            {"price": 2700, "propertyType": "Multi Family", "correlation": 0.9},
+            {"price": 2700, "propertyType": "Multi Family", "correlation": 0.9},
+        ]
+        baseline, same_type = _weighted_baseline(comps, "duplex")
+        # multi_2_4_unit similarity 0.65 to duplex; apartment 0.45 to duplex
+        # weighted = (2200×0.45×3 + 2700×0.65×2) / (0.45×3 + 0.65×2)
+        #         = (2970 + 3510) / (1.35 + 1.30) = 6480 / 2.65 ≈ 2445
+        self.assertGreater(baseline, 2350)
+        self.assertLess(baseline, 2550)
+
+    def test_returns_zero_count_when_no_same_type_match(self):
+        comps = [
+            {"price": 2200, "propertyType": "Apartment", "correlation": 0.9},
+        ]
+        baseline, same_type = _weighted_baseline(comps, "single_family")
+        self.assertEqual(same_type, 0)
+        self.assertGreater(baseline, 0)
+
+    def test_counts_same_type_matches(self):
+        comps = [
+            {"price": 2700, "propertyType": "Single Family", "correlation": 0.9},
+            {"price": 2700, "propertyType": "Single Family", "correlation": 0.9},
+            {"price": 2200, "propertyType": "Apartment", "correlation": 0.9},
+        ]
+        baseline, same_type = _weighted_baseline(comps, "single_family")
+        self.assertEqual(same_type, 2)
+
+    def test_returns_none_when_no_comps(self):
+        baseline, same_type = _weighted_baseline([], "duplex")
+        self.assertIsNone(baseline)
+        self.assertEqual(same_type, 0)
+
+    def test_unknown_comp_type_uses_neutral_similarity(self):
+        comps = [
+            {"price": 2500, "propertyType": "Mystery Type", "correlation": 0.8},
+        ]
+        baseline, same_type = _weighted_baseline(comps, "duplex")
+        # With one comp at 0.5 similarity, baseline = 2500 (weighted-mean of one).
+        self.assertEqual(baseline, 2500.0)
+        self.assertEqual(same_type, 0)
+
+
+class NormalizeRentcastTypeTests(unittest.TestCase):
+    def test_known_mappings(self):
+        self.assertEqual(_normalize_rentcast_type("Single Family"), "single_family")
+        self.assertEqual(_normalize_rentcast_type("Multi Family"), "multi_2_4_unit")
+        self.assertEqual(_normalize_rentcast_type("Condo"), "condo")
+        self.assertEqual(_normalize_rentcast_type("Townhouse"), "townhouse")
+        self.assertEqual(_normalize_rentcast_type("Apartment"), "multi_5plus_unit")
+
+    def test_unknown_returns_none(self):
+        self.assertIsNone(_normalize_rentcast_type("Mystery Type"))
+        self.assertIsNone(_normalize_rentcast_type(None))
+        self.assertIsNone(_normalize_rentcast_type(""))
 
 
 if __name__ == "__main__":
