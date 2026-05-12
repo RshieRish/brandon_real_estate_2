@@ -234,7 +234,7 @@ def _upload_image(image_bytes: bytes, mime: str = "image/jpeg") -> str:
         return url
 
     print("[Blog] All image storage methods failed — using placeholder.")
-    return "https://placehold.co/1200x630/0a0a0a/eac469?text=Sold+With+Sweeney"
+    return "https://placehold.co/1200x630/0a0a0a/eac469.jpg?text=Sold+With+Sweeney"
 
 
 # ===========================================================================
@@ -382,7 +382,7 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
         gemini_key = settings.GEMINI_API_KEY
         if not gemini_key:
             print("[Blog] GEMINI_API_KEY not set — using placeholder image.")
-            return "https://placehold.co/1200x630/0a0a0a/eac469?text=Sold+With+Sweeney"
+            return "https://placehold.co/1200x630/0a0a0a/eac469.jpg?text=Sold+With+Sweeney"
 
         try:
             print(f"[Blog] Generating image for: {title[:60]}...")
@@ -413,7 +413,7 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
         except Exception as exc:
             print(f"[Blog] Image generation failed: {exc}")
 
-        return "https://placehold.co/1200x630/0a0a0a/eac469?text=Sold+With+Sweeney"
+        return "https://placehold.co/1200x630/0a0a0a/eac469.jpg?text=Sold+With+Sweeney"
 
     # -----------------------------------------------------------------------
     # Full pipeline: generate a complete blog post

@@ -3,10 +3,12 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: '**.cdninstagram.com',
-      },
+      { protocol: 'https', hostname: '**.cdninstagram.com' },
+      // Blog cover images served from Cloudflare R2 public bucket.
+      { protocol: 'https', hostname: '**.r2.dev' },
+      // Author avatar fallback (Stephanie Mitchell) and image-generation fallbacks.
+      { protocol: 'https', hostname: 'picsum.photos' },
+      { protocol: 'https', hostname: 'placehold.co' },
     ],
     formats: ['image/avif', 'image/webp'],
   },

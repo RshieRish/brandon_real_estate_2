@@ -3,6 +3,15 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-05-12
 
+### 2026-05-12 — Blog Cover Images Whitelisted in next.config
+- What was changed: Blog posts on the live site rendered with no cover image because Next.js `<Image>` was rejecting the R2 (`pub-*.r2.dev`) hostname — only `**.cdninstagram.com` was in `images.remotePatterns`. Whitelisted the three hosts the blog can actually emit (R2, picsum.photos, placehold.co) and changed the placehold.co fallback URL to use the `.jpg` extension since Next blocks remote SVG by default.
+- Files modified:
+  - `frontend/next.config.ts` — added `**.r2.dev`, `picsum.photos`, `placehold.co` to remotePatterns.
+  - `backend/services/blog_service.py` — placeholder URL bumped from `…/eac469?text=…` to `…/eac469.jpg?text=…` so the safety-net image is served as JPEG (Next refuses remote SVG without `dangerouslyAllowSVG`).
+- Verification:
+  - Started Next dev server in worktree, hit `/_next/image?url=…` for each of the three hosts: R2 (200 / 125KB jpeg), picsum (200 / 901B jpeg), placehold .jpg (200 / 12KB jpeg). Unrelated host (example.com) correctly returned 400, confirming the whitelist is active.
+- Status: Complete locally
+
 ### 2026-05-12 — Blog Auto-Post Scheduler Wired Up
 - What was changed: The blog system was previously fully functional end-to-end (Gemini stages A/B/C all working, R2 upload working, DB save working) but had nothing triggering it. The `/api/v1/blog/cron` endpoint existed but no scheduler ever called it, and the Auto-Pilot button in `/admin/blog` had apparently never been clicked — DB had zero blog rows. Added an in-process asyncio loop that calls `BlogService.create_auto_blog()` on a configurable interval, mirroring the existing `_notification_retry_loop` pattern.
 - Files modified:
