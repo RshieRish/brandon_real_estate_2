@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,7 @@ from routers import (
     leads,
     link_pack,
 )
+from services.blog_service import BlogService
 from services.notification_service import (
     NOTIFICATION_RETRY_INTERVAL_SECONDS,
     run_notification_retry_pass,
@@ -28,6 +30,7 @@ from services.notification_service import (
 
 app = FastAPI(title="Brandon RE API", version="1.0.0", docs_url="/docs")
 _notification_retry_task: asyncio.Task | None = None
+_blog_auto_post_task: asyncio.Task | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,23 +61,76 @@ async def _notification_retry_loop() -> None:
         await asyncio.sleep(NOTIFICATION_RETRY_INTERVAL_SECONDS)
 
 
+async def _blog_auto_post_loop() -> None:
+    """Auto-post a fresh blog every BLOG_AUTO_POST_INTERVAL_HOURS hours.
+
+    Restart-safe: on boot we look at the most recent posted blog's created_at
+    and only post if the gap to now is >= the configured interval. This way an
+    app restart doesn't double-post within the window.
+    """
+    interval_seconds = max(3600, settings.BLOG_AUTO_POST_INTERVAL_HOURS * 3600)
+    while True:
+        try:
+            seconds_since_last = _seconds_since_last_posted_blog()
+            if seconds_since_last is None or seconds_since_last >= interval_seconds:
+                logging.info("[blog-auto] Generating new auto-blog…")
+                result = await BlogService.create_auto_blog()
+                logging.info("[blog-auto] Posted: id=%s slug=%s", result.get("id"), result.get("slug"))
+                sleep_for = interval_seconds
+            else:
+                sleep_for = interval_seconds - seconds_since_last
+                logging.info("[blog-auto] Last post was %ss ago — sleeping %ss until next.", int(seconds_since_last), int(sleep_for))
+        except Exception as exc:
+            logging.error("[blog-auto] Generation pass failed: %s", exc)
+            logging.error(traceback.format_exc())
+            sleep_for = interval_seconds
+        await asyncio.sleep(sleep_for)
+
+
+def _seconds_since_last_posted_blog() -> float | None:
+    """Return seconds since the most recent posted blog's created_at, or None if none exist."""
+    import psycopg2
+    db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    try:
+        conn = psycopg2.connect(db_url)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT created_at FROM blogs WHERE is_posted = TRUE ORDER BY created_at DESC LIMIT 1")
+            row = cur.fetchone()
+            if not row:
+                return None
+            last = row[0]
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            return (datetime.now(tz=timezone.utc) - last).total_seconds()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logging.error("[blog-auto] Failed to read last-posted timestamp: %s", exc)
+        return None
+
+
 @app.on_event("startup")
-async def start_notification_retry_loop() -> None:
-    global _notification_retry_task
+async def start_background_loops() -> None:
+    global _notification_retry_task, _blog_auto_post_task
     if _notification_retry_task is None or _notification_retry_task.done():
         _notification_retry_task = asyncio.create_task(_notification_retry_loop())
+    if settings.BLOG_AUTO_POST_ENABLED and (_blog_auto_post_task is None or _blog_auto_post_task.done()):
+        _blog_auto_post_task = asyncio.create_task(_blog_auto_post_loop())
 
 
 @app.on_event("shutdown")
-async def stop_notification_retry_loop() -> None:
-    global _notification_retry_task
-    if _notification_retry_task:
-        _notification_retry_task.cancel()
-        try:
-            await _notification_retry_task
-        except asyncio.CancelledError:
-            pass
-        _notification_retry_task = None
+async def stop_background_loops() -> None:
+    global _notification_retry_task, _blog_auto_post_task
+    for task_attr in ("_notification_retry_task", "_blog_auto_post_task"):
+        task = globals().get(task_attr)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            globals()[task_attr] = None
 
 
 @app.exception_handler(Exception)

@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     R2_BUCKET_NAME: str = "sweeney-public"
     R2_PUBLIC_URL: str = ""
     R2_REGION: str = "auto"
+    # Auto-blog scheduler (in-process). Set BLOG_AUTO_POST_ENABLED=false in dev
+    # to silence the loop, or tune the cadence with BLOG_AUTO_POST_INTERVAL_HOURS.
+    BLOG_AUTO_POST_ENABLED: bool = True
+    BLOG_AUTO_POST_INTERVAL_HOURS: int = 72
 
 
 settings = Settings()

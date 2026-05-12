@@ -7,6 +7,8 @@
 - Neon PostgreSQL for launch
 - 2026-04-10: Approved direction for Brandon internal notifications is a DB-backed `notification_jobs` queue with save-first semantics and retry-until-delivered email behavior instead of inline route-level SMTP sends.
 - 2026-04-10: Implemented `notification_jobs` with DB-backed retry state plus a background retry loop in `backend/main.py`, so failed Brandon-notification emails can continue retrying independently of new traffic.
+- 2026-05-12: Auto-blog posting runs as a second in-process asyncio loop in `backend/main.py` (`_blog_auto_post_loop`), gated by `BLOG_AUTO_POST_ENABLED` and paced by `BLOG_AUTO_POST_INTERVAL_HOURS` (default 72h). Restart-safe via a `MAX(created_at) WHERE is_posted` check before every post. Existing HTTP `/api/v1/blog/cron` endpoint still works for ad-hoc admin triggering.
+- 2026-05-12: Blog Gemini stages use `gemini-3-flash-preview` (research), `gemini-3-pro-preview` (writing), `gemini-3-pro-image-preview` (cover image). All three are valid against the prod API key — confirmed via direct `models?key=…` listing and live `generateContent` calls. Do **not** "fix" these to `gemini-3.1-*` to match `services/gemini.py`; they are intentionally distinct models.
 
 ## Integration Status
 ## Integration Status

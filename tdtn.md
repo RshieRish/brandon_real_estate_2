@@ -1,7 +1,27 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-04-21
+Last Updated: 2026-05-12
+
+### 2026-05-12 — Blog Auto-Post Scheduler Wired Up
+- What was changed: The blog system was previously fully functional end-to-end (Gemini stages A/B/C all working, R2 upload working, DB save working) but had nothing triggering it. The `/api/v1/blog/cron` endpoint existed but no scheduler ever called it, and the Auto-Pilot button in `/admin/blog` had apparently never been clicked — DB had zero blog rows. Added an in-process asyncio loop that calls `BlogService.create_auto_blog()` on a configurable interval, mirroring the existing `_notification_retry_loop` pattern.
+- Files modified:
+  - `backend/main.py` — added `_blog_auto_post_loop`, `_seconds_since_last_posted_blog`, merged startup/shutdown hooks into `start_background_loops` / `stop_background_loops`.
+  - `backend/config.py` — added `BLOG_AUTO_POST_ENABLED` (default `True`) and `BLOG_AUTO_POST_INTERVAL_HOURS` (default `72`).
+  - `backend/.env.example` — documented the two new env vars.
+- Key decisions:
+  - In-process asyncio loop instead of APScheduler / external Railway cron — matches the existing notification-retry pattern, no new dependency, no need for a service-account JWT to call the HTTP endpoint.
+  - Restart-safe: on every loop iteration we check `MAX(created_at) WHERE is_posted` against the interval, so a redeploy mid-window won't double-post.
+  - Default interval 72h (every 3 days) so the 5 content buckets cycle every ~15 days; tunable via env.
+  - Loop swallows Gemini/DB exceptions, logs them, and waits the full interval before retrying — avoids hammering the API on transient failures.
+- Verification:
+  - Hit Gemini directly via `curl` — `gemini-3-flash-preview`, `gemini-3-pro-preview`, and `gemini-3-pro-image-preview` all return 200. (Initial hypothesis that the model names were wrong was incorrect — they are valid against the prod API key.)
+  - Ran `BlogService.create_auto_blog()` end-to-end against prod DB — produced one real blog `id=9531273e-5256-4de4-bc84-3606ccca477c`, slug `the-most-underrated-neighborhoods-in-northern-massachusetts-a-2025-buyers-guide`, with R2-hosted cover image, `is_posted=true`. (User can delete from `/admin/blog` if undesired.)
+  - Imported `main` from worktree and called `start_background_loops()` — task spawned, logged `Last post was 131s ago — sleeping 259068s until next.`, did not crash, shut down cleanly via `stop_background_loops()`.
+  - Verified `BLOG_AUTO_POST_ENABLED=false` short-circuits and never spawns the task.
+- Status: Complete locally
+
+### 2026-04-21 — Application Feature Inventory Review
 
 ### 2026-04-21 — Application Feature Inventory Review
 - What was changed: Reviewed the current spec, project memory, public pages, backend routers, admin surfaces, chatbot flow, booking flow, and Zapier CRM wiring to prepare an accurate feature inventory for the application.
