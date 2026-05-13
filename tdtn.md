@@ -3,6 +3,28 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-05-12
 
+### 2026-05-12 — Daily Cadence + Topic Dedup + Full SEO Pass on Blog
+- What was changed: Tightened the auto-blog system in three ways: (1) cadence dropped from 72h to 24h so a new post lands every day, (2) topic selection now filters out topics that match (post-Gemini rewrite) any existing blog title, so we cycle through all 50 topics across all 5 buckets before repeating, (3) blog detail pages went from `'use client'` with no SEO metadata to a server component shell exporting `generateMetadata` (full OG, Twitter, canonical, keywords, authors) plus an inline JSON-LD `BlogPosting` schema, with `sitemap.ts`, `robots.ts`, and `metadataBase` added at the app root.
+- Files modified:
+  - `backend/config.py`, `backend/.env.example` — default `BLOG_AUTO_POST_INTERVAL_HOURS` 72 → 24.
+  - `backend/services/blog_service.py` — added `_norm_title`, `_topic_already_used` (state-name normalization + 4-word substring + difflib fuzzy backstop @ 0.72 ratio), `_get_existing_titles`, threaded `used_titles` through `_get_topic_and_category` and `generate_blog_content`, wired into `create_auto_blog`.
+  - `frontend/src/app/(main)/blog/[slug]/page.tsx` — replaced 383-line client page with a server component: server-side `getBlog` memoized via React `cache`, `generateMetadata` with full OG + Twitter + canonical, inline `<script type="application/ld+json">` BlogPosting schema, delegates UI to client child.
+  - `frontend/src/app/(main)/blog/[slug]/BlogArticleClient.tsx` — new file. All the original interactive UI (reading-progress bar, motion, react-markdown, sidebar) accepting `{ blog }` as a prop.
+  - `frontend/src/app/sitemap.ts` — new. 6 static routes + every published blog slug (fetched from prod API, 10-min revalidate).
+  - `frontend/src/app/robots.ts` — new. Allow `/`, disallow `/admin*` and `/api/*`, point at sitemap.
+  - `frontend/src/app/layout.tsx` — added `metadataBase` so relative OG/Twitter image URLs resolve to the absolute site URL.
+- Key decisions:
+  - Server/client split matches Next 16's "metadata + generateMetadata only work in server components" rule. Used React `cache` to ensure the slug fetch happens once per request even though both `generateMetadata` and the page function call `getBlog`.
+  - Dedup uses three signals — state-name normalization (MA↔Massachusetts, NH↔New Hampshire, REALTOR® variants), 4-word distinctive-phrase substring match, and difflib `SequenceMatcher.ratio() >= 0.72`. Tuned the threshold against real rewrites; lower would catch unrelated topics, higher would miss legit duplicates.
+  - Dedup `OR`s against the existing-titles list so categories rotate AND titles never collide.
+  - Sitemap revalidates every 10 minutes, blog detail every 5 minutes — fresh enough for daily posts, light enough on Railway.
+- Verification:
+  - `next build` succeeded; `/blog/[slug]` registered dynamic, `/robots.txt` static, `/sitemap.xml` with 10m revalidate.
+  - Live-rendered the seed blog via dev server pointed at prod API: `<head>` contains correct title, description, canonical, `og:type=article`, `og:image=<R2 URL>`, `twitter:card=summary_large_image`. JSON-LD parses cleanly as `BlogPosting` with author bio, publisher, image, mainEntityOfPage, articleSection, wordCount.
+  - `/robots.txt` and `/sitemap.xml` outputs verified against XML sitemap spec.
+  - Dedup truth-table test: catches MA↔Massachusetts and NH↔New Hampshire rewrites and REALTOR®↔REALTOR variants; correctly does NOT match unrelated topics. 10-day simulation picks 10 distinct topics across all 5 buckets.
+- Status: Complete locally
+
 ### 2026-05-12 — Blog Cover Images Whitelisted in next.config
 - What was changed: Blog posts on the live site rendered with no cover image because Next.js `<Image>` was rejecting the R2 (`pub-*.r2.dev`) hostname — only `**.cdninstagram.com` was in `images.remotePatterns`. Whitelisted the three hosts the blog can actually emit (R2, picsum.photos, placehold.co) and changed the placehold.co fallback URL to use the `.jpg` extension since Next blocks remote SVG by default.
 - Files modified:

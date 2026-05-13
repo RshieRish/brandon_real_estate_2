@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     R2_REGION: str = "auto"
     # Auto-blog scheduler (in-process). Set BLOG_AUTO_POST_ENABLED=false in dev
     # to silence the loop, or tune the cadence with BLOG_AUTO_POST_INTERVAL_HOURS.
+    # Daily posting (24h) is the production cadence so each day picks a fresh topic.
     BLOG_AUTO_POST_ENABLED: bool = True
-    BLOG_AUTO_POST_INTERVAL_HOURS: int = 72
+    BLOG_AUTO_POST_INTERVAL_HOURS: int = 24
 
 
 settings = Settings()

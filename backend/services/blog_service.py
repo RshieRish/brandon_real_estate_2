@@ -153,12 +153,75 @@ except ImportError:
 # Helper: pick a topic from the LRU-least-used bucket
 # ---------------------------------------------------------------------------
 
-def _get_topic_and_category(existing_categories: List[str]) -> tuple[str, str]:
-    """Pick the bucket used least recently, then a random unused topic."""
+_STATE_NORMALIZATIONS = [
+    (r"\bmassachusetts\b", "ma"),
+    (r"\bnew hampshire\b", "nh"),
+    (r"\bnorthern massachusetts\b", "northern ma"),
+    (r"\bsouthern new hampshire\b", "southern nh"),
+    (r"\brealtor s\b", "realtor"),
+    (r"\brealtors\b", "realtor"),
+]
+
+
+def _norm_title(s: str) -> str:
+    """Lowercase, strip punctuation/®, collapse whitespace, normalize MA/NH spellings."""
+    s = s.lower().replace("®", "").replace("'", "").replace("'", "")
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    for pat, rep in _STATE_NORMALIZATIONS:
+        s = re.sub(pat, rep, s)
+    return s
+
+
+def _topic_already_used(topic_seed: str, used_titles: List[str]) -> bool:
+    """Treat a topic as used if any existing blog title shares the same key phrase.
+
+    Gemini rewrites the headline freely (e.g. seed "Best Towns in Northern MA for
+    First-Time Buyers" → "Best Towns in Northern Massachusetts for First-Time
+    Buyers: A 2025 Guide"). We normalize state names and check both a 4-word
+    needle substring AND a difflib similarity ratio so rewrites don't slip past.
+    """
+    from difflib import SequenceMatcher
+
+    seed_norm = _norm_title(topic_seed)
+    seed_words = seed_norm.split()
+    # Pick the 4 most distinctive consecutive words (skip leading filler).
+    skip = sum(1 for w in seed_words[:2] if w in {"the", "a", "an", "how", "why", "what"})
+    needle = " ".join(seed_words[skip : skip + 4]) if len(seed_words) >= skip + 4 else seed_norm
+
+    for title in used_titles:
+        title_norm = _norm_title(title)
+        if needle and needle in title_norm:
+            return True
+        # Fuzzy backstop for headlines Gemini paraphrases heavily.
+        if SequenceMatcher(None, seed_norm, title_norm).ratio() >= 0.72:
+            return True
+    return False
+
+
+def _get_topic_and_category(
+    existing_categories: List[str],
+    used_titles: Optional[List[str]] = None,
+) -> tuple[str, str]:
+    """Pick the bucket used least recently, then a topic not yet used.
+
+    Daily-posting safety: filter the bucket's topic pool against existing post
+    titles so each day picks a fresh topic. If every topic in the chosen
+    bucket has already been used, walk to the next least-used bucket. If all
+    50 topics across all 5 buckets are exhausted, fall back to a random pick
+    (which lets Gemini rewrite the angle for a second pass).
+    """
     from collections import Counter
+    titles = used_titles or []
     counts = Counter(existing_categories)
-    # Sort buckets by usage (ascending) so least-used comes first
     sorted_buckets = sorted(CONTENT_BUCKETS, key=lambda b: counts.get(b, 0))
+
+    for bucket in sorted_buckets:
+        unused = [t for t in TOPIC_POOL[bucket] if not _topic_already_used(t, titles)]
+        if unused:
+            return random.choice(unused), bucket
+
+    # Every topic in every bucket has been used at least once — start a new cycle.
     bucket = sorted_buckets[0]
     return random.choice(TOPIC_POOL[bucket]), bucket
 
@@ -423,10 +486,13 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
         topic: Optional[str],
         category: Optional[str],
         existing_categories: Optional[List[str]] = None,
+        used_titles: Optional[List[str]] = None,
     ) -> Dict:
         """Run the two-stage Gemini pipeline and return a dict with all blog fields."""
         if not category or not topic:
-            resolved_topic, resolved_category = _get_topic_and_category(existing_categories or [])
+            resolved_topic, resolved_category = _get_topic_and_category(
+                existing_categories or [], used_titles or []
+            )
             topic = topic or resolved_topic
             category = category or resolved_category
 
@@ -475,7 +541,6 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
     def _get_existing_categories() -> List[str]:
         conn = BlogService._get_conn()
         try:
-            from psycopg2.extras import RealDictCursor
             cur = conn.cursor()
             cur.execute("SELECT category FROM blogs WHERE category IS NOT NULL ORDER BY created_at DESC LIMIT 30")
             return [r[0] for r in cur.fetchall()]
@@ -486,10 +551,25 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
             conn.close()
 
     @staticmethod
+    def _get_existing_titles(limit: int = 200) -> List[str]:
+        """Return recent blog titles for topic dedupe."""
+        conn = BlogService._get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT title FROM blogs ORDER BY created_at DESC LIMIT %s", (limit,))
+            return [r[0] for r in cur.fetchall() if r[0]]
+        except Exception as exc:
+            print(f"[Blog] Error fetching titles: {exc}")
+            return []
+        finally:
+            conn.close()
+
+    @staticmethod
     async def create_auto_blog() -> Dict:
-        """Auto-pilot: pick topic, generate full post, save to DB as published."""
-        existing = BlogService._get_existing_categories()
-        blog_data = await BlogService.generate_blog_content(None, None, existing)
+        """Auto-pilot: pick topic (not yet used), generate full post, save as published."""
+        existing_cats = BlogService._get_existing_categories()
+        existing_titles = BlogService._get_existing_titles()
+        blog_data = await BlogService.generate_blog_content(None, None, existing_cats, existing_titles)
         image_url = BlogService.generate_blog_image(blog_data["title"])
         return BlogService._save_blog(blog_data, image_url, is_posted=True)
 
