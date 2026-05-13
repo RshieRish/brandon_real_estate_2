@@ -3,6 +3,19 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-05-12
 
+### 2026-05-13 — Scheduler Worker-Race Fix + Removed Placeholder Fallback
+- What was changed: Two daily posts landed in prod within 72 seconds, both with `placehold.co` cover images instead of real R2 images. Two root causes — Railway runs `uvicorn --workers 2`, so two Python processes each ran their own scheduler and fired simultaneously; AND image generation evidently failed on at least one of those concurrent calls so the placeholder fallback fired. Fix: postgres advisory lock around the scheduler so only one worker per cluster posts per cycle, and removed the placeholder fallback so a real failure surfaces the on-brand empty state instead of a generic gray rectangle.
+- Files modified:
+  - `backend/main.py` — added `_try_claim_post_lock` / `_release_post_lock` using `pg_try_advisory_lock(842913571)`. Loop now: jitter 0–30s on boot, then each iteration tries the lock; if got, re-check inside the lock (so a worker that just lost a race doesn't double-post), run pipeline, release; if not got, skip the cycle. Concurrency-safe across N uvicorn workers AND N Railway replicas.
+  - `backend/services/blog_service.py` — `generate_blog_image` now returns `Optional[str]` and retries the Gemini call once (180s timeout, 2s backoff) before giving up; `_upload_image` returns `None` on failure; removed all three `placehold.co` return paths.
+  - `frontend/next.config.ts` — dropped `placehold.co` from `remotePatterns` since no path emits it anymore.
+- Backfill: ran a one-off script to regenerate covers for the 2 placehold posts (`Why More Boston Professionals…` and `Windham, Londonderry, Salem…`) and UPDATE'd their `image_url` to the real R2 URLs.
+- Verification:
+  - Lock test: Worker A claims → `got=True`. Worker B tries while A holds → `got=False`. A releases → B retries → `got=True`. Confirms the lock is non-blocking and properly released.
+  - DB scan: all 3 blogs now have `pub-04769d4526f148fbbbeaac4f7a62b4c5.r2.dev` cover URLs (no placehold).
+  - `next build` clean — 20/20 pages, sitemap + robots intact.
+- Status: Complete locally
+
 ### 2026-05-12 — Daily Cadence + Topic Dedup + Full SEO Pass on Blog
 - What was changed: Tightened the auto-blog system in three ways: (1) cadence dropped from 72h to 24h so a new post lands every day, (2) topic selection now filters out topics that match (post-Gemini rewrite) any existing blog title, so we cycle through all 50 topics across all 5 buckets before repeating, (3) blog detail pages went from `'use client'` with no SEO metadata to a server component shell exporting `generateMetadata` (full OG, Twitter, canonical, keywords, authors) plus an inline JSON-LD `BlogPosting` schema, with `sitemap.ts`, `robots.ts`, and `metadataBase` added at the app root.
 - Files modified:

@@ -1,4 +1,5 @@
 import asyncio
+import random
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -31,6 +32,14 @@ from services.notification_service import (
 app = FastAPI(title="Brandon RE API", version="1.0.0", docs_url="/docs")
 _notification_retry_task: asyncio.Task | None = None
 _blog_auto_post_task: asyncio.Task | None = None
+# Arbitrary bigint identifier for the pg_advisory_lock used by the blog
+# scheduler. Same value across all workers/replicas — only one process at a
+# time can hold it, so only one worker actually runs the Gemini pipeline.
+_BLOG_POST_LOCK_KEY = 842913571
+# Connection that is currently holding the advisory lock. Held module-wide
+# because pg advisory locks are released when the connection closes — we
+# keep this open across the lock_try → release boundary.
+_blog_post_lock_conn = None  # type: ignore[var-annotated]
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,29 +70,90 @@ async def _notification_retry_loop() -> None:
         await asyncio.sleep(NOTIFICATION_RETRY_INTERVAL_SECONDS)
 
 
+def _try_claim_post_lock() -> bool:
+    """Try to claim the blog-poster role via a non-blocking postgres advisory
+    lock. Returns True if this worker got the lock; the caller MUST call
+    `_release_post_lock()` once it's done to free the slot.
+
+    Only one of N uvicorn workers (and N replicas) actually runs the Gemini
+    pipeline per cycle — the rest see False and skip until next iteration.
+    """
+    global _blog_post_lock_conn
+    _release_post_lock()  # be tidy in case a previous iteration leaked
+
+    import psycopg2
+    db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_BLOG_POST_LOCK_KEY,))
+        got = bool(cur.fetchone()[0])
+        if got:
+            _blog_post_lock_conn = conn
+        else:
+            conn.close()
+        return got
+    except Exception as exc:
+        logging.error("[blog-auto] Failed to acquire post lock: %s", exc)
+        return False
+
+
+def _release_post_lock() -> None:
+    global _blog_post_lock_conn
+    if _blog_post_lock_conn is None:
+        return
+    try:
+        cur = _blog_post_lock_conn.cursor()
+        cur.execute("SELECT pg_advisory_unlock(%s)", (_BLOG_POST_LOCK_KEY,))
+    except Exception:
+        pass  # connection close below also releases the lock
+    try:
+        _blog_post_lock_conn.close()
+    except Exception:
+        pass
+    _blog_post_lock_conn = None
+
+
 async def _blog_auto_post_loop() -> None:
     """Auto-post a fresh blog every BLOG_AUTO_POST_INTERVAL_HOURS hours.
 
-    Restart-safe: on boot we look at the most recent posted blog's created_at
-    and only post if the gap to now is >= the configured interval. This way an
-    app restart doesn't double-post within the window.
+    Restart-safe: each iteration looks at the most recent posted blog's
+    created_at and only posts if the gap to now is >= the configured interval.
+
+    Concurrency-safe: gated by a postgres advisory lock so multi-worker /
+    multi-replica deploys don't fire simultaneous Gemini pipelines.
     """
     interval_seconds = max(3600, settings.BLOG_AUTO_POST_INTERVAL_HOURS * 3600)
+    # Random startup jitter (0–30s) so N workers don't all hit the lock at the
+    # same instant; reduces wasted DB connections.
+    await asyncio.sleep(random.uniform(0, 30))
+
     while True:
+        sleep_for = interval_seconds
         try:
             seconds_since_last = _seconds_since_last_posted_blog()
             if seconds_since_last is None or seconds_since_last >= interval_seconds:
-                logging.info("[blog-auto] Generating new auto-blog…")
-                result = await BlogService.create_auto_blog()
-                logging.info("[blog-auto] Posted: id=%s slug=%s", result.get("id"), result.get("slug"))
-                sleep_for = interval_seconds
+                if _try_claim_post_lock():
+                    try:
+                        # Re-check inside the lock — another worker may have
+                        # just posted while we were acquiring it.
+                        recheck = _seconds_since_last_posted_blog()
+                        if recheck is None or recheck >= interval_seconds:
+                            logging.info("[blog-auto] Generating new auto-blog (lock held)…")
+                            result = await BlogService.create_auto_blog()
+                            logging.info("[blog-auto] Posted: id=%s slug=%s", result.get("id"), result.get("slug"))
+                        else:
+                            logging.info("[blog-auto] Recheck: another worker posted %ss ago; skipping.", int(recheck))
+                    finally:
+                        _release_post_lock()
+                else:
+                    logging.info("[blog-auto] Another worker holds the post lock; skipping this cycle.")
             else:
                 sleep_for = interval_seconds - seconds_since_last
                 logging.info("[blog-auto] Last post was %ss ago — sleeping %ss until next.", int(seconds_since_last), int(sleep_for))
         except Exception as exc:
             logging.error("[blog-auto] Generation pass failed: %s", exc)
             logging.error(traceback.format_exc())
-            sleep_for = interval_seconds
         await asyncio.sleep(sleep_for)
 
 
