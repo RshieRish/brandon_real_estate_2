@@ -248,6 +248,32 @@ async def cron_generate_blog(_admin: str = Depends(_require_admin)):
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic: test image generation alone (no DB write, no Gemini text call)
+# ---------------------------------------------------------------------------
+
+@router.post("/admin/test-image")
+async def admin_test_image(_admin: str = Depends(_require_admin)):
+    """Run only the image-generation step and return the result + any error.
+
+    Used to diagnose why image generation succeeds locally but fails on
+    Railway. Costs ~one image-gen call, does not write to the DB.
+    """
+    import time as _time
+    title = "Diagnostic test — Northern Massachusetts real estate"
+    t0 = _time.time()
+    url = BlogService.generate_blog_image(title, max_attempts=1)
+    took_ms = int((_time.time() - t0) * 1000)
+    return {
+        "image_url": url,
+        "error": BlogService._LAST_IMAGE_ERROR if url is None else None,
+        "took_ms": took_ms,
+        "r2_configured": bool(settings.R2_ENDPOINT and settings.R2_ACCESS_KEY_ID and settings.R2_SECRET_ACCESS_KEY),
+        "r2_endpoint_set": bool(settings.R2_ENDPOINT),
+        "r2_public_url_set": bool(settings.R2_PUBLIC_URL),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Admin: update
 # ---------------------------------------------------------------------------
 
