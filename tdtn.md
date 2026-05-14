@@ -3,6 +3,19 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-05-12
 
+### 2026-05-14 — Root Cause for Missing Hero Images: R2 Env Vars Missing on Railway
+- What was changed: Today's auto-post landed with `image_url: null` again (same symptom as yesterday's two posts, which had landed with `placehold.co` URLs before that fallback was removed). Railway logs weren't directly accessible. Added two diagnostic surfaces, deployed, queried prod from outside, identified the actual failure: **R2 environment variables were never set on Railway**, so `boto3` couldn't construct the S3 client and every image upload silently dropped to `None`. Gemini image generation was working fine the entire time (Railway returned 975 KB JPEG bytes in 17s); the failure was the upload step. User added the six `R2_*` env vars to Railway via the dashboard; verified via the diagnostic endpoint immediately after restart — `r2_configured: true`, real R2 URL returned, image publicly readable.
+- Files modified:
+  - `backend/services/blog_service.py` — `generate_blog_image` now writes the human-readable failure reason (HTTP status + body, finishReason, safetyRatings, R2-vs-Gemini distinction, timeout, exception type) to `BlogService._LAST_IMAGE_ERROR`; `_save_blog` accepts an optional `image_error` and persists to a new `blogs.image_gen_error TEXT` column; `create_auto_blog` and `create_draft_blog` thread the error through.
+  - `backend/routers/blog.py` — added `POST /api/v1/blog/admin/test-image` (admin JWT required). Runs only the image-generation step, returns `{image_url, error, took_ms, r2_configured, r2_endpoint_set, r2_public_url_set}`. No Gemini text call, no DB write — cheap to re-run during debugging.
+- Schema change: `ALTER TABLE blogs ADD COLUMN IF NOT EXISTS image_gen_error TEXT` applied to prod DB out-of-band (no migration file — kept as a permanent diagnostic column per user decision to retain the diagnostic surface).
+- Backfill: today's affected post (`Behind the Scenes: A Day in the Life…`) had its cover regenerated from local and `UPDATE`d so the live blog isn't broken.
+- Key decision: kept `/admin/test-image` and `image_gen_error` column in place permanently — both are zero-cost when unused and would have saved hours of debugging today if they'd existed sooner.
+- Verification:
+  - Diagnostic endpoint pre-fix returned `r2_configured: false`, `error: "Gemini OK (975942 bytes) but R2/public upload returned None — check R2 env vars on Railway"`. Post-fix returned `r2_configured: true`, `image_url: pub-…r2.dev/blog-images/blog-1778795754-5620.jpg`, error null, took 16.5s.
+  - Uploaded test image is publicly readable (HTTP 200, 987 KB JPEG).
+- Status: Complete. Tomorrow's auto-post (~16:13 UTC) and every post after will have a real R2 cover.
+
 ### 2026-05-13 — Scheduler Worker-Race Fix + Removed Placeholder Fallback
 - What was changed: Two daily posts landed in prod within 72 seconds, both with `placehold.co` cover images instead of real R2 images. Two root causes — Railway runs `uvicorn --workers 2`, so two Python processes each ran their own scheduler and fired simultaneously; AND image generation evidently failed on at least one of those concurrent calls so the placeholder fallback fired. Fix: postgres advisory lock around the scheduler so only one worker per cluster posts per cycle, and removed the placeholder fallback so a real failure surfaces the on-brand empty state instead of a generic gray rectangle.
 - Files modified:
