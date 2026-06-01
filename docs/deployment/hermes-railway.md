@@ -8,7 +8,9 @@ This runbook is for the private Brandon AI / Atlas assistant foundation.
 - Project ID: `aa6c9f9c-46d4-4f5d-b529-86b073de4972`
 - Existing FastAPI backend service: `extraordinary-prosperity`
 - Existing backend service ID: `85541f63-2aa1-4679-8114-98895f4bf215`
-- New Hermes service name: `atlas-agent`
+- Hermes service: `atlas-agent`
+- Hermes service ID: `6dc65984-89c1-400c-9d17-d5412befd031`
+- Hermes URL: `https://atlas-agent-production-99dc.up.railway.app`
 - Environment: `production`
 
 Use the local wrapper for Railway commands:
@@ -42,10 +44,17 @@ Never commit the token.
 Current status as of 2026-06-01:
 
 - The FastAPI bridge is live and verified.
-- `atlas-agent` has not been created yet.
-- The current `.env.railway-sweeney.local` uses a project-scoped `RAILWAY_TOKEN`, which works for the existing backend service but was rejected by Railway when attempting to create a new GitHub-backed service from `praveen-ks-2001/hermes-agent-template`.
-- Use the Railway dashboard or a dedicated account-wide `RAILWAY_API_TOKEN` for the actual service creation step.
+- `atlas-agent` is live in the same Railway project.
+- Deployment `dc2db0c4-10ca-447a-8d7a-c500dec1aa89` is `SUCCESS`.
+- The public dashboard URL is `https://atlas-agent-production-99dc.up.railway.app`.
+- The health check returns `{"status":"ok","gateway":"stopped"}`.
+- Admin credentials are stored only in local ignored `.env.hermes-admin.local` and Railway variables.
+- The current `.env.railway-sweeney.local` uses a project-scoped `RAILWAY_TOKEN`, which works for existing service operations but was rejected by Railway when attempting to create a new GitHub-backed service from `praveen-ks-2001/hermes-agent-template`.
+- The deployed fallback path was: create an empty `atlas-agent` service, attach `/data`, set admin vars, then upload the checked-out template with `railway up --path-as-root`.
 - The Railway template URL checked on 2026-06-01 is `https://railway.com/deploy/hermes-agent-nous-research`; it requires `ADMIN_USERNAME` and `ADMIN_PASSWORD`, persists config under `/data`, and stores LLM/channel keys through the Hermes dashboard.
+- Template commit deployed: `7224d7c1a4dcffe9304f49bc843f55716f5561b4`.
+- Persistent volume: `atlas-agent-volume`, ID `594c4970-ba61-4888-8372-57d0c235db65`, mounted at `/data`, size `5000 MB`.
+- `BRANDON_BACKEND_URL` and masked `BRANDON_AGENT_CONTROL_TOKEN` are set on `atlas-agent` for future backend-control skills.
 
 Preferred deployment path:
 
@@ -60,6 +69,23 @@ Preferred deployment path:
 
 If the dashboard template is unavailable, use the CLI/repo fallback from the design spec rather than modifying `extraordinary-prosperity`.
 
+The CLI/repo fallback used successfully on 2026-06-01:
+
+```bash
+git clone --depth 1 https://github.com/praveen-ks-2001/hermes-agent-template.git /tmp/hermes-agent-template-inspect
+npx -y @railway/cli@latest add --service atlas-agent --json
+npx -y @railway/cli@latest volume add --mount-path /data --json
+npx -y @railway/cli@latest up /tmp/hermes-agent-template-inspect \
+  --service atlas-agent \
+  --environment production \
+  --path-as-root \
+  --detach \
+  --message "Deploy atlas-agent Hermes template 7224d7c" \
+  --json
+```
+
+Note: `volume add` needed a temporary service link because the project token cannot create one interactively. That temporary `/tmp` link was removed from `~/.railway/config.json` after the volume was attached.
+
 ## Verification
 
 Check both services:
@@ -73,8 +99,8 @@ Expected shape:
 ```text
 Services in production:
 
-extraordinary-prosperity | 85541f63-2aa1-4679-8114-98895f4bf215 | SUCCESS
-atlas-agent | Railway-assigned service UUID | SUCCESS
+extraordinary-prosperity | deployment UUID | SUCCESS
+atlas-agent | deployment UUID | SUCCESS
 ```
 
 Check the backend bridge:
@@ -93,6 +119,23 @@ Expected fields:
   "risk_tier": "read_only_foundation"
 }
 ```
+
+Check Hermes:
+
+```bash
+curl -sS https://atlas-agent-production-99dc.up.railway.app/health
+```
+
+Expected fields:
+
+```json
+{
+  "status": "ok",
+  "gateway": "stopped"
+}
+```
+
+`gateway="stopped"` is expected until the LLM provider and Telegram channel are configured in the Hermes dashboard.
 
 ## Safety Boundary
 

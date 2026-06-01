@@ -923,5 +923,17 @@ Completed Checklist Video Integration
 - Notes:
   - `tests/test_leads_notifications.py` still has a pre-existing expectation mismatch around background notification retry scheduling and was not caused by this bridge.
   - Railway logs still show a pre-existing Gemini blog auto-generation model error for `gemini-3-pro-preview`; this should be handled as a separate follow-up.
-  - `atlas-agent` service creation was attempted from `praveen-ks-2001/hermes-agent-template`, but Railway rejected new GitHub-backed service creation with the current project-scoped token. The local Hermes admin password was rotated after the failed CLI attempt. Use the Railway dashboard or an account-wide `RAILWAY_API_TOKEN` for that provisioning step.
+  - `atlas-agent` is now live as a separate Railway service in the same project. The direct GitHub-backed service creation path was rejected by the current project-scoped token, so the successful fallback was: create empty service, attach `/data`, set admin variables, upload the Hermes template checkout with `railway up --path-as-root`, then redeploy after adding backend bridge vars.
+- Hermes service:
+  - Service ID: `6dc65984-89c1-400c-9d17-d5412befd031`
+  - URL: `https://atlas-agent-production-99dc.up.railway.app`
+  - Volume: `atlas-agent-volume` (`594c4970-ba61-4888-8372-57d0c235db65`) mounted at `/data`
+  - Template commit: `7224d7c1a4dcffe9304f49bc843f55716f5561b4`
+  - Deployment: `dc2db0c4-10ca-447a-8d7a-c500dec1aa89`
+  - `BRANDON_BACKEND_URL` and masked `BRANDON_AGENT_CONTROL_TOKEN` are set on the service for future backend-control skills.
+- Hermes verification:
+  - `scripts/railway-sweeney service status --all` shows both `extraordinary-prosperity` and `atlas-agent` as `SUCCESS`.
+  - `https://atlas-agent-production-99dc.up.railway.app/health` returns `status=ok` and `gateway=stopped`.
+  - Admin login POST returns `302`, sets a session cookie, and redirects to `/setup`.
+  - `gateway=stopped` is expected until LLM provider and Telegram channel are configured in the Hermes dashboard.
 - Status: Complete
