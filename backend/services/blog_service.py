@@ -437,6 +437,11 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
     # -----------------------------------------------------------------------
     # Stage C: Image generation (gemini-3-pro-image-preview via REST)
     # -----------------------------------------------------------------------
+    # Module-scope buffer of the last image-generation failure reason. Read by
+    # create_auto_blog and persisted to blogs.image_gen_error for diagnosis
+    # of Railway-only failures we can't see in stdout-only logs.
+    _LAST_IMAGE_ERROR: Optional[str] = None
+
     @staticmethod
     def generate_blog_image(title: str, max_attempts: int = 2) -> Optional[str]:
         """Generate a photorealistic editorial cover image for the blog post.
@@ -447,7 +452,11 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
 
         Retries once on a transient API failure (Gemini preview models are
         occasionally rate-limited or return empty candidates under load).
+        On final failure, the human-readable reason is left in
+        BlogService._LAST_IMAGE_ERROR for the caller to persist.
         """
+        BlogService._LAST_IMAGE_ERROR = None
+
         image_prompt = (
             f"Photorealistic editorial header image (16:9, 2K resolution) for a New England real estate blog post titled: '{title}'. "
             "Cinematic composition. Warm golden hour light over a suburban New England neighborhood — colonial homes, maple trees, autumn leaves OR fresh spring greenery. "
@@ -457,6 +466,7 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
 
         gemini_key = settings.GEMINI_API_KEY
         if not gemini_key:
+            BlogService._LAST_IMAGE_ERROR = "GEMINI_API_KEY not set"
             print("[Blog] GEMINI_API_KEY not set — skipping cover image.")
             return None
 
@@ -469,6 +479,7 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
             "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]},
         }
 
+        last_error = "unknown"
         for attempt in range(1, max_attempts + 1):
             print(f"[Blog] Generating image (attempt {attempt}/{max_attempts}) for: {title[:60]}…")
             try:
@@ -480,22 +491,44 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                    for part in parts:
                         if "inlineData" in part:
                             mime = part["inlineData"].get("mimeType", "image/jpeg")
                             image_bytes = base64.b64decode(part["inlineData"]["data"])
-                            return _upload_image(image_bytes, mime)
+                            url = _upload_image(image_bytes, mime)
+                            if url is None:
+                                BlogService._LAST_IMAGE_ERROR = (
+                                    f"Gemini OK ({len(image_bytes)} bytes) but R2/public upload returned None — "
+                                    f"check R2 env vars on Railway"
+                                )
+                                return None
+                            return url
                     # 200 but no image part — usually safety filter or quota nuance.
-                    finish = data.get("candidates", [{}])[0].get("finishReason")
-                    print(f"[Blog] Gemini returned 200 but no image data. finishReason={finish}")
+                    cand0 = data.get("candidates", [{}])[0]
+                    finish = cand0.get("finishReason")
+                    safety = cand0.get("safetyRatings")
+                    prompt_fb = data.get("promptFeedback")
+                    last_error = (
+                        f"HTTP 200 but no image data. finishReason={finish} "
+                        f"parts={[list(p.keys()) for p in parts]} "
+                        f"safetyRatings={safety} promptFeedback={prompt_fb}"
+                    )
+                    print(f"[Blog] {last_error}")
                 else:
-                    print(f"[Blog] Gemini image error {resp.status_code}: {resp.text[:300]}")
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:400]}"
+                    print(f"[Blog] Gemini image error {last_error}")
+            except requests.Timeout as exc:
+                last_error = f"requests.Timeout after 180s: {exc}"
+                print(f"[Blog] Image generation attempt {attempt} timed out: {exc}")
             except Exception as exc:
-                print(f"[Blog] Image generation attempt {attempt} failed: {exc}")
+                last_error = f"{type(exc).__name__}: {exc}"
+                print(f"[Blog] Image generation attempt {attempt} failed: {last_error}")
             if attempt < max_attempts:
                 time.sleep(2 * attempt)  # tiny backoff before retry
 
-        print("[Blog] All image generation attempts failed — returning None.")
+        BlogService._LAST_IMAGE_ERROR = f"after {max_attempts} attempts: {last_error}"
+        print(f"[Blog] All image generation attempts failed — {BlogService._LAST_IMAGE_ERROR}")
         return None
 
     # -----------------------------------------------------------------------
@@ -591,14 +624,16 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
         existing_titles = BlogService._get_existing_titles()
         blog_data = await BlogService.generate_blog_content(None, None, existing_cats, existing_titles)
         image_url = BlogService.generate_blog_image(blog_data["title"])
-        return BlogService._save_blog(blog_data, image_url, is_posted=True)
+        image_error = BlogService._LAST_IMAGE_ERROR if image_url is None else None
+        return BlogService._save_blog(blog_data, image_url, is_posted=True, image_error=image_error)
 
     @staticmethod
     async def create_draft_blog(topic: str, category: str) -> Dict:
         """Semi-auto: admin picks topic → Gemini generates → saved as draft."""
         blog_data = await BlogService.generate_blog_content(topic, category, [])
         image_url = BlogService.generate_blog_image(blog_data["title"])
-        return BlogService._save_blog(blog_data, image_url, is_posted=False)
+        image_error = BlogService._LAST_IMAGE_ERROR if image_url is None else None
+        return BlogService._save_blog(blog_data, image_url, is_posted=False, image_error=image_error)
 
     @staticmethod
     def create_manual_blog(
@@ -639,7 +674,12 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
         return BlogService._save_blog(blog_data, image_url, is_posted=is_posted)
 
     @staticmethod
-    def _save_blog(blog_data: Dict, image_url: Optional[str], is_posted: bool) -> Dict:
+    def _save_blog(
+        blog_data: Dict,
+        image_url: Optional[str],
+        is_posted: bool,
+        image_error: Optional[str] = None,
+    ) -> Dict:
         conn = BlogService._get_conn()
         try:
             cur = conn.cursor()
@@ -654,9 +694,9 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
                 INSERT INTO blogs (
                     title, slug, content, excerpt, image_url, category,
                     author, author_role, author_bio, author_image_url,
-                    is_posted, read_time_mins, created_at, updated_at
+                    is_posted, read_time_mins, image_gen_error, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                 ON CONFLICT (slug) DO UPDATE SET slug = blogs.slug || '-' || extract(epoch from now())::int
                 RETURNING id
                 """,
@@ -673,11 +713,12 @@ Write a comprehensive, high-ranking SEO blog post. This must be 1,200–1,800 wo
                     author_img,
                     is_posted,
                     blog_data.get("read_time_mins"),
+                    image_error,
                 ),
             )
             blog_id = str(cur.fetchone()[0])
             conn.commit()
-            print(f"[Blog] Saved blog id={blog_id} | posted={is_posted}")
+            print(f"[Blog] Saved blog id={blog_id} | posted={is_posted} | image_error={image_error!r}")
             return {**blog_data, "id": blog_id, "image_url": image_url, "is_posted": is_posted}
         except Exception as exc:
             conn.rollback()
