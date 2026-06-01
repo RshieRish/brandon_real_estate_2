@@ -1,7 +1,24 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-05-31
+Last Updated: 2026-06-01
+
+### 2026-06-01 - Brandon Hermes Agent Foundation Design
+- What was changed: Wrote the approved design spec for the first private Hermes/Atlas assistant slice: same Railway project, separate Hermes service, and a narrow FastAPI agent-control bridge.
+- Files created:
+  - `docs/superpowers/specs/2026-06-01-brandon-hermes-agent-foundation-design.md`
+- Key decisions:
+  - Keep Hermes under Railway project `enchanting-perception`, but deploy it as a separate `atlas-agent` service instead of merging it into the existing FastAPI backend service.
+  - Leave `extraordinary-prosperity` untouched except for explicit, tested `/api/v1/agent-control/*` endpoints.
+  - First bridge scope is read-only: backend status, allowlisted action registry, recent lead summaries, and recent booking summaries.
+  - Protect the bridge with `AGENT_CONTROL_TOKEN`, `AGENT_CONTROL_ENABLED`, constant-time token comparison, and dedicated audit rows.
+  - Defer Gmail, Calendar, Drive, Sheets, Docs, People, CRM, outbound messaging, and autonomy tiers to later specs.
+- Verification:
+  - Read the attached Brandon AI / Atlas PRD and cross-checked current repo architecture.
+  - Checked current Railway CLI capabilities through `scripts/railway-sweeney`.
+  - Reviewed Hermes/Railway current docs for deployment assumptions and persistent `/data` volume behavior.
+  - Ran the spec self-review scan and removed placeholder-style deployment markers.
+- Status: Spec written; awaiting written-spec review before implementation plan
 
 ### 2026-05-31 - Railway Sweeney Token Verified
 - What was changed: Replaced the rejected local Railway project token in the gitignored `.env.railway-sweeney.local` with a freshly generated project token for the Sold With Sweeney Railway project.

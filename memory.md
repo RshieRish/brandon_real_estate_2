@@ -17,6 +17,7 @@
 - Instagram: Access token prone to expiration; frontend handles fetching failure gracefully.
 - Railway Backend: Docker builder forced via `railway.json`. Uses dynamic `$PORT` and root context.
 - 2026-05-31: Local Railway work for the Sold With Sweeney deployment should use `scripts/railway-sweeney ...`, which sources the gitignored `.env.railway-sweeney.local` project token for `enchanting-perception` (`aa6c9f9c-46d4-4f5d-b529-86b073de4972`) without changing the global `railway login` for `rishabnandibusiness@gmail.com`. The verified production service is `extraordinary-prosperity` (`85541f63-2aa1-4679-8114-98895f4bf215`); use `--service extraordinary-prosperity` for service-scoped commands when the CLI says no service is linked. Do not run `railway login` for `soldwithsweeneyfordeployment@gmail.com` on this machine unless intentionally replacing the global login.
+- 2026-06-01: Approved architecture for Brandon AI / Atlas assistant is same Railway project, separate Hermes service. Keep Hermes under `enchanting-perception` as `atlas-agent` (or `brandon-hermes` if name availability requires), and let it control the existing backend only through explicit `/api/v1/agent-control/*` endpoints protected by `AGENT_CONTROL_TOKEN` and audit logging. First slice is read-only status/actions/recent leads/recent bookings; no Gmail/Calendar/Drive/CRM/outbound autonomy until later specs.
 - Vercel Frontend: Requires `NEXT_PUBLIC_API_URL` to match Railway domain.
 
 ## Content Status
