@@ -3,6 +3,41 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-06-01
 
+### 2026-06-01 - Brandon Hermes Agent-Control Bridge
+- What was changed: Implemented the first backend foundation slice for the private Brandon AI / Atlas assistant: a read-only, token-authenticated FastAPI agent-control bridge with dedicated audit logging.
+- Files created:
+  - `docs/superpowers/plans/2026-06-01-brandon-hermes-agent-foundation.md`
+  - `docs/deployment/hermes-railway.md`
+  - `backend/middleware/agent_control.py`
+  - `backend/models/agent_action_audit.py`
+  - `backend/schemas/agent_control.py`
+  - `backend/services/agent_control_audit.py`
+  - `backend/routers/agent_control.py`
+  - `backend/alembic/versions/e2f4a6b8c901_add_agent_action_audits.py`
+  - `backend/tests/test_agent_control_auth.py`
+  - `backend/tests/test_agent_control_router.py`
+- Files modified:
+  - `backend/config.py`
+  - `backend/main.py`
+  - `backend/models/__init__.py`
+  - `backend/.env.example`
+  - `tdtn.md`
+  - `memory.md`
+- Key decisions:
+  - Added `AGENT_CONTROL_ENABLED`, `AGENT_CONTROL_TOKEN`, and `AGENT_CONTROL_RECENT_LIMIT`; endpoints are unavailable unless explicitly enabled and tokenized.
+  - Added `/api/v1/agent-control/status`, `/actions`, `/leads/recent`, and `/bookings/recent`.
+  - Recent lead/booking responses mask email and phone and never expose `google_event_id`.
+  - Audit rows go to `agent_action_audits` and record action ids/counts instead of raw tokens or full PII payloads.
+  - Documented Hermes deployment as a separate `atlas-agent` Railway service, leaving `extraordinary-prosperity` as the existing FastAPI backend.
+- Verification:
+  - `JWT_SECRET=test-secret DATABASE_URL=postgresql+asyncpg://user:pass@localhost/test /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/python -m pytest tests/test_agent_control_auth.py tests/test_agent_control_router.py -v` passed: 10 tests.
+  - `JWT_SECRET=test-secret DATABASE_URL=postgresql+asyncpg://user:pass@localhost/test /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/python -m pytest tests/test_link_pack_router.py -q` passed: 6 tests.
+  - `JWT_SECRET=test-secret DATABASE_URL=postgresql+asyncpg://user:pass@localhost/test GEMINI_API_KEY=dummy-key /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/python -c "import main; print('main import ok')"` passed.
+  - `JWT_SECRET=test-secret DATABASE_URL=postgresql+asyncpg://user:pass@localhost/test /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/alembic heads` returned `e2f4a6b8c901 (head)`.
+  - `git diff --check` passed.
+  - Neighboring `tests/test_leads_notifications.py` still fails on `main` and this branch because its three route tests expect `run_notification_retry_pass` to be awaited, while the current route code schedules it with `asyncio.create_task`; this is pre-existing and unrelated to the Hermes bridge.
+- Status: Complete locally
+
 ### 2026-06-01 - Brandon Hermes Agent Foundation Design
 - What was changed: Wrote the approved design spec for the first private Hermes/Atlas assistant slice: same Railway project, separate Hermes service, and a narrow FastAPI agent-control bridge.
 - Files created:

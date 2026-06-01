@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Daily posting (24h) is the production cadence so each day picks a fresh topic.
     BLOG_AUTO_POST_ENABLED: bool = True
     BLOG_AUTO_POST_INTERVAL_HOURS: int = 24
+    # Private Hermes/Atlas agent bridge. Keep disabled unless Railway env vars
+    # explicitly turn it on and provide a bearer token.
+    AGENT_CONTROL_TOKEN: str = ""
+    AGENT_CONTROL_ENABLED: bool = False
+    AGENT_CONTROL_RECENT_LIMIT: int = 10
 
 
 settings = Settings()

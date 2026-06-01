@@ -9,6 +9,7 @@ import logging
 
 from config import settings
 from routers import (
+    agent_control,
     analytics,
     auth,
     blog,
@@ -62,6 +63,7 @@ app.include_router(content.router, prefix="/api/v1/content", tags=["content"])
 app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
+app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
 
 
 async def _notification_retry_loop() -> None:
