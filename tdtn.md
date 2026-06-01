@@ -880,3 +880,47 @@ Completed Checklist Video Integration
   - Range-tightness denominator is RentCast's published median (not our weighted baseline) so confidence thresholds remain semantically consistent.
 - Tests: 33 backend tests + 31 frontend tests, all passing.
 - Status: Complete
+
+### 2026-06-01 - Hermes Agent Control Bridge Deployment
+- What was built: Added and deployed the private read-only FastAPI bridge for the Atlas/Hermes backend controller.
+- Files added:
+  - `backend/middleware/agent_control.py`
+  - `backend/models/agent_action_audit.py`
+  - `backend/schemas/agent_control.py`
+  - `backend/services/agent_control_audit.py`
+  - `backend/routers/agent_control.py`
+  - `backend/alembic/versions/e2f4a6b8c901_add_agent_action_audits.py`
+  - `backend/tests/test_agent_control_auth.py`
+  - `backend/tests/test_agent_control_router.py`
+  - `scripts/railway-sweeney`
+  - `docs/deployment/hermes-railway.md`
+  - `docs/superpowers/specs/2026-06-01-brandon-hermes-agent-foundation-design.md`
+  - `docs/superpowers/plans/2026-06-01-brandon-hermes-agent-foundation.md`
+- Files modified:
+  - `backend/config.py`
+  - `backend/main.py`
+  - `backend/models/__init__.py`
+  - `backend/.env.example`
+  - `.gitignore`
+- Key decisions:
+  - Kept the backend under the same Railway project and service family so Hermes can control the Brandon backend without splitting operational context.
+  - Used a dedicated Railway project token via `scripts/railway-sweeney`, leaving the existing global Railway login untouched.
+  - Shipped only read-only bridge actions for the first pass: status, action catalog, recent leads, and recent bookings.
+  - Protected all bridge routes with `AGENT_CONTROL_ENABLED=true` plus a bearer token, and masked lead/booking email and phone values in responses.
+  - Added `agent_action_audits` so every allowed agent-control request is persisted with metadata, IP, user agent, and action id.
+- Deployment:
+  - Pushed `main` to GitHub and Railway deployed commit `5b8c45a`.
+  - Applied the production Alembic migration through Railway: `d5e9f1a2b3c4 -> e2f4a6b8c901`.
+  - Set `AGENT_CONTROL_ENABLED`, `AGENT_CONTROL_RECENT_LIMIT`, and `AGENT_CONTROL_TOKEN` on Railway without printing secret values.
+  - Redeployed Railway deployment `73deb46c-433f-4824-b87d-4f7fed63a154` so the new env snapshot was active.
+- Verification:
+  - `backend`: `pytest tests/test_agent_control_auth.py tests/test_agent_control_router.py -v` passed with 10 tests.
+  - `backend`: `pytest tests/test_link_pack_router.py -q` passed with 6 tests after merging remote main.
+  - `backend`: `pytest tests/test_compliance_scanner.py tests/test_compliance_disclaimer.py -q` passed with 58 tests after merging remote main.
+  - Production `/api/v1/agent-control/status` returned `status=ok` with the expected read-only capabilities when called with the token.
+  - Production `/api/v1/agent-control/status` returned `401` without credentials.
+  - Production `/api/v1/agent-control/actions`, `/leads/recent?limit=1`, and `/bookings/recent?limit=1` returned successfully; data-route checks were summarized by count only.
+- Notes:
+  - `tests/test_leads_notifications.py` still has a pre-existing expectation mismatch around background notification retry scheduling and was not caused by this bridge.
+  - Railway logs still show a pre-existing Gemini blog auto-generation model error for `gemini-3-pro-preview`; this should be handled as a separate follow-up.
+- Status: Complete
