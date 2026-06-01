@@ -16,6 +16,7 @@
 - Google OAuth/Calendar: OAuth client credentials are present, but as of 2026-04-10 Brandon still needs to complete the one-time Google consent to generate `GOOGLE_CALENDAR_REFRESH_TOKEN`.
 - Instagram: Access token prone to expiration; frontend handles fetching failure gracefully.
 - Railway Backend: Docker builder forced via `railway.json`. Uses dynamic `$PORT` and root context.
+- 2026-05-31: Local Railway work for the Sold With Sweeney deployment should use `scripts/railway-sweeney ...`, which sources the gitignored `.env.railway-sweeney.local` project token for `enchanting-perception` (`aa6c9f9c-46d4-4f5d-b529-86b073de4972`) without changing the global `railway login` for `rishabnandibusiness@gmail.com`. The verified production service is `extraordinary-prosperity` (`85541f63-2aa1-4679-8114-98895f4bf215`); use `--service extraordinary-prosperity` for service-scoped commands when the CLI says no service is linked. Do not run `railway login` for `soldwithsweeneyfordeployment@gmail.com` on this machine unless intentionally replacing the global login.
 - Vercel Frontend: Requires `NEXT_PUBLIC_API_URL` to match Railway domain.
 
 ## Content Status
@@ -26,6 +27,7 @@
 - Bio/reviews: In BRANDON_RE_SPEC.md Section 14
 
 ## Known Issues
+- As of 2026-05-19, production blogs are down because the Railway blog API cannot connect to Neon: the live response says the Neon account/project exceeded compute time quota, and the DB connection should use `sslmode=require`. `/blog` depends on `GET /api/v1/blog/?limit=50`, while `/blog/[slug]` returns 404 when the server-side blog fetch fails. The local Neon host is `ep-tiny-firefly-ankqqw49-pooler.c-6.us-east-1.aws.neon.tech` (`neondb`, `neondb_owner`); use `ep-tiny-firefly-ankqqw49` to match the project/endpoint in Neon or Railway. That host still resolves and Railway gets a Neon-origin quota error, so the endpoint exists/routes in Neon rather than being moved elsewhere. Strongest local account candidate is `millergid9@gmail.com`: Chrome Profile 13 signed into Neon, opened org `org-long-bread-73501543` / project `nameless-credit-95836299?database=neondb`, and the exact `ep-tiny-firefly-ankqqw49` URL was pasted into the Brandon project chat about one minute later. This is high-confidence local forensic evidence, not server-side Neon ownership proof. Restore/upgrade Neon compute, add SSL mode to Railway `DATABASE_URL`, restart backend, then verify the blog list and a known slug.
 - Real Google Calendar event creation is still blocked until Brandon completes the one-time OAuth connect flow and the backend receives a refresh token.
 - As of 2026-04-10, the immediate `Access blocked` error on the Google Calendar connect flow is specifically caused by `redirect_uri_mismatch`: the backend is still generating the OAuth URL with the localhost callback because `GOOGLE_CALENDAR_REDIRECT_URI` is unset and falls back to `http://localhost:8000/api/v1/booking/calendar/callback`.
 - The next required setup step is to point `GOOGLE_CALENDAR_REDIRECT_URI` at the real public backend callback and register that exact URI in the Google Cloud OAuth client.

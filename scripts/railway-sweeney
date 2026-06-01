@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${RAILWAY_SWEENEY_ENV_FILE:-"$ROOT_DIR/.env.railway-sweeney.local"}"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  cat >&2 <<MSG
+Missing $ENV_FILE
+
+Create it with either:
+  RAILWAY_TOKEN=...
+or:
+  RAILWAY_API_TOKEN=...
+
+Then rerun:
+  scripts/railway-sweeney status
+MSG
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+if [[ -z "${RAILWAY_TOKEN:-}" && -z "${RAILWAY_API_TOKEN:-}" ]]; then
+  echo "Set RAILWAY_TOKEN or RAILWAY_API_TOKEN in $ENV_FILE." >&2
+  exit 1
+fi
+
+if [[ -n "${RAILWAY_TOKEN:-}" && -n "${RAILWAY_API_TOKEN:-}" ]]; then
+  echo "Only set one Railway auth variable at a time: RAILWAY_TOKEN or RAILWAY_API_TOKEN." >&2
+  exit 1
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  echo "Railway Sweeney shell ready for ${RAILWAY_PROJECT_NAME:-the configured project}."
+  echo "Run railway commands here, then type exit to return to the normal Railway login."
+  exec "${SHELL:-/bin/zsh}" -l
+fi
+
+exec railway "$@"

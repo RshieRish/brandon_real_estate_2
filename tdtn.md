@@ -1,7 +1,60 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-05-12
+Last Updated: 2026-05-31
+
+### 2026-05-31 - Railway Sweeney Token Verified
+- What was changed: Replaced the rejected local Railway project token in the gitignored `.env.railway-sweeney.local` with a freshly generated project token for the Sold With Sweeney Railway project.
+- Files modified:
+  - `.env.railway-sweeney.local` - local-only token refreshed; added the verified Railway service metadata for `extraordinary-prosperity`.
+  - `tdtn.md`
+  - `memory.md`
+- Key decisions:
+  - Continued to use the wrapper instead of `railway login`, preserving the global CLI authentication for `rishabnandibusiness@gmail.com`.
+  - Kept the project token local-only and out of git.
+  - Because the current repo is not globally service-linked, service-scoped commands should pass `--service extraordinary-prosperity` when needed.
+- Verification:
+  - `scripts/railway-sweeney status` returned `Project: enchanting-perception`, `Environment: production`, `Service: None`.
+  - `scripts/railway-sweeney service status --all` returned `extraordinary-prosperity | 85541f63-2aa1-4679-8114-98895f4bf215 | SUCCESS`.
+  - `scripts/railway-sweeney run --service extraordinary-prosperity true` succeeded.
+  - Plain `railway whoami` still reports `rishabnandibusiness@gmail.com`.
+  - `~/.railway/config.json` hash stayed unchanged, confirming no global Railway login/config clobber.
+- Status: Complete
+
+### 2026-05-30 - Railway Sweeney Project Token Wrapper
+- What was changed: Added a local token-scoped Railway helper so commands for the Sold With Sweeney deployment project can run without replacing the global Railway CLI login for `rishabnandibusiness@gmail.com`.
+- Files created:
+  - `scripts/railway-sweeney` - sources a repo-local env file, exports the Railway token only for that process, then runs `railway ...` or opens a token-scoped subshell.
+  - `.env.railway-sweeney.local` - gitignored local env file holding the `soldwithsweeneyfordeployment@gmail.com` Railway project token and the `enchanting-perception` project metadata.
+- Key decisions:
+  - Used `RAILWAY_TOKEN` because the provided token is tied to the single Railway project `enchanting-perception` (`aa6c9f9c-46d4-4f5d-b529-86b073de4972`).
+  - Did not run `railway login`, so `~/.railway/config.json` and the existing global CLI login remain untouched.
+  - Kept the secret out of tracked files by relying on the existing `.env.*.local` ignore rule.
+- Verification:
+  - `scripts/railway-sweeney` is executable.
+  - `.env.railway-sweeney.local` is ignored by git through the existing `.env.*.local` rule.
+  - `railway whoami` still reports the global login as `rishabnandibusiness@gmail.com`.
+  - The Railway config hash for `~/.railway/config.json` stayed unchanged before/after wrapper checks.
+  - Railway rejected the first provided token as invalid/unauthorized for both `RAILWAY_TOKEN` and `RAILWAY_API_TOKEN`, so the helper needed a freshly generated token value before it could operate the `soldwithsweeneyfordeployment@gmail.com` project.
+- Status: Superseded by 2026-05-31 token verification
+
+### 2026-05-19 — Blog Production Outage Diagnosis
+- What was found: Live `/blog` loads the frontend shell, but the deployed blog API returns HTTP 500. The Railway response reports Neon rejecting database connections because the account/project exceeded compute time quota; the error also notes the production DB connection is insecure and should use `sslmode=require`.
+- Impact:
+  - `/blog` can only show the client-side error/empty state because `GET /api/v1/blog/?limit=50` fails.
+  - Individual `/blog/[slug]` pages return 404 because the server component treats a failed blog fetch as missing content.
+  - `/sitemap.xml` still includes blog URLs from cached/generated output, but the live article fetch cannot reach the database.
+- Required production fix: restore/upgrade Neon compute quota, ensure Railway `DATABASE_URL` includes SSL mode, then redeploy/restart the backend. After that, re-check the public blog list and one known post slug against the Railway API and `soldwithsweeney.com`.
+- Neon identifier found locally: host `ep-tiny-firefly-ankqqw49-pooler.c-6.us-east-1.aws.neon.tech`, database `neondb`, user `neondb_owner`. Use the `ep-tiny-firefly-ankqqw49` endpoint/project marker to match this connection string inside the Neon dashboard or Railway variables; the local URL currently has no `sslmode=require` query.
+- Neon account email check: no Neon owner/login email is stored in this repo. The Git author is `RshieRish <118158036+RshieRish@users.noreply.github.com>`, but that is only commit metadata and not evidence of the Neon account owner. Public app emails found (`info@soldwithsweeney.com`, `brandon@soldwithsweeney.com`) are contact/SMTP values, not Neon ownership evidence.
+- Follow-up account trace: no Neon CLI is installed locally; Railway CLI is installed but currently unauthorized and this repo is not linked to a Railway project. A local Claude history search shows the `ep-tiny-firefly-ankqqw49` Neon URL was pasted into a prior project chat, but that pasted connection string does not include the Neon account/login email.
+- 2026-05-19 re-check: the host still resolves publicly (`ep-tiny-firefly-ankqqw49-pooler.c-6.us-east-1.aws.neon.tech` → Neon IPs) and Railway still gets a Neon-origin error. This means the DB endpoint still exists/is routed in Neon; it has not "moved" to Railway or disappeared from DNS. The practical issue is account/org visibility plus Neon compute quota suspension.
+- 2026-05-19 browser-forensics follow-up: strongest account candidate is `millergid9@gmail.com`. Evidence: Chrome `Profile 13` has Google account `millergid9@gmail.com`, signed up/logged into Neon on 2026-03-19 around 01:37 ET, landed in org `org-long-bread-73501543`, opened project `nameless-credit-95836299` with `database=neondb`, and the exact `ep-tiny-firefly-ankqqw49` DB URL was pasted into the Brandon project chat about one minute later. This is high-confidence local forensic evidence, but not server-side Neon ownership proof.
+- Verification:
+  - Confirmed the live blog chunk fetches the Railway backend.
+  - Confirmed Railway `GET /api/v1/blog/?limit=50` returns 500 with Neon quota/SSL connection failure.
+  - Confirmed a known live article URL on `soldwithsweeney.com` returns 404 while the backend blog fetch is failing.
+- Status: Diagnosed; production infrastructure action required
 
 ### 2026-05-13 — Scheduler Worker-Race Fix + Removed Placeholder Fallback
 - What was changed: Two daily posts landed in prod within 72 seconds, both with `placehold.co` cover images instead of real R2 images. Two root causes — Railway runs `uvicorn --workers 2`, so two Python processes each ran their own scheduler and fired simultaneously; AND image generation evidently failed on at least one of those concurrent calls so the placeholder fallback fired. Fix: postgres advisory lock around the scheduler so only one worker per cluster posts per cycle, and removed the placeholder fallback so a real failure surfaces the on-brand empty state instead of a generic gray rectangle.
