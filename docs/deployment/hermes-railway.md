@@ -39,10 +39,18 @@ Never commit the token.
 
 ## Hermes Service
 
+Current status as of 2026-06-01:
+
+- The FastAPI bridge is live and verified.
+- `atlas-agent` has not been created yet.
+- The current `.env.railway-sweeney.local` uses a project-scoped `RAILWAY_TOKEN`, which works for the existing backend service but was rejected by Railway when attempting to create a new GitHub-backed service from `praveen-ks-2001/hermes-agent-template`.
+- Use the Railway dashboard or a dedicated account-wide `RAILWAY_API_TOKEN` for the actual service creation step.
+- The Railway template URL checked on 2026-06-01 is `https://railway.com/deploy/hermes-agent-nous-research`; it requires `ADMIN_USERNAME` and `ADMIN_PASSWORD`, persists config under `/data`, and stores LLM/channel keys through the Hermes dashboard.
+
 Preferred deployment path:
 
 1. Open Railway dashboard for `enchanting-perception`.
-2. Add the Hermes Agent template as a new service.
+2. Add the Hermes Agent template as a new service: `https://railway.com/deploy/hermes-agent-nous-research`.
 3. Name the service `atlas-agent`.
 4. Mount a persistent volume at `/data`.
 5. Configure Hermes admin credentials in Railway variables.

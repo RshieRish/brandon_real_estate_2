@@ -923,4 +923,5 @@ Completed Checklist Video Integration
 - Notes:
   - `tests/test_leads_notifications.py` still has a pre-existing expectation mismatch around background notification retry scheduling and was not caused by this bridge.
   - Railway logs still show a pre-existing Gemini blog auto-generation model error for `gemini-3-pro-preview`; this should be handled as a separate follow-up.
+  - `atlas-agent` service creation was attempted from `praveen-ks-2001/hermes-agent-template`, but Railway rejected new GitHub-backed service creation with the current project-scoped token. The local Hermes admin password was rotated after the failed CLI attempt. Use the Railway dashboard or an account-wide `RAILWAY_API_TOKEN` for that provisioning step.
 - Status: Complete
