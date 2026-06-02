@@ -1041,10 +1041,11 @@ Completed Checklist Video Integration
   - Targeted Settings lint passed: `npx eslint src/app/admin/settings/page.tsx`.
   - Git commit `0552e4b` was pushed to `origin/main`.
   - Railway backend deployment `3c8a2ace-cd34-4c1e-8a57-9fe27df6d453` succeeded after retrying with a small temporary build context; the first retry failed because uploading the repo root exceeded Railway/Cloudflare upload size.
+  - Push-triggered Railway backend deployment `fc779bef-f978-4cee-92b2-4056765e4d8b` also succeeded and is the latest live backend deployment.
   - Live `/health` returned `{"status":"ok","service":"brandon-re-api"}`.
   - Live unauthenticated `/api/v1/workspace/status` returned `403`, confirming the route is protected.
   - Live authenticated `/api/v1/workspace/status` returned `configured=True`, `connected=False`, `can_connect=True`, meaning it is ready for Brandon's OAuth consent.
-  - Live authenticated `/api/v1/workspace/auth-url` returned a Google OAuth URL using the existing production callback `https://extraordinary-prosperity-production.up.railway.app/api/v1/booking/calendar/callback` and 24 requested scopes.
+  - Final live authenticated `/api/v1/workspace/auth-url` on deployment `fc779bef-f978-4cee-92b2-4056765e4d8b` returned a Google OAuth URL using the existing production callback `https://extraordinary-prosperity-production.up.railway.app/api/v1/booking/calendar/callback` and 24 requested scopes.
   - Full frontend lint still fails on pre-existing unrelated files including `.agents/skills/claude-d3js-skill/assets/interactive-template.jsx`, `src/app/admin/link-pack/page.tsx`, `src/components/buyer/MonopolyJourney.tsx`, `src/components/home/Hero.tsx`, `src/components/seller/StagingChecklist.tsx`, `src/components/shared/CookieConsent.tsx`, `src/components/shared/RotatingText.tsx`, and `src/lib/link-pack/theme-css.ts`.
 - Still needed:
   - Have Brandon open Settings and click Connect Workspace while signed in as `brandon@soldwithsweeney.com`.
