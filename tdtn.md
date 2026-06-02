@@ -1062,3 +1062,16 @@ Completed Checklist Video Integration
   - Configure Hermes Telegram channel with the BotFather token and Brandon's numeric Telegram user ID.
   - After Telegram is connected, add explicit Workspace action tools for Hermes so it can use Gmail, Drive, Docs, Sheets, Calendar, and related APIs through approved backend routes.
 - Status: Complete
+
+### 2026-06-02 - Atlas Setup Completeness Check
+- What was checked: Verified whether the Atlas/Hermes system is fully set up aside from the Telegram bot token.
+- Live status:
+  - Railway services: `extraordinary-prosperity` and `atlas-agent` both report `SUCCESS`.
+  - Backend `/health` is OK.
+  - Hermes `/health` reports `status=ok` and `gateway=running`.
+  - Workspace OAuth is connected as `brandon@soldwithsweeney.com`.
+  - Agent-control bridge is live but still read-only, with capabilities `status.read`, `leads.recent.read`, and `bookings.recent.read`.
+- Conclusion:
+  - The infrastructure foundation is set up.
+  - The PRD-level executive assistant is not fully set up yet because Telegram channel/allowlist and Workspace action tools still need implementation/configuration.
+- Status: Complete
