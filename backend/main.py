@@ -23,6 +23,7 @@ from routers import (
     investor,
     leads,
     link_pack,
+    workspace,
 )
 from services.blog_service import BlogService
 from services.notification_service import (
@@ -64,6 +65,7 @@ app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
+app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
 
 
 async def _notification_retry_loop() -> None:

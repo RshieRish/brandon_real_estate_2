@@ -34,6 +34,7 @@ from services.notification_service import (
     enqueue_notification_in_new_session,
     run_notification_retry_pass,
 )
+from routers.workspace import complete_workspace_oauth_callback, is_workspace_oauth_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -162,6 +163,14 @@ async def calendar_callback(
     error: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    if is_workspace_oauth_state(state):
+        return await complete_workspace_oauth_callback(
+            code=code,
+            state=state,
+            error=error,
+            db=db,
+        )
+
     if error:
         return HTMLResponse(
             _render_calendar_oauth_page(

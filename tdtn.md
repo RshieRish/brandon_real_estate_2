@@ -956,3 +956,93 @@ Completed Checklist Video Integration
   - Google Workspace connection plan and credentials/consent for Gmail, Drive, Docs, Sheets, and Calendar beyond the existing website booking flow.
   - eXp CRM requirements or API/Zapier handoff details if CRM automation is needed later.
 - Status: Complete
+
+### 2026-06-02 - Google Workspace Account Correction
+- What was changed: Recorded that Brandon-side Google Workspace setup should use `brandon@soldwithsweeney.com`.
+- Key decisions:
+  - Treat `brandon@soldwithsweeney.com` as the Gmail / Drive / Docs / Sheets / Calendar authorization identity for Workspace automation.
+  - Keep `soldwithsweeneyfordeployment@gmail.com` scoped to Railway deployment access unless Brandon explicitly reassigns ownership.
+  - Keep `rishabnandibusiness@gmail.com` separate from Brandon's Workspace authorization; it can be invited to Google Cloud IAM for implementation access, but should not become the mailbox or document owner.
+- Still needed:
+  - Confirm access to the Google Cloud project that owns OAuth client `721277606944-...apps.googleusercontent.com`.
+  - Enable the required Workspace APIs and update OAuth consent/scopes under the correct project.
+  - Have `brandon@soldwithsweeney.com` complete any OAuth consent flow for Gmail, Drive, Docs, Sheets, and expanded Calendar access.
+- Status: Complete
+
+### 2026-06-02 - Google Cloud IAM Domain Restriction
+- What was changed: Documented the failed IAM grant for `rishabnandibusiness@gmail.com`.
+- Findings:
+  - Google Cloud rejected the IAM grant because Domain Restricted Sharing is enforced through `constraints/iam.allowedPolicyMemberDomains`.
+  - The policy only allows IAM principals from approved domains or organizations, so an external `@gmail.com` account cannot be added directly.
+- Recommended path:
+  - Use `brandon@soldwithsweeney.com` or another allowed `@soldwithsweeney.com` Workspace user for Google Cloud access.
+  - If external implementation access is required, have the Workspace/Cloud organization admin temporarily modify the Domain Restricted Sharing policy to allow `rishabnandibusiness@gmail.com`, then remove it after setup.
+- Status: Complete
+
+### 2026-06-02 - Google Cloud API Enablement
+- What was changed: Switched local `gcloud` to Brandon's Workspace account and enabled the required Google APIs on the website OAuth project.
+- Project:
+  - Account: `brandon@soldwithsweeney.com`
+  - Project ID: `sold-with-sweeney-website-v1`
+  - Project number: `721277606944`
+- Enabled Workspace APIs:
+  - `calendar-json.googleapis.com`
+  - `gmail.googleapis.com`
+  - `drive.googleapis.com`
+  - `docs.googleapis.com`
+  - `sheets.googleapis.com`
+  - `people.googleapis.com`
+  - `pubsub.googleapis.com`
+  - `workspaceevents.googleapis.com`
+  - `driveactivity.googleapis.com`
+  - `tasks.googleapis.com`
+  - `admin.googleapis.com`
+  - `meet.googleapis.com`
+  - `chat.googleapis.com`
+  - `slides.googleapis.com`
+  - `forms.googleapis.com`
+- Enabled Maps/site APIs:
+  - `maps-backend.googleapis.com`
+  - `places-backend.googleapis.com`
+  - `places.googleapis.com`
+  - `geocoding-backend.googleapis.com`
+  - `directions-backend.googleapis.com`
+  - `distance-matrix-backend.googleapis.com`
+  - `routes.googleapis.com`
+  - `static-maps-backend.googleapis.com`
+  - `street-view-image-backend.googleapis.com`
+  - `timezone-backend.googleapis.com`
+  - `addressvalidation.googleapis.com`
+- Verification:
+  - `gcloud services list --enabled --project=sold-with-sweeney-website-v1` confirmed all targeted APIs are enabled.
+- Still needed:
+  - Update OAuth consent/scopes and user authorization flows for Gmail, Drive, Docs, Sheets, People, and any Hermes channel access.
+  - Re-check API key restrictions for the Maps key so browser and backend usage are constrained to the intended domains/services.
+- Status: Complete
+
+### 2026-06-02 - Full Workspace OAuth Connector
+- What was changed: Added a full-access Google Workspace OAuth connector for Brandon/Hermes and an admin Settings control to connect or reconnect it.
+- Files changed:
+  - `backend/services/workspace_service.py` - full-scope Workspace OAuth flow, token persistence helper, Google API service builder, and Gmail/Drive connection status check.
+  - `backend/routers/workspace.py` - admin-protected Workspace status/auth URL routes, OAuth callback, state validation, and durable DB token persistence under `google_workspace_refresh_token`.
+  - `backend/routers/booking.py` - dispatches Workspace OAuth callback states through the existing Calendar callback URI when `GOOGLE_WORKSPACE_REDIRECT_URI` is unset.
+  - `backend/config.py` - added optional `GOOGLE_WORKSPACE_CLIENT_ID`, `GOOGLE_WORKSPACE_CLIENT_SECRET`, `GOOGLE_WORKSPACE_REDIRECT_URI`, and `GOOGLE_WORKSPACE_REFRESH_TOKEN`.
+  - `backend/main.py` - mounted `/api/v1/workspace`.
+  - `frontend/src/app/admin/settings/page.tsx` - added the primary Google Workspace connection card and updated CRM status to eXp pending access path.
+  - `backend/tests/test_workspace_oauth.py` and `backend/tests/test_workspace_token_persistence.py` - added focused tests for Workspace scopes, OAuth URL generation, token exchange, and DB persistence.
+- Scope decision:
+  - Brandon requested broad access. The connector requests Gmail full mail access, Calendar, Drive, Docs, Sheets, Slides, Forms, Contacts/Directory, Tasks, Chat, Meet, and Admin SDK scopes.
+  - The connector can reuse the already registered production Calendar callback URI by falling back to `GOOGLE_CALENDAR_REDIRECT_URI`, so a new redirect URI is optional unless `GOOGLE_WORKSPACE_REDIRECT_URI` is explicitly set.
+  - Broad OAuth access does not by itself enable autonomous send/delete/edit behavior; Hermes still needs explicit backend tools and confirmation policy before it acts on Workspace data.
+- Verification:
+  - Backend focused tests passed: `./.venv/bin/python -m unittest tests.test_workspace_oauth tests.test_workspace_token_persistence tests.test_calendar_oauth tests.test_booking_token_persistence -v`.
+  - Backend import/route smoke passed and listed `/api/v1/workspace/auth-url`, `/api/v1/workspace/callback`, and `/api/v1/workspace/status`.
+  - Frontend typecheck passed: `npm run typecheck`.
+  - Targeted Settings lint passed: `npx eslint src/app/admin/settings/page.tsx`.
+  - Full frontend lint still fails on pre-existing unrelated files including `.agents/skills/claude-d3js-skill/assets/interactive-template.jsx`, `src/app/admin/link-pack/page.tsx`, `src/components/buyer/MonopolyJourney.tsx`, `src/components/home/Hero.tsx`, `src/components/seller/StagingChecklist.tsx`, `src/components/shared/CookieConsent.tsx`, `src/components/shared/RotatingText.tsx`, and `src/lib/link-pack/theme-css.ts`.
+- Still needed:
+  - Deploy backend and push frontend changes.
+  - Have Brandon open Settings and click Connect Workspace while signed in as `brandon@soldwithsweeney.com`.
+  - If Google blocks restricted scopes, trust the OAuth app in Workspace Admin under Security -> Access and data control -> API controls -> App access control.
+  - Add Telegram bot token and Brandon's Telegram user ID to Hermes once available.
+- Status: In progress

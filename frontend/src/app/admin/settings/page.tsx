@@ -12,6 +12,13 @@ interface CalendarStatus {
   detail: string;
 }
 
+interface WorkspaceStatus {
+  configured: boolean;
+  connected: boolean;
+  can_connect: boolean;
+  detail: string;
+}
+
 export default function SettingsPage() {
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
@@ -23,6 +30,10 @@ export default function SettingsPage() {
   const [calendarLoading, setCalendarLoading] = useState(true);
   const [calendarActionLoading, setCalendarActionLoading] = useState(false);
   const [calendarError, setCalendarError] = useState('');
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [workspaceActionLoading, setWorkspaceActionLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState('');
 
   async function loadCalendarStatus() {
     const token = localStorage.getItem('admin_token');
@@ -52,8 +63,37 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadWorkspaceStatus() {
+    const token = localStorage.getItem('admin_token');
+    if (!token) {
+      setWorkspaceLoading(false);
+      return null;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/workspace/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        throw new Error('Could not load Workspace status.');
+      }
+
+      const data = await res.json() as WorkspaceStatus;
+      setWorkspaceStatus(data);
+      setWorkspaceError('');
+      return data;
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Could not load Workspace status.');
+      return null;
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }
+
   useEffect(() => {
-    loadCalendarStatus();
+    void loadCalendarStatus();
+    void loadWorkspaceStatus();
   }, []);
 
   async function handleConnectCalendar() {
@@ -95,8 +135,49 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleConnectWorkspace() {
+    const token = localStorage.getItem('admin_token');
+    if (!token) return;
+
+    setWorkspaceActionLoading(true);
+    setWorkspaceError('');
+
+    try {
+      const res = await fetch(`${API_URL}/api/v1/workspace/auth-url`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        throw new Error('Could not start Google Workspace authorization.');
+      }
+
+      const data = await res.json() as { auth_url: string };
+      const popup = window.open(data.auth_url, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        window.location.href = data.auth_url;
+      }
+
+      let attempts = 0;
+      const poll = window.setInterval(async () => {
+        attempts += 1;
+        const latestStatus = await loadWorkspaceStatus();
+        if (latestStatus?.connected || attempts >= 24) {
+          window.clearInterval(poll);
+          setWorkspaceActionLoading(false);
+        }
+      }, 2500);
+    } catch (error) {
+      setWorkspaceActionLoading(false);
+      setWorkspaceError(
+        error instanceof Error ? error.message : 'Could not start Google Workspace authorization.'
+      );
+    }
+  }
+
   const calendarConnected = calendarStatus?.connected;
   const calendarCanConnect = calendarStatus?.can_connect;
+  const workspaceConnected = workspaceStatus?.connected;
+  const workspaceCanConnect = workspaceStatus?.can_connect;
 
   return (
     <div className="p-8 w-full">
@@ -107,7 +188,69 @@ export default function SettingsPage() {
         <h2 className="text-white/40 text-xs uppercase tracking-widest font-semibold mb-4">
           Integrations
         </h2>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-4">
+          {/* Google Workspace */}
+          <div className="bg-dark-card border border-gold/20 p-6 rounded-xl flex flex-col gap-4 xl:row-span-2">
+            {workspaceLoading ? (
+              <CircleNotch size={26} className="text-gold animate-spin" />
+            ) : workspaceConnected ? (
+              <CheckCircle size={26} weight="fill" className="text-green-400" />
+            ) : (
+              <Warning size={26} weight="fill" className="text-yellow-400" />
+            )}
+            <div>
+              <p className="text-white font-semibold text-base">Google Workspace</p>
+              <span
+                className={`inline-block mt-2 text-xs px-2 py-0.5 rounded-full uppercase tracking-widest font-semibold ${
+                  workspaceLoading
+                    ? 'bg-white/10 text-white/50'
+                    : workspaceConnected
+                      ? 'bg-green-500/20 text-green-400'
+                      : 'bg-yellow-500/20 text-yellow-400'
+                }`}
+              >
+                {workspaceLoading
+                  ? 'Checking'
+                  : workspaceConnected
+                    ? 'Full Access Connected'
+                    : workspaceStatus?.configured
+                      ? 'Needs Brandon Consent'
+                      : 'Not Configured'}
+              </span>
+            </div>
+            <p className="text-white/50 text-xs leading-relaxed">
+              {workspaceStatus?.detail ??
+                'Connect Brandon Workspace for Gmail, Drive, Docs, Sheets, Calendar, Contacts, Tasks, Chat, Meet, and Admin SDK access.'}
+            </p>
+            {workspaceError && (
+              <p className="text-red-400/80 text-xs">{workspaceError}</p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-1">
+              {workspaceCanConnect && (
+                <button
+                  type="button"
+                  onClick={handleConnectWorkspace}
+                  disabled={workspaceActionLoading}
+                  className="text-xs bg-gold text-black font-bold uppercase tracking-widest px-3 py-2 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {workspaceActionLoading && <CircleNotch size={14} className="animate-spin" />}
+                  {workspaceActionLoading ? 'Waiting For Google' : workspaceConnected ? 'Reconnect Workspace' : 'Connect Workspace'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceLoading(true);
+                  void loadWorkspaceStatus();
+                }}
+                className="text-xs text-white/70 border border-dark-border hover:border-gold/30 hover:text-white px-3 py-2 rounded transition-colors inline-flex items-center gap-2"
+              >
+                <ArrowsClockwise size={14} />
+                Refresh
+              </button>
+            </div>
+          </div>
+
           {/* Gemini AI */}
           <div className="bg-dark-card border border-dark-border p-6 rounded-xl flex flex-col gap-3">
             <CheckCircle size={24} weight="fill" className="text-green-400" />
@@ -161,8 +304,9 @@ export default function SettingsPage() {
                   type="button"
                   onClick={handleConnectCalendar}
                   disabled={calendarActionLoading}
-                  className="text-xs bg-gold text-black font-bold uppercase tracking-widest px-3 py-2 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="text-xs bg-gold text-black font-bold uppercase tracking-widest px-3 py-2 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
                 >
+                  {calendarActionLoading && <CircleNotch size={14} className="animate-spin" />}
                   {calendarActionLoading ? 'Waiting For Google' : calendarConnected ? 'Reconnect' : 'Connect Calendar'}
                 </button>
               )}
@@ -172,23 +316,24 @@ export default function SettingsPage() {
                   setCalendarLoading(true);
                   void loadCalendarStatus();
                 }}
-                className="text-xs text-white/70 border border-dark-border hover:border-gold/30 hover:text-white px-3 py-2 rounded transition-colors"
+                className="text-xs text-white/70 border border-dark-border hover:border-gold/30 hover:text-white px-3 py-2 rounded transition-colors inline-flex items-center gap-2"
               >
-                Refresh Status
+                <ArrowsClockwise size={14} />
+                Refresh
               </button>
             </div>
           </div>
 
-          {/* KW CRM */}
+          {/* CRM */}
           <div className="bg-dark-card border border-dark-border p-6 rounded-xl flex flex-col gap-3">
             <ArrowsClockwise size={24} className="text-white/40" />
             <div>
-              <p className="text-white font-semibold text-sm">Keller Williams CRM</p>
+              <p className="text-white font-semibold text-sm">eXp CRM</p>
               <span className="inline-block mt-1 bg-white/10 text-white/40 text-xs px-2 py-0.5 rounded-full uppercase tracking-widest font-semibold">
-                Manual Sync
+                Pending Access Path
               </span>
             </div>
-            <p className="text-white/40 text-xs">KW Command CRM integration</p>
+            <p className="text-white/40 text-xs">Awaiting eXp API or Zapier handoff details</p>
           </div>
         </div>
       </section>

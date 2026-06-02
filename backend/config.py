@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     GOOGLE_CALENDAR_CLIENT_ID: str = ""
     GOOGLE_CALENDAR_CLIENT_SECRET: str = ""
     GOOGLE_CALENDAR_REDIRECT_URI: str = "http://localhost:8000/api/v1/booking/calendar/callback"
+    GOOGLE_WORKSPACE_CLIENT_ID: str = ""
+    GOOGLE_WORKSPACE_CLIENT_SECRET: str = ""
+    GOOGLE_WORKSPACE_REDIRECT_URI: str = ""
+    GOOGLE_WORKSPACE_REFRESH_TOKEN: str = ""
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
