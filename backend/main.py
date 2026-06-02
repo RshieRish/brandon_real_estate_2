@@ -1,4 +1,5 @@
 import asyncio
+import os
 import random
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
@@ -30,6 +31,15 @@ from services.notification_service import (
     NOTIFICATION_RETRY_INTERVAL_SECONDS,
     run_notification_retry_pass,
 )
+
+# Google returns OAuth scopes reordered and expands the `email`/`profile`
+# aliases into their userinfo.* URLs; with include_granted_scopes=true it also
+# folds in previously-granted scopes. oauthlib treats any such drift from the
+# requested scope set as a hard error — a bare Warning raised inside
+# flow.fetch_token() — which surfaced as a 500 on the Workspace/Calendar OAuth
+# callback. Relax the check: Google only ever returns a superset of what we
+# request, so accepting the drift is safe.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 app = FastAPI(title="Brandon RE API", version="1.0.0", docs_url="/docs")
 _notification_retry_task: asyncio.Task | None = None
