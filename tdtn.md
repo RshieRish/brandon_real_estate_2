@@ -1102,8 +1102,12 @@ Completed Checklist Video Integration
   - Red tests failed first for missing helpers/schemas, then passed after implementation.
   - Focused backend suite passed: `./.venv/bin/python -m unittest tests.test_workspace_actions tests.test_agent_control_workspace_actions tests.test_agent_control_router tests.test_workspace_oauth tests.test_workspace_token_persistence tests.test_agent_control_auth -v`.
   - FastAPI import/route smoke listed all six `/api/v1/agent-control/workspace/*` routes.
+  - Git commit `5cc1311` was pushed to `origin/main`.
+  - Railway backend deployment `9e351dd9-fa15-45da-b7e9-8f4947a8f948` reached `SUCCESS`.
+  - Live authenticated `/api/v1/agent-control/status` returned `risk_tier=workspace_action_foundation`, `capability_count=9`, and all six Workspace capabilities.
+  - Live authenticated `/api/v1/agent-control/actions` listed all six Workspace actions.
+  - Live authenticated `/api/v1/agent-control/workspace/status` returned `connected=True`.
 - Still needed:
-  - Deploy backend and verify live action catalog/status.
   - Configure Telegram channel and allowlist tomorrow when token/user ID are available.
   - Add deeper Calendar, Contacts, Gmail thread read/summarize, Drive file read, and action-confirmation workflow tooling after the first slice is live.
-- Status: In progress
+- Status: Complete
