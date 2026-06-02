@@ -1075,3 +1075,35 @@ Completed Checklist Video Integration
   - The infrastructure foundation is set up.
   - The PRD-level executive assistant is not fully set up yet because Telegram channel/allowlist and Workspace action tools still need implementation/configuration.
 - Status: Complete
+
+### 2026-06-02 - Atlas Workspace Action Tools
+- What was changed: Added the first protected Workspace action-tool slice behind the existing `AGENT_CONTROL_TOKEN` bridge.
+- Files changed:
+  - `docs/superpowers/plans/2026-06-02-atlas-workspace-action-tools.md` - implementation plan for the first Workspace action-tool slice.
+  - `backend/services/workspace_service.py` - added Gmail draft/send helpers, Drive search, Google Doc creation, and Sheets append helpers.
+  - `backend/schemas/agent_control.py` - added request/response models for Workspace actions.
+  - `backend/routers/agent_control.py` - added audited `/api/v1/agent-control/workspace/*` routes and updated the action catalog.
+  - `backend/tests/test_workspace_actions.py` - service helper tests.
+  - `backend/tests/test_agent_control_workspace_actions.py` - route/audit/confirmation tests.
+  - `backend/tests/test_agent_control_router.py` - updated capability/action catalog expectations.
+  - `docs/deployment/hermes-railway.md` - updated bridge verification and safety boundary docs.
+- New protected actions:
+  - `workspace.status.read`
+  - `workspace.drive.search`
+  - `workspace.gmail.draft.create`
+  - `workspace.docs.create`
+  - `workspace.sheets.append`
+  - `workspace.gmail.send`
+- Safety:
+  - All routes require the existing agent-control bearer token.
+  - Audit rows intentionally omit Gmail body text and Sheets row values.
+  - Direct Gmail send requires `confirmed_by_brandon=true`; draft creation is available without sending.
+- Verification:
+  - Red tests failed first for missing helpers/schemas, then passed after implementation.
+  - Focused backend suite passed: `./.venv/bin/python -m unittest tests.test_workspace_actions tests.test_agent_control_workspace_actions tests.test_agent_control_router tests.test_workspace_oauth tests.test_workspace_token_persistence tests.test_agent_control_auth -v`.
+  - FastAPI import/route smoke listed all six `/api/v1/agent-control/workspace/*` routes.
+- Still needed:
+  - Deploy backend and verify live action catalog/status.
+  - Configure Telegram channel and allowlist tomorrow when token/user ID are available.
+  - Add deeper Calendar, Contacts, Gmail thread read/summarize, Drive file read, and action-confirmation workflow tooling after the first slice is live.
+- Status: In progress

@@ -75,7 +75,7 @@ class AgentControlAuditTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
-    async def test_status_returns_read_only_capabilities_and_audits(self):
+    async def test_status_returns_workspace_action_capabilities_and_audits(self):
         db = _FakeDB()
         result = await agent_control.agent_status(
             request=_FakeRequest(),
@@ -84,12 +84,14 @@ class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.status, "ok")
-        self.assertEqual(result.risk_tier, "read_only_foundation")
+        self.assertEqual(result.risk_tier, "workspace_action_foundation")
         self.assertIn("leads.recent.read", result.capabilities)
+        self.assertIn("workspace.gmail.draft.create", result.capabilities)
+        self.assertIn("workspace.gmail.send", result.capabilities)
         self.assertEqual(len(db.added), 1)
         self.assertEqual(db.added[0].action_id, "status.read")
 
-    async def test_actions_returns_only_read_only_actions(self):
+    async def test_actions_returns_read_and_workspace_actions(self):
         db = _FakeDB()
         result = await agent_control.list_agent_actions(
             request=_FakeRequest(),
@@ -98,11 +100,13 @@ class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         action_ids = {action.id for action in result.actions}
-        self.assertEqual(
-            action_ids,
-            {"status.read", "leads.recent.read", "bookings.recent.read"},
-        )
-        self.assertTrue(all(action.side_effects is False for action in result.actions))
+        self.assertIn("status.read", action_ids)
+        self.assertIn("workspace.drive.search", action_ids)
+        self.assertIn("workspace.gmail.draft.create", action_ids)
+        self.assertIn("workspace.gmail.send", action_ids)
+        send_action = next(action for action in result.actions if action.id == "workspace.gmail.send")
+        self.assertTrue(send_action.side_effects)
+        self.assertEqual(send_action.risk_tier, "human_confirm")
         self.assertEqual(len(db.added), 1)
         self.assertEqual(db.added[0].action_id, "actions.read")
 

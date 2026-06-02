@@ -118,7 +118,7 @@ Expected fields:
 {
   "status": "ok",
   "service": "brandon-re-api",
-  "risk_tier": "read_only_foundation"
+  "risk_tier": "workspace_action_foundation"
 }
 ```
 
@@ -141,11 +141,17 @@ Expected fields:
 
 ## Safety Boundary
 
-This foundation exposes read-only operational context only:
+This foundation exposes operational context plus the first protected Workspace action tools:
 
 - backend status
 - allowlisted actions
 - recent lead summaries
 - recent booking summaries
+- Workspace connection status
+- Google Drive search
+- Gmail draft creation
+- Google Doc creation
+- Google Sheets row append
+- Gmail send with explicit Brandon confirmation
 
-Do not enable outbound email, SMS, Telegram client replies, calendar invites, CRM writes, or backend mutation endpoints until a later approved spec adds risk-tiered confirmations.
+Do not enable SMS, Telegram client replies, calendar invites, CRM writes, or broader backend mutation endpoints until a later approved spec adds risk-tiered confirmations. Direct Gmail sending is available only through the `workspace.gmail.send` action and requires `confirmed_by_brandon=true`.

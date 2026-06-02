@@ -1,6 +1,8 @@
 """Google Workspace OAuth and service clients for Brandon's agent access."""
 
+import base64
 import logging
+from email.message import EmailMessage
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -171,6 +173,155 @@ def _workspace_credentials() -> Credentials:
 def build_workspace_service(api_name: str, version: str):
     """Build a Google API client using Brandon's Workspace OAuth token."""
     return build(api_name, version, credentials=_workspace_credentials(), cache_discovery=False)
+
+
+def _coerce_recipients(value: list[str] | None) -> list[str]:
+    return [item.strip() for item in (value or []) if item and item.strip()]
+
+
+def _build_raw_email(
+    *,
+    to: list[str],
+    subject: str,
+    body_text: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> str:
+    message = EmailMessage()
+    message["To"] = ", ".join(_coerce_recipients(to))
+    message["Subject"] = subject
+    cc_values = _coerce_recipients(cc)
+    bcc_values = _coerce_recipients(bcc)
+    if cc_values:
+        message["Cc"] = ", ".join(cc_values)
+    if bcc_values:
+        message["Bcc"] = ", ".join(bcc_values)
+    message.set_content(body_text)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+
+def create_gmail_draft(
+    *,
+    to: list[str],
+    subject: str,
+    body_text: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> dict[str, str]:
+    """Create a Gmail draft in Brandon's mailbox."""
+    gmail = build_workspace_service("gmail", "v1")
+    raw = _build_raw_email(to=to, subject=subject, body_text=body_text, cc=cc, bcc=bcc)
+    result = (
+        gmail.users()
+        .drafts()
+        .create(userId="me", body={"message": {"raw": raw}})
+        .execute()
+    )
+    return {
+        "id": result.get("id", ""),
+        "message_id": (result.get("message") or {}).get("id", ""),
+    }
+
+
+def send_gmail_message(
+    *,
+    to: list[str],
+    subject: str,
+    body_text: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> dict[str, str]:
+    """Send a Gmail message from Brandon's mailbox."""
+    gmail = build_workspace_service("gmail", "v1")
+    raw = _build_raw_email(to=to, subject=subject, body_text=body_text, cc=cc, bcc=bcc)
+    result = gmail.users().messages().send(userId="me", body={"raw": raw}).execute()
+    return {
+        "id": result.get("id", ""),
+        "thread_id": result.get("threadId", ""),
+    }
+
+
+def search_drive_files(query: str, page_size: int = 10) -> list[dict[str, str]]:
+    """Search Brandon's Google Drive and return compact file summaries."""
+    drive = build_workspace_service("drive", "v3")
+    safe_page_size = min(max(page_size, 1), 25)
+    result = (
+        drive.files()
+        .list(
+            q=query,
+            pageSize=safe_page_size,
+            fields="files(id,name,mimeType,webViewLink,modifiedTime)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
+    return [
+        {
+            "id": item.get("id", ""),
+            "name": item.get("name", ""),
+            "mime_type": item.get("mimeType", ""),
+            "web_view_link": item.get("webViewLink", ""),
+            "modified_time": item.get("modifiedTime", ""),
+        }
+        for item in result.get("files", [])
+    ]
+
+
+def create_google_doc(title: str, body_text: str) -> dict[str, str]:
+    """Create a Google Doc and insert body text."""
+    docs = build_workspace_service("docs", "v1")
+    created = docs.documents().create(body={"title": title}).execute()
+    document_id = created.get("documentId", "")
+    if body_text:
+        docs.documents().batchUpdate(
+            documentId=document_id,
+            body={
+                "requests": [
+                    {
+                        "insertText": {
+                            "location": {"index": 1},
+                            "text": body_text,
+                        }
+                    }
+                ]
+            },
+        ).execute()
+    return {
+        "document_id": document_id,
+        "title": created.get("title", title),
+        "url": f"https://docs.google.com/document/d/{document_id}/edit" if document_id else "",
+    }
+
+
+def append_sheet_values(
+    *,
+    spreadsheet_id: str,
+    range_name: str,
+    values: list[list[str | int | float | bool | None]],
+) -> dict[str, str | int]:
+    """Append rows to a Google Sheet."""
+    sheets = build_workspace_service("sheets", "v4")
+    result = (
+        sheets.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values},
+        )
+        .execute()
+    )
+    updates = result.get("updates") or {}
+    return {
+        "spreadsheet_id": result.get("spreadsheetId", spreadsheet_id),
+        "updated_range": updates.get("updatedRange", ""),
+        "updated_rows": updates.get("updatedRows", 0),
+        "updated_columns": updates.get("updatedColumns", 0),
+        "updated_cells": updates.get("updatedCells", 0),
+    }
 
 
 def get_workspace_connection_status() -> dict[str, str | bool]:
