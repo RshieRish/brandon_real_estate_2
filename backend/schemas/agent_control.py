@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AgentAction(BaseModel):
@@ -97,6 +97,40 @@ class WorkspaceGmailSendResponse(BaseModel):
     subject: str
 
 
+class WorkspaceGmailSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    page_size: int = Field(default=10, ge=1, le=100)
+
+
+class WorkspaceGmailMessageSummary(BaseModel):
+    id: str
+    thread_id: str
+    snippet: str
+    subject: str
+    from_email: str
+    to_email: str
+    date: str
+
+
+class WorkspaceGmailSearchResponse(BaseModel):
+    messages: list[WorkspaceGmailMessageSummary]
+
+
+class WorkspaceGmailThreadRequest(BaseModel):
+    thread_id: str = Field(min_length=1, max_length=300)
+    max_body_chars: int = Field(default=4000, ge=500, le=20000)
+
+
+class WorkspaceGmailThreadMessage(WorkspaceGmailMessageSummary):
+    body_text: str
+    body_truncated: bool = False
+
+
+class WorkspaceGmailThreadResponse(BaseModel):
+    thread_id: str
+    messages: list[WorkspaceGmailThreadMessage]
+
+
 class WorkspaceDriveSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     page_size: int = Field(default=10, ge=1, le=100)
@@ -112,6 +146,21 @@ class WorkspaceDriveFileSummary(BaseModel):
 
 class WorkspaceDriveSearchResponse(BaseModel):
     files: list[WorkspaceDriveFileSummary]
+
+
+class WorkspaceDriveFileReadRequest(BaseModel):
+    file_id: str = Field(min_length=1, max_length=300)
+    max_chars: int = Field(default=4000, ge=500, le=20000)
+
+
+class WorkspaceDriveFileReadResponse(BaseModel):
+    id: str
+    name: str
+    mime_type: str
+    web_view_link: str
+    modified_time: str
+    content_text: str
+    truncated: bool
 
 
 class WorkspaceDocsCreateRequest(BaseModel):
@@ -148,3 +197,79 @@ class WorkspaceSheetsAppendResponse(BaseModel):
     updated_rows: int
     updated_columns: int
     updated_cells: int
+
+
+class WorkspaceCalendarEventsRequest(BaseModel):
+    time_min: datetime
+    time_max: datetime
+    page_size: int = Field(default=10, ge=1, le=100)
+    calendar_id: str = Field(default="primary", min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_time_window(self):
+        if self.time_max <= self.time_min:
+            raise ValueError("time_max must be after time_min.")
+        return self
+
+
+class WorkspaceCalendarEventSummary(BaseModel):
+    id: str
+    summary: str
+    start: str
+    end: str
+    location: str
+    html_link: str
+    attendee_count: int
+
+
+class WorkspaceCalendarEventsResponse(BaseModel):
+    events: list[WorkspaceCalendarEventSummary]
+
+
+class WorkspaceCalendarCreateEventRequest(BaseModel):
+    summary: str = Field(min_length=1, max_length=300)
+    start: datetime
+    end: datetime
+    attendees: list[str] = Field(min_length=1, max_length=20)
+    location: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=10000)
+    calendar_id: str = Field(default="primary", min_length=1, max_length=300)
+    confirmed_by_brandon: bool = False
+    confirmation_note: str = Field(default="", max_length=500)
+
+    @field_validator("attendees")
+    @classmethod
+    def clean_attendees(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values if value and value.strip()]
+        if not cleaned:
+            raise ValueError("At least one attendee is required.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_event_window(self):
+        if self.end <= self.start:
+            raise ValueError("end must be after start.")
+        return self
+
+
+class WorkspaceCalendarCreateEventResponse(BaseModel):
+    event_id: str
+    html_link: str
+    attendee_count: int
+    summary: str
+
+
+class WorkspaceContactsSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=300)
+    page_size: int = Field(default=10, ge=1, le=100)
+
+
+class WorkspaceContactSummary(BaseModel):
+    resource_name: str
+    display_name: str
+    email_addresses: list[str]
+    phone_numbers: list[str]
+
+
+class WorkspaceContactsSearchResponse(BaseModel):
+    contacts: list[WorkspaceContactSummary]

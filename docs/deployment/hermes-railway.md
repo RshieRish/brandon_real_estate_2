@@ -141,7 +141,7 @@ Expected fields:
 
 ## Safety Boundary
 
-This foundation exposes operational context plus the first protected Workspace action tools:
+This foundation exposes operational context plus the protected Workspace action tools:
 
 - backend status
 - allowlisted actions
@@ -149,9 +149,15 @@ This foundation exposes operational context plus the first protected Workspace a
 - recent booking summaries
 - Workspace connection status
 - Google Drive search
+- Google Drive file text read for supported Docs/text files
+- Gmail search
+- Gmail thread read
 - Gmail draft creation
 - Google Doc creation
 - Google Sheets row append
 - Gmail send with explicit Brandon confirmation
+- Google Calendar event search
+- Google Calendar event creation with explicit Brandon confirmation
+- Google Contacts search
 
-Do not enable SMS, Telegram client replies, calendar invites, CRM writes, or broader backend mutation endpoints until a later approved spec adds risk-tiered confirmations. Direct Gmail sending is available only through the `workspace.gmail.send` action and requires `confirmed_by_brandon=true`.
+Do not enable SMS, Telegram client replies, CRM writes, or broader backend mutation endpoints until a later approved spec adds risk-tiered confirmations. Direct Gmail sending is available only through the `workspace.gmail.send` action and requires `confirmed_by_brandon=true`. Calendar event creation is available only through `workspace.calendar.event.create` and also requires `confirmed_by_brandon=true`.

@@ -88,6 +88,9 @@ class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("leads.recent.read", result.capabilities)
         self.assertIn("workspace.gmail.draft.create", result.capabilities)
         self.assertIn("workspace.gmail.send", result.capabilities)
+        self.assertIn("workspace.gmail.thread.read", result.capabilities)
+        self.assertIn("workspace.calendar.event.create", result.capabilities)
+        self.assertIn("workspace.contacts.search", result.capabilities)
         self.assertEqual(len(db.added), 1)
         self.assertEqual(db.added[0].action_id, "status.read")
 
@@ -104,9 +107,20 @@ class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("workspace.drive.search", action_ids)
         self.assertIn("workspace.gmail.draft.create", action_ids)
         self.assertIn("workspace.gmail.send", action_ids)
+        self.assertIn("workspace.gmail.search", action_ids)
+        self.assertIn("workspace.gmail.thread.read", action_ids)
+        self.assertIn("workspace.drive.file.read", action_ids)
+        self.assertIn("workspace.calendar.events.read", action_ids)
+        self.assertIn("workspace.calendar.event.create", action_ids)
+        self.assertIn("workspace.contacts.search", action_ids)
         send_action = next(action for action in result.actions if action.id == "workspace.gmail.send")
         self.assertTrue(send_action.side_effects)
         self.assertEqual(send_action.risk_tier, "human_confirm")
+        calendar_create_action = next(
+            action for action in result.actions if action.id == "workspace.calendar.event.create"
+        )
+        self.assertTrue(calendar_create_action.side_effects)
+        self.assertEqual(calendar_create_action.risk_tier, "human_confirm")
         self.assertEqual(len(db.added), 1)
         self.assertEqual(db.added[0].action_id, "actions.read")
 

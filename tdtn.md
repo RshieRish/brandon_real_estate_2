@@ -1111,3 +1111,38 @@ Completed Checklist Video Integration
   - Configure Telegram channel and allowlist tomorrow when token/user ID are available.
   - Add deeper Calendar, Contacts, Gmail thread read/summarize, Drive file read, and action-confirmation workflow tooling after the first slice is live.
 - Status: Complete
+
+### 2026-06-02 - Atlas Workspace Deep Action Tools
+- What was changed: Expanded the protected Atlas/Hermes Workspace command surface with deeper Gmail, Drive, Calendar, and Contacts tools.
+- Files changed:
+  - `docs/superpowers/plans/2026-06-02-atlas-workspace-deep-action-tools.md` - implementation plan and execution checklist for this slice.
+  - `backend/services/workspace_service.py` - added Gmail search/thread read helpers, Drive file text read, Calendar event list/create helpers, and Contacts search.
+  - `backend/schemas/agent_control.py` - added request/response models for Gmail search/thread, Drive file read, Calendar events/create, and Contacts search.
+  - `backend/routers/agent_control.py` - added audited `/api/v1/agent-control/workspace/*` routes and action catalog entries.
+  - `backend/tests/test_workspace_actions.py` - service helper tests.
+  - `backend/tests/test_agent_control_workspace_actions.py` - route/audit/confirmation tests.
+  - `backend/tests/test_agent_control_router.py` - action catalog/status expectations.
+  - `docs/deployment/hermes-railway.md` - updated safety boundary and available Workspace tools.
+- New protected actions:
+  - `workspace.gmail.search`
+  - `workspace.gmail.thread.read`
+  - `workspace.drive.file.read`
+  - `workspace.calendar.events.read`
+  - `workspace.calendar.event.create`
+  - `workspace.contacts.search`
+- Safety:
+  - All new routes require the existing agent-control bearer token.
+  - Gmail thread bodies, Drive file contents, contact email addresses, contact phone numbers, calendar descriptions, and attendee addresses are intentionally excluded from audit metadata.
+  - Calendar event creation requires `confirmed_by_brandon=true`, matching the human-confirm policy already used for direct Gmail send.
+  - Read endpoints cap page sizes to 25 and content reads to bounded character counts.
+- Verification:
+  - Red tests failed first for missing helpers/schemas/routes/action IDs, then passed after implementation.
+  - Focused backend suite passed: `./.venv/bin/python -m unittest tests.test_workspace_actions tests.test_agent_control_workspace_actions tests.test_agent_control_router tests.test_workspace_oauth tests.test_workspace_token_persistence tests.test_agent_control_auth -v`.
+  - FastAPI import/route smoke listed all 12 `/api/v1/agent-control/workspace/*` routes.
+  - `git diff --check` passed.
+- Still needed:
+  - Commit, push, and wait for Railway backend deployment to reach `SUCCESS`.
+  - Live-smoke the backend action catalog after deploy.
+  - Configure Telegram channel and allowlist when Brandon's BotFather token and numeric Telegram user ID are available.
+  - Wire Hermes-side tool invocation prompts/config so Atlas can call these backend routes from chat.
+- Status: Local complete, deployment pending

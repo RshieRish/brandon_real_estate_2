@@ -4,6 +4,8 @@ import base64
 import logging
 from email.message import EmailMessage
 from pathlib import Path
+from datetime import datetime
+from typing import Any
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -179,6 +181,31 @@ def _coerce_recipients(value: list[str] | None) -> list[str]:
     return [item.strip() for item in (value or []) if item and item.strip()]
 
 
+def _safe_page_size(page_size: int, cap: int = 25) -> int:
+    return min(max(page_size, 1), cap)
+
+
+def _truncate_with_flag(value: str, max_chars: int) -> tuple[str, bool]:
+    safe_max = min(max(max_chars, 1), 20000)
+    if len(value) <= safe_max:
+        return value, False
+    return value[:safe_max], True
+
+
+def _coerce_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _coerce_iso_datetime(value: datetime | str) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
 def _build_raw_email(
     *,
     to: list[str],
@@ -198,6 +225,83 @@ def _build_raw_email(
         message["Bcc"] = ", ".join(bcc_values)
     message.set_content(body_text)
     return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+
+def _gmail_headers(payload: dict[str, Any]) -> dict[str, str]:
+    headers = payload.get("headers") or []
+    return {
+        str(header.get("name", "")).lower(): str(header.get("value", ""))
+        for header in headers
+        if header.get("name")
+    }
+
+
+def _decode_gmail_body_data(value: str | None) -> str:
+    if not value:
+        return ""
+    padded = value + ("=" * (-len(value) % 4))
+    try:
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except (ValueError, TypeError):
+        return ""
+
+
+def _extract_gmail_payload_text(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return ""
+
+    mime_type = str(payload.get("mimeType", ""))
+    body_text = _decode_gmail_body_data((payload.get("body") or {}).get("data"))
+    if body_text and mime_type.startswith("text/plain"):
+        return body_text
+
+    plain_parts = []
+    fallback_parts = []
+    for part in payload.get("parts") or []:
+        part_text = _extract_gmail_payload_text(part)
+        if not part_text:
+            continue
+        part_mime = str(part.get("mimeType", ""))
+        if part_mime.startswith("text/plain"):
+            plain_parts.append(part_text)
+        else:
+            fallback_parts.append(part_text)
+
+    if plain_parts:
+        return "\n".join(plain_parts)
+    if fallback_parts:
+        return "\n".join(fallback_parts)
+    return body_text
+
+
+def _gmail_message_summary(
+    message: dict[str, Any],
+    *,
+    include_body: bool = False,
+    max_body_chars: int = 4000,
+) -> dict[str, str | bool]:
+    payload = message.get("payload") or {}
+    headers = _gmail_headers(payload)
+    summary: dict[str, str | bool] = {
+        "id": message.get("id", ""),
+        "thread_id": message.get("threadId", ""),
+        "snippet": message.get("snippet", ""),
+        "subject": headers.get("subject", ""),
+        "from_email": headers.get("from", ""),
+        "to_email": headers.get("to", ""),
+        "date": headers.get("date", ""),
+    }
+    if include_body:
+        body_text, truncated = _truncate_with_flag(
+            _extract_gmail_payload_text(payload),
+            max_body_chars,
+        )
+        summary["body_text"] = body_text
+        summary["body_truncated"] = truncated
+    return summary
 
 
 def create_gmail_draft(
@@ -241,10 +345,64 @@ def send_gmail_message(
     }
 
 
+def search_gmail_messages(query: str, page_size: int = 10) -> list[dict[str, str | bool]]:
+    """Search Brandon's Gmail and return compact message metadata."""
+    gmail = build_workspace_service("gmail", "v1")
+    safe_page_size = _safe_page_size(page_size)
+    result = (
+        gmail.users()
+        .messages()
+        .list(userId="me", q=query, maxResults=safe_page_size)
+        .execute()
+    )
+    messages = []
+    for item in result.get("messages", []):
+        message_id = item.get("id")
+        if not message_id:
+            continue
+        message = (
+            gmail.users()
+            .messages()
+            .get(
+                userId="me",
+                id=message_id,
+                format="metadata",
+                metadataHeaders=["Subject", "From", "To", "Date"],
+            )
+            .execute()
+        )
+        if not message.get("threadId") and item.get("threadId"):
+            message["threadId"] = item.get("threadId")
+        messages.append(_gmail_message_summary(message))
+    return messages
+
+
+def get_gmail_thread(thread_id: str, max_body_chars: int = 4000) -> dict[str, Any]:
+    """Read a Gmail thread and extract text bodies for Hermes context."""
+    gmail = build_workspace_service("gmail", "v1")
+    result = (
+        gmail.users()
+        .threads()
+        .get(userId="me", id=thread_id, format="full")
+        .execute()
+    )
+    return {
+        "thread_id": result.get("id", thread_id),
+        "messages": [
+            _gmail_message_summary(
+                message,
+                include_body=True,
+                max_body_chars=max_body_chars,
+            )
+            for message in result.get("messages", [])
+        ],
+    }
+
+
 def search_drive_files(query: str, page_size: int = 10) -> list[dict[str, str]]:
     """Search Brandon's Google Drive and return compact file summaries."""
     drive = build_workspace_service("drive", "v3")
-    safe_page_size = min(max(page_size, 1), 25)
+    safe_page_size = _safe_page_size(page_size)
     result = (
         drive.files()
         .list(
@@ -266,6 +424,52 @@ def search_drive_files(query: str, page_size: int = 10) -> list[dict[str, str]]:
         }
         for item in result.get("files", [])
     ]
+
+
+def read_drive_file(file_id: str, max_chars: int = 4000) -> dict[str, str | bool]:
+    """Read text content from a supported Drive file."""
+    drive = build_workspace_service("drive", "v3")
+    metadata = (
+        drive.files()
+        .get(
+            fileId=file_id,
+            fields="id,name,mimeType,webViewLink,modifiedTime",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    mime_type = metadata.get("mimeType", "")
+    export_mime_type = ""
+    if mime_type == "application/vnd.google-apps.document":
+        export_mime_type = "text/plain"
+    elif mime_type == "application/vnd.google-apps.spreadsheet":
+        export_mime_type = "text/csv"
+
+    if export_mime_type:
+        raw_content = (
+            drive.files()
+            .export(fileId=file_id, mimeType=export_mime_type)
+            .execute()
+        )
+    elif mime_type.startswith("text/") or mime_type in {
+        "application/json",
+        "application/xml",
+        "text/csv",
+    }:
+        raw_content = drive.files().get_media(fileId=file_id).execute()
+    else:
+        raw_content = ""
+
+    content_text, truncated = _truncate_with_flag(_coerce_text(raw_content), max_chars)
+    return {
+        "id": metadata.get("id", file_id),
+        "name": metadata.get("name", ""),
+        "mime_type": mime_type,
+        "web_view_link": metadata.get("webViewLink", ""),
+        "modified_time": metadata.get("modifiedTime", ""),
+        "content_text": content_text,
+        "truncated": truncated,
+    }
 
 
 def create_google_doc(title: str, body_text: str) -> dict[str, str]:
@@ -292,6 +496,116 @@ def create_google_doc(title: str, body_text: str) -> dict[str, str]:
         "title": created.get("title", title),
         "url": f"https://docs.google.com/document/d/{document_id}/edit" if document_id else "",
     }
+
+
+def list_calendar_events(
+    time_min: datetime | str,
+    time_max: datetime | str,
+    *,
+    page_size: int = 10,
+    calendar_id: str = "primary",
+) -> list[dict[str, str | int]]:
+    """List Brandon's Calendar events using the Workspace OAuth token."""
+    calendar = build_workspace_service("calendar", "v3")
+    safe_page_size = _safe_page_size(page_size)
+    result = (
+        calendar.events()
+        .list(
+            calendarId=calendar_id,
+            timeMin=_coerce_iso_datetime(time_min),
+            timeMax=_coerce_iso_datetime(time_max),
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=safe_page_size,
+        )
+        .execute()
+    )
+    events = []
+    for item in result.get("items", []):
+        start = item.get("start") or {}
+        end = item.get("end") or {}
+        events.append(
+            {
+                "id": item.get("id", ""),
+                "summary": item.get("summary", ""),
+                "start": start.get("dateTime", start.get("date", "")),
+                "end": end.get("dateTime", end.get("date", "")),
+                "location": item.get("location", ""),
+                "html_link": item.get("htmlLink", ""),
+                "attendee_count": len(item.get("attendees") or []),
+            }
+        )
+    return events
+
+
+def create_workspace_calendar_event(
+    *,
+    summary: str,
+    start: datetime | str,
+    end: datetime | str,
+    attendees: list[str],
+    location: str = "",
+    description: str = "",
+    calendar_id: str = "primary",
+) -> dict[str, str]:
+    """Create a Calendar event from Brandon's Workspace account."""
+    calendar = build_workspace_service("calendar", "v3")
+    event_body = {
+        "summary": summary,
+        "location": location,
+        "description": description,
+        "start": {"dateTime": _coerce_iso_datetime(start)},
+        "end": {"dateTime": _coerce_iso_datetime(end)},
+        "attendees": [{"email": email} for email in _coerce_recipients(attendees)],
+        "reminders": {"useDefault": True},
+    }
+    created = (
+        calendar.events()
+        .insert(
+            calendarId=calendar_id,
+            body=event_body,
+            sendUpdates="all",
+        )
+        .execute()
+    )
+    return {
+        "event_id": created.get("id", ""),
+        "html_link": created.get("htmlLink", ""),
+    }
+
+
+def search_contacts(query: str, page_size: int = 10) -> list[dict[str, str | list[str]]]:
+    """Search Brandon's Google Contacts with compact contact summaries."""
+    people = build_workspace_service("people", "v1")
+    safe_page_size = _safe_page_size(page_size)
+    result = (
+        people.people()
+        .searchContacts(
+            query=query,
+            pageSize=safe_page_size,
+            readMask="names,emailAddresses,phoneNumbers",
+        )
+        .execute()
+    )
+    contacts = []
+    for item in result.get("results", []):
+        person = item.get("person") or {}
+        names = person.get("names") or []
+        emails = person.get("emailAddresses") or []
+        phones = person.get("phoneNumbers") or []
+        contacts.append(
+            {
+                "resource_name": person.get("resourceName", ""),
+                "display_name": (names[0] or {}).get("displayName", "") if names else "",
+                "email_addresses": [
+                    email.get("value", "") for email in emails if email.get("value")
+                ],
+                "phone_numbers": [
+                    phone.get("value", "") for phone in phones if phone.get("value")
+                ],
+            }
+        )
+    return contacts
 
 
 def append_sheet_values(

@@ -18,15 +18,31 @@ from schemas.agent_control import (
     AgentStatusResponse,
     RecentBookingsResponse,
     RecentLeadsResponse,
+    WorkspaceCalendarCreateEventRequest,
+    WorkspaceCalendarCreateEventResponse,
+    WorkspaceCalendarEventsRequest,
+    WorkspaceCalendarEventsResponse,
+    WorkspaceCalendarEventSummary,
+    WorkspaceContactsSearchRequest,
+    WorkspaceContactsSearchResponse,
+    WorkspaceContactSummary,
     WorkspaceDocsCreateRequest,
     WorkspaceDocsCreateResponse,
+    WorkspaceDriveFileReadRequest,
+    WorkspaceDriveFileReadResponse,
     WorkspaceDriveFileSummary,
     WorkspaceDriveSearchRequest,
     WorkspaceDriveSearchResponse,
     WorkspaceGmailDraftRequest,
     WorkspaceGmailDraftResponse,
+    WorkspaceGmailMessageSummary,
+    WorkspaceGmailSearchRequest,
+    WorkspaceGmailSearchResponse,
     WorkspaceGmailSendRequest,
     WorkspaceGmailSendResponse,
+    WorkspaceGmailThreadMessage,
+    WorkspaceGmailThreadRequest,
+    WorkspaceGmailThreadResponse,
     WorkspaceSheetsAppendRequest,
     WorkspaceSheetsAppendResponse,
 )
@@ -35,8 +51,14 @@ from services.workspace_service import (
     append_sheet_values,
     create_gmail_draft,
     create_google_doc,
+    create_workspace_calendar_event,
+    get_gmail_thread,
     get_workspace_connection_status,
+    list_calendar_events,
+    read_drive_file,
+    search_contacts,
     search_drive_files,
+    search_gmail_messages,
     send_gmail_message,
 )
 from routers.workspace import load_workspace_refresh_token_from_db
@@ -85,6 +107,46 @@ AGENT_ACTIONS = [
         description="Search Brandon's Google Drive and return compact file summaries.",
     ),
     AgentAction(
+        id="workspace.drive.file.read",
+        method="POST",
+        path="/api/v1/agent-control/workspace/drive/file",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read text content from a supported Google Drive file.",
+    ),
+    AgentAction(
+        id="workspace.gmail.search",
+        method="POST",
+        path="/api/v1/agent-control/workspace/gmail/search",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Search Brandon's Gmail and return compact message summaries.",
+    ),
+    AgentAction(
+        id="workspace.gmail.thread.read",
+        method="POST",
+        path="/api/v1/agent-control/workspace/gmail/thread",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read a Gmail thread body for approved Hermes context.",
+    ),
+    AgentAction(
+        id="workspace.calendar.events.read",
+        method="POST",
+        path="/api/v1/agent-control/workspace/calendar/events",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read Brandon's Google Calendar events in a bounded time window.",
+    ),
+    AgentAction(
+        id="workspace.contacts.search",
+        method="POST",
+        path="/api/v1/agent-control/workspace/contacts/search",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Search Brandon's Google Contacts for recipient context.",
+    ),
+    AgentAction(
         id="workspace.gmail.draft.create",
         method="POST",
         path="/api/v1/agent-control/workspace/gmail/draft",
@@ -115,6 +177,14 @@ AGENT_ACTIONS = [
         risk_tier="human_confirm",
         side_effects=True,
         description="Send email from Brandon's mailbox only after explicit Brandon confirmation.",
+    ),
+    AgentAction(
+        id="workspace.calendar.event.create",
+        method="POST",
+        path="/api/v1/agent-control/workspace/calendar/event/create",
+        risk_tier="human_confirm",
+        side_effects=True,
+        description="Create a Google Calendar event only after explicit Brandon confirmation.",
     ),
 ]
 
@@ -239,6 +309,67 @@ async def workspace_status(
     return response
 
 
+@router.post("/workspace/gmail/search", response_model=WorkspaceGmailSearchResponse)
+async def workspace_gmail_search(
+    payload: WorkspaceGmailSearchRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceGmailSearchResponse:
+    await load_workspace_refresh_token_from_db(db)
+    safe_page_size = _safe_page_size(payload.page_size)
+    messages = search_gmail_messages(payload.query, page_size=safe_page_size)
+    response = WorkspaceGmailSearchResponse(
+        messages=[WorkspaceGmailMessageSummary(**item) for item in messages]
+    )
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.gmail.search",
+        request_meta={"query_length": len(payload.query), "page_size": safe_page_size},
+        response_meta={
+            "count": len(response.messages),
+            "message_ids": [item.id for item in response.messages],
+            "thread_ids": [item.thread_id for item in response.messages],
+        },
+    )
+    return response
+
+
+@router.post("/workspace/gmail/thread", response_model=WorkspaceGmailThreadResponse)
+async def workspace_gmail_thread(
+    payload: WorkspaceGmailThreadRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceGmailThreadResponse:
+    await load_workspace_refresh_token_from_db(db)
+    result = get_gmail_thread(payload.thread_id, max_body_chars=payload.max_body_chars)
+    response = WorkspaceGmailThreadResponse(
+        thread_id=result.get("thread_id", payload.thread_id),
+        messages=[WorkspaceGmailThreadMessage(**item) for item in result.get("messages", [])],
+    )
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.gmail.thread.read",
+        request_meta={
+            "thread_id": payload.thread_id,
+            "max_body_chars": payload.max_body_chars,
+        },
+        response_meta={
+            "thread_id": response.thread_id,
+            "count": len(response.messages),
+            "message_ids": [item.id for item in response.messages],
+            "body_lengths": [len(item.body_text) for item in response.messages],
+            "truncated_count": sum(1 for item in response.messages if item.body_truncated),
+        },
+    )
+    return response
+
+
 @router.post("/workspace/gmail/draft", response_model=WorkspaceGmailDraftResponse)
 async def workspace_gmail_draft(
     payload: WorkspaceGmailDraftRequest,
@@ -347,6 +478,32 @@ async def workspace_drive_search(
     return response
 
 
+@router.post("/workspace/drive/file", response_model=WorkspaceDriveFileReadResponse)
+async def workspace_drive_file_read(
+    payload: WorkspaceDriveFileReadRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceDriveFileReadResponse:
+    await load_workspace_refresh_token_from_db(db)
+    result = read_drive_file(payload.file_id, max_chars=payload.max_chars)
+    response = WorkspaceDriveFileReadResponse(**result)
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.drive.file.read",
+        request_meta={"file_id": payload.file_id, "max_chars": payload.max_chars},
+        response_meta={
+            "file_id": response.id,
+            "mime_type": response.mime_type,
+            "content_length": len(response.content_text),
+            "truncated": response.truncated,
+        },
+    )
+    return response
+
+
 @router.post("/workspace/docs/create", response_model=WorkspaceDocsCreateResponse)
 async def workspace_docs_create(
     payload: WorkspaceDocsCreateRequest,
@@ -364,6 +521,120 @@ async def workspace_docs_create(
         action_id="workspace.docs.create",
         request_meta={"title_length": len(payload.title), "body_length": len(payload.body_text)},
         response_meta={"document_id": response.document_id},
+    )
+    return response
+
+
+@router.post("/workspace/calendar/events", response_model=WorkspaceCalendarEventsResponse)
+async def workspace_calendar_events(
+    payload: WorkspaceCalendarEventsRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceCalendarEventsResponse:
+    await load_workspace_refresh_token_from_db(db)
+    safe_page_size = _safe_page_size(payload.page_size)
+    events = list_calendar_events(
+        payload.time_min,
+        payload.time_max,
+        page_size=safe_page_size,
+        calendar_id=payload.calendar_id,
+    )
+    response = WorkspaceCalendarEventsResponse(
+        events=[WorkspaceCalendarEventSummary(**item) for item in events]
+    )
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.calendar.events.read",
+        request_meta={
+            "time_min": payload.time_min.isoformat(),
+            "time_max": payload.time_max.isoformat(),
+            "page_size": safe_page_size,
+            "calendar_id": payload.calendar_id,
+        },
+        response_meta={"count": len(response.events), "ids": [item.id for item in response.events]},
+    )
+    return response
+
+
+@router.post(
+    "/workspace/calendar/event/create",
+    response_model=WorkspaceCalendarCreateEventResponse,
+)
+async def workspace_calendar_event_create(
+    payload: WorkspaceCalendarCreateEventRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceCalendarCreateEventResponse:
+    if not payload.confirmed_by_brandon:
+        raise HTTPException(
+            status_code=422,
+            detail="Calendar event creation requires confirmed_by_brandon=true.",
+        )
+
+    await load_workspace_refresh_token_from_db(db)
+    result = create_workspace_calendar_event(
+        summary=payload.summary,
+        start=payload.start,
+        end=payload.end,
+        attendees=payload.attendees,
+        location=payload.location,
+        description=payload.description,
+        calendar_id=payload.calendar_id,
+    )
+    response = WorkspaceCalendarCreateEventResponse(
+        event_id=result.get("event_id", ""),
+        html_link=result.get("html_link", ""),
+        attendee_count=len(payload.attendees),
+        summary=payload.summary,
+    )
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.calendar.event.create",
+        request_meta={
+            "summary_length": len(payload.summary),
+            "start": payload.start.isoformat(),
+            "end": payload.end.isoformat(),
+            "attendee_count": len(payload.attendees),
+            "location_length": len(payload.location),
+            "description_length": len(payload.description),
+            "calendar_id": payload.calendar_id,
+            "confirmed_by_brandon": payload.confirmed_by_brandon,
+            "confirmation_note_length": len(payload.confirmation_note),
+        },
+        response_meta={"event_id": response.event_id},
+    )
+    return response
+
+
+@router.post("/workspace/contacts/search", response_model=WorkspaceContactsSearchResponse)
+async def workspace_contacts_search(
+    payload: WorkspaceContactsSearchRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: dict = Depends(require_agent_control),
+) -> WorkspaceContactsSearchResponse:
+    await load_workspace_refresh_token_from_db(db)
+    safe_page_size = _safe_page_size(payload.page_size)
+    contacts = search_contacts(payload.query, page_size=safe_page_size)
+    response = WorkspaceContactsSearchResponse(
+        contacts=[WorkspaceContactSummary(**item) for item in contacts]
+    )
+    await _audit(
+        db,
+        request=request,
+        actor=agent["actor"],
+        action_id="workspace.contacts.search",
+        request_meta={"query_length": len(payload.query), "page_size": safe_page_size},
+        response_meta={
+            "count": len(response.contacts),
+            "resource_names": [item.resource_name for item in response.contacts],
+        },
     )
     return response
 
