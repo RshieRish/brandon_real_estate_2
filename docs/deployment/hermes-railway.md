@@ -47,7 +47,7 @@ Current status as of 2026-06-01:
 - `atlas-agent` is live in the same Railway project.
 - Deployment `dc2db0c4-10ca-447a-8d7a-c500dec1aa89` is `SUCCESS`.
 - The public dashboard URL is `https://atlas-agent-production-99dc.up.railway.app`.
-- The health check returns `{"status":"ok","gateway":"stopped"}`.
+- The health check returns `{"status":"ok","gateway":"running"}` after Gemini provider setup.
 - Admin credentials are stored only in local ignored `.env.hermes-admin.local` and Railway variables.
 - The current `.env.railway-sweeney.local` uses a project-scoped `RAILWAY_TOKEN`, which works for existing service operations but was rejected by Railway when attempting to create a new GitHub-backed service from `praveen-ks-2001/hermes-agent-template`.
 - The deployed fallback path was: create an empty `atlas-agent` service, attach `/data`, set admin vars, then upload the checked-out template with `railway up --path-as-root`.
@@ -55,6 +55,8 @@ Current status as of 2026-06-01:
 - Template commit deployed: `7224d7c1a4dcffe9304f49bc843f55716f5561b4`.
 - Persistent volume: `atlas-agent-volume`, ID `594c4970-ba61-4888-8372-57d0c235db65`, mounted at `/data`, size `5000 MB`.
 - `BRANDON_BACKEND_URL` and masked `BRANDON_AGENT_CONTROL_TOKEN` are set on `atlas-agent` for future backend-control skills.
+- Gemini provider is configured in Hermes persistent config with `LLM_MODEL=gemini-3.5-flash`.
+- Messaging channels are not configured yet. Hermes logs warn that no messaging platforms are enabled and unauthorized users are denied.
 
 Preferred deployment path:
 
@@ -131,11 +133,11 @@ Expected fields:
 ```json
 {
   "status": "ok",
-  "gateway": "stopped"
+  "gateway": "running"
 }
 ```
 
-`gateway="stopped"` is expected until the LLM provider and Telegram channel are configured in the Hermes dashboard.
+`gateway="running"` confirms Hermes is up, but it still cannot receive Brandon messages until Telegram or another channel is configured.
 
 ## Safety Boundary
 

@@ -937,3 +937,22 @@ Completed Checklist Video Integration
   - Admin login POST returns `302`, sets a session cookie, and redirects to `/setup`.
   - `gateway=stopped` is expected until LLM provider and Telegram channel are configured in the Hermes dashboard.
 - Status: Complete
+
+### 2026-06-02 - Hermes Gemini Provider Setup
+- What was changed: Configured the live `atlas-agent` Hermes dashboard to use Google Gemini and updated current CRM assumptions.
+- Key decisions:
+  - Used official Gemini API docs to confirm the stable model string for Gemini 3.5 Flash is `gemini-3.5-flash`.
+  - Reused the existing local `backend/.env` Gemini API key without printing it.
+  - Tested `gemini-3.5-flash` through the Gemini API before updating Hermes; the API returned HTTP 200.
+  - Set Hermes persistent `/data/.hermes/.env` values through the admin API: `LLM_MODEL=gemini-3.5-flash` and masked `GEMINI_API_KEY`.
+  - Started the Hermes gateway after provider setup.
+  - Updated CRM assumption: Brandon is moving to eXp; do not build new KW CRM work. Current KW/Zapier references should be treated as legacy/one-way Zapier context only unless replaced by an eXp integration spec.
+- Verification:
+  - Hermes `/setup/api/status` reports `Gemini` configured.
+  - Hermes `/health` reports `status=ok` and `gateway=running`.
+  - Hermes logs warn that no messaging platforms are enabled and all unauthorized users will be denied; this is expected until Telegram/email/Workspace channels and allowlists are configured.
+- Still needed:
+  - Telegram bot token and Brandon's Telegram user ID/approval.
+  - Google Workspace connection plan and credentials/consent for Gmail, Drive, Docs, Sheets, and Calendar beyond the existing website booking flow.
+  - eXp CRM requirements or API/Zapier handoff details if CRM automation is needed later.
+- Status: Complete
