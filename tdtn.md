@@ -1052,3 +1052,13 @@ Completed Checklist Video Integration
   - If Google blocks restricted scopes, trust the OAuth app in Workspace Admin under Security -> Access and data control -> API controls -> App access control.
   - Add Telegram bot token and Brandon's Telegram user ID to Hermes once available.
 - Status: Complete
+
+### 2026-06-02 - Workspace Consent Completed
+- What changed: Verified Brandon completed the Google Workspace OAuth consent flow.
+- Verification:
+  - Live authenticated `/api/v1/workspace/status` returned `configured=True`, `connected=True`, `can_connect=True`.
+  - Status detail reports Workspace is connected as `brandon@soldwithsweeney.com`.
+- Next step:
+  - Configure Hermes Telegram channel with the BotFather token and Brandon's numeric Telegram user ID.
+  - After Telegram is connected, add explicit Workspace action tools for Hermes so it can use Gmail, Drive, Docs, Sheets, Calendar, and related APIs through approved backend routes.
+- Status: Complete
