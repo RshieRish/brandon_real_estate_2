@@ -100,11 +100,11 @@ Expected: all tests pass.
 
 Run focused backend tests and `git diff --check`.
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Commit implementation and docs on the current branch, then push.
 
-- [ ] **Step 3: Verify Railway**
+- [x] **Step 3: Verify Railway**
 
 Wait for Railway backend auto-deploy to reach `SUCCESS`, then smoke test:
 - `/api/v1/agent-control/status` includes the new Workspace deep action capabilities.

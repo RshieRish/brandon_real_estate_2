@@ -1140,9 +1140,13 @@ Completed Checklist Video Integration
   - Focused backend suite passed: `./.venv/bin/python -m unittest tests.test_workspace_actions tests.test_agent_control_workspace_actions tests.test_agent_control_router tests.test_workspace_oauth tests.test_workspace_token_persistence tests.test_agent_control_auth -v`.
   - FastAPI import/route smoke listed all 12 `/api/v1/agent-control/workspace/*` routes.
   - `git diff --check` passed.
+  - Git commit `bd7a738` was pushed to `origin/main`.
+  - Railway backend deployment `047f12b5-2a3c-4488-90af-f8dde7d8f080` reached `SUCCESS`.
+  - Live authenticated `/api/v1/agent-control/status` returned `risk_tier=workspace_action_foundation`, `capability_count=15`, and no missing new Workspace capabilities.
+  - Live authenticated `/api/v1/agent-control/actions` returned `action_count=15` and no missing new Workspace action IDs.
+  - Live authenticated `/api/v1/agent-control/workspace/status` returned `connected=True`.
+  - Live unconfirmed calendar event creation returned `422` with `Calendar event creation requires confirmed_by_brandon=true.`, confirming the production confirmation guard.
 - Still needed:
-  - Commit, push, and wait for Railway backend deployment to reach `SUCCESS`.
-  - Live-smoke the backend action catalog after deploy.
   - Configure Telegram channel and allowlist when Brandon's BotFather token and numeric Telegram user ID are available.
   - Wire Hermes-side tool invocation prompts/config so Atlas can call these backend routes from chat.
-- Status: Local complete, deployment pending
+- Status: Complete
