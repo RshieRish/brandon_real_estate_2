@@ -1150,3 +1150,30 @@ Completed Checklist Video Integration
   - Configure Telegram channel and allowlist when Brandon's BotFather token and numeric Telegram user ID are available.
   - Wire Hermes-side tool invocation prompts/config so Atlas can call these backend routes from chat.
 - Status: Complete
+
+### 2026-06-02 - Atlas Hermes MCP Bridge
+- What was changed: Added a stdlib-only MCP bridge so Hermes can expose the protected backend action catalog as callable tools once a messaging channel is connected.
+- Files changed:
+  - `docs/superpowers/plans/2026-06-02-atlas-hermes-mcp-bridge.md` - execution plan for the Hermes-to-backend bridge.
+  - `hermes/atlas_backend_mcp.py` - stdio MCP server mapping Hermes tool calls to FastAPI `agent-control` routes.
+  - `hermes/README.md` - deployment overlay notes for future custom Hermes redeploys.
+  - `backend/tests/test_atlas_backend_mcp.py` - MCP tool catalog, request mapping, JSON-RPC, and backend-error tests.
+  - `docs/deployment/hermes-railway.md` - runbook updates for the custom Hermes image and MCP config.
+- Live deployment:
+  - Patched the deployed Hermes template staging copy to include `/app/atlas_backend_mcp.py`.
+  - Patched the template boot config writer to add `mcp_servers.atlas_backend` when `BRANDON_BACKEND_URL` and `BRANDON_AGENT_CONTROL_TOKEN` are present.
+  - Deployed `atlas-agent` with Railway deployment `8dcd567b-0c27-4eda-a7ef-46104aff91fe`, which reached `SUCCESS`.
+- Verification:
+  - Red tests failed first because `hermes/atlas_backend_mcp.py` did not exist.
+  - Focused MCP suite passed: `./.venv/bin/python -m unittest tests.test_atlas_backend_mcp -v`.
+  - Local stdio MCP smoke against production initialized successfully and called `workspace_status`, returning `configured=True` and `connected=True`.
+  - Template boot config smoke with fake env produced `mcp_servers.atlas_backend` with 16 allowlisted tools and token placeholders.
+  - Railway variable-name check confirmed `BRANDON_BACKEND_URL` and `BRANDON_AGENT_CONTROL_TOKEN` exist on `atlas-agent` without printing values.
+  - Hermes health returned `{"status":"ok","gateway":"running"}` after deployment, and setup status showed Gemini configured with no channels yet.
+- Limit:
+  - Railway SSH is blocked by project role (`MEMBER` required), so direct in-container `hermes mcp list/test` could not be run.
+  - Since Telegram is not configured yet, there is no live messaging session to exercise the MCP tools from chat.
+- Still needed:
+  - Configure Telegram bot token and Brandon's numeric Telegram allowlist when available.
+  - After Telegram is connected, send an approved test prompt that calls a read-only Atlas tool, then a draft-only Workspace action.
+- Status: Complete

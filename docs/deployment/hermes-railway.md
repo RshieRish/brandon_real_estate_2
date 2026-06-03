@@ -57,6 +57,9 @@ Current status as of 2026-06-01:
 - `BRANDON_BACKEND_URL` and masked `BRANDON_AGENT_CONTROL_TOKEN` are set on `atlas-agent` for future backend-control skills.
 - Gemini provider is configured in Hermes persistent config with `LLM_MODEL=gemini-3.5-flash`.
 - Messaging channels are not configured yet. Hermes logs warn that no messaging platforms are enabled and unauthorized users are denied.
+- Atlas backend MCP bridge is included in the custom Hermes image and writes `mcp_servers.atlas_backend` at boot when `BRANDON_BACKEND_URL` and `BRANDON_AGENT_CONTROL_TOKEN` exist.
+- Latest custom Hermes deployment with the Atlas MCP bridge: `8dcd567b-0c27-4eda-a7ef-46104aff91fe` reached `SUCCESS`.
+- Railway SSH currently returns `Insufficient permissions: Railway SSH requires the MEMBER role`; use image redeploys and the Hermes setup API unless Railway project role is upgraded.
 
 Preferred deployment path:
 
@@ -87,6 +90,60 @@ npx -y @railway/cli@latest up /tmp/hermes-agent-template-inspect \
 ```
 
 Note: `volume add` needed a temporary service link because the project token cannot create one interactively. That temporary `/tmp` link was removed from `~/.railway/config.json` after the volume was attached.
+
+## Atlas Backend MCP Bridge
+
+Hermes uses the repo bridge at `hermes/atlas_backend_mcp.py`. It is a stdlib-only stdio MCP server that calls the existing FastAPI `agent-control` routes with:
+
+- `BRANDON_BACKEND_URL`
+- `BRANDON_AGENT_CONTROL_TOKEN`
+
+These variables are Railway service variables on `atlas-agent`; do not commit or print the token.
+
+The custom Hermes image copies the bridge to:
+
+```text
+/app/atlas_backend_mcp.py
+```
+
+The patched Hermes template writes this config entry at boot when both backend bridge vars exist:
+
+```yaml
+mcp_servers:
+  atlas_backend:
+    command: python
+    args:
+      - /app/atlas_backend_mcp.py
+    env:
+      BRANDON_BACKEND_URL: ${BRANDON_BACKEND_URL}
+      BRANDON_AGENT_CONTROL_TOKEN: ${BRANDON_AGENT_CONTROL_TOKEN}
+    enabled: true
+    timeout: 120
+    connect_timeout: 30
+    supports_parallel_tool_calls: false
+    tools:
+      include:
+        - status_read
+        - actions_list
+        - leads_recent
+        - bookings_recent
+        - workspace_status
+        - drive_search
+        - drive_file_read
+        - gmail_search
+        - gmail_thread_read
+        - gmail_draft_create
+        - gmail_send
+        - docs_create
+        - sheets_append
+        - calendar_events_read
+        - calendar_event_create
+        - contacts_search
+      resources: false
+      prompts: false
+```
+
+Local stdio verification against production succeeded for `initialize` and `workspace_status`, returning `configured=True` and `connected=True`. The live Hermes service cannot show a full MCP tool invocation yet because no messaging platform is enabled and Railway SSH is not available for direct `hermes mcp list/test` inside the container.
 
 ## Verification
 
