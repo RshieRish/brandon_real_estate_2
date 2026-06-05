@@ -1177,3 +1177,26 @@ Completed Checklist Video Integration
   - Configure Telegram bot token and Brandon's numeric Telegram allowlist when available.
   - After Telegram is connected, send an approved test prompt that calls a read-only Atlas tool, then a draft-only Workspace action.
 - Status: Complete
+
+### 2026-06-05 - Hermes Telegram Channel Connected
+- What was changed: Connected Brandon's Telegram bot to the live `atlas-agent` Hermes service.
+- Runtime config:
+  - Railway `atlas-agent` variables now include `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_HOME_CHANNEL`, `TELEGRAM_HOME_CHANNEL_NAME`, and `GATEWAY_ALLOW_ALL_USERS=false`.
+  - Hermes persistent setup config was updated through the admin API so the setup dashboard also shows Telegram configured.
+  - Brandon's Telegram allowlisted user ID is `8647590834`.
+  - Telegram home channel is Brandon's private DM chat ID.
+- Live deployment:
+  - `atlas-agent` redeployment `0636f515-da58-4b94-a6ca-bb27ef2ed8f5` reached `SUCCESS`.
+- Verification:
+  - Telegram Bot API `getMe` returned username `soldwithsweeney_bot`.
+  - Telegram Bot API `getWebhookInfo` returned no webhook URL and no pending updates, consistent with Hermes long polling.
+  - Railway variable-name check confirmed Telegram, allowlist, home-channel, and backend bridge variables are present without printing secret values.
+  - Hermes `/health` returned `{"status":"ok","gateway":"running"}`.
+  - Hermes native dashboard status returned `gateway_platforms.telegram.state=connected` with no error code/message.
+  - Hermes setup status returned `channels.Telegram.configured=True`.
+- Security note:
+  - The BotFather token was pasted into chat during setup. Rotate it in BotFather after live testing, then update Railway and Hermes config with the replacement token.
+- Still needed:
+  - Have Brandon send a normal non-`/start` message in Telegram and verify an agent response in the chat.
+  - After token rotation, repeat the Telegram runtime status check.
+- Status: Complete

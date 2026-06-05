@@ -56,9 +56,10 @@ Current status as of 2026-06-01:
 - Persistent volume: `atlas-agent-volume`, ID `594c4970-ba61-4888-8372-57d0c235db65`, mounted at `/data`, size `5000 MB`.
 - `BRANDON_BACKEND_URL` and masked `BRANDON_AGENT_CONTROL_TOKEN` are set on `atlas-agent` for future backend-control skills.
 - Gemini provider is configured in Hermes persistent config with `LLM_MODEL=gemini-3.5-flash`.
-- Messaging channels are not configured yet. Hermes logs warn that no messaging platforms are enabled and unauthorized users are denied.
+- Telegram is configured for `soldwithsweeney_bot` with Brandon's Telegram user ID in the allowlist.
+- Telegram home channel is Brandon's private DM chat ID, so future default Hermes deliveries can target Brandon without repeating a chat ID.
 - Atlas backend MCP bridge is included in the custom Hermes image and writes `mcp_servers.atlas_backend` at boot when `BRANDON_BACKEND_URL` and `BRANDON_AGENT_CONTROL_TOKEN` exist.
-- Latest custom Hermes deployment with the Atlas MCP bridge: `8dcd567b-0c27-4eda-a7ef-46104aff91fe` reached `SUCCESS`.
+- Latest custom Hermes deployment after Telegram config: `0636f515-da58-4b94-a6ca-bb27ef2ed8f5` reached `SUCCESS`.
 - Railway SSH currently returns `Insufficient permissions: Railway SSH requires the MEMBER role`; use image redeploys and the Hermes setup API unless Railway project role is upgraded.
 
 Preferred deployment path:
@@ -194,7 +195,28 @@ Expected fields:
 }
 ```
 
-`gateway="running"` confirms Hermes is up, but it still cannot receive Brandon messages until Telegram or another channel is configured.
+`gateway="running"` confirms Hermes is up. The native dashboard `/api/status` should show `gateway_platforms.telegram.state="connected"`.
+
+Check Telegram through Hermes setup/native status:
+
+```bash
+# Use .env.hermes-admin.local locally for admin credentials and query:
+#   https://atlas-agent-production-99dc.up.railway.app/setup/api/status
+#   https://atlas-agent-production-99dc.up.railway.app/api/status
+```
+
+Expected fields:
+
+```json
+{
+  "setup_telegram": true,
+  "telegram_runtime": {
+    "state": "connected",
+    "error_code": null,
+    "error_message": null
+  }
+}
+```
 
 ## Safety Boundary
 
