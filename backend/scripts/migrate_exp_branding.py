@@ -469,7 +469,8 @@ def _changed_fields(
     return [
         field
         for field in _updateable_fields(table)
-        if before.get(field) != after.get(field)
+        if _copy_database_value(before.get(field))
+        != _copy_database_value(after.get(field))
     ]
 
 

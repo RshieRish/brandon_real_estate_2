@@ -128,6 +128,29 @@ def test_binary_database_values_are_normalized_for_transform_and_backup():
     }
 
 
+def test_equivalent_bytea_memoryview_is_not_reported_as_a_change():
+    migration = _load_migration()
+    before = {
+        "link_pack": [
+            {
+                "id": 1,
+                "profile_name": "Brandon",
+                "profile_bio": "at eXp Realty",
+                "social_website": "https://www.soldwithsweeney.com/",
+                "published_snapshot": None,
+                "background_image_data": memoryview(b"black-gold-background").cast("c"),
+                "background_image_mime": "image/png",
+            }
+        ]
+    }
+    after = migration.transform_tables(before)
+
+    summary = migration.summarize_changes(before, after)
+
+    assert summary["link_pack"]["rows_changed"] == 0
+    assert summary["link_pack"]["fields_changed"] == []
+
+
 def test_link_item_destinations_are_context_aware():
     migration = _load_migration()
 
