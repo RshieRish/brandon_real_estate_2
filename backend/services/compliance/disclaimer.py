@@ -1,8 +1,7 @@
 """Standard disclaimer block appended to every investor report.
 
 Three concatenated paragraphs covering NAR Articles 11/13 (not-advice),
-Federal + MA + NH Fair Housing, and KW broker disclosure (mirrors the
-existing site footer per CLAUDE.md).
+Federal + MA + NH Fair Housing, and the current broker disclosure.
 """
 
 _NOT_ADVICE = (
@@ -17,13 +16,12 @@ _FAIR_HOUSING = (
     "Hampshire fair housing laws."
 )
 
-_KW_BROKER = (
+_BROKER_DISCLOSURE = (
     "Brandon Sweeney is a licensed real estate agent in MA & NH. Sold With "
-    "Sweeney & Co. is powered by Keller Williams Realty Success. Each office is "
-    "independently owned and operated."
+    "Sweeney & Co. is brokered by eXp Realty."
 )
 
 
 def build_disclaimer() -> str:
     """Return the three-paragraph disclaimer block."""
-    return "\n\n".join((_NOT_ADVICE, _FAIR_HOUSING, _KW_BROKER))
+    return "\n\n".join((_NOT_ADVICE, _FAIR_HOUSING, _BROKER_DISCLOSURE))

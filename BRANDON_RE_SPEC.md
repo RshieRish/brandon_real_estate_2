@@ -30,7 +30,7 @@
 ## 1. PROJECT OVERVIEW & OBJECTIVE
 
 ### What This Is
-A premium AI-powered real estate conversion platform for **Brandon Sweeney**, CEO of **Sold With Sweeney & Co.**, powered by **Keller Williams Realty Success**. This is NOT a standard realtor brochure site. It is a conversion engine.
+A premium AI-powered real estate conversion platform for **Brandon Sweeney**, CEO of **Sold With Sweeney & Co.**, brokered by **eXp Realty**. This is NOT a standard REALTOR® brochure site. It is a conversion engine.
 
 ### Primary Objective
 Turn every visitor into a qualified meeting with Brandon across three audience paths:
@@ -45,14 +45,13 @@ Turn every visitor into a qualified meeting with Brandon across three audience p
 
 ### Who Is Brandon Sweeney
 - **Title**: REALTOR® (always capitalized with ® mark), CEO of Sold With Sweeney & Co.
-- **Brokerage**: Keller Williams Realty Success
+- **Brokerage**: eXp Realty
 - **Licensed**: MA Associate Broker #9589032 | NH Salesperson #072734
 - **Licensed Since**: April 17, 2017
 - **Designations**: GREEN, C2EX
 - **Office**: 101 Broadway Rd. #21, Dracut, Massachusetts 01826
 - **Cell**: (978) 987-2806
 - **SWS Phone (Twilio)**: (603) 505-8321
-- **KW Office**: (978) 475-2111
 - **Email**: info@soldwithsweeney.com
 - **Website**: www.SoldWithSweeney.com
 - **Association Memberships**: NAR, MAR (Massachusetts Association of REALTORS®), NEAR (Northeast Association of REALTORS®)
@@ -60,8 +59,8 @@ Turn every visitor into a qualified meeting with Brandon across three audience p
   - NEAR President & REALTOR® Of The Year 2025
   - President Elect 2024, 1st Vice President 2023
   - MAR BOD Member 2026
-  - KW Heavy Hitter 2022, 2024
-  - KW Capper 2019–2025
+  - Heavy Hitter 2022, 2024
+  - Capper 2019–2025
   - Distinguished Young Professional (GLCC) 2022
   - NEAR Platinum 2022, 2024; Gold 2020–2021, 2023
   - MAR Good Neighbor 2023; NEAR Good Neighbor 2020
@@ -69,7 +68,7 @@ Turn every visitor into a qualified meeting with Brandon across three audience p
 - **Nonprofit**: Founder of MS is BS New England Inc. (501(c)(3), est. 2015). Provided $300,000+ in grants to local MS warriors. Family connection: father (John), uncle (Gary), late grandmother (Rose Sweeney 1928–2023) all have/had MS.
 - **Education**: Plymouth State University, Magna Cum Laude, Bachelor's in Business Management, minors in Sales & Marketing
 - **Hometown**: Born and raised in Dracut, MA
-- **Personal brand positioning**: "NOT your AVERAGE, award winning, philanthropic REALTOR® OF THE YEAR 25' at KW Realty Success!"
+- **Personal brand positioning**: "NOT your AVERAGE, award winning, philanthropic REALTOR® OF THE YEAR 25' at eXp Realty!"
 - **Investor experience**: Owns 1-2 family property, completed 1 fix & flip (50 Cheever Ave — purchased at $415K, $48.7K rehab, sold at $570K, profit $77,875.33 in 3 months)
 
 ### Social Media Links
@@ -139,7 +138,7 @@ Persistent context for Claude Code across sessions:
 - [Issue]: [Status]
 
 ## Integration Status
-- KW CRM: [Status]
+- CRM handoff: [Status]
 - Google Calendar: [Status]
 - Gemini API: [Status]
 
@@ -213,16 +212,14 @@ font-family: 'Apricots', cursive; /* Brandon noted "idk if I like it" — use on
 
 ### Footer Disclaimers (Required)
 Every page footer must include links to:
-- Terms of Use: https://legal.kw.com/termsofuse
-- Privacy Policy: https://legal.kw.com/privacy-policy
-- Cookie Policy: https://legal.kw.com/cookie-policy
-- DMCA: https://legal.kw.com/dmca
-- Fair Housing Policy: https://legal.kw.com/fairhousing
-- Accessibility: https://legal.kw.com/accessibility
+- Terms of Use: https://www.agnt.inc/terms-of-service
+- Privacy Policy: https://www.agnt.inc/privacy-policy
+- DMCA: https://www.exprealty.com/dmca
+- Accessibility: https://www.agnt.inc/terms-of-service#s-accessibility
 
 ### Logo Usage
 - Primary logo: "SOLD WITH SWEENEY & CO." with house icon and shamrock accents
-- Always paired with "KW SUCCESS — KELLER WILLIAMS REALTY" badge
+- Pair brokerage branding with the approved official eXp Realty mark
 - Gold/black/white treatments depending on background
 - Logos from Brandon's uploaded presentation assets should be referenced
 
@@ -310,7 +307,7 @@ Every page footer must include links to:
 │   /api/v1/analytics     → Event tracking             │
 │   /api/v1/content       → Content block CRUD         │
 │   /api/v1/auth          → Admin JWT auth             │
-│   /api/v1/crm           → KW CRM integration        │
+│   /api/v1/crm           → Legacy CRM handoff        │
 └──────────────────────┬──────────────────────────────┘
                        │
                        ▼
@@ -338,7 +335,7 @@ GEMINI_API_KEY=<Brandon's key>
 GOOGLE_CALENDAR_CLIENT_ID=<pending from Brandon>
 GOOGLE_CALENDAR_CLIENT_SECRET=<pending from Brandon>
 GOOGLE_MAPS_API_KEY=<pending from Brandon>
-KW_CRM_API_KEY=<pending — confirm access path with Brandon>
+ZAPIER_WEBHOOK_URL=<existing legacy CRM handoff>
 SMTP_HOST=<for internal notifications to Brandon only>
 SMTP_USER=<email>
 SMTP_PASS=<password>
@@ -388,7 +385,7 @@ app.add_middleware(
 #### Trust / Social Proof Section
 - Review scores: 4.9/5.0 Satisfaction, 5.0/5.0 Performance, 5.0/5.0 Recommendation
 - 3-4 rotating client testimonials (sourced from Buyer's Guide and Seller's Guide reviews — see Section 14)
-- Association badges: NEAR, MAR, KW logos
+- Association and brokerage badges: NEAR, MAR, eXp Realty logos
 - "REALTOR® Of The Year 2025" callout
 
 #### Audience Path Cards
@@ -406,7 +403,7 @@ Three premium cards for Buy / Sell / Invest, each with:
 #### Footer
 - Contact info: phone, email, address
 - Social media icons (all 6 platforms)
-- KW logo + legal disclaimer links
+- eXp Realty logo + legal disclosure links
 - NEAR 2025 President badge, GREEN designation, C2EX badge
 - License numbers: MA #9589032 | NH #072734
 - Fair Housing logo
@@ -645,8 +642,8 @@ Full "About Me" content:
 
 **Career Achievements** (Two columns from presentation slide 12)
 Left column (awards):
-- KW Heavy Hitter '22, '24
-- KW Capper '19-'25
+- Heavy Hitter '22, '24
+- Capper '19-'25
 - Distinguished Young Professional (GLCC) '22
 - NEAR Platinum '22, '24
 - NEAR Gold '20-'21, '23
@@ -760,7 +757,7 @@ A floating chatbot assistant across all public website pages. Its core job: move
 ```
 You are Brandon Sweeney's AI assistant on his real estate website, SoldWithSweeney.com. 
 
-Brandon is a licensed REALTOR® in MA and NH, CEO of Sold With Sweeney & Co., powered by Keller Williams Realty Success. He is the 2025 NEAR President and REALTOR® Of The Year. He has been licensed since 2017, specializes in residential real estate in the Merrimack Valley and surrounding areas, and also works with real estate investors.
+Brandon is a licensed real estate agent in MA and NH, CEO of Sold With Sweeney & Co., brokered by eXp Realty. He is the 2025 NEAR President and REALTOR® Of The Year. He has been licensed since 2017, specializes in residential real estate in the Merrimack Valley and surrounding areas, and also works with real estate investors.
 
 Your PRIMARY goal in every conversation is to help the visitor book a meeting with Brandon. You do this by:
 1. Understanding what the visitor needs (buying, selling, investing, general questions)
@@ -980,13 +977,13 @@ Single-admin dashboard for Brandon. Must feel simple, clean, and obvious — no 
 - Source and submission context (what page, what funnel, what they submitted)
 - Notes field (Brandon can add notes)
 - Routing status: "In Dashboard" or "Sent to CRM"
-- Action: "Send to KW CRM" button (one-click)
+- Action: "Send to CRM" button (one-click)
 - Meeting booking status if applicable
 
 **Lead Routing Statuses**
 - `new` — Just arrived
 - `in_review` — Brandon is looking at it
-- `sent_to_crm` — Pushed to KW CRM
+- `sent_to_crm` — Pushed to the configured CRM handoff
 - `booked` — Meeting booked
 - `converted` — Became a client
 - `archived` — No longer active
@@ -1027,7 +1024,7 @@ Input form:
 - CTA text
 - Photos upload (multiple)
 - Video URL (optional)
-- Lead routing mode: "Direct to KW CRM" or "Dashboard First"
+- Lead routing mode: "Direct to CRM" or "Dashboard First"
 
 **Funnel Generation**
 - Brandon fills out the form
@@ -1050,7 +1047,7 @@ Input form:
 - Brandon's contact info (pre-filled, editable)
 - Default meeting types and durations
 - Google Calendar connection status
-- KW CRM connection status
+- CRM handoff connection status
 
 **Lead Routing Settings**
 - Default routing mode for new funnels
@@ -1073,7 +1070,7 @@ Each generated funnel page includes:
 
 | Mode | Behavior | Admin Impact |
 |------|----------|-------------|
-| Direct to KW CRM | Lead sent to KW Command CRM immediately | Dashboard keeps a mirrored record for visibility |
+| Direct to CRM | Lead sent through the configured CRM handoff immediately | Dashboard keeps a mirrored record for visibility |
 | Dashboard First | Lead enters internal lead list first | Brandon reviews, then sends to CRM with one click |
 
 ### Routing Rules
@@ -1094,10 +1091,10 @@ Each generated funnel page includes:
 - Event includes: meeting type, attendee name/email/phone, context (buyer/seller/investor), any property details
 - Calendar picker UI component for chatbot and booking CTAs
 
-### Keller Williams Command CRM
-- API integration for lead pushing
+### CRM Handoff (Provider-Agnostic)
+- Lead pushing currently uses the legacy Zapier handoff
 - Required fields: name, email, phone, lead source, lead type
-- Confirm API access path with Brandon (pending)
+- Confirm the intended eXp-compatible CRM destination and access path with Brandon before building a native integration
 - Fallback: If CRM API is unavailable, provide CSV export functionality
 
 ### Google Maps
@@ -1110,7 +1107,7 @@ Each generated funnel page includes:
   - New lead submissions
   - New meeting bookings
   - New funnel registrations
-- Client-facing email/SMS stays inside KW CRM workflows
+- Client-facing email/SMS stays inside the configured CRM workflows
 - Use `aiosmtplib` in the Python backend or a service like Resend
 
 ---
@@ -1163,7 +1160,7 @@ Simple analytics dashboard — nothing crazy. Enough for Brandon to understand t
 ### Client Reviews Database
 
 **Buyer Reviews:**
-1. "Brandon went above and beyond throughout this process. We ran into a few roadblocks outside of our control but he continued to work with me to get the property I wanted. He was knowledgeable in many areas I was not expecting, and made the process as smooth as it could have possibly been. He's a wonderful Realtor and an even better person. I couldn't have asked for a better team to get the deal done." — Adam P, Lowell, MA
+1. "Brandon went above and beyond throughout this process. We ran into a few roadblocks outside of our control but he continued to work with me to get the property I wanted. He was knowledgeable in many areas I was not expecting, and made the process as smooth as it could have possibly been. He's a wonderful REALTOR® and an even better person. I couldn't have asked for a better team to get the deal done." — Adam P, Lowell, MA
 
 2. "Working with Brandon was amazing! He made a generally stressful process feel much easier by being there for us every step of the way, which was very important to us as first time home buyers. He is extremely knowledgeable not only of the market but also of many aspects of homes including electric, inspections, roofing, septic systems, etc which was very helpful in finding the perfect home for us. He was always there to answer any and all of our questions, and we are very happy with the end result. I strongly recommend working with Brandon!" — Jacqui, Westford, MA
 
@@ -1184,7 +1181,7 @@ Simple analytics dashboard — nothing crazy. Enough for Brandon to understand t
 9. "Brandon was very responsive, very professional, presented a great marketing plan with a great price strategy. He took the time to understand our property and highlight the features. We would highly recommend him as he executed on his strategy and delivered."
 
 ### Key Copy Lines to Use
-- "NOT your AVERAGE, award winning, philanthropic REALTOR® OF THE YEAR '25 at KW Realty Success!"
+- "NOT your AVERAGE, award winning, philanthropic REALTOR® OF THE YEAR '25 at eXp Realty!"
 - "Real estate is not only my profession, it's also my passion."
 - "Relationships are more important than transactions."
 - "You control my business!"
@@ -1222,7 +1219,7 @@ brandon-re/
 │   │   │   └── house-blast/            # Extracted JPEG frames for scroll
 │   │   ├── images/
 │   │   │   ├── brandon/             # Brandon's photos
-│   │   │   ├── logos/               # SWS, KW, NEAR, MAR logos
+│   │   │   ├── logos/               # SWS, eXp Realty, NEAR, MAR logos
 │   │   │   ├── properties/          # Property photos
 │   │   │   └── icons/               # Custom icons
 │   │   └── fonts/
@@ -1354,13 +1351,13 @@ brandon-re/
 │   │   ├── booking.py               # /api/v1/booking — Google Calendar
 │   │   ├── analytics.py             # /api/v1/analytics — Event tracking + dashboard data
 │   │   ├── content.py               # /api/v1/content — Content block CRUD
-│   │   ├── crm.py                   # /api/v1/crm — KW CRM integration
+│   │   ├── crm.py                   # /api/v1/crm — provider-agnostic CRM handoff
 │   │   └── auth.py                  # /api/v1/auth — Admin JWT auth
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── gemini.py                # Gemini API client wrapper
 │   │   ├── calendar_service.py      # Google Calendar integration
-│   │   ├── crm_service.py           # KW CRM integration
+│   │   ├── crm_service.py           # provider-agnostic CRM handoff
 │   │   ├── evaluator_service.py     # Property evaluation logic + data fetching
 │   │   ├── investor_service.py      # Investor AI analysis + PDF generation
 │   │   ├── funnel_service.py        # Funnel AI generation logic
@@ -1408,7 +1405,7 @@ Convert visitors into qualified meetings across 3 paths: Buy, Sell, Invest.
 - REALTOR® must ALWAYS be capitalized with ® mark
 - Dark-dominant, premium, personal aesthetic
 - Gold halftone dot patterns as texture elements
-- Follow KW legal disclaimer requirements in footer
+- Follow eXp Realty legal disclosure requirements in footer
 
 ## Tech Stack
 - Frontend: Next.js 14+ (App Router) on Vercel — UI only, no API routes
@@ -1418,7 +1415,7 @@ Convert visitors into qualified meetings across 3 paths: Buy, Sell, Invest.
 - Database: PostgreSQL on Neon/Supabase (free tier)
 - AI: Gemini API via google-generativeai Python SDK
 - Calendar: Google Calendar API via google-api-python-client
-- CRM: KW Command CRM for lead routing
+- CRM: Provider-agnostic lead routing through the current legacy Zapier handoff
 
 ## Design Skill
 Apply taste-skill: https://github.com/Leonxlnx/taste-skill
@@ -1479,7 +1476,7 @@ Last Updated: [Date]
 - Gemini API: Key provided, ready to integrate
 - Google Calendar: Pending OAuth credentials from Brandon
 - Google Maps: Pending API key from Brandon
-- KW CRM: Pending access path confirmation from Brandon
+- CRM handoff: Pending eXp-compatible destination and access path confirmation from Brandon
 - SMTP: Not yet configured
 
 ## Content Status
@@ -1619,7 +1616,7 @@ These were the Cling 3.0 prompts used to generate the above assets:
 - [ ] Database seeded with initial content blocks + admin user
 - [ ] CORS configured on FastAPI for frontend domain
 - [ ] Brandon's Google Calendar OAuth connected
-- [ ] KW CRM integration tested
+- [ ] Configured CRM handoff tested
 - [ ] All pages tested on mobile/tablet/desktop
 - [ ] Lighthouse audit passed (>80 performance)
 - [ ] Legal disclaimer links verified

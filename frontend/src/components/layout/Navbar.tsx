@@ -40,12 +40,16 @@ export default function Navbar() {
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="flex items-center shrink-0">
+          <Link
+            href="/"
+            className="flex items-center shrink-0"
+            aria-label="Sold With Sweeney & Co."
+          >
             <Image
-              src="/logos/sws-logo-white-gold.png"
+              src="/logos/sws-primary-white-gold.png"
               alt="Sold With Sweeney & Co."
-              width={160}
-              height={44}
+              width={76}
+              height={40}
               className="object-contain h-9 w-auto"
               priority
             />

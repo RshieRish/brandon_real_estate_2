@@ -358,10 +358,10 @@ export default function BlogPage() {
         )}
       </div>
 
-      {/* KW Disclaimer */}
+      {/* Brokerage disclaimer */}
       <p className="text-white/20 text-xs text-center max-w-2xl mx-auto mt-20 px-6 leading-relaxed">
-        Sold With Sweeney &amp; Co. is powered by Keller Williams Realty Success. This content is for informational
-        purposes only and does not constitute legal or financial advice. Each office is independently owned and operated.
+        Sold With Sweeney &amp; Co. is brokered by eXp Realty. This content is for informational purposes only
+        and does not constitute legal or financial advice.
       </p>
     </section>
   );

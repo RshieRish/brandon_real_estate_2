@@ -95,7 +95,7 @@ TOPIC_POOL: Dict[str, List[str]] = {
         "How Brandon Sweeney Negotiates Above Asking Price Every Time",
         "What Brandon Sweeney's Clients Say About Working With Him",
         "Brandon's Morning Routine: How a Top Agent Starts the Day",
-        "Why Brandon Sweeney Chose Keller Williams for His Business",
+        "Why Brandon Sweeney Chose eXp Realty for His Business",
         "How Brandon Sweeney Balances Real Estate, Family, and Giving Back",
     ],
     "REALTOR® Insights": [
@@ -316,7 +316,7 @@ class BlogService:
     # -----------------------------------------------------------------------
     @staticmethod
     async def _stage_a_research(topic: str, category: str) -> str:
-        prompt = f"""You are a real estate market research expert supporting Brandon Sweeney, a top-producing REALTOR® in Northern Massachusetts and Southern New Hampshire. Brandon is the 2025 NEAR President and REALTOR® of the Year, licensed since 2017, with Keller Williams.
+        prompt = f"""You are a real estate market research expert supporting Brandon Sweeney, a top-producing REALTOR® in Northern Massachusetts and Southern New Hampshire. Brandon is the 2025 NEAR President and REALTOR® of the Year, licensed since 2017, with eXp Realty.
 
 Topic to research: "{topic}"
 Content category: {category}
@@ -377,7 +377,7 @@ CRITICAL BRAND RULES:
 - Refer to Brandon as a REALTOR® only when discussing his membership, awards, or the National Association of REALTORS®
 - Brandon serves "Northern Massachusetts and Southern New Hampshire" (never "Merrimack Valley")
 - No emojis anywhere in the post
-- Company: Sold With Sweeney & Co., powered by Keller Williams Realty Success
+- Company: Sold With Sweeney & Co., brokered by eXp Realty
 
 Topic: "{topic}"
 Category: {category}

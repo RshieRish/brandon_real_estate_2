@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 from datetime import datetime, timezone
 
 from models.link_pack import LinkPack, LinkPackItem
@@ -45,6 +46,19 @@ class BuildSnapshotTests(unittest.TestCase):
         pack.profile_photo_mime = None
         snap = build_snapshot(pack, [])
         self.assertIsNone(snap["profile"]["photo_url"])
+
+    def test_background_url_cache_bust_tracks_binary_content(self):
+        pack, _ = _make_pack()
+        pack.background_image_mime = "image/png"
+        pack.background_image_data = b"black-gold-background-v1"
+
+        first = build_snapshot(pack, [])["background_image_url"]
+        expected = hashlib.sha256(pack.background_image_data).hexdigest()[:12]
+        self.assertEqual(first, f"/api/v1/link-pack/images/background?v={expected}")
+
+        pack.background_image_data = b"black-gold-background-v2"
+        second = build_snapshot(pack, [])["background_image_url"]
+        self.assertNotEqual(second, first)
 
 
 class GateTokenTests(unittest.TestCase):

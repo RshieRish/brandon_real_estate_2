@@ -57,7 +57,7 @@ export default async function Page({ searchParams }: PageProps) {
     name: snapshot.profile.name,
     image: imageUrl(snapshot.profile.photo_url) ?? undefined,
     url: 'https://soldwithsweeney.com/links',
-    jobTitle: 'Realtor',
+    jobTitle: 'REALTOR®',
     sameAs,
   };
   return (

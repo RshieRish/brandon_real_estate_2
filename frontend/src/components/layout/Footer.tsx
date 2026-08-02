@@ -20,10 +20,10 @@ const socialLinks = [
 ];
 
 const legalLinks = [
-  { label: 'Privacy Policy', href: 'https://www.kw.com/kw/privacy-policy.html' },
-  { label: 'Terms of Use', href: 'https://www.kw.com/kw/terms-of-use.html' },
-  { label: 'DMCA Notice', href: 'https://www.kw.com/kw/dmca.html' },
-  { label: 'Accessibility', href: 'https://www.kw.com/kw/accessibility.html' },
+  { label: 'Privacy Policy', href: 'https://www.agnt.inc/privacy-policy' },
+  { label: 'Terms of Use', href: 'https://www.agnt.inc/terms-of-service' },
+  { label: 'DMCA Notice', href: 'https://www.exprealty.com/dmca' },
+  { label: 'Accessibility', href: 'https://www.agnt.inc/terms-of-service#s-accessibility' },
 ];
 
 export default function Footer() {
@@ -50,10 +50,10 @@ export default function Footer() {
             </p>
             <div className="flex items-center gap-3">
               <Image
-                src="/logos/KWRS White.png"
-                alt="Keller Williams Realty Success"
+                src="/logos/exp-realty-white.png"
+                alt="eXp Realty"
                 width={140}
-                height={40}
+                height={73}
                 className="object-contain h-10 w-auto opacity-70"
               />
             </div>
@@ -65,15 +65,8 @@ export default function Footer() {
               Contact
             </h3>
             <address className="not-italic flex flex-col gap-3 text-sm text-gray leading-relaxed">
-              <span className="font-semibold text-white/70">Keller Williams Realty Success</span>
-              <span>Satellite: 101 Broadway Rd #21, Dracut, MA 01826</span>
-              <span>Main: 138 River Rd, Andover, MA 01810</span>
-              <a
-                href="tel:+19784752111"
-                className="hover:text-gold transition-colors duration-200"
-              >
-                Office: (978) 475-2111
-              </a>
+              <span className="font-semibold text-white/70">Sold With Sweeney &amp; Co.</span>
+              <span>101 Broadway Rd #21, Dracut, MA 01826</span>
               <a
                 href="tel:+19789872806"
                 className="hover:text-gold transition-colors duration-200"
@@ -88,7 +81,7 @@ export default function Footer() {
               </a>
             </address>
             <p className="text-xs text-gray/60 mt-2 leading-relaxed">
-              Licensed salesperson in MA &amp; NH with Keller Williams Realty Success
+              Licensed salesperson in MA &amp; NH. Sold With Sweeney &amp; Co. is brokered by eXp Realty.
             </p>
           </div>
 
@@ -119,7 +112,7 @@ export default function Footer() {
               })}
             </div>
             <p className="text-xs text-gray/60 mt-4 leading-relaxed">
-              The Sold With Sweeney &amp; Co. website soldwithsweeney.com is operated by Brandon Sweeney. Powered by Keller Williams Realty Success. All information deemed reliable but not guaranteed.
+              The Sold With Sweeney &amp; Co. website soldwithsweeney.com is operated by Brandon Sweeney and brokered by eXp Realty. All information deemed reliable but not guaranteed.
             </p>
           </div>
         </div>

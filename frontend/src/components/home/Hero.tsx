@@ -152,7 +152,7 @@ export default function Hero() {
             {/* Eyebrow badge */}
             <motion.div variants={item} className="mb-6">
               <span className="inline-block glass border border-gold/30 text-gold text-xs font-semibold tracking-widest uppercase px-4 py-2 leading-relaxed">
-                Northeast Association of REALTORS<sup className="text-[0.6em] uppercase font-bold relative -top-1 ml-[0.02em]">&reg;</sup> Realtor Of The Year 2025 <span className="mx-1.5 opacity-50">|</span> <span className="whitespace-nowrap">Keller Williams Realty Success</span>
+                Northeast Association of REALTORS<sup className="text-[0.6em] uppercase font-bold relative -top-1 ml-[0.02em]">&reg;</sup> REALTOR<sup className="text-[0.6em] uppercase font-bold relative -top-1 ml-[0.02em]">&reg;</sup> Of The Year 2025 <span className="mx-1.5 opacity-50">|</span> <span className="whitespace-nowrap">eXp Realty</span>
               </span>
             </motion.div>
 

@@ -239,9 +239,8 @@ export default function BlogArticleClient({ blog }: { blog: Blog }) {
               </motion.div>
 
               <p className="text-white/20 text-xs mt-10 leading-relaxed">
-                Sold With Sweeney &amp; Co. is powered by Keller Williams Realty Success. This content is for
-                informational purposes only and does not constitute legal or financial advice.
-                Each Keller Williams office is independently owned and operated.
+                Sold With Sweeney &amp; Co. is brokered by eXp Realty. This content is for informational
+                purposes only and does not constitute legal or financial advice.
               </p>
             </article>
 

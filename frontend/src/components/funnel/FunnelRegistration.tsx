@@ -256,12 +256,11 @@ export default function FunnelRegistration({
         </div>
       </div>
 
-      {/* KW Legal */}
+      {/* Brokerage legal disclaimer */}
       <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
-        Brandon Sweeney is a licensed REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> with Keller Williams Realty Success. All real
-        estate services are subject to applicable state law and Keller Williams Realty
-        International&apos;s policies. Equal Housing Opportunity. Information deemed reliable but
-        not guaranteed.
+        Brandon Sweeney is a licensed real estate professional with Sold With Sweeney &amp; Co., brokered by eXp Realty. All real
+        estate services are subject to applicable state law. Equal Housing Opportunity. Information deemed
+        reliable but not guaranteed.
       </p>
     </section>
   );

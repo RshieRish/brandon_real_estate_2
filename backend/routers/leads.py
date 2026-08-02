@@ -46,7 +46,7 @@ async def create_lead(
     await db.commit()
     asyncio.create_task(run_notification_retry_pass(limit=5))
 
-    # Fire-and-forget: push to Zapier → KW Command in the background
+    # Fire-and-forget: push to the existing legacy Zapier CRM handoff.
     background_tasks.add_task(
         push_lead_to_zapier,
         name=data.name,

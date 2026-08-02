@@ -8,9 +8,10 @@ def test_disclaimer_contains_required_blocks():
     # fair housing block
     assert "Equal Housing Opportunity" in text
     assert "Federal Fair Housing Act" in text
-    # KW broker block
-    assert "Keller Williams Realty Success" in text
-    assert "independently owned and operated" in text
+    # eXp broker block
+    assert "brokered by eXp Realty" in text
+    assert "Keller Williams Realty Success" not in text
+    assert "independently owned and operated" not in text
 
 
 def test_disclaimer_is_stable():

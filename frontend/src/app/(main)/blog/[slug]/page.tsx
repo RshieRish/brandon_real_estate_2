@@ -1,11 +1,22 @@
 import { cache } from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 import type { Metadata } from 'next';
 
 import BlogArticleClient, { type Blog } from './BlogArticleClient';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://soldwithsweeney.com').replace(/\/$/, '');
+
+// Intentional old-brand allowlist: preserve the indexed legacy URL with a 308
+// while the published article moves to its eXp Realty canonical slug.
+const LEGACY_BROKERAGE_SLUG = 'the-strategic-edge-why-brandon-sweeney-partnered-with-keller-williams';
+const EXP_BROKERAGE_SLUG = 'the-strategic-edge-why-brandon-sweeney-partnered-with-exp-realty';
+
+function redirectLegacyBrokerageSlug(slug: string) {
+  if (slug === LEGACY_BROKERAGE_SLUG) {
+    permanentRedirect(`/blog/${EXP_BROKERAGE_SLUG}`);
+  }
+}
 
 // React.cache memoizes within a single request so generateMetadata + the page
 // component share one fetch instead of doubling up.
@@ -32,6 +43,7 @@ export async function generateMetadata({
   params: Promise<Params>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  redirectLegacyBrokerageSlug(slug);
   const blog = await getBlog(slug);
 
   if (!blog) {
@@ -86,6 +98,7 @@ export default async function BlogArticlePage({
   params: Promise<Params>;
 }) {
   const { slug } = await params;
+  redirectLegacyBrokerageSlug(slug);
   const blog = await getBlog(slug);
   if (!blog) notFound();
 

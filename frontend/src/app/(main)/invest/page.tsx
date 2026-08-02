@@ -346,14 +346,13 @@ export default function InvestPage() {
           </div>
         </div>
 
-        {/* KW Legal disclaimer */}
+        {/* Brokerage legal disclaimer */}
         <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
-          Brandon Sweeney is a licensed REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> with Keller Williams Realty Success. Deal
-          analysis results are estimates for informational purposes only and do not constitute
-          financial, legal, or investment advice. Actual returns depend on market conditions,
-          financing, property condition, and other factors. Equal Housing Opportunity. &copy;{' '}
-          {new Date().getFullYear()} Sold With Sweeney &amp; Co. All rights reserved. Keller
-          Williams Realty, Inc. is not responsible for the accuracy of third-party data.
+          Brandon Sweeney is a licensed real estate professional with Sold With Sweeney &amp; Co., brokered by eXp Realty. Deal
+          analysis results are estimates for informational purposes only and do not constitute financial,
+          legal, or investment advice. Actual returns depend on market conditions, financing, property
+          condition, and other factors. Equal Housing Opportunity. &copy; {new Date().getFullYear()}{' '}
+          Sold With Sweeney &amp; Co. All rights reserved.
         </p>
       </section>
     </>

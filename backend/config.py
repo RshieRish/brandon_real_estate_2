@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASS: str = ""
-    KW_CRM_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
     GOOGLE_CALENDAR_REFRESH_TOKEN: str = ""
     BRANDON_DEFAULT_LOCATION: str = "101 Broadway Rd #21, Dracut, MA 01826"

@@ -103,7 +103,7 @@ function HeroSection() {
                 variants={fadeUp}
                 className="text-gold/70 text-sm font-semibold tracking-[0.18em] uppercase mb-6 leading-relaxed"
               >
-                Licensed since 2017 <span className="mx-1.5 opacity-50">|</span> MA &amp; NH <span className="mx-1.5 opacity-50">|</span> Keller Williams Realty Success
+                Licensed since 2017 <span className="mx-1.5 opacity-50">|</span> MA &amp; NH <span className="mx-1.5 opacity-50">|</span> eXp Realty
               </motion.p>
 
               {/* Intro paragraph */}
@@ -112,7 +112,7 @@ function HeroSection() {
                 className="text-white/65 text-base md:text-lg leading-relaxed font-light max-w-xl"
               >
                 Brandon Sweeney is the CEO of Sold With Sweeney &amp; Co. — a top-producing team
-                powered by Keller Williams Realty Success. Named{' '}
+                brokered by eXp Realty. Named{' '}
                 <span className="text-gold font-medium">2025 Northeast Association of REALTORS<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> President &amp; REALTOR<sup style={{ fontSize: '0.45em', verticalAlign: 'super', lineHeight: 0 }}>&reg;</sup> Of The Year</span>, Brandon has built his career on market expertise, honest
                 communication, and an unwavering commitment to the Northern Massachusetts and Southern New Hampshire community where
                 he grew up.
@@ -420,7 +420,7 @@ function BioSection() {
                   The Expert
                 </h3>
                 <p className="text-white/60 text-sm md:text-base leading-relaxed font-light">
-                  As CEO of Sold With Sweeney &amp; Co. powered by Keller Williams Realty Success, Brandon
+                  As CEO of Sold With Sweeney &amp; Co., brokered by eXp Realty, Brandon
                   specializes in residential and investment real estate across Northern Massachusetts and Southern New Hampshire. His clients trust him for deep market knowledge, direct honest
                   communication, and a commitment to going above and beyond — every single time.
                 </p>
@@ -907,8 +907,8 @@ function TeamSection() {
               variants={fadeUp}
               className="text-white/60 text-base md:text-lg leading-relaxed font-light mb-6"
             >
-              Brandon doesn&apos;t work alone. The Sold With Sweeney &amp; Co. team powered by Keller
-              Williams Realty Success is a curated group of driven, client-first professionals who
+              Brandon doesn&apos;t work alone. The Sold With Sweeney &amp; Co. team, brokered by eXp
+              Realty, is a curated group of driven, client-first professionals who
               share Brandon&apos;s commitment to excellence and community.
             </motion.p>
 

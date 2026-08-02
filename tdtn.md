@@ -1,7 +1,85 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-06-01
+Last Updated: 2026-08-01
+
+### 2026-08-01 - eXp Production Rollout Preflight
+- Production rollout was explicitly authorized for the completed eXp brokerage swap.
+- Confirmed `codex/exp-brokerage-swap` starts at the current `origin/main` tip and that pushes to `main` create both the Railway `enchanting-perception / production` deployment and the Vercel `Production` deployment.
+- Fresh release gates passed: 33/33 frontend tests, TypeScript, production build, 39/39 branding-focused backend tests, Python compileall, and `git diff --check`.
+- The full backend suite has the same eight non-release failures on both the release and an isolated `origin/main` snapshot: seven notification retry-task timing assertions plus one test that requires a running local PostgreSQL instance. The release adds passing coverage and introduces no new failure name.
+- A fresh production-data dry-run rolled back without a backup or write and predicted exactly 33 changes with zero old-brokerage remnants.
+- Release scope excludes the unrelated existing `docs/deployment/hermes-railway.md` edit. Production sequence is main push, Railway backend success, guarded migration apply and verification, then public Vercel/custom-domain verification.
+- Status: Production release in progress; exact live deployment and migration evidence is reported in the deployment task handoff.
+
+### 2026-08-01 - Local Frontend Review and Links Restoration
+- Started the updated Next.js frontend at `http://localhost:3000` for local visual review.
+- Removed the eXp logo from both the shared header and the `/links` background so the visible brand treatment stays Sold With Sweeney-only; eXp identification remains in the appropriate profile copy and footer disclosures.
+- Added a navbar regression test that failed against the oversized dual-logo header and passed after the SWS-only correction.
+- Replaced the temporary three-button `/links` mock with a read-only preview of the actual published link pack: the original profile, photo, social links, property, resource groups, valuation, contact, testimonials, thumbnails, active states, and all six top-level items are preserved.
+- The preview API reads the published snapshot and its assets once inside an explicit read-only transaction, rolls the transaction back and closes it, and applies only the eXp copy, destination, and cleaned black-and-gold background substitutions in memory. It does not start production background loops or write to the database.
+- Added a `/links` regression test that failed while the eXp image overlay was present and passed after only that overlay was removed.
+- Verification: 33/33 frontend tests passed, TypeScript passed, targeted ESLint passed, the source/preview structure comparison matched all six top-level items with zero old-brokerage remnants, both local routes returned HTTP 200, and browser review found no console errors or horizontal overflow.
+- Runtime status: The temporary frontend and read-only preview API were stopped cleanly before the production build; no deployment or production mutation occurred during local review.
+
+### 2026-08-01 - eXp Realty Brokerage Swap
+- What was changed: Replaced active Keller Williams/KW website branding with eXp Realty while preserving the existing Sold With Sweeney black-and-gold design, layouts, animation system, and lead flows.
+- Frontend and assets:
+  - Added the official white eXp Realty logo with source provenance for the footer; the shared navbar and `/links` background intentionally remain Sold With Sweeney-only.
+  - Removed four Keller Williams-branded public logo/lockup files, including the prior composite navbar asset.
+  - Replaced active brokerage copy and disclaimers on Home, About, Buy, Sell, Invest, Blog, blog articles, funnels, navigation, and footer.
+  - Replaced KW legal destinations with the current eXp/AGNT terms, privacy, DMCA, and accessibility destinations.
+  - Preserved the historical brokerage blog URL as an intentional permanent redirect to the new eXp Realty slug.
+  - Cleaned only the old brokerage lockup from the black-and-gold `/links` background and left that background logo-free; the profile copy retains the appropriate eXp brokerage attribution.
+- Backend and persisted content:
+  - Updated blog, funnel, chatbot, investor-disclaimer, link-pack seed, email, and legacy CRM-handoff language so new content does not regenerate Keller Williams branding.
+  - Added `backend/scripts/migrate_exp_branding.py`, which defaults to dry-run and uses an allowlist, audited-row guards, one transaction, advisory/row locks, a private outside-repo backup, and a post-update remnant check for apply mode.
+  - Fresh live dry-run completed with no write or backup: 33 planned updates, covering 13 blogs, 16 funnels, 1 content block, 1 link pack, and 2 link items, with zero predicted old-brand remnants.
+- Verification:
+  - Frontend: 33/33 tests passed, TypeScript passed, and the production build completed successfully.
+  - Backend branding suite: 39/39 tests passed; Python compileall and `git diff --check` passed.
+  - Full backend suite under the explicit local test configuration: 222 passed, 8 failed, 3 deselected. The release and `origin/main` have the same eight failure names: seven pre-existing notification retry-task timing assertions plus one test that requires a running local PostgreSQL instance.
+  - Independent frontend and backend quality reviews both passed after fixing the `/links` logo drift alignment.
+  - Active-source scan found no unrelated company branding and no active Keller Williams/KW reference; the only active-source exception is the intentional legacy blog redirect slug.
+- Production status: Rollout explicitly authorized. Safe release order is backend deployment, migration apply plus remnant verification, then frontend verification so the renamed blog destination exists before its redirect is public.
+- Status: Implementation and release tooling complete; production rollout in progress.
+
+### 2026-08-01 - Keller Williams Site-Wide Audit
+- What was done: Completed a read-only Keller Williams inventory across the current production site, live public database content, frontend/backend source, public image assets, generated blog/funnel content, and non-served repository records.
+- Current production findings:
+  - The shared navigation logo contains an embedded `KW SUCCESS / KELLERWILLIAMS REALTY` lockup, and the shared footer contains the dedicated KW logo, three Keller Williams text blocks, and four `kw.com` legal links.
+  - Page-specific Keller Williams copy remains on Home, About, Buy, Sell, Invest, Blog, blog articles, and funnel registration sections.
+  - All 13 currently published blog articles and all 9 currently published funnels contain Keller Williams/KW copy in their article or generated funnel content.
+  - `/links` has an eXp bio but still uses a background graphic containing the KW Success/Keller Williams lockup and a home-valuation link to `soldwithsweeney.kw.com`.
+  - Investor full reports append the hardcoded Keller Williams broker disclaimer.
+  - Blog, funnel, and chatbot prompts plus link-pack seed defaults can reintroduce Keller Williams after visible copy is changed.
+- Asset verification:
+  - Confirmed four Keller Williams-branded logo/lockup PNG files in `frontend/public/logos/`, including two duplicate white SWS/KW lockups.
+  - OCR and visual checks found no Keller Williams branding in site videos, animation frames, current blog hero images, or published funnel hero images.
+- Security follow-up: An initial failed read-only `psql` invocation echoed the production database connection URL in command output. Treat the database password as exposed and rotate it; no credential rotation or database mutation was performed during this audit.
+- Scope: Inventory only; no public site, production data, or branding content was changed.
+- Status: Complete
+
+### 2026-06-05 - Hermes Assistant Rename To Sydney
+- What was changed: Renamed the live Brandon Hermes/Atlas assistant identity to Sydney without redeploying or touching Railway global login state.
+- Live configuration changed:
+  - Telegram bot visible display/first name is now `Sydney`; the username remains `soldwithsweeney_bot`.
+  - Hermes default profile `SOUL.md` now identifies the assistant as Sydney and instructs it not to introduce itself as Hermes Agent.
+  - Restarted the Hermes gateway through the protected admin API so the updated persona is loaded for new turns.
+- Files modified:
+  - `docs/deployment/hermes-railway.md`
+  - `tdtn.md`
+  - `memory.md`
+- Verification:
+  - Hermes admin login succeeded and `/api/profiles/default/soul` returned the Sydney identity after the write.
+  - Telegram Bot API `getMyName` returned `Sydney`, and `getMe` returned first name `Sydney` with username `soldwithsweeney_bot`.
+  - Hermes `/health` returned `{"status":"ok","gateway":"running"}` after the restart.
+  - Native Hermes `/api/status` reported Telegram `state=connected` with no error code or message.
+- Notes:
+  - Hermes stores the built system prompt per session. After the first rename, Brandon's existing Telegram session still had the old prompt and answered as Hermes Agent.
+  - Added a persistent `agent.system_prompt` Sydney identity overlay and deleted Brandon's stale Telegram session so the next inbound message starts from the Sydney prompt.
+  - `/start` is treated as a Telegram platform ping after a session exists, so Brandon should send a normal message such as `who are you?` or use `/reset` first to force a clean re-introduction.
+- Status: Complete
 
 ### 2026-06-01 - Brandon Hermes Agent-Control Bridge
 - What was changed: Implemented the first backend foundation slice for the private Brandon AI / Atlas assistant: a read-only, token-authenticated FastAPI agent-control bridge with dedicated audit logging.

@@ -328,12 +328,12 @@ export default function SellPage() {
           </div>
         </div>
 
-        {/* KW Legal disclaimer */}
+        {/* Brokerage legal disclaimer */}
         <p className="relative max-w-7xl mx-auto mt-16 text-gray/50 text-xs leading-relaxed border-t border-dark-border pt-6">
-          Brandon Sweeney is a licensed real estate professional with Keller Williams Realty Success. This
-          market valuation tool provides an estimate only and is not a formal appraisal. Actual sale price may
-          vary based on market conditions, property condition, and other factors. Equal Housing Opportunity.
-          Information deemed reliable but not guaranteed.
+          Brandon Sweeney is a licensed real estate professional with Sold With Sweeney &amp; Co.,
+          brokered by eXp Realty. This market valuation tool provides an estimate only and is not a formal
+          appraisal. Actual sale price may vary based on market conditions, property condition, and other
+          factors. Equal Housing Opportunity. Information deemed reliable but not guaranteed.
         </p>
       </section>
     </>

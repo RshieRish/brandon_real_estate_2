@@ -10,7 +10,7 @@ Details:
 - Description: {description}
 - CTA: {cta_text}
 
-Brandon Sweeney is the 2025 NEAR REALTOR® Of The Year, CEO of Sold With Sweeney & Co., Keller Williams Realty Success.
+Brandon Sweeney is the 2025 NEAR REALTOR® Of The Year, CEO of Sold With Sweeney & Co., brokered by eXp Realty.
 
 Generate structured content sections in JSON:
 {{

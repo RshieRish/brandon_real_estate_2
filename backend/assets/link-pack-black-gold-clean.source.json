@@ -1,0 +1,24 @@
+{
+  "asset": "link-pack-black-gold-clean.png",
+  "created_on": "2026-08-01",
+  "source": {
+    "url": "https://ugc.production.linktr.ee/c951a70a-c6df-48e5-a61f-5728d6f453f0_Gold-and-Black-Elegant-Abstract-Linktree-Background--5-.png",
+    "media_type": "image/jpeg",
+    "pixel_dimensions": "1200x1200",
+    "bytes": 182948,
+    "sha256": "2aec36432fb193a85d5e189414acd3ffc27f18fea9436ee71fe3619b86395a21"
+  },
+  "edit": {
+    "tool": "OpenAI built-in image editing",
+    "use_case": "precise-object-edit",
+    "asset_type": "square website link-page background",
+    "prompt": "Use case: precise-object-edit\nAsset type: square website link-page background\nInput image: edit target is the supplied 1200x1200 black-and-gold Sold With Sweeney background.\nPrimary request: remove only the small tilted KW SUCCESS / KELLER WILLIAMS REALTY lockup above and slightly left of the central gold house.\nReconstruction: fill that small removed area naturally with the same black background and continuing gold wave-and-particle texture already behind it.\nInvariants: preserve the exact 1:1 dimensions, central gold house, curved ‘sold with sweeney’ lettering, gold waves, particles, black negative space, colors, framing, sharpness, and every other pixel-level design feature as closely as possible.\nConstraints: do not add eXp or any other logo or text; do not redraw or change the Sold With Sweeney branding; no watermark; change only the old brokerage lockup area."
+  },
+  "output": {
+    "media_type": "image/png",
+    "pixel_dimensions": "1254x1254",
+    "color_mode": "RGB",
+    "sha256": "23791c5985bf0d559536f2382f8577379bca913bd31e88fe652ac7dacb7ac345",
+    "review": "Vetted as a clean black-and-gold Sold With Sweeney link-page background with the prior brokerage lockup removed and no replacement logo added."
+  }
+}

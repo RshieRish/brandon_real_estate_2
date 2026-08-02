@@ -76,7 +76,7 @@ async def test_generate_investor_analysis_fallback_when_json_unparseable():
 
 @pytest.mark.asyncio
 async def test_unparseable_fallback_uses_full_disclaimer():
-    """Fallback must use the same disclaimer as the happy path (Fair Housing + KW required)."""
+    """Fallback must use the same disclaimer as the happy path (Fair Housing + eXp required)."""
     from services.investor_service import generate_investor_analysis
     from services.compliance.disclaimer import build_disclaimer
 
@@ -96,4 +96,5 @@ async def test_unparseable_fallback_uses_full_disclaimer():
     assert out["disclaimer"] == build_disclaimer()
     # spot-check both required blocks
     assert "Equal Housing Opportunity" in out["disclaimer"]
-    assert "Keller Williams Realty Success" in out["disclaimer"]
+    assert "brokered by eXp Realty" in out["disclaimer"]
+    assert "Keller Williams Realty Success" not in out["disclaimer"]

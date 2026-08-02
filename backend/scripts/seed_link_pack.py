@@ -1,8 +1,9 @@
 """Idempotent seed for the singleton link pack.
 
-Populates Brandon's profile, social links, theme, and 10 initial link items
-from his current link-in-bio configuration. Downloads avatar, background image,
-and property thumbnails from their public CDN URLs.
+Populates Brandon's profile, social links, theme, and initial link items from
+his current link-in-bio configuration. The vetted black-and-gold background is
+packaged with the backend; avatar and property thumbnails come from their
+public CDN URLs.
 
 Usage:
     python -m scripts.seed_link_pack
@@ -25,13 +26,13 @@ from datetime import datetime, timezone  # noqa: E402
 
 
 PROFILE_PHOTO_URL = "https://ugc.production.linktr.ee/b6d5aa61-e9c3-4728-8046-7080044ef6e5_Brandon-Sweeney-Headshot-Zoomed-In.png"
-BACKGROUND_URL = "https://ugc.production.linktr.ee/c951a70a-c6df-48e5-a61f-5728d6f453f0_Gold-and-Black-Elegant-Abstract-Linktree-Background--5-.png"
+BACKGROUND_PATH = Path(__file__).resolve().parents[1] / "assets" / "link-pack-black-gold-clean.png"
 LISTING_50_FRANK_THUMB = "https://ugc.production.linktr.ee/8e23039e-c430-4a4e-894a-4c79d07552a4_Resizer.jpeg"
 LISTING_37_SAINT_PAUL_THUMB = "https://ugc.production.linktr.ee/b582bb0f-f324-459d-bf87-e7993e50c3ad_Resizer.jpeg"
 
 PROFILE = {
     "name": "Brandon Sweeney | REALTOR®",
-    "bio": "NOT your AVERAGE, award winning, philanthropic REALTOR®️ OF THE YEAR 25' at KW Realty Success!",
+    "bio": "NOT your AVERAGE, award winning, philanthropic REALTOR®️ OF THE YEAR 25' at eXp Realty!",
     "is_verified": True,
 }
 SOCIAL = {
@@ -40,7 +41,7 @@ SOCIAL = {
     "social_instagram": "https://instagram.com/soldwithsweeneyco",
     "social_facebook": "https://www.facebook.com/SoldWithSweeneyCo",
     "social_youtube": "https://www.youtube.com/@soldwithsweeneyco",
-    "social_website": "https://soldwithsweeney.kw.com/?kwuid=878439",
+    "social_website": "https://www.soldwithsweeney.com/",
 }
 
 
@@ -58,9 +59,10 @@ async def main() -> None:
             print("LinkPack already seeded; skipping.")
             return
 
-        print("Fetching profile photo and background...")
+        print("Fetching profile photo and loading packaged background...")
         photo_bytes, photo_mime = await _fetch(PROFILE_PHOTO_URL)
-        bg_bytes, bg_mime = await _fetch(BACKGROUND_URL)
+        bg_bytes = BACKGROUND_PATH.read_bytes()
+        bg_mime = "image/png"
 
         pack = LinkPack(
             id=1,
@@ -90,8 +92,8 @@ async def main() -> None:
             }, [
                 {
                     "kind": "thumbnail",
-                    "title": "50 Frank St #50, Dracut, MA 01826 | Keller Williams",
-                    "url": "https://soldwithsweeney.kw.com/property/50-Frank-St-50-Dracut-MA-01826/2100015566681408",
+                    "title": "50 Frank St #50, Dracut, MA 01826 | eXp Realty",
+                    "url": "https://www.soldwithsweeney.com/buy",
                     "thumbnail_data": thumb_50_frank,
                     "thumbnail_mime": thumb_50_frank_mime,
                 },
@@ -102,8 +104,8 @@ async def main() -> None:
             }, [
                 {
                     "kind": "thumbnail",
-                    "title": "37 Saint Paul St, Lowell, MA 01851 | Keller Williams",
-                    "url": "https://soldwithsweeney.kw.com/property/37-Saint-Paul-St-Lowell-MA-01851/2093151465671102?kwuid=878439",
+                    "title": "37 Saint Paul St, Lowell, MA 01851 | eXp Realty",
+                    "url": "https://www.soldwithsweeney.com/buy",
                     "thumbnail_data": thumb_37_saint_paul,
                     "thumbnail_mime": thumb_37_saint_paul_mime,
                 },
@@ -127,7 +129,7 @@ async def main() -> None:
             ({
                 "kind": "classic",
                 "title": "WHAT'S MY HOME WORTH? \U0001f4b8",
-                "url": "https://soldwithsweeney.kw.com/YourHomeValuation",
+                "url": "https://www.soldwithsweeney.com/sell",
             }, []),
             ({
                 "kind": "classic",
@@ -137,7 +139,8 @@ async def main() -> None:
             ({
                 "kind": "classic",
                 "title": "DOWNLOAD MY APP \U0001f3e1",
-                "url": "https://kw.com/download/KW4ABYJHJ",
+                "url": None,
+                "is_active": False,
             }, []),
             ({
                 "kind": "classic",
@@ -147,12 +150,14 @@ async def main() -> None:
         ]
 
         for position, (parent_data, children_data) in enumerate(items):
+            parent_payload = dict(parent_data)
+            is_active = parent_payload.pop("is_active", True)
             parent = LinkPackItem(
                 link_pack_id=1,
                 position=position,
                 animation="none",
-                is_active=True,
-                **parent_data,
+                is_active=is_active,
+                **parent_payload,
             )
             db.add(parent)
             await db.flush()

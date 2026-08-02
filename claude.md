@@ -13,7 +13,7 @@ Convert visitors into qualified meetings: Buy → strategy call, Sell → valuat
 - REALTOR® must ALWAYS be capitalized with ® mark
 - Dark-dominant, premium, cinematic aesthetic
 - Gold halftone dot patterns as texture overlays
-- KW legal disclaimers in every footer
+- eXp Realty legal disclosures and links in every footer
 
 ## Design Skill (MANDATORY for all frontend)
 taste-skill applied: DESIGN_VARIANCE:8, MOTION_INTENSITY:6, VISUAL_DENSITY:4
@@ -32,7 +32,7 @@ Source: https://github.com/Leonxlnx/taste-skill
 - DB: PostgreSQL (Neon) via SQLAlchemy 2.0 async + asyncpg
 - AI: Google Gemini via google-generativeai SDK
 - Calendar: Google Calendar API OAuth2
-- CRM: KW Command CRM
+- CRM: Provider-agnostic lead routing (current legacy Zapier handoff; native eXp integration not yet specified)
 - Migrations: Alembic
 
 ## Key Rules

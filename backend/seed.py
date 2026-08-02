@@ -26,7 +26,7 @@ DEFAULT_CONTENT = [
     },
     {
         "block_id": "home_hero_subtext",
-        "content": "Serving MA & NH | Keller Williams Realty Success",
+        "content": "Serving MA & NH | eXp Realty",
         "page": "home",
     },
     {"block_id": "home_cta_buy", "content": "Find Your Home", "page": "home"},

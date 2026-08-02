@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -17,7 +18,12 @@ def _profile_photo_url(pack: LinkPack) -> str | None:
 
 
 def _background_image_url(pack: LinkPack) -> str | None:
-    return "/api/v1/link-pack/images/background" if pack.background_image_mime else None
+    if not pack.background_image_mime:
+        return None
+    if not pack.background_image_data:
+        return "/api/v1/link-pack/images/background"
+    version = hashlib.sha256(pack.background_image_data).hexdigest()[:12]
+    return f"/api/v1/link-pack/images/background?v={version}"
 
 
 def _thumbnail_url(item: LinkPackItem) -> str | None:

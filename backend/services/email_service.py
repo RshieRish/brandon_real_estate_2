@@ -6,7 +6,7 @@ This service is for INTERNAL NOTIFICATIONS ONLY:
 - New meeting bookings
 - New funnel registrations
 
-Client-facing emails stay inside KW CRM workflows.
+Client-facing emails stay inside the existing legacy CRM workflows.
 """
 
 import logging
