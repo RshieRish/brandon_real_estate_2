@@ -3,6 +3,17 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-08-01
 
+### 2026-08-01 - eXp Production Release
+- Pushed the completed brokerage swap to GitHub `main` at `857a752`, then pushed the migration idempotency follow-up at `b364124`.
+- Railway production deployment `62b8335e-975f-4472-b069-045597141874` released the branding implementation. Follow-up deployment `0a580dbf-b570-4f2c-9500-c416531c3e53` released the corrected migration comparison and reached `SUCCESS`.
+- Vercel Production deployment `5710309885` for `b364124` completed successfully at the custom domain.
+- Applied the guarded production content migration once: 33 updates across 13 blogs, 16 funnels, 1 content block, 1 link pack, and 2 link items. The private recovery snapshot is `/Users/rishabnandi/.sws-backups/exp-branding/exp-branding-backup-20260802T024423Z.json`.
+- A post-apply dry-run exposed a PostgreSQL-driver comparison false positive for the link-pack `BYTEA` background: the database `memoryview` and packaged `bytes` had identical length and SHA-256, but the raw types compared unequal. Added a reproducing regression test first, normalized both sides of the comparison, and passed all 26 migration tests.
+- Final production dry-run reports exactly 0 planned updates and 0 old-brand remnants across every allowlisted table.
+- Live verification: backend `/health` returns `status=ok`; Home, About, Buy, Sell, Invest, Blog, and Links all return HTTP 200 with zero `Keller Williams` text matches. The homepage header contains only the Sold With Sweeney logo, the footer contains the appropriate eXp Realty identification and legal links, and `/links` contains all six published top-level items with no eXp logo overlay.
+- The unrelated existing `docs/deployment/hermes-railway.md` edit remained excluded from every release commit.
+- Status: Complete
+
 ### 2026-08-01 - eXp Production Rollout Preflight
 - Production rollout was explicitly authorized for the completed eXp brokerage swap.
 - Confirmed `codex/exp-brokerage-swap` starts at the current `origin/main` tip and that pushes to `main` create both the Railway `enchanting-perception / production` deployment and the Vercel `Production` deployment.
