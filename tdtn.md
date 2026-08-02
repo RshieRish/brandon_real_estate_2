@@ -1,7 +1,18 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-01
+Last Updated: 2026-08-02
+
+### 2026-08-02 - Production Header Logo Sizing Fix
+- Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
+- Added a regression test first; it failed against the undersized `76x40` image contract and passed after the correction.
+- Kept the existing 64px black-and-gold header and SWS-only branding. The logo now renders inside an overflow-hidden responsive frame: `112x64px` on mobile and `124x64px` from the small breakpoint, with the padded image enlarged to `72px`/`80px` tall so only transparent margins are cropped.
+- Local browser verification at a 1200px viewport measured a `124x64px` logo frame and `152x80px` image box with zero horizontal overflow; the visible mark is approximately `117x46px` on desktop.
+- Verification passed: 34/34 frontend tests, TypeScript, targeted Navbar lint, `git diff --check`, and the Next.js production build.
+- Pushed commit `3358610` to GitHub `main`. Vercel Production deployment `5715079788` completed successfully, and Railway runtime deployment `3a9fee4a-a042-40c0-8e92-bf7a60196b83` reached `SUCCESS`.
+- Live custom-domain verification returned HTTP 200 and confirmed the new frame/image classes and dimensions, absence of the old `76px` width, and no eXp logo in the header.
+- The unrelated existing `docs/deployment/hermes-railway.md` edit remained excluded from the release.
+- Status: Complete
 
 ### 2026-08-01 - eXp Production Release
 - Pushed the completed brokerage swap to GitHub `main` at `857a752`, then pushed the migration idempotency follow-up at `b364124`.
