@@ -42,15 +42,15 @@ export default function Navbar() {
           {/* Logo */}
           <Link
             href="/"
-            className="flex items-center shrink-0"
+            className="relative flex h-16 w-28 shrink-0 items-center justify-center overflow-hidden sm:w-[124px]"
             aria-label="Sold With Sweeney & Co."
           >
             <Image
               src="/logos/sws-primary-white-gold.png"
               alt="Sold With Sweeney & Co."
-              width={76}
-              height={40}
-              className="object-contain h-9 w-auto"
+              width={152}
+              height={80}
+              className="h-[72px] w-auto max-w-none object-contain sm:h-20"
               priority
             />
           </Link>
