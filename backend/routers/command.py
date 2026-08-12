@@ -308,6 +308,13 @@ async def create_plan_step(plan_id: int, payload: SmartPlanStepCreate, db: Async
     if not await db.get(CRMSmartPlan, plan_id): raise HTTPException(404, "Smart Plan not found")
     item=CRMSmartPlanStep(smart_plan_id=plan_id, position=payload.position, action_type=payload.action_type, payload_json=payload.payload.model_dump_json() if hasattr(payload.payload,'model_dump_json') else __import__('json').dumps(payload.payload)); db.add(item); await db.flush(); return {"id":item.id,"position":item.position,"action_type":item.action_type}
 
+@router.patch("/smart-plans/{plan_id}/steps/{step_id}")
+async def update_plan_step(plan_id: int, step_id: int, payload: SmartPlanStepCreate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMSmartPlanStep, step_id)
+    if not item or item.smart_plan_id != plan_id: raise HTTPException(404, "Smart Plan step not found")
+    item.position = payload.position; item.action_type = payload.action_type; item.payload_json = __import__('json').dumps(payload.payload)
+    await db.flush(); return {"id": item.id, "position": item.position, "action_type": item.action_type}
+
 @router.post("/smart-plans/{plan_id}/enrollments")
 async def enroll_contact(plan_id: int, payload: SmartPlanEnrollmentCreate, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMSmartPlan, plan_id) or not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Smart Plan or contact not found")

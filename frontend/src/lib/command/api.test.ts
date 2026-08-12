@@ -98,4 +98,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateContactStage(11, 'client')).resolves.toMatchObject({ stage: 'client' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/11'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ stage: 'client' }) }));
   });
+
+  it('edits a Smart Plan step through the authenticated API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-step' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 4, position: 2, action_type: 'email' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateSmartPlanStep(7, 4, 2, 'email', { subject: 'Welcome' })).resolves.toMatchObject({ action_type: 'email' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/steps/4'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ position: 2, action_type: 'email', payload: { subject: 'Welcome' } }) }));
+  });
 });

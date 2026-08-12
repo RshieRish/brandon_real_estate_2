@@ -1352,3 +1352,6 @@ Completed Checklist Video Integration
 
 - Contacts now support persisted CRM stage movement from the contact workspace, with a `stage_changed` activity added to the contact timeline.
 - Verification: Command API tests pass (10) and frontend typecheck passes.
+
+- Smart Plan steps now support persisted editing of action type and position/payload contract through the internal API; the editor exposes an edit action per step.
+- Verification: Command API tests pass (11) and frontend typecheck passes.
