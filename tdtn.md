@@ -1358,3 +1358,6 @@ Completed Checklist Video Integration
 
 - Command nested routes now have a responsive mobile drawer with labelled open/close controls, an overlay dismiss action, and the same navigation destinations as the desktop rail.
 - Verification: frontend typecheck passes and Command API tests remain passing (11).
+
+- Added generic persisted task links (`crm_task_links`) and `POST /tasks/{task_id}/links` so tasks can reference an internal opportunity, agreement, listing, or other entity without copying its data. Migration `fc0e8a4b9422` was validated offline and applied to the configured internal database.
+- Verification: Command model tests pass (5); Alembic current is `fc0e8a4b9422 (head)`.

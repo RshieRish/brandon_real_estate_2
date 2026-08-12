@@ -6,14 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
 from models.lead import Lead
 from models.analytics_event import AnalyticsEvent
 from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 
@@ -212,6 +212,12 @@ async def update_task(task_id: int, payload: TaskUpdate, db: AsyncSession = Depe
     if not item: raise HTTPException(404, "Task not found")
     for field, value in payload.model_dump(exclude_none=True).items(): setattr(item, field, value)
     await db.flush(); return item
+
+@router.post("/tasks/{task_id}/links")
+async def add_task_link(task_id: int, payload: TaskLinkCreate, db: AsyncSession = Depends(get_db)):
+    if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
+    link = CRMTaskLink(task_id=task_id, **payload.model_dump()); db.add(link); await db.flush()
+    return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id}
 
 
 @router.patch("/agreements/{agreement_id}/status")

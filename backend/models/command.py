@@ -61,6 +61,14 @@ class CRMTask(Timestamped, Base):
         super().__init__(**kwargs)
 
 
+class CRMTaskLink(Base):
+    __tablename__ = "crm_task_links"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("crm_tasks.id"))
+    entity_type: Mapped[str] = mapped_column(String(50))
+    entity_id: Mapped[int] = mapped_column(Integer)
+
+
 class CRMNote(Timestamped, Base):
     __tablename__ = "crm_notes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

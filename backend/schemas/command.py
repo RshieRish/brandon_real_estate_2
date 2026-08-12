@@ -34,6 +34,11 @@ class TaskUpdate(BaseModel):
     due_at: datetime | None = None
 
 
+class TaskLinkCreate(BaseModel):
+    entity_type: str = Field(min_length=1, max_length=50)
+    entity_id: int = Field(gt=0)
+
+
 class TaskOut(TaskCreate):
     id: int
     status: str
