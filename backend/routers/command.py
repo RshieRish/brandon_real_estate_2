@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +6,7 @@ from database import get_db
 from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from services.command_file_storage import upload_command_file
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -116,6 +117,12 @@ async def files(db: AsyncSession = Depends(get_db)):
 @router.post("/files", response_model=FileAssetOut)
 async def create_file(payload: FileAssetCreate, db: AsyncSession = Depends(get_db)):
     item=CRMFileAsset(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.post("/files/upload", response_model=FileAssetOut)
+async def upload_file(file: UploadFile, db: AsyncSession = Depends(get_db)):
+    filename, storage_key, content_type = await upload_command_file(file)
+    item = CRMFileAsset(filename=filename, storage_key=storage_key, content_type=content_type)
+    db.add(item); await db.flush(); return item
 
 @router.get("/listings", response_model=list[ListingOut])
 async def listings(db: AsyncSession = Depends(get_db)):
