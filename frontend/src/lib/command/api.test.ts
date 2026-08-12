@@ -148,4 +148,13 @@ describe('commandApi', () => {
     await expect(commandApi.celebrations(8)).resolves.toEqual({ birthdays: [], anniversaries: [] });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/celebrations?month=8'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-celebrations' }) }));
   });
+
+  it('persists private celebration dates on the contact profile', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-profile-dates' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 11, first_name: 'Avery', last_name: '', email: null, phone: null, stage: 'lead', birthday: '1990-08-12', anniversary: null }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.updateContact(11, { birthday: '1990-08-12', anniversary: null });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/11'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ birthday: '1990-08-12', anniversary: null }) }));
+  });
 });

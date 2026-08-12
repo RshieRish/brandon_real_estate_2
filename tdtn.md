@@ -1407,3 +1407,6 @@ Completed Checklist Video Integration
 
 - Command Home now has a real current-month birthday and anniversary queue. Contact profile records can persist optional private `birthday` and `anniversary` dates; `GET /celebrations?month=1..12` returns only matching internal contacts, ordered by calendar day.
 - Verification: migration `a2d7e4b9c118` is applied to the configured database; authenticated celebrations runtime read returned HTTP 200; 12 focused Command backend tests, 16 Command frontend API tests, TypeScript, and production build pass.
+
+- Contact profile editing now includes private birthday and anniversary dates, displays stored dates as contact metadata, and renders saved-search criteria alongside the saved-search record. Both use existing authenticated persisted APIs; date validation remains server-side through the contact schema.
+- Verification: Command frontend API tests pass (17) and TypeScript passes.
