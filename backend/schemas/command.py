@@ -117,3 +117,5 @@ class SmartPlanStepCreate(BaseModel):
     payload: dict = {}
 class SmartPlanEnrollmentCreate(BaseModel):
     contact_id: int
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)

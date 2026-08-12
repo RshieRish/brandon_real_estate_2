@@ -4,9 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
 from models.lead import Lead
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -79,7 +79,20 @@ async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db))
     activity = await rows(CRMActivity, CRMActivity.contact_id)
     enrollments = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.contact_id == contact_id))).scalars().all()
     searches=(await db.execute(select(CRMSavedSearch).where(CRMSavedSearch.contact_id == contact_id))).scalars().all()
-    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches]}
+    tag_rows=(await db.execute(select(CRMTag).join(CRMContactTag,CRMTag.id==CRMContactTag.tag_id).where(CRMContactTag.contact_id==contact_id))).scalars().all()
+    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
+
+@router.post("/tags")
+async def create_tag(payload:TagCreate,db:AsyncSession=Depends(get_db)):
+    existing=(await db.execute(select(CRMTag).where(CRMTag.name==payload.name))).scalar_one_or_none()
+    if existing:return {"id":existing.id,"name":existing.name}
+    tag=CRMTag(name=payload.name);db.add(tag);await db.flush();return {"id":tag.id,"name":tag.name}
+@router.post("/contacts/{contact_id}/tags/{tag_id}")
+async def assign_tag(contact_id:int,tag_id:int,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMContact,contact_id) or not await db.get(CRMTag,tag_id):raise HTTPException(404,"Contact or tag not found")
+    existing=(await db.execute(select(CRMContactTag).where(CRMContactTag.contact_id==contact_id,CRMContactTag.tag_id==tag_id))).scalar_one_or_none()
+    if not existing:db.add(CRMContactTag(contact_id=contact_id,tag_id=tag_id));await db.flush()
+    return {"contact_id":contact_id,"tag_id":tag_id}
 
 
 @router.get("/tasks", response_model=list[TaskOut])
