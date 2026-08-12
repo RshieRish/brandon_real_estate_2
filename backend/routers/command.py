@@ -314,8 +314,13 @@ async def upload_file(file: UploadFile, agreement_id: int | None = None, db: Asy
     db.add(item); await db.flush(); return item
 
 @router.get("/listings", response_model=list[ListingOut])
-async def listings(db: AsyncSession = Depends(get_db)):
-    return (await db.execute(select(CRMListingRecord).order_by(CRMListingRecord.created_at.desc()))).scalars().all()
+async def listings(query: str | None = None, status: str | None = None, db: AsyncSession = Depends(get_db)):
+    statement = select(CRMListingRecord).order_by(CRMListingRecord.created_at.desc())
+    if query and (term := query.strip()):
+        statement = statement.where(CRMListingRecord.address.ilike(f"%{term}%"))
+    if status:
+        statement = statement.where(CRMListingRecord.status == status)
+    return (await db.execute(statement)).scalars().all()
 
 @router.post("/listings", response_model=ListingOut)
 async def create_listing(payload: ListingCreate, db: AsyncSession = Depends(get_db)):

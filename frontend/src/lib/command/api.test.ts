@@ -166,4 +166,13 @@ describe('commandApi', () => {
     await commandApi.contacts(100, 0, { query: 'avery lake', stage: 'client' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=100&offset=0&query=avery+lake&stage=client'), expect.anything());
   });
+
+  it('requests listings with server-side address and lifecycle filters', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-listing-filter' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.listings({ query: 'Main', status: 'active' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/listings?query=Main&status=active'), expect.anything());
+  });
 });

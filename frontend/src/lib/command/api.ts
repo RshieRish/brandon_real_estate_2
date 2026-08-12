@@ -46,7 +46,7 @@ export const commandApi = {
   agreementTemplates: () => request<AgreementTemplate[]>('/agreement-templates'),
   createAgreementTemplate: (name: string, body = '') => request<AgreementTemplate>('/agreement-templates', { method: 'POST', body: JSON.stringify({ name, body }) }),
   updateAgreementTemplate: (id: number, body: string) => request<AgreementTemplate>(`/agreement-templates/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
-  listings: () => request<Listing[]>('/listings'), createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}), updateListingStatus: (id: number, status: 'active' | 'pending' | 'sold' | 'withdrawn') => request<Listing>(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  listings: (filters: { query?: string; status?: string } = {}) => { const params = new URLSearchParams(); if (filters.query?.trim()) params.set('query', filters.query.trim()); if (filters.status) params.set('status', filters.status); return request<Listing[]>(`/listings${params.size ? `?${params.toString()}` : ''}`); }, createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}), updateListingStatus: (id: number, status: 'active' | 'pending' | 'sold' | 'withdrawn') => request<Listing>(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   geocodeListing: (id: number) => request<Listing>(`/listings/${id}/geocode`, { method: 'POST' }),
   referrals: () => request<Referral[]>('/referrals'),
   createReferral: (payload: Omit<Referral, 'id' | 'status'>) => request<Referral>('/referrals', { method: 'POST', body: JSON.stringify(payload) }),

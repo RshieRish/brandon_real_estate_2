@@ -1413,3 +1413,6 @@ Completed Checklist Video Integration
 
 - Contacts now have server-side search and lifecycle-stage filtering. The API accepts bounded pagination plus `query` (name/email/phone) and `stage`; the Contacts workspace debounces searches, keeps paging through matching records, and shows explicit loading/empty states.
 - Verification: 12 focused Command backend tests, 18 Command frontend API tests, and TypeScript pass. Authenticated runtime searches for both a query and stage filter returned HTTP 200.
+
+- Listings & Map now supports server-side address search and lifecycle filtering. The map/list workspace debounces the selected filters so mapped pins and cards remain scoped to the same persisted listing result set.
+- Verification: 12 focused Command backend tests, 19 Command frontend API tests, and TypeScript pass. Authenticated listing query and status-filter runtime reads returned HTTP 200.
