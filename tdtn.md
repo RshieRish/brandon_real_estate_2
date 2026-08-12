@@ -1337,3 +1337,6 @@ Completed Checklist Video Integration
 
 - Listings now have a server-side Google geocoding action (configured-key only) and a coordinate-derived internal map layout. Geocoding failures are explicit and do not fabricate a location.
 - Verification: focused Command model/geocoding tests pass (6) and frontend typecheck passes.
+
+- Runtime migration verification: `fb74d2c0a611` is applied to the configured internal PostgreSQL database and `crm_file_assets.agreement_id` is present. Authenticated read checks returned HTTP 200 for Command overview, reports, marketing records, website records, event breakdown, listings, and agreements.
+- Final frontend verification: 40 tests pass, TypeScript passes, and the production build completes. Static generation logs the pre-existing unavailable-local-API content-block fetch but does not fail the build.
