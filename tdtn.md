@@ -1499,3 +1499,6 @@ Completed Checklist Video Integration
 
 - Contact notes, tags, and saved searches now use native inline workspace controls with loading/error states and in-place refresh instead of browser prompts or a full-page reload.
 - Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Contact profile editing now uses an inline, validated form with real date controls and explicit optional-field clears, replacing the remaining prompt-driven workflow.
+- Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
