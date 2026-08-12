@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTask
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -142,6 +142,16 @@ async def smart_plans(db: AsyncSession = Depends(get_db)):
 async def create_smart_plan(payload: NamedRecordCreate, db: AsyncSession = Depends(get_db)):
     item = CRMSmartPlan(**payload.model_dump()); db.add(item); await db.flush(); return item
 
+@router.post("/smart-plans/{plan_id}/steps")
+async def create_plan_step(plan_id: int, payload: SmartPlanStepCreate, db: AsyncSession = Depends(get_db)):
+    if not await db.get(CRMSmartPlan, plan_id): raise HTTPException(404, "Smart Plan not found")
+    item=CRMSmartPlanStep(smart_plan_id=plan_id, position=payload.position, action_type=payload.action_type, payload_json=payload.payload.model_dump_json() if hasattr(payload.payload,'model_dump_json') else __import__('json').dumps(payload.payload)); db.add(item); await db.flush(); return {"id":item.id,"position":item.position,"action_type":item.action_type}
+
+@router.post("/smart-plans/{plan_id}/enrollments")
+async def enroll_contact(plan_id: int, payload: SmartPlanEnrollmentCreate, db: AsyncSession = Depends(get_db)):
+    if not await db.get(CRMSmartPlan, plan_id) or not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Smart Plan or contact not found")
+    item=CRMSmartPlanEnrollment(smart_plan_id=plan_id,contact_id=payload.contact_id); db.add(item); await db.flush(); return {"id":item.id,"status":item.status}
+
 
 @router.get("/opportunities", response_model=list[OpportunityOut])
 async def opportunities(db: AsyncSession = Depends(get_db)):
@@ -151,3 +161,21 @@ async def opportunities(db: AsyncSession = Depends(get_db)):
 @router.post("/opportunities", response_model=OpportunityOut)
 async def create_opportunity(payload: OpportunityCreate, db: AsyncSession = Depends(get_db)):
     item = CRMOpportunity(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.post("/opportunities/{opportunity_id}/contacts", response_model=RelationshipOut)
+async def add_opportunity_contact(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMOpportunity, opportunity_id) or not payload.contact_id or not await db.get(CRMContact,payload.contact_id): raise HTTPException(404,"Opportunity or contact not found")
+    item=CRMOpportunityContact(opportunity_id=opportunity_id,contact_id=payload.contact_id,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"contact_id":item.contact_id,"role":item.role}
+@router.post("/opportunities/{opportunity_id}/vendors", response_model=RelationshipOut)
+async def add_opportunity_vendor(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMOpportunity,opportunity_id) or not payload.name: raise HTTPException(404,"Opportunity or vendor name not found")
+    item=CRMOpportunityVendor(opportunity_id=opportunity_id,name=payload.name,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"name":item.name,"role":item.role}
+@router.post("/opportunities/{opportunity_id}/offers", response_model=RelationshipOut)
+async def add_opportunity_offer(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMOpportunity,opportunity_id): raise HTTPException(404,"Opportunity not found")
+    item=CRMOpportunityOffer(opportunity_id=opportunity_id,amount_cents=payload.amount_cents,status=payload.status);db.add(item);await db.flush();return {"id":item.id,"amount_cents":item.amount_cents,"status":item.status}
+
+@router.post("/agreements/{agreement_id}/recipients", response_model=RelationshipOut)
+async def add_agreement_recipient(agreement_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMAgreement,agreement_id) or not payload.name or not payload.email: raise HTTPException(404,"Agreement or recipient details not found")
+    item=CRMAgreementRecipient(agreement_id=agreement_id,name=payload.name,email=payload.email,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"name":item.name,"email":item.email,"role":item.role}

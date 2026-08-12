@@ -100,3 +100,20 @@ class FileAssetCreate(BaseModel):
 class FileAssetOut(FileAssetCreate):
     id: int
     class Config: from_attributes = True
+
+class RelationshipCreate(BaseModel):
+    name: str | None = None
+    contact_id: int | None = None
+    role: str = "client"
+    amount_cents: int | None = None
+    email: str | None = None
+    status: str = "draft"
+class RelationshipOut(RelationshipCreate):
+    id: int
+    class Config: from_attributes = True
+class SmartPlanStepCreate(BaseModel):
+    position: int = Field(ge=1)
+    action_type: str = Field(min_length=1, max_length=50)
+    payload: dict = {}
+class SmartPlanEnrollmentCreate(BaseModel):
+    contact_id: int
