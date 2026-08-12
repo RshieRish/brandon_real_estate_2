@@ -1466,3 +1466,6 @@ Completed Checklist Video Integration
 
 - Task links now validate both the supported internal entity type and the referenced record before persistence. Only contacts, opportunities, agreements, and listings can be linked; dangling or arbitrary entity links are rejected.
 - Verification: 19 focused Command backend tests pass.
+
+- Internal contact imports now accept optional birthday and anniversary dates, preserving them in the same persisted CRM contact fields used by Command Home celebrations.
+- Verification: 20 focused Command backend tests pass.

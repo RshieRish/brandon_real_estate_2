@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
+from schemas.command import ContactCreate, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
@@ -111,3 +111,9 @@ def test_opportunity_contact_table_has_a_database_uniqueness_contract():
 def test_task_link_types_resolve_to_internal_persistence_models():
     assert task_link_model("agreement").__tablename__ == "crm_agreements"
     assert task_link_model("unsupported") is None
+
+
+def test_contact_import_supports_private_celebration_dates():
+    row = ContactImportRow(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
+    assert row.birthday == date(1990, 8, 12)
+    assert row.anniversary == date(2020, 6, 1)

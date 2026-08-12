@@ -191,6 +191,8 @@ class ContactImportRow(BaseModel):
     email: str | None = None
     phone: str | None = None
     stage: str = "lead"
+    birthday: date | None = None
+    anniversary: date | None = None
 class ContactImportRequest(BaseModel):
     contacts: list[ContactImportRow] = Field(max_length=1000)
 

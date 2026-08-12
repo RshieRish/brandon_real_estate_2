@@ -256,3 +256,4 @@ Added interactive videos to Seller Staging Checklist
 - Opportunity contact relationship writes are now idempotent per contact+role; duplicates return the existing association and different roles remain distinct. Covered by 17 focused Command backend tests and diff check.
 - PostgreSQL now enforces unique opportunity/contact/role rows via migration c3a8b5e1d204, protecting concurrent writes beyond API idempotency. Migration applied; focused Command backend suite has 18 passing tests.
 - Task links now validate allowed internal entity types and target-record existence before persistence, preventing arbitrary/dangling links. Focused Command backend suite has 19 passing tests.
+- Internal contact imports now accept optional birthday and anniversary dates and retain them on the canonical CRM contact record, feeding the existing celebrations workflow. Focused Command backend suite has 20 passing tests.
