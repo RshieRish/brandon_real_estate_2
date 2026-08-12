@@ -1376,5 +1376,8 @@ Completed Checklist Video Integration
 - Agreement templates now have a persisted body-update API (`PATCH /agreement-templates/{template_id}`) for internal template editing.
 - Verification: all Command backend tests pass (10).
 
+- Agreement workspace now includes a persistent template editor: create internal templates and edit their bodies through the authenticated template API.
+- Verification: Command API tests pass (13) and frontend typecheck passes.
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

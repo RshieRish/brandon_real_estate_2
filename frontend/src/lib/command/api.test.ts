@@ -115,4 +115,12 @@ describe('commandApi', () => {
     await expect(commandApi.addTaskLink(8, 'agreement', 15)).resolves.toMatchObject({ entity_id: 15 });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/8/links'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ entity_type: 'agreement', entity_id: 15 }) }));
   });
+
+  it('updates an internal agreement template body', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-template' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 6, name: 'Buyer', body: 'Updated body' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(commandApi.updateAgreementTemplate(6, 'Updated body')).resolves.toMatchObject({ body: 'Updated body' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreement-templates/6'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ body: 'Updated body' }) }));
+  });
 });
