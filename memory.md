@@ -214,3 +214,4 @@ Added interactive videos to Seller Staging Checklist
 - Listing map placement is now coordinate-based. The backend geocodes only when the configured Google Maps key is present and returns explicit errors otherwise.
 - 2026-08-12: Command migration `fb74d2c0a611` is applied in the configured internal database; verified `crm_file_assets.agreement_id`. Authenticated runtime reads across overview/reports/marketing/websites/listings/agreements returned HTTP 200. Frontend full suite has 40 passing tests and production build completes; local static generation still logs an unrelated unavailable content-block API fetch.
 - Contacts UI now fetches the entire paginated CRM dataset in 100-row batches rather than only the first 50 results.
+- Smart Plan enrollment lifecycle now supports active/paused/completed status changes with a server-backed pause/resume UI.

@@ -13,7 +13,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 
@@ -304,6 +304,12 @@ async def create_plan_step(plan_id: int, payload: SmartPlanStepCreate, db: Async
 async def enroll_contact(plan_id: int, payload: SmartPlanEnrollmentCreate, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMSmartPlan, plan_id) or not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Smart Plan or contact not found")
     item=CRMSmartPlanEnrollment(smart_plan_id=plan_id,contact_id=payload.contact_id); db.add(item); await db.flush(); return {"id":item.id,"status":item.status}
+
+@router.patch("/smart-plans/{plan_id}/enrollments/{enrollment_id}")
+async def update_plan_enrollment(plan_id: int, enrollment_id: int, payload: SmartPlanEnrollmentUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMSmartPlanEnrollment, enrollment_id)
+    if not item or item.smart_plan_id != plan_id: raise HTTPException(404, "Smart Plan enrollment not found")
+    item.status = payload.status; await db.flush(); return {"id": item.id, "status": item.status}
 
 
 @router.get("/opportunities", response_model=list[OpportunityOut])

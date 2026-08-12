@@ -1343,3 +1343,6 @@ Completed Checklist Video Integration
 
 - Contact loading now requests every paginated internal CRM page (100 rows per request) before applying client-side search, preventing the previous first-50-record truncation.
 - Verification: Command API tests pass (7) and frontend typecheck passes.
+
+- Smart Plan enrollments now support persisted `active`, `paused`, and `completed` lifecycle states; the UI provides pause/resume control from the plan workspace.
+- Verification: Command API tests pass (8), frontend typecheck passes, and focused Command backend tests pass (6).

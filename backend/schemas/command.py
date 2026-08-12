@@ -118,6 +118,8 @@ class SmartPlanStepCreate(BaseModel):
     payload: dict = {}
 class SmartPlanEnrollmentCreate(BaseModel):
     contact_id: int
+class SmartPlanEnrollmentUpdate(BaseModel):
+    status: str = Field(pattern="^(active|paused|completed)$")
 class TagCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 class NoteCreate(BaseModel):

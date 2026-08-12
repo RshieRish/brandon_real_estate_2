@@ -71,4 +71,13 @@ describe('commandApi', () => {
     await commandApi.contacts(50, 100);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=50&offset=100'), expect.anything());
   });
+
+  it('updates a Smart Plan enrollment state through the authenticated API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-enrollment' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, status: 'paused' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateSmartPlanEnrollment(7, 9, 'paused')).resolves.toMatchObject({ status: 'paused' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/enrollments/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }));
+  });
 });
