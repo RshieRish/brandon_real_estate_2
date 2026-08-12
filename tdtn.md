@@ -1434,3 +1434,6 @@ Completed Checklist Video Integration
 
 - Command Home now includes persisted internal Goals with a measurable target, current progress, and period (weekly/monthly/quarterly/annual). The API supports creation, retrieval, and authenticated progress updates; the home workspace renders actual progress rather than a fixed dashboard widget.
 - Verification: migration `b7e1f2d4a906` is applied to the configured database; 15 focused Command backend tests, 23 Command frontend API tests, and TypeScript pass. Authenticated `GET /goals` returned HTTP 200.
+
+- Goal management is now complete in Command Home: admins can set a goal name, target, and cadence, then update a goal’s actual progress directly from its progress card. All writes use the persisted authenticated goals API and refresh local UI state only after the server response.
+- Verification: Command frontend API tests pass (23), TypeScript passes, and `git diff --check` is clean.
