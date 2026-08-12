@@ -10,6 +10,12 @@ Last Updated: 2026-08-02
 - Design document: `docs/superpowers/specs/2026-08-12-command-workspace-design.md`.
 - Status: Design approved; implementation plan pending user review of the written spec.
 
+### 2026-08-12 - Command Workspace Foundation
+- Created the isolated `feat/command-workspace` branch and began the internal CRM persistence layer.
+- Added SQLAlchemy Command models for contacts linked to existing leads, activities, notes, tasks, Smart Plans, opportunities, listings, internal agreements/events, and file metadata.
+- Added a focused test-first model contract; `backend/tests/test_command_models.py` passes (2 tests) with an explicit non-production test configuration.
+- Next: additive Alembic migration, Pydantic contracts, authenticated `/api/v1/command` router, then the `/admin/command` UI shell.
+
 ### 2026-08-02 - Production Header Logo Sizing Fix
 - Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
 - Added a regression test first; it failed against the undersized `76x40` image contract and passed after the correction.

@@ -1,6 +1,7 @@
 # Project Memory
 
 ## Architecture Decisions
+- 2026-08-12: `/admin/command` implementation lives on isolated branch `feat/command-workspace`. Its first committed slice (`a7ccf66`) adds internal CRM SQLAlchemy models rather than replacing legacy lead data. Contacts link to `leads.id`; agreements are internal lifecycle records, not legal DocuSign execution.
 - Next.js App Router: SSR + static pages, no API routes (UI only)
 - FastAPI backend: all AI, DB, business logic
 - Gemini flash for chatbot speed; Gemini pro for complex analysis
