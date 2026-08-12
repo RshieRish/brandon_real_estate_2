@@ -10,6 +10,10 @@ class ContactCreate(BaseModel):
     lead_id: int | None = None
 
 
+class ContactStageUpdate(BaseModel):
+    stage: str = Field(min_length=1, max_length=50)
+
+
 class ContactOut(ContactCreate):
     id: int
     stage: str

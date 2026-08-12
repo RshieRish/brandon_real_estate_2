@@ -89,4 +89,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateOpportunity(3, 'offer')).resolves.toMatchObject({ stage: 'offer' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/opportunities/3'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ stage: 'offer' }) }));
   });
+
+  it('updates a contact stage through the internal CRM API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-stage' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 11, first_name: 'Taylor', last_name: '', email: null, phone: null, stage: 'client' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateContactStage(11, 'client')).resolves.toMatchObject({ stage: 'client' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/11'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ stage: 'client' }) }));
+  });
 });

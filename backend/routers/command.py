@@ -13,7 +13,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 
@@ -140,6 +140,14 @@ async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMContact, contact_id)
     if not item: raise HTTPException(404, "Contact not found")
     return item
+
+@router.patch("/contacts/{contact_id}", response_model=ContactOut)
+async def update_contact_stage(contact_id: int, payload: ContactStageUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMContact, contact_id)
+    if not item: raise HTTPException(404, "Contact not found")
+    item.stage = payload.stage
+    db.add(CRMActivity(contact_id=item.id, kind="stage_changed", summary=f"Contact stage changed to {payload.stage}"))
+    await db.flush(); return item
 
 @router.get("/contacts/{contact_id}/workspace")
 async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db)):

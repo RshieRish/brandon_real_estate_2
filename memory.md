@@ -216,3 +216,4 @@ Added interactive videos to Seller Staging Checklist
 - Contacts UI now fetches the entire paginated CRM dataset in 100-row batches rather than only the first 50 results.
 - Smart Plan enrollment lifecycle now supports active/paused/completed status changes with a server-backed pause/resume UI.
 - Opportunity workspace now persists pipeline stage changes and refreshes from the internal API after movement.
+- Contact workspace now updates lead/client stages through the internal API and appends a stage-change timeline activity.

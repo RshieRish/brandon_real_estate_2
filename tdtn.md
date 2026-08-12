@@ -1349,3 +1349,6 @@ Completed Checklist Video Integration
 
 - Opportunities now support persisted pipeline stage movement from the detail workspace across cultivate, appointment, active, offer, under contract, closed, and lost.
 - Verification: Command API tests pass (9), frontend typecheck passes, and focused Command model tests pass (4).
+
+- Contacts now support persisted CRM stage movement from the contact workspace, with a `stage_changed` activity added to the contact timeline.
+- Verification: Command API tests pass (10) and frontend typecheck passes.
