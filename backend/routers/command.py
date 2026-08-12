@@ -20,6 +20,7 @@ from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
 from services.command_tasks import task_activity_summary
+from services.command_relationships import is_same_opportunity_contact
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -490,6 +491,10 @@ async def opportunity_workspace(opportunity_id:int,db:AsyncSession=Depends(get_d
 @router.post("/opportunities/{opportunity_id}/contacts", response_model=RelationshipOut)
 async def add_opportunity_contact(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMOpportunity, opportunity_id) or not payload.contact_id or not await db.get(CRMContact,payload.contact_id): raise HTTPException(404,"Opportunity or contact not found")
+    candidates = (await db.execute(select(CRMOpportunityContact).where(CRMOpportunityContact.opportunity_id == opportunity_id, CRMOpportunityContact.contact_id == payload.contact_id))).scalars().all()
+    existing = next((row for row in candidates if is_same_opportunity_contact(row.contact_id, row.role, payload.contact_id, payload.role)), None)
+    if existing:
+        return {"id":existing.id,"contact_id":existing.contact_id,"role":existing.role}
     item=CRMOpportunityContact(opportunity_id=opportunity_id,contact_id=payload.contact_id,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"contact_id":item.contact_id,"role":item.role}
 @router.post("/opportunities/{opportunity_id}/vendors", response_model=RelationshipOut)
 async def add_opportunity_vendor(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):

@@ -1457,3 +1457,6 @@ Completed Checklist Video Integration
 
 - Opportunity contact relationships now use a complete paginated internal-contact chooser rather than requiring raw IDs. Existing relationship rows resolve to actual internal contact names when available, while writes still use the established validated persisted relationship API.
 - Verification: Command frontend API tests pass (27), TypeScript passes, and `git diff --check` is clean.
+
+- Opportunity-contact assignments are now idempotent by contact and role. Repeating the same relationship returns its existing record instead of creating a duplicate; a different role for the same contact remains a distinct valid relationship.
+- Verification: 17 focused Command backend tests and `git diff --check` pass.
