@@ -1322,3 +1322,6 @@ Completed Checklist Video Integration
 - Added an authenticated bulk-contact import endpoint for permitted internal source data. It accepts up to 1,000 contacts per request, skips duplicate email addresses, and writes a `contact_imported` activity for every created record.
 - Contact workspace responses now resolve and return every opportunity linked through the internal opportunity-contact relation, including the opportunity’s name, stage, value, and the contact’s role. The former empty Opportunities tab payload is removed.
 - Verification: command model and private storage tests pass (4 tests). The repository-wide test run still has seven pre-existing notification retry assertion failures, unrelated to the Command workspace.
+
+- Opportunity workspace now supports actual authenticated additions for linked contacts, vendors, and offers. Additions reload the authoritative backend workspace state and show API errors in the UI.
+- Verification: frontend typecheck and focused Command API tests pass.

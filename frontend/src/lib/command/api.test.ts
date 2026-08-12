@@ -17,4 +17,17 @@ describe('commandApi', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ detail: 'Contact already exists' }) }));
     await expect(commandApi.createContact({ first_name: 'A', last_name: '', email: null, phone: null })).rejects.toThrow('Contact already exists');
   });
+
+  it('creates an opportunity contact relationship through the authenticated API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-relationship' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 8, contact_id: 12, role: 'buyer' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.addOpportunityContact(4, 12, 'buyer')).resolves.toMatchObject({ contact_id: 12, role: 'buyer' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/opportunities/4/contacts'), expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer token-relationship' }),
+      body: JSON.stringify({ contact_id: 12, role: 'buyer' }),
+    }));
+  });
 });

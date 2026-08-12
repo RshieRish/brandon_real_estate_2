@@ -207,3 +207,4 @@ Added interactive videos to Seller Staging Checklist
 # 2026-08-12: Internal Command workspace continuation
 - Bulk permitted-data import is now available at `POST /api/v1/command/contacts/import` (maximum 1,000 rows per request). It deduplicates by email and records per-contact import activity.
 - Contact workspaces now expose actual linked opportunity records rather than a blank opportunities array. This is internal CRM data only; no external brokerage or e-signature archive is present in this repository or database.
+- Opportunity details support real contact, vendor, and offer relationship writes through the internal API; they are not mock UI state.
