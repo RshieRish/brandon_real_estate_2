@@ -7,6 +7,7 @@ from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, Oppor
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
+from services.command_task_links import task_link_model
 
 
 def test_command_models_expose_safe_defaults_and_links():
@@ -105,3 +106,8 @@ def test_opportunity_contact_identity_includes_the_role():
 def test_opportunity_contact_table_has_a_database_uniqueness_contract():
     constraint_columns = {tuple(column.name for column in constraint.columns) for constraint in CRMOpportunityContact.__table__.constraints if getattr(constraint, "columns", None)}
     assert ("opportunity_id", "contact_id", "role") in constraint_columns
+
+
+def test_task_link_types_resolve_to_internal_persistence_models():
+    assert task_link_model("agreement").__tablename__ == "crm_agreements"
+    assert task_link_model("unsupported") is None

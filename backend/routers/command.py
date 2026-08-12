@@ -21,6 +21,7 @@ from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
+from services.command_task_links import task_link_model
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -297,6 +298,9 @@ async def update_task(task_id: int, payload: TaskUpdate, db: AsyncSession = Depe
 @router.post("/tasks/{task_id}/links")
 async def add_task_link(task_id: int, payload: TaskLinkCreate, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
+    entity_model = task_link_model(payload.entity_type)
+    if entity_model is None: raise HTTPException(422, "Unsupported task-link entity type")
+    if not await db.get(entity_model, payload.entity_id): raise HTTPException(404, "Linked internal record not found")
     link = CRMTaskLink(task_id=task_id, **payload.model_dump()); db.add(link); await db.flush()
     return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id}
 

@@ -1463,3 +1463,6 @@ Completed Checklist Video Integration
 
 - Opportunity-contact deduplication is now enforced at the PostgreSQL layer with `uq_crm_opportunity_contact_role` across opportunity, contact, and role. This protects concurrent writes in addition to the API’s idempotent behavior.
 - Verification: migration `c3a8b5e1d204` is applied to the configured database; 18 focused Command backend tests pass.
+
+- Task links now validate both the supported internal entity type and the referenced record before persistence. Only contacts, opportunities, agreements, and listings can be linked; dangling or arbitrary entity links are rejected.
+- Verification: 19 focused Command backend tests pass.

@@ -255,3 +255,4 @@ Added interactive videos to Seller Staging Checklist
 - Opportunity contact relationship editor now loads every paginated internal contact and resolves relationship records to names, avoiding raw-ID-only CRM UI. Existing relationship API remains authoritative. Frontend API tests (27), TypeScript, and diff check pass.
 - Opportunity contact relationship writes are now idempotent per contact+role; duplicates return the existing association and different roles remain distinct. Covered by 17 focused Command backend tests and diff check.
 - PostgreSQL now enforces unique opportunity/contact/role rows via migration c3a8b5e1d204, protecting concurrent writes beyond API idempotency. Migration applied; focused Command backend suite has 18 passing tests.
+- Task links now validate allowed internal entity types and target-record existence before persistence, preventing arbitrary/dangling links. Focused Command backend suite has 19 passing tests.
