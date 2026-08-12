@@ -72,6 +72,12 @@ class CRMTag(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True)
 
+class CRMContactTag(Base):
+    __tablename__ = "crm_contact_tags"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
+    tag_id: Mapped[int] = mapped_column(ForeignKey("crm_tags.id"))
+
 class CRMSavedSearch(Timestamped, Base):
     __tablename__ = "crm_saved_searches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
