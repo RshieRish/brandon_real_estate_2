@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ContactCreate, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
+from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
@@ -120,6 +120,7 @@ def test_contact_import_supports_private_celebration_dates():
     row = ContactImportRow(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
     assert row.birthday == date(1990, 8, 12)
     assert row.anniversary == date(2020, 6, 1)
+    assert ContactImportResult(created=1, skipped_duplicates=2).model_dump() == {"created": 1, "skipped_duplicates": 2}
 
 
 def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():

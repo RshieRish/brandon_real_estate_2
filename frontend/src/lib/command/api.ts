@@ -11,6 +11,8 @@ export type Task = { id: number; title: string; contact_id: number | null; descr
 export type NamedRecord = { id:number; name:string; description:string; status:string };
 export type SmartPlanEnrollment = { id: number; contact_id: number; contact_name: string; status: 'active' | 'paused' | 'completed' };
 export type TaskLink = { id: number; task_id: number; entity_type: string; entity_id: number; display_name: string };
+export type ContactImportRow = Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'birthday' | 'anniversary'> & { stage?: string };
+export type ContactImportResult = { created: number; skipped_duplicates: number };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; template_id?:number|null; status:string };
 export type AgreementWorkspace = { agreement: Agreement; recipients: Relationship[]; events: { id: number; event_type: string; created_at: string }[]; files: { id: number; filename: string; storage_key: string; content_type: string; agreement_id: number | null }[] };
@@ -41,6 +43,7 @@ export const commandApi = {
   aiBriefing: () => request<AiBriefing>('/ai/briefing'),
   generateAiBriefing: () => request<AiBriefing>('/ai/briefing/generate', { method: 'POST' }),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
+  importContacts: (contacts: ContactImportRow[]) => request<ContactImportResult>('/contacts/import', { method: 'POST', body: JSON.stringify({ contacts }) }),
   updateContactStage: (id: number, stage: string) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
   updateContact: (id: number, payload: Partial<Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'stage' | 'birthday' | 'anniversary'>>) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   smartPlans: () => request<NamedRecord[]>('/smart-plans'), createSmartPlan: (payload: Pick<NamedRecord,'name'|'description'>) => request<NamedRecord>('/smart-plans',{method:'POST',body:JSON.stringify(payload)}),

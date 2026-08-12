@@ -198,6 +198,11 @@ class ContactImportRequest(BaseModel):
     contacts: list[ContactImportRow] = Field(max_length=1000)
 
 
+class ContactImportResult(BaseModel):
+    created: int
+    skipped_duplicates: int
+
+
 class ContactWorkspaceOpportunityOut(BaseModel):
     id: int
     name: str

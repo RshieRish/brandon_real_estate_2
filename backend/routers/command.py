@@ -15,7 +15,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactImportResult, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -191,12 +191,13 @@ async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
     await db.flush()
     return {"created": created, "timeline_backfilled": backfilled, "total_legacy_leads": len(leads)}
 
-@router.post("/contacts/import")
+@router.post("/contacts/import", response_model=ContactImportResult)
 async def import_contacts(payload:ContactImportRequest,db:AsyncSession=Depends(get_db)):
     created=0;skipped=0
     for row in payload.contacts:
         existing=None
-        if row.email: existing=(await db.execute(select(CRMContact).where(CRMContact.email==row.email))).scalar_one_or_none()
+        if row.email:
+            existing=(await db.execute(select(CRMContact).where(func.lower(CRMContact.email) == row.email.strip().lower()))).scalar_one_or_none()
         if existing: skipped+=1; continue
         contact=CRMContact(**row.model_dump());db.add(contact);await db.flush()
         db.add(CRMActivity(contact_id=contact.id,kind="contact_imported",summary="Imported through internal CRM import"));created+=1

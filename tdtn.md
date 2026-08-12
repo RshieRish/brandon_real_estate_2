@@ -1481,3 +1481,6 @@ Completed Checklist Video Integration
 
 - Tasks can now be created and reassigned against canonical internal contacts through selectors in the task workspace. The backend validates contact existence on create/update while preserving explicit unassignment.
 - Verification: 22 focused Command backend tests, 64 frontend tests, and TypeScript pass.
+
+- Command now includes a permitted internal contact-archive intake workflow. Admins can preview validated CSV or JSON, import in bounded 1,000-contact batches, and receive canonical created/duplicate totals. Duplicate email checks are case-insensitive.
+- Verification: 22 focused Command backend tests, 65 frontend tests, and TypeScript pass.
