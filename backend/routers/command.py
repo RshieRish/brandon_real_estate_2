@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMListingRecord, CRMOpportunity, CRMSmartPlan, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMListingRecord, CRMNote, CRMOpportunity, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -51,6 +51,18 @@ async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMContact, contact_id)
     if not item: raise HTTPException(404, "Contact not found")
     return item
+
+@router.get("/contacts/{contact_id}/workspace")
+async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db)):
+    contact = await db.get(CRMContact, contact_id)
+    if not contact: raise HTTPException(404, "Contact not found")
+    async def rows(model, field):
+        return (await db.execute(select(model).where(field == contact_id).order_by(model.created_at.desc()))).scalars().all()
+    tasks = await rows(CRMTask, CRMTask.contact_id)
+    notes = await rows(CRMNote, CRMNote.contact_id)
+    activity = await rows(CRMActivity, CRMActivity.contact_id)
+    enrollments = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.contact_id == contact_id))).scalars().all()
+    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": []}
 
 
 @router.get("/tasks", response_model=list[TaskOut])
