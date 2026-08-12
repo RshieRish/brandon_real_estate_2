@@ -184,6 +184,7 @@ class CRMAgreementRecipient(Base):
 class CRMFileAsset(Timestamped, Base):
     __tablename__ = "crm_file_assets"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agreement_id: Mapped[int | None] = mapped_column(ForeignKey("crm_agreements.id"), nullable=True)
     filename: Mapped[str] = mapped_column(String(500))
     storage_key: Mapped[str] = mapped_column(String(500))
     content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
 from models.lead import Lead
 from models.analytics_event import AnalyticsEvent
 from models.content_block import ContentBlock
@@ -188,6 +188,8 @@ async def update_agreement_status(agreement_id: int, payload: AgreementStatusUpd
     item = await db.get(CRMAgreement, agreement_id)
     if not item: raise HTTPException(404, "Agreement not found")
     item.status = payload.status; await db.flush()
+    db.add(CRMAgreementEvent(agreement_id=item.id, event_type=payload.status))
+    await db.flush()
     return {"id": item.id, "status": item.status}
 
 @router.get("/agreements", response_model=list[AgreementOut])
@@ -196,7 +198,17 @@ async def agreements(db: AsyncSession = Depends(get_db)):
 
 @router.post("/agreements", response_model=AgreementOut)
 async def create_agreement(payload: AgreementCreate, db: AsyncSession = Depends(get_db)):
-    item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush(); return item
+    item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush()
+    db.add(CRMAgreementEvent(agreement_id=item.id, event_type="draft")); await db.flush(); return item
+
+@router.get("/agreements/{agreement_id}/workspace")
+async def agreement_workspace(agreement_id: int, db: AsyncSession = Depends(get_db)):
+    agreement = await db.get(CRMAgreement, agreement_id)
+    if not agreement: raise HTTPException(404, "Agreement not found")
+    recipients = (await db.execute(select(CRMAgreementRecipient).where(CRMAgreementRecipient.agreement_id == agreement_id))).scalars().all()
+    events = (await db.execute(select(CRMAgreementEvent).where(CRMAgreementEvent.agreement_id == agreement_id).order_by(CRMAgreementEvent.created_at.desc()))).scalars().all()
+    files = (await db.execute(select(CRMFileAsset).where(CRMFileAsset.agreement_id == agreement_id).order_by(CRMFileAsset.created_at.desc()))).scalars().all()
+    return {"agreement": agreement, "recipients": recipients, "events": events, "files": files}
 
 @router.get("/agreement-templates", response_model=list[TemplateOut])
 async def templates(db: AsyncSession = Depends(get_db)):
@@ -212,9 +224,11 @@ async def create_file(payload: FileAssetCreate, db: AsyncSession = Depends(get_d
     item=CRMFileAsset(**payload.model_dump()); db.add(item); await db.flush(); return item
 
 @router.post("/files/upload", response_model=FileAssetOut)
-async def upload_file(file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def upload_file(file: UploadFile, agreement_id: int | None = None, db: AsyncSession = Depends(get_db)):
+    if agreement_id is not None and not await db.get(CRMAgreement, agreement_id):
+        raise HTTPException(404, "Agreement not found")
     filename, storage_key, content_type = await upload_command_file(file)
-    item = CRMFileAsset(filename=filename, storage_key=storage_key, content_type=content_type)
+    item = CRMFileAsset(filename=filename, storage_key=storage_key, content_type=content_type, agreement_id=agreement_id)
     db.add(item); await db.flush(); return item
 
 @router.get("/listings", response_model=list[ListingOut])
@@ -288,4 +302,4 @@ async def add_opportunity_offer(opportunity_id:int,payload:RelationshipCreate,db
 @router.post("/agreements/{agreement_id}/recipients", response_model=RelationshipOut)
 async def add_agreement_recipient(agreement_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMAgreement,agreement_id) or not payload.name or not payload.email: raise HTTPException(404,"Agreement or recipient details not found")
-    item=CRMAgreementRecipient(agreement_id=agreement_id,name=payload.name,email=payload.email,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"name":item.name,"email":item.email,"role":item.role}
+    item=CRMAgreementRecipient(agreement_id=agreement_id,name=payload.name,email=payload.email,role=payload.role);db.add(item);db.add(CRMAgreementEvent(agreement_id=agreement_id,event_type="recipient_added"));await db.flush();return {"id":item.id,"name":item.name,"email":item.email,"role":item.role}

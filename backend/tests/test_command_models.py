@@ -1,5 +1,5 @@
 from schemas.command import ContactWorkspaceOpportunityOut
-from models.command import AgreementStatus, CRMActivity, CRMContact, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMTask
 
 
 def test_command_models_expose_safe_defaults_and_links():
@@ -34,3 +34,15 @@ def test_contact_workspace_opportunity_serializes_linked_record_context():
         "value_cents": 75000000,
         "role": "buyer",
     }
+
+
+def test_agreement_files_and_events_are_scoped_to_an_internal_agreement():
+    asset = CRMFileAsset(
+        filename="buyer-agreement.pdf",
+        storage_key="command-files/buyer-agreement.pdf",
+        agreement_id=4,
+    )
+    event = CRMAgreementEvent(agreement_id=4, event_type="in_review")
+
+    assert asset.agreement_id == 4
+    assert event.agreement_id == 4

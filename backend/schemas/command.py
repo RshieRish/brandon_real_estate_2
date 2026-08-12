@@ -97,6 +97,7 @@ class FileAssetCreate(BaseModel):
     filename: str = Field(min_length=1, max_length=500)
     storage_key: str = Field(min_length=1, max_length=500)
     content_type: str = "application/octet-stream"
+    agreement_id: int | None = None
 class FileAssetOut(FileAssetCreate):
     id: int
     class Config: from_attributes = True

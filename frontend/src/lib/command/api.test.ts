@@ -42,4 +42,15 @@ describe('commandApi', () => {
       body: JSON.stringify({ position: 1, action_type: 'call', payload: { title: 'Initial consult' } }),
     }));
   });
+
+  it('updates an agreement lifecycle state through the internal API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-agreement' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 5, status: 'in_review' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateAgreementStatus(5, 'in_review')).resolves.toMatchObject({ status: 'in_review' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements/5/status'), expect.objectContaining({
+      method: 'PATCH', body: JSON.stringify({ status: 'in_review' }),
+    }));
+  });
 });

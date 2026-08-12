@@ -1328,3 +1328,6 @@ Completed Checklist Video Integration
 
 - Smart Plan detail workspaces now persist action steps and contact enrollments through the authenticated backend rather than merely rendering their counts.
 - Verification: frontend typecheck and focused Command API tests pass after the new Smart Plan API coverage.
+
+- Agreement workspaces now provide recipient management, lifecycle state changes, event history, and agreement-scoped private-file metadata. The schema change is additive (`fb74d2c0a611_link_files_to_agreements`) and its generated PostgreSQL SQL was verified offline.
+- Verification: focused Command backend tests pass (5), frontend Command API tests pass (5), and frontend typecheck passes.
