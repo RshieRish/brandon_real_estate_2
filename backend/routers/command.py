@@ -157,6 +157,14 @@ async def smart_plans(db: AsyncSession = Depends(get_db)):
 async def create_smart_plan(payload: NamedRecordCreate, db: AsyncSession = Depends(get_db)):
     item = CRMSmartPlan(**payload.model_dump()); db.add(item); await db.flush(); return item
 
+@router.get("/smart-plans/{plan_id}/workspace")
+async def smart_plan_workspace(plan_id:int, db:AsyncSession=Depends(get_db)):
+    plan=await db.get(CRMSmartPlan,plan_id)
+    if not plan: raise HTTPException(404,"Smart Plan not found")
+    steps=(await db.execute(select(CRMSmartPlanStep).where(CRMSmartPlanStep.smart_plan_id==plan_id).order_by(CRMSmartPlanStep.position))).scalars().all()
+    enrollments=(await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.smart_plan_id==plan_id))).scalars().all()
+    return {"plan":plan,"steps":[{"id":x.id,"position":x.position,"action_type":x.action_type,"payload":x.payload_json} for x in steps],"enrollments":[{"id":x.id,"contact_id":x.contact_id,"status":x.status} for x in enrollments]}
+
 @router.post("/smart-plans/{plan_id}/steps")
 async def create_plan_step(plan_id: int, payload: SmartPlanStepCreate, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMSmartPlan, plan_id): raise HTTPException(404, "Smart Plan not found")
