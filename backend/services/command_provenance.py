@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -13,7 +13,16 @@ import re
 from types import MappingProxyType
 from typing import TypeVar
 
-from models.command_provenance import CaptureQuality, EvidenceLevel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.command import CRMArchiveArtifact
+from models.command_provenance import (
+    CRMSourceRecord,
+    CRMSourceRecordArtifact,
+    CaptureQuality,
+    EvidenceLevel,
+)
 
 
 class ArchiveIntegrityError(ValueError):
@@ -22,6 +31,32 @@ class ArchiveIntegrityError(ValueError):
 
 class SourceDraftValidationError(ValueError):
     """Raised when a semantic source-record draft is unsafe or incomplete."""
+
+
+class ParserVersionConflict(ValueError):
+    """Raised when one parser identity resolves to different source artifacts."""
+
+
+class DuplicateSourceDraftError(ValueError):
+    """Raised when a persistence batch repeats a five-part source identity."""
+
+
+class MissingArchiveArtifactError(ValueError):
+    """Raised when source evidence cannot resolve to the archive catalog."""
+
+
+@dataclass(frozen=True, slots=True)
+class PersistenceCounts:
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    links_created: int = 0
+
+    def __post_init__(self) -> None:
+        for field_name in ("created", "updated", "unchanged", "links_created"):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +164,129 @@ class SourceRecordDraft:
         )
 
 
+async def persist_source_records(
+    db: AsyncSession,
+    drafts: Sequence[SourceRecordDraft],
+) -> PersistenceCounts:
+    """Flush semantic source records and evidence links without committing."""
+    materialized = tuple(drafts)
+    identities: set[tuple[str, str, str, str, str]] = set()
+    artifact_paths: set[str] = set()
+    for draft in materialized:
+        if not isinstance(draft, SourceRecordDraft):
+            raise SourceDraftValidationError(
+                "drafts must contain only SourceRecordDraft values"
+            )
+        if draft.identity in identities:
+            raise DuplicateSourceDraftError(
+                f"duplicate source draft identity: {draft.identity}"
+            )
+        identities.add(draft.identity)
+        if not draft.artifact_paths:
+            if draft.evidence_level is not EvidenceLevel.DISPLAYED_AGGREGATE:
+                raise MissingArchiveArtifactError(
+                    "only a displayed aggregate may omit archive artifacts"
+                )
+        artifact_paths.update(draft.artifact_paths)
+
+    artifacts_by_path: dict[str, CRMArchiveArtifact] = {}
+    if artifact_paths:
+        artifacts = await db.scalars(
+            select(CRMArchiveArtifact).where(
+                CRMArchiveArtifact.source_path.in_(artifact_paths)
+            )
+        )
+        artifacts_by_path = {artifact.source_path: artifact for artifact in artifacts}
+        missing_paths = artifact_paths.difference(artifacts_by_path)
+        if missing_paths:
+            raise MissingArchiveArtifactError(
+                "archive artifacts not found: " + ", ".join(sorted(missing_paths))
+            )
+
+    created = 0
+    updated = 0
+    unchanged = 0
+    links_created = 0
+    for draft in materialized:
+        source_record = await db.scalar(
+            select(CRMSourceRecord).where(
+                CRMSourceRecord.source_system == draft.source_system,
+                CRMSourceRecord.module == draft.module,
+                CRMSourceRecord.record_kind == draft.record_kind,
+                CRMSourceRecord.source_key == draft.source_key,
+                CRMSourceRecord.parser_version == draft.parser_version,
+            )
+        )
+        if source_record is None:
+            source_record = CRMSourceRecord(
+                source_system=draft.source_system,
+                module=draft.module,
+                record_kind=draft.record_kind,
+                source_key=draft.source_key,
+                evidence_level=draft.evidence_level.value,
+                display_label=draft.display_label,
+                payload_json=draft.payload_json,
+                capture_quality=draft.capture_quality.value,
+                captured_at=draft.captured_at,
+                parser_version=draft.parser_version,
+            )
+            db.add(source_record)
+            await db.flush()
+            for path in draft.artifact_paths:
+                db.add(
+                    CRMSourceRecordArtifact(
+                        source_record_id=source_record.id,
+                        artifact_id=artifacts_by_path[path].id,
+                        relation="evidence",
+                    )
+                )
+                links_created += 1
+            created += 1
+            continue
+
+        existing_paths = set(
+            await db.scalars(
+                select(CRMArchiveArtifact.source_path)
+                .join(
+                    CRMSourceRecordArtifact,
+                    CRMSourceRecordArtifact.artifact_id == CRMArchiveArtifact.id,
+                )
+                .where(CRMSourceRecordArtifact.source_record_id == source_record.id)
+            )
+        )
+        requested_paths = set(draft.artifact_paths)
+        if existing_paths != requested_paths:
+            raise ParserVersionConflict(
+                "source artifact set changed; a new parser version is required "
+                f"for identity {draft.identity}"
+            )
+
+        semantic_values = {
+            "evidence_level": draft.evidence_level.value,
+            "display_label": draft.display_label,
+            "payload_json": draft.payload_json,
+            "capture_quality": draft.capture_quality.value,
+            "captured_at": draft.captured_at,
+        }
+        if any(
+            getattr(source_record, field_name) != value
+            for field_name, value in semantic_values.items()
+        ):
+            for field_name, value in semantic_values.items():
+                setattr(source_record, field_name, value)
+            updated += 1
+        else:
+            unchanged += 1
+
+    await db.flush()
+    return PersistenceCounts(
+        created=created,
+        updated=updated,
+        unchanged=unchanged,
+        links_created=links_created,
+    )
+
+
 _EnumType = TypeVar("_EnumType", bound=Enum)
 _LOWERCASE_SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -161,10 +319,7 @@ def _freeze_json_value(
 
 def _thaw_json_value(value: object) -> object:
     if isinstance(value, Mapping):
-        return {
-            key: _thaw_json_value(item)
-            for key, item in value.items()
-        }
+        return {key: _thaw_json_value(item) for key, item in value.items()}
     if isinstance(value, tuple):
         return [_thaw_json_value(item) for item in value]
     return value

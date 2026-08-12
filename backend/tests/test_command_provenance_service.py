@@ -1,10 +1,18 @@
 from dataclasses import FrozenInstanceError, fields, replace
+from datetime import datetime
 import hashlib
 from types import MappingProxyType
 
 import pytest
+from sqlalchemy import func, select
 
-from models.command_provenance import CaptureQuality, EvidenceLevel
+from command_db import archive_artifact_row, command_db as command_db_session
+from models.command_provenance import (
+    CRMSourceRecord,
+    CRMSourceRecordArtifact,
+    CaptureQuality,
+    EvidenceLevel,
+)
 from services.command_provenance import (
     ArchiveArtifactInput,
     ArchiveIntegrityError,
@@ -13,6 +21,9 @@ from services.command_provenance import (
     bundle_fingerprint,
     verify_artifact_bytes,
 )
+
+
+command_db = pytest.fixture(name="command_db")(command_db_session)
 
 
 def artifact_for(content: bytes = b"private archive bytes", **overrides):
@@ -398,3 +409,253 @@ def test_bundle_fingerprint_rejects_duplicate_source_paths():
 
 def test_empty_bundle_fingerprint_is_sha256_of_empty_bytes():
     assert bundle_fingerprint([]) == hashlib.sha256(b"").hexdigest()
+
+
+async def test_persistence_creates_records_and_links_then_is_idempotent(command_db):
+    from services.command_provenance import PersistenceCounts, persist_source_records
+
+    first_path = "kw_command_repaired/contacts/contact.json"
+    second_path = "kw_command_repaired/contacts/timeline.json"
+    command_db.add_all(
+        [
+            archive_artifact_row(source_path=first_path),
+            archive_artifact_row(source_path=second_path, content=b"timeline"),
+        ]
+    )
+    await command_db.flush()
+    first = source_draft(artifact_paths=(first_path, second_path))
+    second = source_draft(
+        source_key="contact-2",
+        display_label="Ada Lovelace",
+        payload={"name": "Ada Lovelace"},
+        artifact_paths=(first_path,),
+    )
+
+    assert await persist_source_records(command_db, (first, second)) == (
+        PersistenceCounts(created=2, links_created=3)
+    )
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 2
+    )
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMSourceRecordArtifact)
+        )
+        == 3
+    )
+
+    assert await persist_source_records(command_db, (first, second)) == (
+        PersistenceCounts(unchanged=2)
+    )
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 2
+    )
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMSourceRecordArtifact)
+        )
+        == 3
+    )
+
+
+async def test_persistence_updates_semantics_when_artifact_set_is_unchanged(
+    command_db,
+):
+    from services.command_provenance import PersistenceCounts, persist_source_records
+
+    path = "kw_command_repaired/contacts/contact.json"
+    command_db.add(archive_artifact_row(source_path=path))
+    await command_db.flush()
+    captured_at = datetime(2026, 8, 12, 14, 30)
+    original = source_draft(artifact_paths=(path,))
+    changed = source_draft(
+        artifact_paths=(path,),
+        evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
+        display_label="José Rivera — updated",
+        payload={"name": "José Rivera", "stage": "lead"},
+        capture_quality=CaptureQuality.PARTIAL,
+        captured_at=captured_at,
+    )
+
+    assert await persist_source_records(command_db, (original,)) == PersistenceCounts(
+        created=1,
+        links_created=1,
+    )
+    assert await persist_source_records(command_db, (changed,)) == PersistenceCounts(
+        updated=1
+    )
+
+    row = await command_db.scalar(select(CRMSourceRecord))
+    assert row is not None
+    assert row.evidence_level == EvidenceLevel.RENDERED_OCCURRENCE.value
+    assert row.display_label == "José Rivera — updated"
+    assert row.payload_json == '{"name":"José Rivera","stage":"lead"}'
+    assert row.capture_quality == CaptureQuality.PARTIAL.value
+    assert row.captured_at == captured_at
+
+
+async def test_persistence_rejects_parser_identity_with_changed_artifact_set(
+    command_db,
+):
+    from services.command_provenance import (
+        ParserVersionConflict,
+        persist_source_records,
+    )
+
+    first_path = "kw_command_repaired/contacts/contact.json"
+    second_path = "kw_command_repaired/contacts/other.json"
+    command_db.add_all(
+        [
+            archive_artifact_row(source_path=first_path),
+            archive_artifact_row(source_path=second_path, content=b"other"),
+        ]
+    )
+    await command_db.flush()
+    await persist_source_records(
+        command_db, (source_draft(artifact_paths=(first_path,)),)
+    )
+
+    with pytest.raises(ParserVersionConflict, match="parser version"):
+        await persist_source_records(
+            command_db,
+            (source_draft(artifact_paths=(first_path, second_path)),),
+        )
+
+
+async def test_persistence_rejects_duplicate_draft_identity_before_db_writes(
+    command_db,
+):
+    from services.command_provenance import (
+        DuplicateSourceDraftError,
+        persist_source_records,
+    )
+
+    path = "kw_command_repaired/contacts/contact.json"
+    command_db.add(archive_artifact_row(source_path=path))
+    await command_db.flush()
+    first = source_draft(artifact_paths=(path,))
+    duplicate = source_draft(artifact_paths=(path,), display_label="Changed")
+
+    with pytest.raises(DuplicateSourceDraftError, match="duplicate"):
+        await persist_source_records(command_db, (first, duplicate))
+
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+
+
+async def test_persistence_rejects_missing_artifacts_before_record_writes(command_db):
+    from services.command_provenance import (
+        MissingArchiveArtifactError,
+        persist_source_records,
+    )
+
+    present_path = "kw_command_repaired/contacts/contact.json"
+    command_db.add(archive_artifact_row(source_path=present_path))
+    await command_db.flush()
+
+    with pytest.raises(MissingArchiveArtifactError, match="missing.json"):
+        await persist_source_records(
+            command_db,
+            (
+                source_draft(artifact_paths=(present_path,)),
+                source_draft(
+                    source_key="missing",
+                    artifact_paths=("kw_command_repaired/contacts/missing.json",),
+                ),
+            ),
+        )
+
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+
+
+async def test_persistence_allows_only_aggregate_drafts_without_artifacts(command_db):
+    from services.command_provenance import (
+        MissingArchiveArtifactError,
+        PersistenceCounts,
+        persist_source_records,
+    )
+
+    nonaggregate = source_draft(artifact_paths=())
+    with pytest.raises(MissingArchiveArtifactError, match="aggregate"):
+        await persist_source_records(command_db, (nonaggregate,))
+
+    aggregate = source_draft(
+        source_key="displayed-total",
+        record_kind="contact_total",
+        evidence_level=EvidenceLevel.DISPLAYED_AGGREGATE,
+        artifact_paths=(),
+        payload={"count": 42},
+    )
+    assert await persist_source_records(command_db, (aggregate,)) == PersistenceCounts(
+        created=1
+    )
+
+
+async def test_persistence_failure_is_atomic_after_caller_rollback(command_db):
+    from services.command_provenance import (
+        MissingArchiveArtifactError,
+        persist_source_records,
+    )
+
+    present_path = "kw_command_repaired/contacts/contact.json"
+    command_db.add(archive_artifact_row(source_path=present_path))
+    await command_db.commit()
+
+    await persist_source_records(
+        command_db,
+        (
+            source_draft(
+                source_key="kept-only-without-rollback", artifact_paths=(present_path,)
+            ),
+        ),
+    )
+    with pytest.raises(MissingArchiveArtifactError):
+        await persist_source_records(
+            command_db,
+            (
+                source_draft(
+                    source_key="missing",
+                    artifact_paths=("kw_command_repaired/contacts/missing.json",),
+                ),
+            ),
+        )
+    await command_db.rollback()
+
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+
+
+async def test_persistence_rejects_non_draft_values_before_db_writes(command_db):
+    from services.command_provenance import (
+        SourceDraftValidationError,
+        persist_source_records,
+    )
+
+    with pytest.raises(SourceDraftValidationError, match="SourceRecordDraft"):
+        await persist_source_records(command_db, (object(),))
+
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+
+
+def test_persistence_counts_are_frozen_slotted_and_nonnegative():
+    from services.command_provenance import PersistenceCounts
+
+    counts = PersistenceCounts()
+    assert (
+        counts.created
+        == counts.updated
+        == counts.unchanged
+        == counts.links_created
+        == 0
+    )
+    assert not hasattr(counts, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        counts.created = 1
+    with pytest.raises(ValueError, match="non-negative"):
+        PersistenceCounts(created=-1)
