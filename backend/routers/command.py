@@ -9,6 +9,7 @@ from database import get_db
 from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMReferral, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
 from models.lead import Lead
+from models.booking import Booking
 from models.analytics_event import AnalyticsEvent
 from models.content_block import ContentBlock
 from models.funnel import Funnel
@@ -195,8 +196,14 @@ async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db))
     )).all()
     searches=(await db.execute(select(CRMSavedSearch).where(CRMSavedSearch.contact_id == contact_id))).scalars().all()
     tag_rows=(await db.execute(select(CRMTag).join(CRMContactTag,CRMTag.id==CRMContactTag.tag_id).where(CRMContactTag.contact_id==contact_id))).scalars().all()
+    booking_predicates = []
+    if contact.lead_id is not None:
+        booking_predicates.append(Booking.lead_id == contact.lead_id)
+    if contact.email:
+        booking_predicates.append(func.lower(Booking.email) == contact.email.lower())
+    booking_rows = (await db.execute(select(Booking).where(or_(*booking_predicates)).order_by(Booking.scheduled_at.desc()))).scalars().all() if booking_predicates else []
     opportunities = [ContactWorkspaceOpportunityOut(id=item.id, name=item.name, stage=item.stage, value_cents=item.value_cents, role=role).model_dump() for item, role in opportunity_rows]
-    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": opportunities, "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
+    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": opportunities, "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "bookings":[{"id":b.id,"meeting_type":b.meeting_type,"context":b.context,"scheduled_at":b.scheduled_at,"location":b.location,"notes":b.notes} for b in booking_rows], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
 
 @router.post("/tags")
 async def create_tag(payload:TagCreate,db:AsyncSession=Depends(get_db)):

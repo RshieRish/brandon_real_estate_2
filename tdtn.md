@@ -1425,3 +1425,6 @@ Completed Checklist Video Integration
 
 - Referrals can now be linked to internal contacts from the referral workspace. The chooser loads every paginated contact record (rather than assuming a small contact set), passes the contact relationship through the existing validated referral API, and displays the resolved contact on the referral card.
 - Verification: 14 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass.
+
+- Contact workspaces now include a Bookings tab built from the existing authoritative `bookings` table. The server links bookings by internal lead ID when available and otherwise by case-insensitive internal contact email; it does not duplicate or mutate booking records. The frontend now uses a typed contact-workspace API boundary rather than a route-local fetch.
+- Verification: 14 focused Command backend tests, 21 Command frontend API tests, and TypeScript pass. Authenticated runtime contact-workspace read returned the contact and a `bookings` array. The reproducible frontend `.next` cache was removed to reclaim local temporary-disk space for the runtime check; no source or persisted data was deleted.
