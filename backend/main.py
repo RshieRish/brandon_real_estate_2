@@ -17,6 +17,7 @@ from routers import (
     booking,
     chat,
     command,
+    command_provenance,
     content,
     crm,
     evaluator,
@@ -78,6 +79,11 @@ app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
 app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
+app.include_router(
+    command_provenance.router,
+    prefix="/api/v1/command",
+    tags=["command-provenance"],
+)
 
 
 async def _notification_retry_loop() -> None:
