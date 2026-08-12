@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from models.lead import Lead
 from models.analytics_event import AnalyticsEvent
 from models.content_block import ContentBlock
 from models.funnel import Funnel
+from config import settings
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
@@ -35,6 +37,21 @@ async def ai_briefing(db: AsyncSession = Depends(get_db)):
     contacts = await _count(db, CRMContact)
     opportunities = await _count(db, CRMOpportunity)
     return {"summary": f"{open_tasks} open tasks across {contacts} contacts and {opportunities} opportunities.", "source": "internal-crm", "requires_review": True}
+
+@router.post("/ai/briefing/generate")
+async def generate_ai_briefing(db:AsyncSession=Depends(get_db)):
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(503,"AI briefing is not configured")
+    metrics=await reports_summary(db)
+    prompt=("Write a concise internal real-estate CRM morning briefing from these aggregate metrics: "
+            f"{metrics}. Give only prioritized next actions. Do not claim actions were completed, do not give legal advice, and do not include private contact data.")
+    import google.generativeai as genai
+    def generate():
+        return genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt).text
+    summary=await asyncio.to_thread(generate)
+    db.add(CRMActivity(kind="ai_briefing_generated",summary="Generated review-only AI briefing",metadata_json='{"scope":"aggregate_metrics"}'))
+    await db.flush()
+    return {"summary":summary,"source":"gemini-aggregate-internal-metrics","requires_review":True}
 
 @router.get("/reports/summary")
 async def reports_summary(db:AsyncSession=Depends(get_db)):
