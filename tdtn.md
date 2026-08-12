@@ -1364,3 +1364,5 @@ Completed Checklist Video Integration
 
 - Tasks workspace now exposes the task-link workflow: choose a task, choose an internal record type, and persist the target record ID through the Task Links API.
 - Verification: Command API tests pass (12) and frontend typecheck passes.
+
+- Current-branch verification sweep: all frontend tests pass (46), TypeScript passes, production build completes, and all Command backend tests pass (8). The production build retains the known non-fatal local content-block API connection warning during static public-page generation.
