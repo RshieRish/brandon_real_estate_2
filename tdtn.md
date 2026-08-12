@@ -3,6 +3,13 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-08-02
 
+### 2026-08-12 - Command Workspace Design
+- Approved a new `/admin/command` workspace that remains separate from the existing admin panel and uses the current FastAPI/PostgreSQL stack as the source of truth.
+- Defined a unified internal CRM design covering Contacts, Tasks, Smart Plans, Opportunities, Marketing, Agreements/Templates/files, Reports, Listings/Search/Map, Websites, and server-side auditable AI features.
+- Internal agreements deliberately replace the initial DocuSign dependency: file bytes live in configured object storage and PostgreSQL stores metadata, recipients, lifecycle, and immutable audit events. Legally binding e-signature execution is deferred.
+- Design document: `docs/superpowers/specs/2026-08-12-command-workspace-design.md`.
+- Status: Design approved; implementation plan pending user review of the written spec.
+
 ### 2026-08-02 - Production Header Logo Sizing Fix
 - Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
 - Added a regression test first; it failed against the undersized `76x40` image contract and passed after the correction.
