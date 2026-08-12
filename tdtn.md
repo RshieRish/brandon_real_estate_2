@@ -3,6 +3,23 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-08-02
 
+### 2026-08-12 - Command Workspace Design
+- Approved a new `/admin/command` workspace that remains separate from the existing admin panel and uses the current FastAPI/PostgreSQL stack as the source of truth.
+- Defined a unified internal CRM design covering Contacts, Tasks, Smart Plans, Opportunities, Marketing, Agreements/Templates/files, Reports, Listings/Search/Map, Websites, and server-side auditable AI features.
+- Internal agreements deliberately replace the initial DocuSign dependency: file bytes live in configured object storage and PostgreSQL stores metadata, recipients, lifecycle, and immutable audit events. Legally binding e-signature execution is deferred.
+- Design document: `docs/superpowers/specs/2026-08-12-command-workspace-design.md`.
+- Status: Design approved; implementation plan pending user review of the written spec.
+
+### 2026-08-12 - Command Workspace Foundation
+- Created the isolated `feat/command-workspace` branch and began the internal CRM persistence layer.
+- Added SQLAlchemy Command models for contacts linked to existing leads, activities, notes, tasks, Smart Plans, opportunities, listings, internal agreements/events, and file metadata.
+- Added a focused test-first model contract; `backend/tests/test_command_models.py` passes (2 tests) with an explicit non-production test configuration.
+- Next: additive Alembic migration, Pydantic contracts, authenticated `/api/v1/command` router, then the `/admin/command` UI shell.
+- Completed the additive migration, authenticated Command overview/contact/task/agreement API, dark Command dashboard, and route navigation shells. Frontend typecheck, 34 Vitest tests, and production build pass. Remaining work is the full feature views and resource endpoints for each workspace module.
+- Added live internal Contacts, Tasks, Smart Plans, Opportunities, Agreements, Listings/Map, connected Marketing/Reports/Websites, and Sweeney AI briefing modules. Contact detail now covers Timeline, Opportunities, Smart Plans, Tasks, Notes, and Saved Searches through one authenticated API endpoint.
+- Applied additive migration `f3a91c2d7e10` to the configured PostgreSQL database. Verified `alembic current` reports `f3a91c2d7e10 (head)`; no existing lead, booking, content, funnel, or analytics data was changed.
+- Added and applied `f6b24e1c8a03` for Tags and Saved Searches; saved searches are returned in the per-contact workspace.
+
 ### 2026-08-02 - Production Header Logo Sizing Fix
 - Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
 - Added a regression test first; it failed against the undersized `76x40` image contract and passed after the correction.
@@ -1300,3 +1317,215 @@ Completed Checklist Video Integration
   - Have Brandon send a normal non-`/start` message in Telegram and verify an agent response in the chat.
   - After token rotation, repeat the Telegram runtime status check.
 - Status: Complete
+# Command workspace continuation (2026-08-12)
+
+## 2026-08-12 - Recovered Command and DocuSign archive catalog
+
+- Recovered the permitted local account archive at `Documents/Codex/2026-07-27/realtime-voice-chat/outputs/authorized-account-archive` and applied additive migration `fe2a1c4b8d75`.
+- The configured internal PostgreSQL database now contains a checksum-backed catalog of all 12,580 recovered source artifacts. The Command admin includes `/admin/command/archive`, which browses the preserved private captures by source system; normalized records remain in their respective CRM modules.
+- Initial normalized import is present for recovered contacts, tasks, notes, SmartPlan enrollments, timelines, listings, and a captured opportunity. Referral/network and DocuSign evidence are preserved in the catalog; do not claim that a rendered count is equivalent to 2,318 individual structured referral records.
+- DocuSign normalization now includes 2 captured templates, 117 unique agreement titles/events parsed from the four recovered list pages, and 151 private file metadata entries for recovered downloads/pending forms. The raw source evidence remains cataloged for reconciliation.
+- Added migration `ff7d8e1a9234` and a resumable checksum-verifying importer that stores the original artifact bytes in PostgreSQL, so recovered evidence no longer depends on this Mac's filesystem or unavailable external object storage. The protected archive UI now downloads originals through the authenticated Command API. Bulk byte persistence is actively progressing and must be reconciled to 12,580 rows before completion.
+- Completed the byte reconciliation: all 12,580 artifacts are non-null in PostgreSQL, totaling 745,060,261 bytes. Three spread source-to-database checksum/length probes passed, and an authenticated API retrieval of a 956,385-byte DocuSign artifact returned HTTP 200 with its exact cataloged length and attachment disposition. Focused backend tests (25), frontend Command API tests (35), TypeScript, and frontend production build pass.
+
+- Added an authenticated bulk-contact import endpoint for permitted internal source data. It accepts up to 1,000 contacts per request, skips duplicate email addresses, and writes a `contact_imported` activity for every created record.
+- Contact workspace responses now resolve and return every opportunity linked through the internal opportunity-contact relation, including the opportunity’s name, stage, value, and the contact’s role. The former empty Opportunities tab payload is removed.
+- Verification: command model and private storage tests pass (4 tests). The repository-wide test run still has seven pre-existing notification retry assertion failures, unrelated to the Command workspace.
+
+- Opportunity workspace now supports actual authenticated additions for linked contacts, vendors, and offers. Additions reload the authoritative backend workspace state and show API errors in the UI.
+- Verification: frontend typecheck and focused Command API tests pass.
+
+- Smart Plan detail workspaces now persist action steps and contact enrollments through the authenticated backend rather than merely rendering their counts.
+- Verification: frontend typecheck and focused Command API tests pass after the new Smart Plan API coverage.
+
+- Agreement workspaces now provide recipient management, lifecycle state changes, event history, and agreement-scoped private-file metadata. The schema change is additive (`fb74d2c0a611_link_files_to_agreements`) and its generated PostgreSQL SQL was verified offline.
+- Verification: focused Command backend tests pass (5), frontend Command API tests pass (5), and frontend typecheck passes.
+
+- Marketing and Websites now show actual internal content/funnel records, and Reports includes a persisted analytics event-type breakdown. These views remain linked to the existing internal content/funnel editors as the single write path.
+- Verification: focused Command backend tests pass (5), frontend Command API tests pass (6), and frontend typecheck passes.
+
+- Listings now have a server-side Google geocoding action (configured-key only) and a coordinate-derived internal map layout. Geocoding failures are explicit and do not fabricate a location.
+- Verification: focused Command model/geocoding tests pass (6) and frontend typecheck passes.
+
+- Runtime migration verification: `fb74d2c0a611` is applied to the configured internal PostgreSQL database and `crm_file_assets.agreement_id` is present. Authenticated read checks returned HTTP 200 for Command overview, reports, marketing records, website records, event breakdown, listings, and agreements.
+- Final frontend verification: 40 tests pass, TypeScript passes, and the production build completes. Static generation logs the pre-existing unavailable-local-API content-block fetch but does not fail the build.
+
+- Contact loading now requests every paginated internal CRM page (100 rows per request) before applying client-side search, preventing the previous first-50-record truncation.
+- Verification: Command API tests pass (7) and frontend typecheck passes.
+
+- Smart Plan enrollments now support persisted `active`, `paused`, and `completed` lifecycle states; the UI provides pause/resume control from the plan workspace.
+- Verification: Command API tests pass (8), frontend typecheck passes, and focused Command backend tests pass (6).
+
+- Opportunities now support persisted pipeline stage movement from the detail workspace across cultivate, appointment, active, offer, under contract, closed, and lost.
+- Verification: Command API tests pass (9), frontend typecheck passes, and focused Command model tests pass (4).
+
+- Contacts now support persisted CRM stage movement from the contact workspace, with a `stage_changed` activity added to the contact timeline.
+- Verification: Command API tests pass (10) and frontend typecheck passes.
+
+- Smart Plan steps now support persisted editing of action type and position/payload contract through the internal API; the editor exposes an edit action per step.
+- Verification: Command API tests pass (11) and frontend typecheck passes.
+
+- Command nested routes now have a responsive mobile drawer with labelled open/close controls, an overlay dismiss action, and the same navigation destinations as the desktop rail.
+- Verification: frontend typecheck passes and Command API tests remain passing (11).
+
+- Added generic persisted task links (`crm_task_links`) and `POST /tasks/{task_id}/links` so tasks can reference an internal opportunity, agreement, listing, or other entity without copying its data. Migration `fc0e8a4b9422` was validated offline and applied to the configured internal database.
+- Verification: Command model tests pass (5); Alembic current is `fc0e8a4b9422 (head)`.
+
+- Tasks workspace now exposes the task-link workflow: choose a task, choose an internal record type, and persist the target record ID through the Task Links API.
+- Verification: Command API tests pass (12) and frontend typecheck passes.
+
+- Current-branch verification sweep: all frontend tests pass (46), TypeScript passes, production build completes, and all Command backend tests pass (8). The production build retains the known non-fatal local content-block API connection warning during static public-page generation.
+
+- Agreement detail workspaces now support private file upload directly to the selected agreement using the existing server-side object-storage path and `agreement_id` relation.
+- Verification: frontend typecheck passes.
+
+- Agreement lifecycle integrity is now enforced server-side: draft → review → ready → shared → viewed → completed, with void/expiry exits and terminal-state protection. Invalid/backward transitions return 422 and do not append an event.
+- Verification: Command lifecycle/model tests pass (7).
+
+- Agreement templates now have a persisted body-update API (`PATCH /agreement-templates/{template_id}`) for internal template editing.
+- Verification: all Command backend tests pass (10).
+
+- Agreement workspace now includes a persistent template editor: create internal templates and edit their bodies through the authenticated template API.
+- Verification: Command API tests pass (13) and frontend typecheck passes.
+
+- Task links are now retrievable and visible from Tasks: `GET /tasks/{task_id}/links` returns persisted internal links, and the task card can load/display their entity type and ID.
+- Verification: Command API tests pass (13), frontend typecheck passes, and all Command backend tests pass (10).
+
+- Tasks now support server-side status and due-date bounds (`status`, `due_before`, `due_after`) with matching open/completed and due-by controls in the Tasks workspace.
+- Verification: Command API tests pass (14), frontend typecheck passes, and all Command backend tests pass (10).
+
+- Listings now support validated persisted lifecycle states (active, pending, sold, withdrawn) through the Listings workspace and API.
+- Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
+
+- Sweeney AI briefing now visibly reports backend provenance and review-required state, with explicit error handling for unavailable/generation failures. It remains review-only and does not take automatic action.
+- Verification: frontend typecheck passes and Command API tests remain passing (15).
+
+- Tasks workspace now captures and persists priority and due date/time during creation, and displays each stored due date in the task queue.
+- Verification: frontend typecheck passes and Command API tests remain passing (15).
+
+- Contact profiles now support validated persisted edits to name, email, phone, and stage. Profile edits append `contact_updated` activity while stage-only edits retain `stage_changed` activity.
+- Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
+
+- Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
+- Verification: frontend typecheck passes.
+
+- Added an internal Referrals workspace backed by persisted `crm_referrals` records. Referrals support source, optional linked contact, and a validated lifecycle (new, contacted, nurture, converted, closed, lost); the Command navigation and API now expose creation, retrieval, and status updates.
+- Verification: migration `fd1c8e9a4703` is the configured database head; 11 focused Command backend tests, 15 Command frontend API tests, TypeScript, and the optimized frontend build pass. Authenticated runtime reads for overview, contacts, referrals, reports, marketing, and websites each returned HTTP 200.
+
+- Data verification: the internal database currently contains 51 CRM contacts and 52 CRM activities, all from the existing internal lead projection. Tasks, Smart Plans, Opportunities, Listings, Referrals, Agreements, Templates, and private file assets are correctly provisioned but currently empty. No KW Command or DocuSign archive has been imported into this database.
+
+- Command Home now has a real current-month birthday and anniversary queue. Contact profile records can persist optional private `birthday` and `anniversary` dates; `GET /celebrations?month=1..12` returns only matching internal contacts, ordered by calendar day.
+- Verification: migration `a2d7e4b9c118` is applied to the configured database; authenticated celebrations runtime read returned HTTP 200; 12 focused Command backend tests, 16 Command frontend API tests, TypeScript, and production build pass.
+
+- Contact profile editing now includes private birthday and anniversary dates, displays stored dates as contact metadata, and renders saved-search criteria alongside the saved-search record. Both use existing authenticated persisted APIs; date validation remains server-side through the contact schema.
+- Verification: Command frontend API tests pass (17) and TypeScript passes.
+
+- Contacts now have server-side search and lifecycle-stage filtering. The API accepts bounded pagination plus `query` (name/email/phone) and `stage`; the Contacts workspace debounces searches, keeps paging through matching records, and shows explicit loading/empty states.
+- Verification: 12 focused Command backend tests, 18 Command frontend API tests, and TypeScript pass. Authenticated runtime searches for both a query and stage filter returned HTTP 200.
+
+- Listings & Map now supports server-side address search and lifecycle filtering. The map/list workspace debounces the selected filters so mapped pins and cards remain scoped to the same persisted listing result set.
+- Verification: 12 focused Command backend tests, 19 Command frontend API tests, and TypeScript pass. Authenticated listing query and status-filter runtime reads returned HTTP 200.
+
+- Tasks now support a complete persisted edit path for title, details, priority, and due date. Server-side contracts constrain task states to `open`, `in_progress`, `completed`, or `cancelled`, and priorities to `low`, `normal`, or `high`; the workspace can filter the additional states and edit existing task records.
+- Verification: 13 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass. An authenticated invalid task-state mutation was rejected with HTTP 422.
+
+- Every persisted task edit now appends an immutable `task_updated` CRM activity to the linked contact timeline. The audit summary names only the fields actually changed (for example, priority and due date), without duplicating task content in activity metadata.
+- Verification: 14 focused Command backend tests pass.
+
+- Referrals can now be linked to internal contacts from the referral workspace. The chooser loads every paginated contact record (rather than assuming a small contact set), passes the contact relationship through the existing validated referral API, and displays the resolved contact on the referral card.
+- Verification: 14 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass.
+
+- Contact workspaces now include a Bookings tab built from the existing authoritative `bookings` table. The server links bookings by internal lead ID when available and otherwise by case-insensitive internal contact email; it does not duplicate or mutate booking records. The frontend now uses a typed contact-workspace API boundary rather than a route-local fetch.
+- Verification: 14 focused Command backend tests, 21 Command frontend API tests, and TypeScript pass. Authenticated runtime contact-workspace read returned the contact and a `bookings` array. The reproducible frontend `.next` cache was removed to reclaim local temporary-disk space for the runtime check; no source or persisted data was deleted.
+
+- Reports now has individual report-card drilldowns. Each aggregate card opens a bounded, read-only list of its current supporting contacts, leads, open tasks, opportunities, agreements, or analytics events. The report page also uses the typed authenticated client for its summary instead of a local fetch.
+- Verification: 14 focused Command backend tests, 22 Command frontend API tests, and TypeScript pass. Authenticated runtime `reports/details/contacts` returned the expected metric with a result set capped at 25 rows.
+
+- Command Home now includes persisted internal Goals with a measurable target, current progress, and period (weekly/monthly/quarterly/annual). The API supports creation, retrieval, and authenticated progress updates; the home workspace renders actual progress rather than a fixed dashboard widget.
+- Verification: migration `b7e1f2d4a906` is applied to the configured database; 15 focused Command backend tests, 23 Command frontend API tests, and TypeScript pass. Authenticated `GET /goals` returned HTTP 200.
+
+- Goal management is now complete in Command Home: admins can set a goal name, target, and cadence, then update a goal’s actual progress directly from its progress card. All writes use the persisted authenticated goals API and refresh local UI state only after the server response.
+- Verification: Command frontend API tests pass (23), TypeScript passes, and `git diff --check` is clean.
+
+- Smart Plans now have their own validated lifecycle (`active`, `paused`, `archived`), separate from contact enrollment state. The plan editor updates the stored plan status through a dedicated authenticated API without altering its steps or enrollments.
+- Verification: 15 focused Command backend tests, 24 Command frontend API tests, and TypeScript pass. An authenticated invalid Smart Plan lifecycle mutation returned HTTP 422.
+
+- Opportunities now enforce the internal pipeline vocabulary (`cultivate`, `appointment`, `active`, `offer`, `under_contract`, `closed`, `lost`) for creation and stage moves. A real stage move appends immutable `opportunity_stage_changed` activity evidence without duplicating opportunity data.
+- Verification: 16 focused Command backend tests pass. An authenticated invalid opportunity-stage mutation returned HTTP 422.
+
+- Sweeney AI Briefing now uses the shared typed authenticated Command client for both its deterministic internal preview and explicit fresh-generation action. The existing backend contract remains aggregate-only, review-required, audit-logged for generation, and non-autonomous.
+- Verification: 16 focused Command backend tests, 25 Command frontend API tests, and TypeScript pass.
+
+- Contact workspace actions now use the shared typed Command client for notes, saved searches, tags, and tag assignments. New saved searches persist self-describing criteria (`contact_id`, `scope`, and `saved_from`) rather than an empty object, making their context auditable and displayable.
+- Verification: 16 focused Command backend tests, 26 Command frontend API tests, and TypeScript pass.
+
+- Full current-branch regression sweep: all 60 frontend tests pass, all 16 focused Command backend tests pass, configured PostgreSQL is at `b7e1f2d4a906 (head)`, and the optimized frontend production build completes with every Command route present. Static generation retains the known non-fatal local `content blocks` connection-refused warning because no public API was running for that build.
+
+- Internal agreement creation now supports selecting an existing internal template and persists `template_id` on the agreement record. The server validates optional contact/template references before creating the agreement and its initial audit event; this remains tracking/review only, not legal e-signature execution.
+- Verification: 16 focused Command backend tests, 27 Command frontend API tests, TypeScript, and `git diff --check` pass.
+
+- Opportunity contact relationships now use a complete paginated internal-contact chooser rather than requiring raw IDs. Existing relationship rows resolve to actual internal contact names when available, while writes still use the established validated persisted relationship API.
+- Verification: Command frontend API tests pass (27), TypeScript passes, and `git diff --check` is clean.
+
+- Opportunity-contact assignments are now idempotent by contact and role. Repeating the same relationship returns its existing record instead of creating a duplicate; a different role for the same contact remains a distinct valid relationship.
+- Verification: 17 focused Command backend tests and `git diff --check` pass.
+
+- Opportunity-contact deduplication is now enforced at the PostgreSQL layer with `uq_crm_opportunity_contact_role` across opportunity, contact, and role. This protects concurrent writes in addition to the API’s idempotent behavior.
+- Verification: migration `c3a8b5e1d204` is applied to the configured database; 18 focused Command backend tests pass.
+
+- Task links now validate both the supported internal entity type and the referenced record before persistence. Only contacts, opportunities, agreements, and listings can be linked; dangling or arbitrary entity links are rejected.
+- Verification: 19 focused Command backend tests pass.
+
+- Internal contact imports now accept optional birthday and anniversary dates, preserving them in the same persisted CRM contact fields used by Command Home celebrations.
+- Verification: 20 focused Command backend tests pass.
+
+- Smart Plan enrollment now uses a complete internal contact selector, returns the enrolled contact's display name, and prevents duplicate plan/contact enrollment records at both the API and PostgreSQL layers.
+- Verification: migration `e8f2c4a6b901` is applied; 21 focused Command backend tests, 28 Command API tests, and TypeScript pass.
+
+- Task-to-record links now use internal record selectors rather than raw IDs, display the persisted record name, are idempotent, and enforce unique task/entity links at the database layer.
+- Verification: migration `ab4d9e2c7108` is applied; 22 focused Command backend tests, 62 frontend tests, and TypeScript pass.
+
+- Agreement creation now includes a complete internal contact selector and persists that relationship with the selected template and agreement metadata.
+- Verification: 63 frontend tests and TypeScript pass.
+
+- Tasks can now be created and reassigned against canonical internal contacts through selectors in the task workspace. The backend validates contact existence on create/update while preserving explicit unassignment.
+- Verification: 22 focused Command backend tests, 64 frontend tests, and TypeScript pass.
+
+- Command now includes a permitted internal contact-archive intake workflow. Admins can preview validated CSV or JSON, import in bounded 1,000-contact batches, and receive canonical created/duplicate totals. Duplicate email checks are case-insensitive.
+- Verification: 22 focused Command backend tests, 65 frontend tests, and TypeScript pass.
+
+- Contact profile updates now persist explicit clears for optional email, phone, birthday, and anniversary values. This matches the profile UI and prevents stale private data from remaining after an admin clears it.
+- Verification: 23 focused Command backend tests, 65 frontend tests, and TypeScript pass.
+
+- Referral creation and genuine lifecycle changes now append immutable activity entries to their linked contact timeline, keeping relationship history visible from the canonical contact workspace.
+- Verification: 24 focused Command backend tests pass.
+
+- Public homepage static builds now deliberately use authored fallback content when no public API endpoint is configured, preventing build workers from attempting an unavailable localhost request.
+- Verification: 65 frontend tests, TypeScript, and a clean 33-route production build pass with no content-block fetch failure. Reclaimed only a stale generated `.next` cache to complete the local build.
+
+- Saved Searches now has its own internal Command registry with canonical contact context, readable persisted criteria, and explicit deletion. This completes management beyond the contact-profile creation entrypoint.
+- Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.
+
+- Contact notes, tags, and saved searches now use native inline workspace controls with loading/error states and in-place refresh instead of browser prompts or a full-page reload.
+- Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Contact profile editing now uses an inline, validated form with real date controls and explicit optional-field clears, replacing the remaining prompt-driven workflow.
+- Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Opportunity stage changes and new contact/opportunity relationships now create contact-scoped immutable timeline activity, so the contact workspace retains the full pipeline history.
+- Verification: 25 focused Command backend tests pass.
+
+- Agreement creation/status changes and Smart Plan enrollment/status changes now emit contact-scoped immutable CRM activity. Each contact timeline now carries the agreement and automation events attached to that person.
+- Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.
+
+- Contact notes and tags now have complete scoped removal workflows. Removals are protected by contact ownership, refresh in place, and append immutable contact-timeline activity.
+- Verification: 26 focused Command backend tests, 67 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Archive intake now supports a structured permitted JSON bundle for contacts, tasks, notes, opportunities, referrals, listings, templates, and agreements. It reconciles email-based contact relationships, reports unresolved references, and deduplicates against canonical internal records.
+- Verification: 27 focused Command backend tests, 68 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Task editing now uses a native modal form with validation, date controls, save state, and error feedback instead of browser prompts. The Link Pack layout no longer makes production builds depend on remote Next font downloads.
+- Verification: 68 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Archive intake now provides a downloadable JSON template covering every supported record collection and email relationship key, making the source-data handoff directly actionable.
+- Verification: 68 frontend tests, TypeScript, and clean 34-route production build pass.

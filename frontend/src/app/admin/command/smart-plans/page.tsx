@@ -1,0 +1,133 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Clock, Plus, Users } from '@phosphor-icons/react';
+import { commandApi, type Contact, type NamedRecord, type SmartPlanEnrollment } from '@/lib/command/api';
+
+type Detail = {
+  plan: NamedRecord;
+  steps: { id: number; position: number; action_type: string; payload: string }[];
+  enrollments: SmartPlanEnrollment[];
+};
+
+export default function Page() {
+  const [plans, setPlans] = useState<NamedRecord[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [name, setName] = useState('');
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [actionType, setActionType] = useState('call');
+  const [contactId, setContactId] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const load = async () => {
+      const planRows = await commandApi.smartPlans();
+      const allContacts: Contact[] = [];
+      for (let offset = 0;; offset += 100) {
+        const page = await commandApi.contacts(100, offset);
+        allContacts.push(...page);
+        if (page.length < 100) break;
+      }
+      setPlans(planRows);
+      setContacts(allContacts);
+    };
+    void load().catch((err) => setError(err instanceof Error ? err.message : 'Unable to load Smart Plans'));
+  }, []);
+
+  async function add() {
+    if (!name.trim()) return;
+    try {
+      const item = await commandApi.createSmartPlan({ name: name.trim(), description: '' });
+      setPlans((all) => [item, ...all]);
+      setName('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create plan');
+    }
+  }
+
+  async function open(id: number) {
+    try {
+      setDetail(await commandApi.smartPlanWorkspace(id));
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load plan');
+    }
+  }
+
+  async function addStep() {
+    if (!detail || !actionType.trim()) return;
+    try {
+      await commandApi.addSmartPlanStep(detail.plan.id, detail.steps.length + 1, actionType.trim(), {});
+      await open(detail.plan.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to add step');
+    }
+  }
+
+  async function editStep(id: number, position: number, currentAction: string) {
+    if (!detail) return;
+    const action = window.prompt('Action type', currentAction)?.trim();
+    if (!action) return;
+    try {
+      await commandApi.updateSmartPlanStep(detail.plan.id, id, position, action, {});
+      await open(detail.plan.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update step');
+    }
+  }
+
+  async function enroll() {
+    if (!detail || !contactId) return;
+    try {
+      await commandApi.enrollSmartPlanContact(detail.plan.id, Number(contactId));
+      setContactId('');
+      await open(detail.plan.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to enroll contact');
+    }
+  }
+
+  async function updateEnrollment(id: number, status: 'active' | 'paused' | 'completed') {
+    if (!detail) return;
+    try {
+      await commandApi.updateSmartPlanEnrollment(detail.plan.id, id, status);
+      await open(detail.plan.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update enrollment');
+    }
+  }
+
+  async function updatePlanStatus(status: 'active' | 'paused' | 'archived') {
+    if (!detail) return;
+    try {
+      const plan = await commandApi.updateSmartPlanStatus(detail.plan.id, status);
+      setPlans((all) => all.map((item) => item.id === plan.id ? plan : item));
+      setDetail((current) => current ? { ...current, plan } : current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update plan');
+    }
+  }
+
+  const enrolledContactIds = new Set(detail?.enrollments.map((item) => item.contact_id));
+  const availableContacts = contacts.filter((contact) => !enrolledContactIds.has(contact.id));
+
+  return <div className="min-h-[100dvh] bg-[#080807] p-6 text-white">
+    <main className="mx-auto max-w-6xl">
+      <p className="text-xs uppercase tracking-[.25em] text-[#eac469]">Automation</p>
+      <h1 className="mt-1 text-3xl font-black">Smart Plans</h1>
+      <div className="mt-6 flex gap-3">
+        <input className="flex-1 rounded-xl border border-white/10 bg-white/5 p-3" value={name} onChange={(event) => setName(event.target.value)} placeholder="New Smart Plan" />
+        <button onClick={add} className="rounded-xl bg-[#eac469] px-4 text-black" aria-label="Create smart plan"><Plus /></button>
+      </div>
+      {error && <p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}
+      <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_.9fr]">
+        <section className="space-y-2">{plans.map((plan) => <button className="w-full rounded-xl border border-white/10 bg-white/[.035] p-4 text-left hover:border-[#eac469]/40" onClick={() => open(plan.id)} key={plan.id}><b>{plan.name}</b><p className="mt-1 text-sm text-white/45">{plan.status}</p></button>)}</section>
+        <aside className="rounded-2xl border border-white/10 bg-white/[.035] p-5">{detail ? <>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">{detail.plan.name}</h2><select aria-label="Smart Plan status" value={detail.plan.status} onChange={(event) => updatePlanStatus(event.target.value as 'active' | 'paused' | 'archived')} className="rounded-lg border border-white/10 bg-black/40 p-2 text-sm"><option value="active">active</option><option value="paused">paused</option><option value="archived">archived</option></select></div>
+          <div className="mt-6"><p className="flex gap-2 font-bold"><Clock className="text-[#eac469]" size={17} />Steps</p>{detail.steps.length ? detail.steps.map((step) => <div className="mt-2 flex items-center justify-between text-sm text-white/55" key={step.id}><span>{step.position}. {step.action_type}</span><button onClick={() => editStep(step.id, step.position, step.action_type)} className="text-xs font-bold text-[#eac469]">Edit</button></div>) : <p className="mt-2 text-sm text-white/35">No steps yet.</p>}<div className="mt-3 flex gap-2"><input value={actionType} onChange={(event) => setActionType(event.target.value)} placeholder="Action type" className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm" /><button onClick={addStep} className="rounded-lg bg-[#eac469] px-3 text-sm font-bold text-black">Add</button></div></div>
+          <div className="mt-6"><p className="flex gap-2 font-bold"><Users className="text-[#eac469]" size={17} />Enrollments</p>{detail.enrollments.length ? detail.enrollments.map((item) => <div key={item.id} className="mt-2 flex items-center justify-between gap-3 text-sm text-white/55"><span>{item.contact_name} · {item.status}</span><button onClick={() => updateEnrollment(item.id, item.status === 'active' ? 'paused' : 'active')} className="text-xs font-bold text-[#eac469]">{item.status === 'active' ? 'Pause' : 'Resume'}</button></div>) : <p className="mt-2 text-sm text-white/35">No contacts enrolled.</p>}<div className="mt-3 flex gap-2"><select aria-label="Select contact to enroll" value={contactId} onChange={(event) => setContactId(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm"><option value="">Select internal contact</option>{availableContacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.first_name} {contact.last_name}</option>)}</select><button onClick={enroll} disabled={!contactId} className="rounded-lg bg-[#eac469] px-3 text-sm font-bold text-black disabled:opacity-50">Enroll</button></div></div>
+        </> : <p className="text-white/40">Choose a Smart Plan to manage steps and enrollments.</p>}</aside>
+      </div>
+    </main>
+  </div>;
+}
