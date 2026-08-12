@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -62,7 +62,8 @@ async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db))
     notes = await rows(CRMNote, CRMNote.contact_id)
     activity = await rows(CRMActivity, CRMActivity.contact_id)
     enrollments = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.contact_id == contact_id))).scalars().all()
-    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": []}
+    searches=(await db.execute(select(CRMSavedSearch).where(CRMSavedSearch.contact_id == contact_id))).scalars().all()
+    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches]}
 
 
 @router.get("/tasks", response_model=list[TaskOut])
