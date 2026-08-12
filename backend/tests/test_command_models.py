@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMReferral, CRMTask, CRMTaskLink
+from services.command_tasks import task_activity_summary
 
 
 def test_command_models_expose_safe_defaults_and_links():
@@ -77,3 +78,7 @@ def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
         TaskUpdate(status="deleted")
     with pytest.raises(ValidationError):
         TaskUpdate(priority="urgentish")
+
+
+def test_task_audit_summary_describes_the_persisted_changed_fields():
+    assert task_activity_summary({"priority": "high", "due_at": "2026-08-12T15:00:00Z"}) == "Updated task priority and due date"

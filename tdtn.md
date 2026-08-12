@@ -1419,3 +1419,6 @@ Completed Checklist Video Integration
 
 - Tasks now support a complete persisted edit path for title, details, priority, and due date. Server-side contracts constrain task states to `open`, `in_progress`, `completed`, or `cancelled`, and priorities to `low`, `normal`, or `high`; the workspace can filter the additional states and edit existing task records.
 - Verification: 13 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass. An authenticated invalid task-state mutation was rejected with HTTP 422.
+
+- Every persisted task edit now appends an immutable `task_updated` CRM activity to the linked contact timeline. The audit summary names only the fields actually changed (for example, priority and due date), without duplicating task content in activity metadata.
+- Verification: 14 focused Command backend tests pass.

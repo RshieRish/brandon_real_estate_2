@@ -18,6 +18,7 @@ from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
+from services.command_tasks import task_activity_summary
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -239,7 +240,10 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_db)):
 async def update_task(task_id: int, payload: TaskUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMTask, task_id)
     if not item: raise HTTPException(404, "Task not found")
-    for field, value in payload.model_dump(exclude_none=True).items(): setattr(item, field, value)
+    changes = payload.model_dump(exclude_none=True)
+    for field, value in changes.items(): setattr(item, field, value)
+    if changes:
+        db.add(CRMActivity(contact_id=item.contact_id, kind="task_updated", summary=task_activity_summary(changes)))
     await db.flush(); return item
 
 @router.post("/tasks/{task_id}/links")
