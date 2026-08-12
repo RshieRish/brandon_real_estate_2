@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
@@ -8,6 +8,8 @@ class ContactCreate(BaseModel):
     email: str | None = None
     phone: str | None = None
     lead_id: int | None = None
+    birthday: date | None = None
+    anniversary: date | None = None
 
 
 class ContactStageUpdate(BaseModel):
@@ -20,6 +22,8 @@ class ContactUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=50)
     stage: str | None = Field(default=None, min_length=1, max_length=50)
+    birthday: date | None = None
+    anniversary: date | None = None
 
 
 class ContactOut(ContactCreate):

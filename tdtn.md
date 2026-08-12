@@ -1404,3 +1404,6 @@ Completed Checklist Video Integration
 - Verification: migration `fd1c8e9a4703` is the configured database head; 11 focused Command backend tests, 15 Command frontend API tests, TypeScript, and the optimized frontend build pass. Authenticated runtime reads for overview, contacts, referrals, reports, marketing, and websites each returned HTTP 200.
 
 - Data verification: the internal database currently contains 51 CRM contacts and 52 CRM activities, all from the existing internal lead projection. Tasks, Smart Plans, Opportunities, Listings, Referrals, Agreements, Templates, and private file assets are correctly provisioned but currently empty. No KW Command or DocuSign archive has been imported into this database.
+
+- Command Home now has a real current-month birthday and anniversary queue. Contact profile records can persist optional private `birthday` and `anniversary` dates; `GET /celebrations?month=1..12` returns only matching internal contacts, ordered by calendar day.
+- Verification: migration `a2d7e4b9c118` is applied to the configured database; authenticated celebrations runtime read returned HTTP 200; 12 focused Command backend tests, 16 Command frontend API tests, TypeScript, and production build pass.

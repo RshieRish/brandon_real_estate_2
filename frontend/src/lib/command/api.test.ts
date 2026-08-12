@@ -139,4 +139,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateListingStatus(9, 'pending')).resolves.toMatchObject({ status: 'pending' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/listings/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'pending' }) }));
   });
+
+  it('loads birthday and anniversary queues for the requested month', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-celebrations' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ birthdays: [], anniversaries: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.celebrations(8)).resolves.toEqual({ birthdays: [], anniversaries: [] });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/celebrations?month=8'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-celebrations' }) }));
+  });
 });

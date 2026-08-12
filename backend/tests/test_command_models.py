@@ -1,4 +1,6 @@
-from schemas.command import ContactWorkspaceOpportunityOut
+from datetime import date
+
+from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMReferral, CRMTask, CRMTaskLink
 
 
@@ -56,3 +58,11 @@ def test_task_link_connects_a_task_to_an_internal_record_without_copying_data():
 def test_referral_is_an_internal_record_with_a_lifecycle():
     referral = CRMReferral(name="Buyer introduction", status="new")
     assert referral.status == "new"
+
+
+def test_contact_can_store_private_birthday_and_anniversary_dates():
+    contact = CRMContact(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
+    payload = ContactCreate(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
+
+    assert contact.birthday == date(1990, 8, 12)
+    assert payload.anniversary == date(2020, 6, 1)

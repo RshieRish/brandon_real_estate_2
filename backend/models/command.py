@@ -1,8 +1,8 @@
 """Persistent internal CRM entities for the Command workspace."""
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -33,6 +33,8 @@ class CRMContact(Timestamped, Base):
     email: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(50))
     stage: Mapped[str] = mapped_column(String(50), default="lead")
+    birthday: Mapped[date | None] = mapped_column(Date, nullable=True)
+    anniversary: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class CRMActivity(Base):

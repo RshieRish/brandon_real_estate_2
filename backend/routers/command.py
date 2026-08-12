@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,6 +93,22 @@ async def event_breakdown(db: AsyncSession = Depends(get_db)):
 async def contacts(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CRMContact).order_by(CRMContact.created_at.desc()).offset(offset).limit(min(limit, 100)))
     return result.scalars().all()
+
+
+@router.get("/celebrations")
+async def celebrations(month: int = Query(ge=1, le=12), db: AsyncSession = Depends(get_db)):
+    """Return only internal contact celebrations for the requested calendar month."""
+    birthdays = (await db.execute(
+        select(CRMContact)
+        .where(func.extract("month", CRMContact.birthday) == month)
+        .order_by(func.extract("day", CRMContact.birthday), CRMContact.last_name, CRMContact.first_name)
+    )).scalars().all()
+    anniversaries = (await db.execute(
+        select(CRMContact)
+        .where(func.extract("month", CRMContact.anniversary) == month)
+        .order_by(func.extract("day", CRMContact.anniversary), CRMContact.last_name, CRMContact.first_name)
+    )).scalars().all()
+    return {"birthdays": birthdays, "anniversaries": anniversaries}
 
 
 @router.post("/contacts", response_model=ContactOut)
