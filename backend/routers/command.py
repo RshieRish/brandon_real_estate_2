@@ -220,6 +220,12 @@ async def add_task_link(task_id: int, payload: TaskLinkCreate, db: AsyncSession 
     link = CRMTaskLink(task_id=task_id, **payload.model_dump()); db.add(link); await db.flush()
     return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id}
 
+@router.get("/tasks/{task_id}/links")
+async def task_links(task_id: int, db: AsyncSession = Depends(get_db)):
+    if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
+    rows = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id).order_by(CRMTaskLink.id.desc()))).scalars().all()
+    return [{"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id} for row in rows]
+
 
 @router.patch("/agreements/{agreement_id}/status")
 async def update_agreement_status(agreement_id: int, payload: AgreementStatusUpdate, db: AsyncSession = Depends(get_db)):

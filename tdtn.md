@@ -1379,5 +1379,8 @@ Completed Checklist Video Integration
 - Agreement workspace now includes a persistent template editor: create internal templates and edit their bodies through the authenticated template API.
 - Verification: Command API tests pass (13) and frontend typecheck passes.
 
+- Task links are now retrievable and visible from Tasks: `GET /tasks/{task_id}/links` returns persisted internal links, and the task card can load/display their entity type and ID.
+- Verification: Command API tests pass (13), frontend typecheck passes, and all Command backend tests pass (10).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

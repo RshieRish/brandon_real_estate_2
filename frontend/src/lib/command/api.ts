@@ -49,5 +49,6 @@ export const commandApi = {
   eventBreakdown: () => request<{ events: { event_type: string; count: number }[] }>('/reports/event-breakdown'),
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   addTaskLink: (taskId: number, entityType: string, entityId: number) => request<{ id: number; task_id: number; entity_type: string; entity_id: number }>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
+  taskLinks: (taskId: number) => request<{ id: number; task_id: number; entity_type: string; entity_id: number }[]>(`/tasks/${taskId}/links`),
   updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'status' | 'due_at'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 };

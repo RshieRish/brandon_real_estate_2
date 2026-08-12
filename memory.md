@@ -227,3 +227,4 @@ Added interactive videos to Seller Staging Checklist
 - Agreement state transitions are now server-validated and forward-only, with terminal completed/voided/expired states protected.
 - Agreement templates now expose a persisted body update API for template-editor UI work.
 - Agreement template editor UI now creates and edits internal template bodies through the authenticated Command API.
+- Task links now have a retrieval API and are visible from the task workspace.
