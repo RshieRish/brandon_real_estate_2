@@ -86,3 +86,17 @@ class ListingOut(ListingCreate):
     id: int
     status: str
     class Config: from_attributes = True
+
+class TemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    body: str = ""
+class TemplateOut(TemplateCreate):
+    id: int
+    class Config: from_attributes = True
+class FileAssetCreate(BaseModel):
+    filename: str = Field(min_length=1, max_length=500)
+    storage_key: str = Field(min_length=1, max_length=500)
+    content_type: str = "application/octet-stream"
+class FileAssetOut(FileAssetCreate):
+    id: int
+    class Config: from_attributes = True

@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMListingRecord, CRMNote, CRMOpportunity, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMSmartPlan, CRMSmartPlanEnrollment, CRMTask
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -102,6 +102,19 @@ async def agreements(db: AsyncSession = Depends(get_db)):
 @router.post("/agreements", response_model=AgreementOut)
 async def create_agreement(payload: AgreementCreate, db: AsyncSession = Depends(get_db)):
     item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.get("/agreement-templates", response_model=list[TemplateOut])
+async def templates(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMAgreementTemplate))).scalars().all()
+@router.post("/agreement-templates", response_model=TemplateOut)
+async def create_template(payload: TemplateCreate, db: AsyncSession = Depends(get_db)):
+    item=CRMAgreementTemplate(**payload.model_dump()); db.add(item); await db.flush(); return item
+@router.get("/files", response_model=list[FileAssetOut])
+async def files(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMFileAsset))).scalars().all()
+@router.post("/files", response_model=FileAssetOut)
+async def create_file(payload: FileAssetCreate, db: AsyncSession = Depends(get_db)):
+    item=CRMFileAsset(**payload.model_dump()); db.add(item); await db.flush(); return item
 
 @router.get("/listings", response_model=list[ListingOut])
 async def listings(db: AsyncSession = Depends(get_db)):
