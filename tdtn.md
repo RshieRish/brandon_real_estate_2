@@ -1505,3 +1505,6 @@ Completed Checklist Video Integration
 
 - Opportunity stage changes and new contact/opportunity relationships now create contact-scoped immutable timeline activity, so the contact workspace retains the full pipeline history.
 - Verification: 25 focused Command backend tests pass.
+
+- Agreement creation/status changes and Smart Plan enrollment/status changes now emit contact-scoped immutable CRM activity. Each contact timeline now carries the agreement and automation events attached to that person.
+- Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.

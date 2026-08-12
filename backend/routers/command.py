@@ -366,6 +366,8 @@ async def update_agreement_status(agreement_id: int, payload: AgreementStatusUpd
         raise HTTPException(422, str(exc)) from exc
     item.status = payload.status; await db.flush()
     db.add(CRMAgreementEvent(agreement_id=item.id, event_type=payload.status))
+    if item.contact_id:
+        db.add(CRMActivity(contact_id=item.contact_id, kind="agreement_status_changed", summary=f"Agreement {item.title} moved to {item.status}"))
     await db.flush()
     return {"id": item.id, "status": item.status}
 
@@ -378,7 +380,10 @@ async def create_agreement(payload: AgreementCreate, db: AsyncSession = Depends(
     if payload.contact_id is not None and not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Contact not found")
     if payload.template_id is not None and not await db.get(CRMAgreementTemplate, payload.template_id): raise HTTPException(404, "Agreement template not found")
     item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush()
-    db.add(CRMAgreementEvent(agreement_id=item.id, event_type="draft")); await db.flush(); return item
+    db.add(CRMAgreementEvent(agreement_id=item.id, event_type="draft"))
+    if item.contact_id:
+        db.add(CRMActivity(contact_id=item.contact_id, kind="agreement_created", summary=f"Agreement created: {item.title}"))
+    await db.flush(); return item
 
 @router.get("/agreements/{agreement_id}/workspace")
 async def agreement_workspace(agreement_id: int, db: AsyncSession = Depends(get_db)):
@@ -516,13 +521,21 @@ async def enroll_contact(plan_id: int, payload: SmartPlanEnrollmentCreate, db: A
     existing = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.smart_plan_id == plan_id, CRMSmartPlanEnrollment.contact_id == payload.contact_id))).scalar_one_or_none()
     if existing:
         return {"id": existing.id, "contact_id": existing.contact_id, "status": existing.status}
-    item=CRMSmartPlanEnrollment(smart_plan_id=plan_id,contact_id=payload.contact_id); db.add(item); await db.flush(); return {"id":item.id,"status":item.status}
+    plan = await db.get(CRMSmartPlan, plan_id)
+    item=CRMSmartPlanEnrollment(smart_plan_id=plan_id,contact_id=payload.contact_id); db.add(item); await db.flush()
+    db.add(CRMActivity(contact_id=item.contact_id, kind="smart_plan_enrolled", summary=f"Enrolled in Smart Plan: {plan.name if plan else plan_id}"))
+    await db.flush(); return {"id":item.id,"status":item.status}
 
 @router.patch("/smart-plans/{plan_id}/enrollments/{enrollment_id}")
 async def update_plan_enrollment(plan_id: int, enrollment_id: int, payload: SmartPlanEnrollmentUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMSmartPlanEnrollment, enrollment_id)
     if not item or item.smart_plan_id != plan_id: raise HTTPException(404, "Smart Plan enrollment not found")
-    item.status = payload.status; await db.flush(); return {"id": item.id, "status": item.status}
+    changed = item.status != payload.status
+    item.status = payload.status
+    if changed:
+        plan = await db.get(CRMSmartPlan, plan_id)
+        db.add(CRMActivity(contact_id=item.contact_id, kind="smart_plan_enrollment_changed", summary=f"Smart Plan {plan.name if plan else plan_id} enrollment {item.status}"))
+    await db.flush(); return {"id": item.id, "status": item.status}
 
 
 @router.get("/opportunities", response_model=list[OpportunityOut])
