@@ -64,6 +64,32 @@ async def generate_ai_briefing(db:AsyncSession=Depends(get_db)):
 async def reports_summary(db:AsyncSession=Depends(get_db)):
     return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,CRMTask.status!="completed"),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
 
+
+@router.get("/reports/details/{metric}")
+async def report_details(metric: str, db: AsyncSession = Depends(get_db)):
+    """Bounded, read-only drilldown behind a Command report card."""
+    if metric == "contacts":
+        rows = (await db.execute(select(CRMContact).order_by(CRMContact.updated_at.desc()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": f"{row.first_name} {row.last_name}".strip(), "detail": row.stage, "occurred_at": row.updated_at} for row in rows]
+    elif metric == "leads":
+        rows = (await db.execute(select(Lead).order_by(Lead.updated_at.desc()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": row.name or "Unnamed lead", "detail": f"{row.routing_status} · {row.source or 'internal'}", "occurred_at": row.updated_at} for row in rows]
+    elif metric == "open_tasks":
+        rows = (await db.execute(select(CRMTask).where(CRMTask.status != "completed").order_by(CRMTask.due_at.asc().nulls_last()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": row.title, "detail": f"{row.status} · {row.priority}", "occurred_at": row.due_at or row.updated_at} for row in rows]
+    elif metric == "opportunities":
+        rows = (await db.execute(select(CRMOpportunity).order_by(CRMOpportunity.updated_at.desc()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": row.name, "detail": f"{row.stage}{f' · ${(row.value_cents or 0) / 100:,.0f}' if row.value_cents else ''}", "occurred_at": row.updated_at} for row in rows]
+    elif metric == "agreements":
+        rows = (await db.execute(select(CRMAgreement).order_by(CRMAgreement.updated_at.desc()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": row.title, "detail": row.status, "occurred_at": row.updated_at} for row in rows]
+    elif metric == "events":
+        rows = (await db.execute(select(AnalyticsEvent).order_by(AnalyticsEvent.created_at.desc()).limit(25))).scalars().all()
+        data = [{"id": row.id, "title": row.event_type, "detail": row.page or "No page recorded", "occurred_at": row.created_at} for row in rows]
+    else:
+        raise HTTPException(404, "Unknown report metric")
+    return {"metric": metric, "rows": data}
+
 @router.get("/growth/summary")
 async def growth_summary(db:AsyncSession=Depends(get_db)):
     return {"content_blocks":await _count(db,ContentBlock),"funnels":await _count(db,Funnel),"leads":await _count(db,Lead),"analytics_events":await _count(db,AnalyticsEvent)}

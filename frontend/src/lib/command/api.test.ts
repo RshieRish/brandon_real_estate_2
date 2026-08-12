@@ -193,4 +193,13 @@ describe('commandApi', () => {
     await expect(commandApi.contactWorkspace(14)).resolves.toMatchObject({ bookings: [] });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/workspace'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-contact-workspace' }) }));
   });
+
+  it('loads a report-card drilldown through the authenticated Command API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-report-detail' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ metric: 'contacts', rows: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.reportDetails('contacts')).resolves.toMatchObject({ metric: 'contacts' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/reports/details/contacts'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-report-detail' }) }));
+  });
 });

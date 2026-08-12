@@ -1428,3 +1428,6 @@ Completed Checklist Video Integration
 
 - Contact workspaces now include a Bookings tab built from the existing authoritative `bookings` table. The server links bookings by internal lead ID when available and otherwise by case-insensitive internal contact email; it does not duplicate or mutate booking records. The frontend now uses a typed contact-workspace API boundary rather than a route-local fetch.
 - Verification: 14 focused Command backend tests, 21 Command frontend API tests, and TypeScript pass. Authenticated runtime contact-workspace read returned the contact and a `bookings` array. The reproducible frontend `.next` cache was removed to reclaim local temporary-disk space for the runtime check; no source or persisted data was deleted.
+
+- Reports now has individual report-card drilldowns. Each aggregate card opens a bounded, read-only list of its current supporting contacts, leads, open tasks, opportunities, agreements, or analytics events. The report page also uses the typed authenticated client for its summary instead of a local fetch.
+- Verification: 14 focused Command backend tests, 22 Command frontend API tests, and TypeScript pass. Authenticated runtime `reports/details/contacts` returned the expected metric with a result set capped at 25 rows.
