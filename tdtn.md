@@ -1454,3 +1454,6 @@ Completed Checklist Video Integration
 
 - Internal agreement creation now supports selecting an existing internal template and persists `template_id` on the agreement record. The server validates optional contact/template references before creating the agreement and its initial audit event; this remains tracking/review only, not legal e-signature execution.
 - Verification: 16 focused Command backend tests, 27 Command frontend API tests, TypeScript, and `git diff --check` pass.
+
+- Opportunity contact relationships now use a complete paginated internal-contact chooser rather than requiring raw IDs. Existing relationship rows resolve to actual internal contact names when available, while writes still use the established validated persisted relationship API.
+- Verification: Command frontend API tests pass (27), TypeScript passes, and `git diff --check` is clean.

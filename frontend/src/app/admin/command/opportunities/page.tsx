@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { Handshake, Plus, Receipt, Users } from '@phosphor-icons/react';
-import { commandApi, type Opportunity, type Relationship } from '@/lib/command/api';
+import { commandApi, type Contact, type Opportunity, type Relationship } from '@/lib/command/api';
 
 type Detail = { opportunity: Opportunity; contacts: Relationship[]; vendors: Relationship[]; offers: Relationship[] };
 
 export default function Page() {
   const [items, setItems] = useState<Opportunity[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [name, setName] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [contactId, setContactId] = useState('');
@@ -15,7 +16,7 @@ export default function Page() {
   const [offerAmount, setOfferAmount] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => { void commandApi.opportunities().then(setItems).catch((err) => setError(err.message)); }, []);
+  useEffect(() => { const load = async () => { const opportunities = await commandApi.opportunities(); const allContacts: Contact[] = []; for (let offset = 0;; offset += 100) { const page = await commandApi.contacts(100, offset); allContacts.push(...page); if (page.length < 100) break; } setItems(opportunities); setContacts(allContacts); }; void load().catch((err) => setError(err.message)); }, []);
 
   async function add() {
     if (!name.trim()) return;
@@ -55,7 +56,7 @@ export default function Page() {
     {error && <p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}
     <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_.9fr]"><section className="space-y-2">{items.map((item) => <button onClick={() => open(item.id)} key={item.id} className="w-full rounded-xl border border-white/10 bg-white/[.035] p-4 text-left hover:border-[#eac469]/40"><b>{item.name}</b><p className="mt-1 text-sm text-white/45">{item.stage} {item.value_cents ? `· $${(item.value_cents / 100).toLocaleString()}` : ''}</p></button>)}</section>
       <aside className="rounded-2xl border border-white/10 bg-white/[.035] p-5">{detail ? <><h2 className="text-xl font-bold">{detail.opportunity.name}</h2><label className="mt-3 block text-xs uppercase tracking-widest text-white/45">Pipeline stage<select value={detail.opportunity.stage} onChange={(event) => moveStage(event.target.value)} className="mt-2 block w-full rounded-lg border border-white/10 bg-black/40 p-2 text-sm text-white">{['cultivate','appointment','active','offer','under_contract','closed','lost'].map((stage) => <option key={stage} value={stage}>{stage.replace('_', ' ')}</option>)}</select></label>
-        <RelationshipSection icon={<Users size={17} className="text-[#eac469]" />} label="Contacts" rows={detail.contacts.map((item) => `Contact #${item.contact_id} · ${item.role}`)} input={<input value={contactId} onChange={(event) => setContactId(event.target.value)} inputMode="numeric" placeholder="Contact ID" className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm" />} onAdd={addContact} />
+        <RelationshipSection icon={<Users size={17} className="text-[#eac469]" />} label="Contacts" rows={detail.contacts.map((item) => { const contact = contacts.find((candidate) => candidate.id === item.contact_id); return `${contact ? `${contact.first_name} ${contact.last_name}` : `Contact #${item.contact_id}`} · ${item.role}`; })} input={<select aria-label="Opportunity contact" value={contactId} onChange={(event) => setContactId(event.target.value)} className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm"><option value="">Select contact</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.first_name} {contact.last_name}</option>)}</select>} onAdd={addContact} />
         <RelationshipSection icon={<Handshake size={17} className="text-[#eac469]" />} label="Vendors" rows={detail.vendors.map((item) => `${item.name} · ${item.role}`)} input={<input value={vendorName} onChange={(event) => setVendorName(event.target.value)} placeholder="Vendor name" className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm" />} onAdd={addVendor} />
         <RelationshipSection icon={<Receipt size={17} className="text-[#eac469]" />} label="Offers" rows={detail.offers.map((item) => `${item.amount_cents ? `$${(item.amount_cents / 100).toLocaleString()}` : 'Draft'} · ${item.status}`)} input={<input value={offerAmount} onChange={(event) => setOfferAmount(event.target.value)} inputMode="decimal" placeholder="Amount (USD)" className="min-w-0 flex-1 rounded-lg bg-black/30 p-2 text-sm" />} onAdd={addOffer} />
       </> : <p className="text-white/40">Choose an opportunity to manage contacts, vendors, and offers.</p>}</aside>
