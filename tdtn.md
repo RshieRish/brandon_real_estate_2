@@ -1325,3 +1325,6 @@ Completed Checklist Video Integration
 
 - Opportunity workspace now supports actual authenticated additions for linked contacts, vendors, and offers. Additions reload the authoritative backend workspace state and show API errors in the UI.
 - Verification: frontend typecheck and focused Command API tests pass.
+
+- Smart Plan detail workspaces now persist action steps and contact enrollments through the authenticated backend rather than merely rendering their counts.
+- Verification: frontend typecheck and focused Command API tests pass after the new Smart Plan API coverage.

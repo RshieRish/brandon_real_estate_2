@@ -30,4 +30,16 @@ describe('commandApi', () => {
       body: JSON.stringify({ contact_id: 12, role: 'buyer' }),
     }));
   });
+
+  it('adds a persisted action step to a Smart Plan', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-plan' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 2, position: 1, action_type: 'call' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.addSmartPlanStep(7, 1, 'call', { title: 'Initial consult' })).resolves.toMatchObject({ action_type: 'call' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/steps'), expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ position: 1, action_type: 'call', payload: { title: 'Initial consult' } }),
+    }));
+  });
 });
