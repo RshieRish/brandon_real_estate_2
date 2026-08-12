@@ -1388,6 +1388,9 @@ Completed Checklist Video Integration
 - Listings now support validated persisted lifecycle states (active, pending, sold, withdrawn) through the Listings workspace and API.
 - Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
 
+- Sweeney AI briefing now visibly reports backend provenance and review-required state, with explicit error handling for unavailable/generation failures. It remains review-only and does not take automatic action.
+- Verification: frontend typecheck passes and Command API tests remain passing (15).
+
 - Contact profiles now support validated persisted edits to name, email, phone, and stage. Profile edits append `contact_updated` activity while stage-only edits retain `stage_changed` activity.
 - Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
 
