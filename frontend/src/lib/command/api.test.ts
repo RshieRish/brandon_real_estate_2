@@ -183,6 +183,16 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/archive/import'), expect.objectContaining({ method: 'POST' }));
   });
 
+  it('downloads recovered artifact bytes through an authenticated non-JSON request', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-artifact-download' });
+    const payload = new Blob(['recovered source']);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => payload });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.archiveArtifactBlob(42)).resolves.toBe(payload);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/archive/artifacts/42/content'), expect.objectContaining({ headers: { Authorization: 'Bearer token-artifact-download' } }));
+  });
+
   it('requests contacts with server-side search and stage filters', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-contact-filter' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });

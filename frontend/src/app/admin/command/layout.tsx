@@ -2,10 +2,10 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChartBar, CheckCircle, FileText, Handshake, House, List, MagnifyingGlass, MapPin, Megaphone, Sparkle, UploadSimple, Users, X } from '@phosphor-icons/react';
+import { Archive, ChartBar, CheckCircle, FileText, Handshake, House, List, MagnifyingGlass, MapPin, Megaphone, Sparkle, UploadSimple, Users, X } from '@phosphor-icons/react';
 import { useState } from 'react';
 
-const links = [['Contacts', '/admin/command/contacts', Users], ['Saved searches', '/admin/command/saved-searches', MagnifyingGlass], ['Tasks', '/admin/command/tasks', CheckCircle], ['Smart Plans', '/admin/command/smart-plans', Sparkle], ['Opportunities', '/admin/command/opportunities', ChartBar], ['Referrals', '/admin/command/referrals', Handshake], ['Marketing', '/admin/command/marketing', Megaphone], ['Agreements', '/admin/command/agreements', FileText], ['Reports', '/admin/command/reports', ChartBar], ['Listings & Map', '/admin/command/listings', MapPin], ['Websites', '/admin/command/websites', House], ['Sweeney AI', '/admin/command/ai', Sparkle], ['Import contacts', '/admin/command/import', UploadSimple]] as const;
+const links = [['Contacts', '/admin/command/contacts', Users], ['Saved searches', '/admin/command/saved-searches', MagnifyingGlass], ['Tasks', '/admin/command/tasks', CheckCircle], ['Smart Plans', '/admin/command/smart-plans', Sparkle], ['Opportunities', '/admin/command/opportunities', ChartBar], ['Referrals', '/admin/command/referrals', Handshake], ['Marketing', '/admin/command/marketing', Megaphone], ['Agreements', '/admin/command/agreements', FileText], ['Reports', '/admin/command/reports', ChartBar], ['Listings & Map', '/admin/command/listings', MapPin], ['Websites', '/admin/command/websites', House], ['Recovered archive', '/admin/command/archive', Archive], ['Sweeney AI', '/admin/command/ai', Sparkle], ['Import contacts', '/admin/command/import', UploadSimple]] as const;
 
 function Navigation({ path, close }: { path: string; close?: () => void }) { return <>{links.map(([label, href, Icon]) => <Link onClick={close} key={href} href={href} className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm ${path === href ? 'bg-[#eac469] font-bold text-black' : 'text-white/60 hover:bg-white/5'}`}><Icon size={17} />{label}</Link>)}</>; }
 

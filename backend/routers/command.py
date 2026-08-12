@@ -1,13 +1,13 @@
 import asyncio
 from datetime import datetime
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMReferral, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMArchiveArtifact, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMReferral, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
 from models.lead import Lead
 from models.booking import Booking
 from models.analytics_event import AnalyticsEvent
@@ -79,6 +79,37 @@ async def generate_ai_briefing(db:AsyncSession=Depends(get_db)):
 @router.get("/reports/summary")
 async def reports_summary(db:AsyncSession=Depends(get_db)):
     return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,CRMTask.status!="completed"),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
+
+
+@router.get("/archive/artifacts")
+async def archive_artifacts(domain: str | None = None, artifact_type: str | None = None, limit: int = 100, offset: int = 0, db: AsyncSession = Depends(get_db)):
+    """Browse the complete private recovered-archive catalog."""
+    statement = select(CRMArchiveArtifact).order_by(CRMArchiveArtifact.source_path)
+    if domain:
+        statement = statement.where(CRMArchiveArtifact.domain == domain)
+    if artifact_type:
+        statement = statement.where(CRMArchiveArtifact.artifact_type == artifact_type)
+    count_statement = select(func.count()).select_from(CRMArchiveArtifact)
+    if domain:
+        count_statement = count_statement.where(CRMArchiveArtifact.domain == domain)
+    if artifact_type:
+        count_statement = count_statement.where(CRMArchiveArtifact.artifact_type == artifact_type)
+    total = int((await db.execute(count_statement)).scalar_one())
+    rows = (await db.execute(statement.offset(max(offset, 0)).limit(min(max(limit, 1), 200)))).scalars().all()
+    return {"total": total, "rows": [{"id": row.id, "domain": row.domain, "artifact_type": row.artifact_type, "filename": row.filename, "source_path": row.source_path, "sha256": row.sha256, "size_bytes": row.size_bytes, "text_preview": row.text_preview} for row in rows]}
+
+
+@router.get("/archive/artifacts/{artifact_id}/content")
+async def archive_artifact_content(artifact_id: int, db: AsyncSession = Depends(get_db)):
+    """Return an original recovered artifact only to an authenticated admin."""
+    artifact = await db.get(CRMArchiveArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Recovered artifact not found")
+    if artifact.content_bytes is None:
+        raise HTTPException(409, "Recovered artifact bytes are not yet stored internally")
+    media_type = {"html": "text/html", "json": "application/json", "txt": "text/plain", "csv": "text/csv", "zip": "application/zip", "png": "image/png", "pdf": "application/pdf"}.get(artifact.artifact_type, "application/octet-stream")
+    safe_name = artifact.filename.replace('"', "")
+    return Response(content=artifact.content_bytes, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{safe_name}"', "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/reports/details/{metric}")

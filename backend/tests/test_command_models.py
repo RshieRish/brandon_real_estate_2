@@ -10,6 +10,57 @@ from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
 
 
+def test_archive_contact_parser_extracts_identity_and_profile_fields():
+    from services.command_archive import parse_contact_capture
+
+    record = parse_contact_capture("""Search Contacts
+Adam Pappastergion
+Last contact on 7 months ago
+Primary Phone
++1 978 995 7104
+Primary Email
+apappastergion@gmail.com
+Lead Source
+Facebook
+Birthday
+August 30
+Home Anniversary
+September 23, 2022""")
+
+    assert record == {
+        "first_name": "Adam", "last_name": "Pappastergion", "email": "apappastergion@gmail.com",
+        "phone": "+1 978 995 7104", "stage": "lead", "birthday": "08-30", "anniversary": "2022-09-23",
+    }
+
+
+def test_archive_inventory_is_checksum_backed_and_domain_classified(tmp_path):
+    from services.command_archive import archive_inventory
+
+    (tmp_path / "kw_command_full").mkdir()
+    (tmp_path / "docusign_full").mkdir()
+    (tmp_path / "kw_command_full" / "contact.snapshot.txt").write_text("Jane Doe")
+    (tmp_path / "docusign_full" / "agreement.json").write_text('{"title":"Offer"}')
+
+    rows = archive_inventory(tmp_path)
+
+    assert [(row["domain"], row["artifact_type"], row["filename"]) for row in rows] == [
+        ("docusign", "json", "agreement.json"),
+        ("kw_command", "txt", "contact.snapshot.txt"),
+    ]
+    assert all(len(row["sha256"]) == 64 for row in rows)
+
+
+def test_archive_artifact_can_hold_private_source_bytes():
+    from models.command import CRMArchiveArtifact
+
+    artifact = CRMArchiveArtifact(
+        source_path="docusign_full/downloads/example.zip", domain="docusign", artifact_type="zip",
+        filename="example.zip", sha256="a" * 64, size_bytes=3, content_bytes=b"zip",
+    )
+
+    assert artifact.content_bytes == b"zip"
+
+
 def test_command_models_expose_safe_defaults_and_links():
     contact = CRMContact(first_name="Brandon", last_name="Sweeney")
     task = CRMTask(title="Call Brandon")

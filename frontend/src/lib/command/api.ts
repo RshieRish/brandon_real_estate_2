@@ -23,6 +23,7 @@ export type AgreementTemplate = { id: number; name: string; body: string };
 export type MarketingRecords = { content_blocks: { id: number; block_id: string; page: string | null; content_type: string; updated_at: string }[]; funnels: { id: number; title: string; slug: string; audience: string; status: string; registrations: number; updated_at: string }[] };
 export type Listing = { id:number; address:string; latitude:string|null; longitude:string|null; status:string };
 export type Referral = { id: number; name: string; source: string; contact_id: number | null; status: string };
+export type ArchiveArtifact = { id: number; domain: string; artifact_type: string; filename: string; source_path: string; sha256: string; size_bytes: number; text_preview: string };
 export type Relationship = { id:number; contact_id?:number; name?:string; email?:string; role:string; amount_cents?:number|null; status?:string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -30,6 +31,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1/command${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init?.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Unable to load Command workspace');
   return response.json() as Promise<T>;
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  const token = localStorage.getItem('admin_token');
+  const response = await fetch(`${API_URL}/api/v1/command${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Unable to retrieve recovered artifact');
+  return response.blob();
 }
 
 export const commandApi = {
@@ -83,6 +91,8 @@ export const commandApi = {
   websiteRecords: () => request<{ pages: MarketingRecords['content_blocks'] }>('/websites/records'),
   eventBreakdown: () => request<{ events: { event_type: string; count: number }[] }>('/reports/event-breakdown'),
   reportsSummary: () => request<Record<string, number>>('/reports/summary'),
+  archiveArtifacts: (domain?: string, offset = 0) => { const params = new URLSearchParams({ limit: '100', offset: String(offset) }); if (domain) params.set('domain', domain); return request<{ total: number; rows: ArchiveArtifact[] }>(`/archive/artifacts?${params}`); },
+  archiveArtifactBlob: (id: number) => requestBlob(`/archive/artifacts/${id}/content`),
   reportDetails: (metric: string) => request<ReportDetails>(`/reports/details/${encodeURIComponent(metric)}`),
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   addTaskLink: (taskId: number, entityType: string, entityId: number) => request<TaskLink>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),

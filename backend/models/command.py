@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -223,3 +223,23 @@ class CRMFileAsset(Timestamped, Base):
     filename: Mapped[str] = mapped_column(String(500))
     storage_key: Mapped[str] = mapped_column(String(500))
     content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+
+
+class CRMArchiveArtifact(Timestamped, Base):
+    """Immutable index of a recovered, permitted source artifact.
+
+    The source file remains in the private archive; the catalog makes every
+    captured page and download discoverable without pretending it was parsed
+    into a richer CRM record than the capture actually supports.
+    """
+    __tablename__ = "crm_archive_artifacts"
+    __table_args__ = (UniqueConstraint("source_path", name="uq_crm_archive_artifact_source_path"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_path: Mapped[str] = mapped_column(String(1000))
+    domain: Mapped[str] = mapped_column(String(64))
+    artifact_type: Mapped[str] = mapped_column(String(64))
+    filename: Mapped[str] = mapped_column(String(500))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    text_preview: Mapped[str] = mapped_column(Text, default="")
+    content_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)

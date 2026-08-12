@@ -1319,6 +1319,15 @@ Completed Checklist Video Integration
 - Status: Complete
 # Command workspace continuation (2026-08-12)
 
+## 2026-08-12 - Recovered Command and DocuSign archive catalog
+
+- Recovered the permitted local account archive at `Documents/Codex/2026-07-27/realtime-voice-chat/outputs/authorized-account-archive` and applied additive migration `fe2a1c4b8d75`.
+- The configured internal PostgreSQL database now contains a checksum-backed catalog of all 12,580 recovered source artifacts. The Command admin includes `/admin/command/archive`, which browses the preserved private captures by source system; normalized records remain in their respective CRM modules.
+- Initial normalized import is present for recovered contacts, tasks, notes, SmartPlan enrollments, timelines, listings, and a captured opportunity. Referral/network and DocuSign evidence are preserved in the catalog; do not claim that a rendered count is equivalent to 2,318 individual structured referral records.
+- DocuSign normalization now includes 2 captured templates, 117 unique agreement titles/events parsed from the four recovered list pages, and 151 private file metadata entries for recovered downloads/pending forms. The raw source evidence remains cataloged for reconciliation.
+- Added migration `ff7d8e1a9234` and a resumable checksum-verifying importer that stores the original artifact bytes in PostgreSQL, so recovered evidence no longer depends on this Mac's filesystem or unavailable external object storage. The protected archive UI now downloads originals through the authenticated Command API. Bulk byte persistence is actively progressing and must be reconciled to 12,580 rows before completion.
+- Completed the byte reconciliation: all 12,580 artifacts are non-null in PostgreSQL, totaling 745,060,261 bytes. Three spread source-to-database checksum/length probes passed, and an authenticated API retrieval of a 956,385-byte DocuSign artifact returned HTTP 200 with its exact cataloged length and attachment disposition. Focused backend tests (25), frontend Command API tests (35), TypeScript, and frontend production build pass.
+
 - Added an authenticated bulk-contact import endpoint for permitted internal source data. It accepts up to 1,000 contacts per request, skips duplicate email addresses, and writes a `contact_imported` activity for every created record.
 - Contact workspace responses now resolve and return every opportunity linked through the internal opportunity-contact relation, including the opportunity’s name, stage, value, and the contact’s role. The former empty Opportunities tab payload is removed.
 - Verification: command model and private storage tests pass (4 tests). The repository-wide test run still has seven pre-existing notification retry assertion failures, unrelated to the Command workspace.
