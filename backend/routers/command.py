@@ -14,7 +14,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -144,11 +144,14 @@ async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
     return item
 
 @router.patch("/contacts/{contact_id}", response_model=ContactOut)
-async def update_contact_stage(contact_id: int, payload: ContactStageUpdate, db: AsyncSession = Depends(get_db)):
+async def update_contact(contact_id: int, payload: ContactUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMContact, contact_id)
     if not item: raise HTTPException(404, "Contact not found")
-    item.stage = payload.stage
-    db.add(CRMActivity(contact_id=item.id, kind="stage_changed", summary=f"Contact stage changed to {payload.stage}"))
+    changes = payload.model_dump(exclude_none=True)
+    for field, value in changes.items(): setattr(item, field, value)
+    kind = "stage_changed" if set(changes) == {"stage"} else "contact_updated"
+    summary = f"Contact stage changed to {changes['stage']}" if kind == "stage_changed" else "Updated contact profile"
+    db.add(CRMActivity(contact_id=item.id, kind=kind, summary=summary))
     await db.flush(); return item
 
 @router.get("/contacts/{contact_id}/workspace")

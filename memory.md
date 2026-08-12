@@ -230,3 +230,4 @@ Added interactive videos to Seller Staging Checklist
 - Task links now have a retrieval API and are visible from the task workspace.
 - Tasks now support server-side status and due-date filtering with matching workspace controls.
 - Listings now support persisted active/pending/sold/withdrawn lifecycle status changes.
+- Contact profile fields now support persisted edits with timeline activity auditing.

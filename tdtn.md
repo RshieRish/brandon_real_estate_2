@@ -1388,5 +1388,8 @@ Completed Checklist Video Integration
 - Listings now support validated persisted lifecycle states (active, pending, sold, withdrawn) through the Listings workspace and API.
 - Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
 
+- Contact profiles now support validated persisted edits to name, email, phone, and stage. Profile edits append `contact_updated` activity while stage-only edits retain `stage_changed` activity.
+- Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

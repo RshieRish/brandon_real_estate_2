@@ -14,6 +14,14 @@ class ContactStageUpdate(BaseModel):
     stage: str = Field(min_length=1, max_length=50)
 
 
+class ContactUpdate(BaseModel):
+    first_name: str | None = Field(default=None, min_length=1, max_length=120)
+    last_name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=50)
+    stage: str | None = Field(default=None, min_length=1, max_length=50)
+
+
 class ContactOut(ContactCreate):
     id: int
     stage: str
