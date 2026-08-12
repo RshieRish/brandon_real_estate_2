@@ -1366,3 +1366,6 @@ Completed Checklist Video Integration
 - Verification: Command API tests pass (12) and frontend typecheck passes.
 
 - Current-branch verification sweep: all frontend tests pass (46), TypeScript passes, production build completes, and all Command backend tests pass (8). The production build retains the known non-fatal local content-block API connection warning during static public-page generation.
+
+- Agreement detail workspaces now support private file upload directly to the selected agreement using the existing server-side object-storage path and `agreement_id` relation.
+- Verification: frontend typecheck passes.

@@ -222,3 +222,4 @@ Added interactive videos to Seller Staging Checklist
 - Added and applied `fc0e8a4b9422` for generic task-to-internal-record links. API path: POST `/api/v1/command/tasks/{task_id}/links`.
 - The Tasks workspace now exposes the persisted task-link workflow for contacts, opportunities, agreements, and listings.
 - Latest Command branch verification: 46 frontend tests, frontend typecheck/build, and 8 focused Command backend tests pass. Build retains the unrelated non-fatal local content-block fetch warning.
+- Agreement detail UI now uploads private files directly to the selected agreement through the existing protected storage endpoint.
