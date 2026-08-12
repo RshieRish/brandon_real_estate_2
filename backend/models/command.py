@@ -67,6 +67,18 @@ class CRMNote(Timestamped, Base):
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
     body: Mapped[str] = mapped_column(Text)
 
+class CRMTag(Base):
+    __tablename__ = "crm_tags"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+
+class CRMSavedSearch(Timestamped, Base):
+    __tablename__ = "crm_saved_searches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    criteria_json: Mapped[str] = mapped_column("criteria", Text, default="{}")
+
 
 class CRMSmartPlan(Timestamped, Base):
     __tablename__ = "crm_smart_plans"
