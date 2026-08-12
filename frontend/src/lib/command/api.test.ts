@@ -264,6 +264,16 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/saved-searches'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Follow-up context', criteria: { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' } }) }));
   });
 
+  it('removes scoped contact notes and tags through protected Command routes', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-cleanup' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ deleted: true }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await commandApi.deleteContactNote(14, 3);
+    await commandApi.removeContactTag(14, 5);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, expect.stringContaining('/contacts/14/notes/3'), expect.objectContaining({ method: 'DELETE' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, expect.stringContaining('/contacts/14/tags/5'), expect.objectContaining({ method: 'DELETE' }));
+  });
+
   it('lists and deletes saved searches through the authenticated Command API', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-saved-search-list' });
     const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => [] }).mockResolvedValueOnce({ ok: true, json: async () => ({ deleted: true, id: 4 }) });

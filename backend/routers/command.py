@@ -263,10 +263,28 @@ async def assign_tag(contact_id:int,tag_id:int,db:AsyncSession=Depends(get_db)):
     if not existing:db.add(CRMContactTag(contact_id=contact_id,tag_id=tag_id));await db.flush()
     return {"contact_id":contact_id,"tag_id":tag_id}
 
+@router.delete("/contacts/{contact_id}/tags/{tag_id}")
+async def remove_tag(contact_id: int, tag_id: int, db: AsyncSession = Depends(get_db)):
+    assignment = (await db.execute(select(CRMContactTag).where(CRMContactTag.contact_id == contact_id, CRMContactTag.tag_id == tag_id))).scalar_one_or_none()
+    if not assignment: raise HTTPException(404, "Contact tag not found")
+    await db.delete(assignment)
+    db.add(CRMActivity(contact_id=contact_id, kind="tag_removed", summary="Removed a contact tag"))
+    await db.flush()
+    return {"removed": True, "contact_id": contact_id, "tag_id": tag_id}
+
 @router.post("/contacts/{contact_id}/notes")
 async def create_contact_note(contact_id:int,payload:NoteCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
     note=CRMNote(contact_id=contact_id,body=payload.body);db.add(note);db.add(CRMActivity(contact_id=contact_id,kind="note",summary="Added a contact note"));await db.flush();return {"id":note.id,"body":note.body}
+
+@router.delete("/contacts/{contact_id}/notes/{note_id}")
+async def delete_contact_note(contact_id: int, note_id: int, db: AsyncSession = Depends(get_db)):
+    note = await db.get(CRMNote, note_id)
+    if not note or note.contact_id != contact_id: raise HTTPException(404, "Contact note not found")
+    await db.delete(note)
+    db.add(CRMActivity(contact_id=contact_id, kind="note_removed", summary="Removed a contact note"))
+    await db.flush()
+    return {"deleted": True, "id": note_id}
 @router.post("/contacts/{contact_id}/saved-searches")
 async def create_saved_search(contact_id:int,payload:SavedSearchCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")

@@ -1508,3 +1508,6 @@ Completed Checklist Video Integration
 
 - Agreement creation/status changes and Smart Plan enrollment/status changes now emit contact-scoped immutable CRM activity. Each contact timeline now carries the agreement and automation events attached to that person.
 - Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.
+
+- Contact notes and tags now have complete scoped removal workflows. Removals are protected by contact ownership, refresh in place, and append immutable contact-timeline activity.
+- Verification: 26 focused Command backend tests, 67 frontend tests, TypeScript, and clean 34-route production build pass.

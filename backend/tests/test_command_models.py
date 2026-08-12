@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
@@ -152,3 +152,8 @@ def test_task_link_identity_and_display_name_are_canonical():
 def test_saved_search_belongs_to_optional_canonical_contact_context():
     search = CRMSavedSearch(name="Follow up", contact_id=9, criteria_json='{"stage":"lead"}')
     assert (search.contact_id, search.criteria_json) == (9, '{"stage":"lead"}')
+
+
+def test_contact_notes_and_tag_assignments_remain_scoped_to_the_contact():
+    assert CRMNote(contact_id=7, body="Follow up Friday").contact_id == 7
+    assert CRMContactTag(contact_id=7, tag_id=3).contact_id == 7
