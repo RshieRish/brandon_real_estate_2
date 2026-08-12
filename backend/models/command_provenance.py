@@ -2,7 +2,17 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -32,6 +42,15 @@ class CRMSourceRecord(Timestamped, Base):
             "source_key",
             "parser_version",
             name="uq_crm_source_record_identity",
+        ),
+        CheckConstraint(
+            "evidence_level IN ('observed_record', 'rendered_occurrence', "
+            "'displayed_aggregate')",
+            name="ck_crm_source_records_evidence_level",
+        ),
+        CheckConstraint(
+            "capture_quality IN ('complete', 'partial', 'shell', 'error')",
+            name="ck_crm_source_records_capture_quality",
         ),
         Index(
             "ix_crm_source_records_module_level",
@@ -103,6 +122,16 @@ class CRMEntitySource(Base):
 
 class CRMReconciliationRun(Base):
     __tablename__ = "crm_reconciliation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('dry_run', 'apply', 'verify_only')",
+            name="ck_crm_reconciliation_runs_mode",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'completed', 'failed')",
+            name="ck_crm_reconciliation_runs_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     bundle_fingerprint: Mapped[str] = mapped_column(String(64), index=True)

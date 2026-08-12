@@ -53,6 +53,15 @@ def upgrade() -> None:
             "parser_version",
             name="uq_crm_source_record_identity",
         ),
+        sa.CheckConstraint(
+            "evidence_level IN ('observed_record', 'rendered_occurrence', "
+            "'displayed_aggregate')",
+            name="ck_crm_source_records_evidence_level",
+        ),
+        sa.CheckConstraint(
+            "capture_quality IN ('complete', 'partial', 'shell', 'error')",
+            name="ck_crm_source_records_capture_quality",
+        ),
     )
     op.create_index(
         "ix_crm_source_records_module_level",
@@ -145,6 +154,14 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "mode IN ('dry_run', 'apply', 'verify_only')",
+            name="ck_crm_reconciliation_runs_mode",
+        ),
+        sa.CheckConstraint(
+            "status IN ('running', 'completed', 'failed')",
+            name="ck_crm_reconciliation_runs_status",
+        ),
     )
     op.create_index(
         "ix_crm_reconciliation_runs_bundle_fingerprint",
