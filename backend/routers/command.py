@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTask
+from models.lead import Lead
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
@@ -45,6 +46,20 @@ async def create_contact(payload: ContactCreate, db: AsyncSession = Depends(get_
     db.add(item); await db.flush()
     db.add(CRMActivity(contact_id=item.id, kind="contact_created", summary="Contact created in Command workspace"))
     await db.flush(); return item
+
+@router.post("/contacts/sync-leads")
+async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
+    """Idempotently project existing internal leads into CRM contacts."""
+    leads = (await db.execute(select(Lead))).scalars().all()
+    linked = {row[0] for row in (await db.execute(select(CRMContact.lead_id).where(CRMContact.lead_id.is_not(None)))).all()}
+    created = 0
+    for lead in leads:
+        if lead.id in linked: continue
+        parts = (lead.name or "Unnamed contact").strip().split(maxsplit=1)
+        db.add(CRMContact(lead_id=lead.id, first_name=parts[0], last_name=parts[1] if len(parts) > 1 else "", email=lead.email, phone=lead.phone, stage=lead.routing_status or "lead"))
+        created += 1
+    await db.flush()
+    return {"created": created, "total_legacy_leads": len(leads)}
 
 
 @router.get("/contacts/{contact_id}", response_model=ContactOut)
