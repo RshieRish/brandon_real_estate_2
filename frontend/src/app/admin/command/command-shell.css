@@ -1,0 +1,143 @@
+.command-root {
+  --command-rail: 80px;
+  --command-rail-expanded: 248px;
+  --command-header: 64px;
+  --command-mobile-header: 56px;
+  --command-black: #0a0a0a;
+  --command-graphite: #24262b;
+  --command-ink: #292b31;
+  --command-muted: #6f737b;
+  --command-gold: #eac469;
+  --command-gold-strong: #c08235;
+  --command-canvas: #f6f5f2;
+  --command-surface: #ffffff;
+  --command-border: #dedfdc;
+  --command-danger: #b42318;
+  --command-success: #26724a;
+  min-height: 100dvh;
+  background: var(--command-canvas);
+  color: var(--command-ink);
+}
+
+.command-root .command-rail {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: flex;
+  width: var(--command-rail);
+  min-height: 100dvh;
+  flex-direction: column;
+  background: var(--command-black);
+  color: var(--command-surface);
+}
+
+.command-root .command-rail-overlay {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  width: var(--command-rail-expanded);
+  min-height: 100dvh;
+  background: var(--command-black);
+  color: var(--command-surface);
+  box-shadow: 12px 0 32px rgb(0 0 0 / 24%);
+}
+
+.command-root .command-utility-header {
+  position: fixed;
+  inset: 0 0 auto var(--command-rail);
+  z-index: 40;
+  min-height: var(--command-header);
+  background: var(--command-graphite);
+  color: var(--command-surface);
+}
+
+.command-root .command-content-gutters {
+  padding-inline: 24px;
+}
+
+.command-root .command-touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.command-root :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--command-gold);
+  outline-offset: 2px;
+}
+
+.command-root .command-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.command-root .command-canvas {
+  min-width: 0;
+  min-height: calc(100dvh - var(--command-header));
+  margin-left: var(--command-rail);
+  padding-top: var(--command-header);
+  background: var(--command-canvas);
+}
+
+.command-root .command-main {
+  min-width: 0;
+  min-height: calc(100dvh - var(--command-header));
+  overflow-x: clip;
+}
+
+@media (max-width: 1023px) {
+  .command-root .command-rail,
+  .command-root .command-utility-header {
+    display: none;
+  }
+
+  .command-root .command-mobile-header {
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 40;
+    min-height: var(--command-mobile-header);
+    background: var(--command-black);
+    color: var(--command-surface);
+  }
+
+  .command-root .command-content-gutters {
+    padding-inline: 16px;
+  }
+
+  .command-root .command-canvas {
+    min-height: calc(100dvh - var(--command-mobile-header));
+    margin-left: 0;
+    padding-top: var(--command-mobile-header);
+  }
+
+  .command-root .command-main {
+    min-height: calc(100dvh - var(--command-mobile-header));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-root *,
+  .command-root *::before,
+  .command-root *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  .command-root .command-rail,
+  .command-root .command-rail-overlay,
+  .command-root .command-utility-header,
+  .command-root .command-mobile-header,
+  .command-root .command-print-hidden {
+    display: none !important;
+  }
+
+  .command-root .command-canvas {
+    min-height: auto;
+    margin-left: 0;
+    padding-top: 0;
+  }
+}
