@@ -45,3 +45,25 @@ class OverviewOut(BaseModel):
 
 class AgreementStatusUpdate(BaseModel):
     status: str
+
+
+class NamedRecordCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = ""
+
+
+class NamedRecordOut(NamedRecordCreate):
+    id: int
+    status: str
+    class Config: from_attributes = True
+
+
+class OpportunityCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    stage: str = "cultivate"
+    value_cents: int | None = None
+
+
+class OpportunityOut(OpportunityCreate):
+    id: int
+    class Config: from_attributes = True

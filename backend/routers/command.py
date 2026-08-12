@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMOpportunity, CRMSmartPlan, CRMTask
-from schemas.command import AgreementStatusUpdate, ContactCreate, ContactOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
+from schemas.command import AgreementStatusUpdate, ContactCreate, ContactOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -74,3 +74,23 @@ async def update_agreement_status(agreement_id: int, payload: AgreementStatusUpd
     if not item: raise HTTPException(404, "Agreement not found")
     item.status = payload.status; await db.flush()
     return {"id": item.id, "status": item.status}
+
+
+@router.get("/smart-plans", response_model=list[NamedRecordOut])
+async def smart_plans(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMSmartPlan).order_by(CRMSmartPlan.created_at.desc()))).scalars().all()
+
+
+@router.post("/smart-plans", response_model=NamedRecordOut)
+async def create_smart_plan(payload: NamedRecordCreate, db: AsyncSession = Depends(get_db)):
+    item = CRMSmartPlan(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+
+@router.get("/opportunities", response_model=list[OpportunityOut])
+async def opportunities(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMOpportunity).order_by(CRMOpportunity.created_at.desc()))).scalars().all()
+
+
+@router.post("/opportunities", response_model=OpportunityOut)
+async def create_opportunity(payload: OpportunityCreate, db: AsyncSession = Depends(get_db)):
+    item = CRMOpportunity(**payload.model_dump()); db.add(item); await db.flush(); return item
