@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 import re
+from types import MappingProxyType
 from typing import TypeVar
 
 from models.command_provenance import CaptureQuality, EvidenceLevel
@@ -79,7 +80,7 @@ class SourceRecordDraft:
         try:
             frozen_payload = _freeze_json_value(self.payload)
             json.dumps(
-                frozen_payload,
+                _thaw_json_value(frozen_payload),
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
@@ -120,7 +121,7 @@ class SourceRecordDraft:
     @property
     def payload_json(self) -> str:
         return json.dumps(
-            self.payload,
+            _thaw_json_value(self.payload),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -130,34 +131,6 @@ class SourceRecordDraft:
 
 _EnumType = TypeVar("_EnumType", bound=Enum)
 _LOWERCASE_SHA256 = re.compile(r"[0-9a-f]{64}")
-
-
-class _FrozenJSONDict(dict):
-    """A JSON-object-compatible dict that rejects mutation."""
-
-    @classmethod
-    def _from_items(
-        cls,
-        items: Iterable[tuple[object, object]],
-    ) -> _FrozenJSONDict:
-        frozen = dict.__new__(cls)
-        dict.update(frozen, items)
-        return frozen
-
-    @staticmethod
-    def _immutable(*args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise TypeError("frozen JSON object does not support mutation")
-
-    __init__ = _immutable
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
-    __ior__ = _immutable
 
 
 def _freeze_json_value(
@@ -175,13 +148,26 @@ def _freeze_json_value(
     ancestors.add(identity)
     try:
         if isinstance(value, Mapping):
-            return _FrozenJSONDict._from_items(
-                (key, _freeze_json_value(item, ancestors))
-                for key, item in value.items()
+            return MappingProxyType(
+                {
+                    key: _freeze_json_value(item, ancestors)
+                    for key, item in value.items()
+                }
             )
         return tuple(_freeze_json_value(item, ancestors) for item in value)
     finally:
         ancestors.remove(identity)
+
+
+def _thaw_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _thaw_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_thaw_json_value(item) for item in value]
+    return value
 
 
 def _enum_value(

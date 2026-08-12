@@ -145,27 +145,26 @@ def test_source_draft_payload_rejects_top_level_mutation():
         draft.payload["name"] = "Changed"
 
 
-@pytest.mark.parametrize(
-    ("method_name", "args"),
-    [
-        ("__setitem__", ("added", True)),
-        ("__delitem__", ("name",)),
-        ("clear", ()),
-        ("pop", ("name",)),
-        ("popitem", ()),
-        ("setdefault", ("added", True)),
-        ("update", ({"added": True},)),
-        ("__ior__", ({"added": True},)),
-        ("__init__", ({"added": True},)),
-    ],
-)
-def test_source_draft_payload_blocks_every_dict_mutator(method_name, args):
-    draft = source_draft(payload={"name": "José Rivera"})
+def test_source_draft_payload_uses_true_immutable_mapping_proxies():
+    draft = source_draft(
+        payload={"contact": {"name": "José Rivera"}, "tags": ["buyer"]}
+    )
+
+    assert isinstance(draft.payload, MappingProxyType)
+    assert isinstance(draft.payload["contact"], MappingProxyType)
+    assert not isinstance(draft.payload, dict)
+    assert not isinstance(draft.payload["contact"], dict)
+
+
+def test_source_draft_payload_cannot_be_mutated_through_dict_base_class():
+    draft = source_draft(payload={"contact": {"name": "José Rivera"}})
 
     with pytest.raises(TypeError):
-        getattr(draft.payload, method_name)(*args)
+        dict.__setitem__(draft.payload, "added", True)
+    with pytest.raises(TypeError):
+        dict.__setitem__(draft.payload["contact"], "name", "Changed")
 
-    assert draft.payload_json == '{"name":"José Rivera"}'
+    assert draft.payload_json == '{"contact":{"name":"José Rivera"}}'
 
 
 def test_source_draft_payload_rejects_nested_mapping_mutation():
