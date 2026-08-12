@@ -81,6 +81,15 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/enrollments/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }));
   });
 
+  it('enrolls a selected internal contact into a Smart Plan through the typed API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-enrollment-create' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, contact_id: 13, status: 'active' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.enrollSmartPlanContact(7, 13)).resolves.toMatchObject({ contact_id: 13, status: 'active' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/enrollments'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ contact_id: 13 }) }));
+  });
+
   it('moves an opportunity to a new persisted pipeline stage', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-opportunity' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 3, name: 'Oak Street', stage: 'offer', value_cents: null }) });

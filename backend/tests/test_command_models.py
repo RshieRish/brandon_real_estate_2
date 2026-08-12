@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_model
@@ -117,3 +117,8 @@ def test_contact_import_supports_private_celebration_dates():
     row = ContactImportRow(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
     assert row.birthday == date(1990, 8, 12)
     assert row.anniversary == date(2020, 6, 1)
+
+
+def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():
+    constraint_columns = {tuple(column.name for column in constraint.columns) for constraint in CRMSmartPlanEnrollment.__table__.constraints if getattr(constraint, "columns", None)}
+    assert ("smart_plan_id", "contact_id") in constraint_columns

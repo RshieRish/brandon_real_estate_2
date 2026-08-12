@@ -9,6 +9,7 @@ export type Goal = { id: number; name: string; target_value: number; current_val
 export type AiBriefing = { summary: string; source: string; requires_review: boolean };
 export type Task = { id: number; title: string; contact_id: number | null; description: string; priority: string; due_at: string | null; status: string };
 export type NamedRecord = { id:number; name:string; description:string; status:string };
+export type SmartPlanEnrollment = { id: number; contact_id: number; contact_name: string; status: 'active' | 'paused' | 'completed' };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; template_id?:number|null; status:string };
 export type AgreementWorkspace = { agreement: Agreement; recipients: Relationship[]; events: { id: number; event_type: string; created_at: string }[]; files: { id: number; filename: string; storage_key: string; content_type: string; agreement_id: number | null }[] };
@@ -43,10 +44,10 @@ export const commandApi = {
   updateContact: (id: number, payload: Partial<Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'stage' | 'birthday' | 'anniversary'>>) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   smartPlans: () => request<NamedRecord[]>('/smart-plans'), createSmartPlan: (payload: Pick<NamedRecord,'name'|'description'>) => request<NamedRecord>('/smart-plans',{method:'POST',body:JSON.stringify(payload)}),
   updateSmartPlanStatus: (id: number, status: 'active' | 'paused' | 'archived') => request<NamedRecord>(`/smart-plans/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-  smartPlanWorkspace: (id: number) => request<{ plan: NamedRecord; steps: { id: number; position: number; action_type: string; payload: string }[]; enrollments: { id: number; contact_id: number; status: string }[] }>(`/smart-plans/${id}/workspace`),
+  smartPlanWorkspace: (id: number) => request<{ plan: NamedRecord; steps: { id: number; position: number; action_type: string; payload: string }[]; enrollments: SmartPlanEnrollment[] }>(`/smart-plans/${id}/workspace`),
   addSmartPlanStep: (planId: number, position: number, actionType: string, payload: Record<string, unknown>) => request<{ id: number; position: number; action_type: string }>(`/smart-plans/${planId}/steps`, { method: 'POST', body: JSON.stringify({ position, action_type: actionType, payload }) }),
   updateSmartPlanStep: (planId: number, stepId: number, position: number, actionType: string, payload: Record<string, unknown>) => request<{ id: number; position: number; action_type: string }>(`/smart-plans/${planId}/steps/${stepId}`, { method: 'PATCH', body: JSON.stringify({ position, action_type: actionType, payload }) }),
-  enrollSmartPlanContact: (planId: number, contactId: number) => request<{ id: number; status: string }>(`/smart-plans/${planId}/enrollments`, { method: 'POST', body: JSON.stringify({ contact_id: contactId }) }),
+  enrollSmartPlanContact: (planId: number, contactId: number) => request<{ id: number; contact_id: number; status: string }>(`/smart-plans/${planId}/enrollments`, { method: 'POST', body: JSON.stringify({ contact_id: contactId }) }),
   updateSmartPlanEnrollment: (planId: number, enrollmentId: number, status: 'active' | 'paused' | 'completed') => request<{ id: number; status: string }>(`/smart-plans/${planId}/enrollments/${enrollmentId}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   opportunities: () => request<Opportunity[]>('/opportunities'), createOpportunity: (payload: Omit<Opportunity,'id'>) => request<Opportunity>('/opportunities',{method:'POST',body:JSON.stringify(payload)}),
   updateOpportunity: (id: number, stage: string) => request<Opportunity>(`/opportunities/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),

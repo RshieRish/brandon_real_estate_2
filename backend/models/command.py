@@ -115,6 +115,9 @@ class CRMSmartPlanStep(Base):
 
 class CRMSmartPlanEnrollment(Timestamped, Base):
     __tablename__ = "crm_smart_plan_enrollments"
+    __table_args__ = (
+        UniqueConstraint("smart_plan_id", "contact_id", name="uq_crm_smart_plan_enrollment"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     smart_plan_id: Mapped[int] = mapped_column(ForeignKey("crm_smart_plans.id"))
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))

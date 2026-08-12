@@ -438,8 +438,13 @@ async def smart_plan_workspace(plan_id:int, db:AsyncSession=Depends(get_db)):
     plan=await db.get(CRMSmartPlan,plan_id)
     if not plan: raise HTTPException(404,"Smart Plan not found")
     steps=(await db.execute(select(CRMSmartPlanStep).where(CRMSmartPlanStep.smart_plan_id==plan_id).order_by(CRMSmartPlanStep.position))).scalars().all()
-    enrollments=(await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.smart_plan_id==plan_id))).scalars().all()
-    return {"plan":plan,"steps":[{"id":x.id,"position":x.position,"action_type":x.action_type,"payload":x.payload_json} for x in steps],"enrollments":[{"id":x.id,"contact_id":x.contact_id,"status":x.status} for x in enrollments]}
+    enrollment_rows=(await db.execute(
+        select(CRMSmartPlanEnrollment, CRMContact)
+        .join(CRMContact, CRMContact.id == CRMSmartPlanEnrollment.contact_id)
+        .where(CRMSmartPlanEnrollment.smart_plan_id==plan_id)
+        .order_by(CRMContact.last_name, CRMContact.first_name)
+    )).all()
+    return {"plan":plan,"steps":[{"id":x.id,"position":x.position,"action_type":x.action_type,"payload":x.payload_json} for x in steps],"enrollments":[{"id":enrollment.id,"contact_id":enrollment.contact_id,"contact_name":f"{contact.first_name} {contact.last_name}".strip(),"status":enrollment.status} for enrollment, contact in enrollment_rows]}
 
 @router.post("/smart-plans/{plan_id}/steps")
 async def create_plan_step(plan_id: int, payload: SmartPlanStepCreate, db: AsyncSession = Depends(get_db)):
@@ -456,6 +461,9 @@ async def update_plan_step(plan_id: int, step_id: int, payload: SmartPlanStepCre
 @router.post("/smart-plans/{plan_id}/enrollments")
 async def enroll_contact(plan_id: int, payload: SmartPlanEnrollmentCreate, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMSmartPlan, plan_id) or not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Smart Plan or contact not found")
+    existing = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.smart_plan_id == plan_id, CRMSmartPlanEnrollment.contact_id == payload.contact_id))).scalar_one_or_none()
+    if existing:
+        return {"id": existing.id, "contact_id": existing.contact_id, "status": existing.status}
     item=CRMSmartPlanEnrollment(smart_plan_id=plan_id,contact_id=payload.contact_id); db.add(item); await db.flush(); return {"id":item.id,"status":item.status}
 
 @router.patch("/smart-plans/{plan_id}/enrollments/{enrollment_id}")

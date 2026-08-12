@@ -1469,3 +1469,6 @@ Completed Checklist Video Integration
 
 - Internal contact imports now accept optional birthday and anniversary dates, preserving them in the same persisted CRM contact fields used by Command Home celebrations.
 - Verification: 20 focused Command backend tests pass.
+
+- Smart Plan enrollment now uses a complete internal contact selector, returns the enrolled contact's display name, and prevents duplicate plan/contact enrollment records at both the API and PostgreSQL layers.
+- Verification: migration `e8f2c4a6b901` is applied; 21 focused Command backend tests, 28 Command API tests, and TypeScript pass.
