@@ -232,3 +232,4 @@ Added interactive videos to Seller Staging Checklist
 - Listings now support persisted active/pending/sold/withdrawn lifecycle status changes.
 - Contact profile fields now support persisted edits with timeline activity auditing.
 - Sweeney AI briefing UI now explicitly renders provenance, review-required status, loading, and backend errors.
+- Tasks UI now captures persisted priority and due datetime at creation and displays stored due dates.

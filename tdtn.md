@@ -1391,6 +1391,9 @@ Completed Checklist Video Integration
 - Sweeney AI briefing now visibly reports backend provenance and review-required state, with explicit error handling for unavailable/generation failures. It remains review-only and does not take automatic action.
 - Verification: frontend typecheck passes and Command API tests remain passing (15).
 
+- Tasks workspace now captures and persists priority and due date/time during creation, and displays each stored due date in the task queue.
+- Verification: frontend typecheck passes and Command API tests remain passing (15).
+
 - Contact profiles now support validated persisted edits to name, email, phone, and stage. Profile edits append `contact_updated` activity while stage-only edits retain `stage_changed` activity.
 - Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
 
