@@ -220,3 +220,4 @@ Added interactive videos to Seller Staging Checklist
 - Smart Plan steps can now be edited through a persisted API update from the plan workspace.
 - Command shell now has a responsive mobile navigation drawer on nested module routes.
 - Added and applied `fc0e8a4b9422` for generic task-to-internal-record links. API path: POST `/api/v1/command/tasks/{task_id}/links`.
+- The Tasks workspace now exposes the persisted task-link workflow for contacts, opportunities, agreements, and listings.

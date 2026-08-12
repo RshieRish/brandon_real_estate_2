@@ -107,4 +107,12 @@ describe('commandApi', () => {
     await expect(commandApi.updateSmartPlanStep(7, 4, 2, 'email', { subject: 'Welcome' })).resolves.toMatchObject({ action_type: 'email' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/steps/4'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ position: 2, action_type: 'email', payload: { subject: 'Welcome' } }) }));
   });
+
+  it('creates an internal record link for a task', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-task-link' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 2, task_id: 8, entity_type: 'agreement', entity_id: 15 }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(commandApi.addTaskLink(8, 'agreement', 15)).resolves.toMatchObject({ entity_id: 15 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/8/links'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ entity_type: 'agreement', entity_id: 15 }) }));
+  });
 });

@@ -1361,3 +1361,6 @@ Completed Checklist Video Integration
 
 - Added generic persisted task links (`crm_task_links`) and `POST /tasks/{task_id}/links` so tasks can reference an internal opportunity, agreement, listing, or other entity without copying its data. Migration `fc0e8a4b9422` was validated offline and applied to the configured internal database.
 - Verification: Command model tests pass (5); Alembic current is `fc0e8a4b9422 (head)`.
+
+- Tasks workspace now exposes the task-link workflow: choose a task, choose an internal record type, and persist the target record ID through the Task Links API.
+- Verification: Command API tests pass (12) and frontend typecheck passes.
