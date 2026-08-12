@@ -18,6 +18,9 @@ build/
 # Claude Code worktrees (recursive — never commit)
 .claude/worktrees/
 
+# Local implementation worktrees
+.worktrees/
+
 # public/assets/*.mp4
 # public/assets/*.MP4
 # public/testimonial/*.MP4
