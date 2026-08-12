@@ -198,14 +198,12 @@ def _owned_run_update(run_id: int, claim_token: str):
     )
 
 
-async def _validate_result_records(
-    db: AsyncSession,
+def _validate_result_records(
     records: Sequence[SourceRecordDraft],
     *,
     parser_version: str,
     artifacts_by_path: Mapping[str, ArchiveArtifactInput],
 ) -> None:
-    referenced_paths: set[str] = set()
     for draft in records:
         if draft.parser_version != parser_version:
             raise ReconciliationRunError(
@@ -217,24 +215,29 @@ async def _validate_result_records(
                 raise ReconciliationRunError(
                     f"source draft artifact is outside the fingerprinted bundle: {path}"
                 )
-            referenced_paths.add(path)
 
-    if not referenced_paths:
+
+async def _validate_bundle_catalog(
+    db: AsyncSession,
+    artifacts_by_path: Mapping[str, ArchiveArtifactInput],
+) -> None:
+    """Require every fingerprinted artifact to match its catalog row exactly."""
+    if not artifacts_by_path:
         return
     catalog_rows = await db.scalars(
         select(CRMArchiveArtifact).where(
-            CRMArchiveArtifact.source_path.in_(referenced_paths)
+            CRMArchiveArtifact.source_path.in_(artifacts_by_path)
         )
     )
     catalog_by_path = {row.source_path: row for row in catalog_rows}
-    missing_paths = referenced_paths.difference(catalog_by_path)
+    missing_paths = set(artifacts_by_path).difference(catalog_by_path)
     if missing_paths:
         raise ReconciliationRunError(
             "fingerprinted bundle artifacts are missing from the archive catalog: "
             + ", ".join(sorted(missing_paths))
         )
 
-    for path in sorted(referenced_paths):
+    for path in sorted(artifacts_by_path):
         artifact = artifacts_by_path[path]
         catalog = catalog_by_path[path]
         if catalog.id != artifact.id:
@@ -440,6 +443,7 @@ async def execute_reconciliation(
         await _claim_resume_run(db, run_id, claim_token)
 
     try:
+        await _validate_bundle_catalog(db, artifacts_by_path)
         parsers = registry.select(selected_modules)
         selected = tuple((parser.module, parser) for parser in parsers)
         completed_modules = set(
@@ -462,8 +466,7 @@ async def execute_reconciliation(
                     "parser result module does not match selected module: "
                     f"expected {expected_module!r}, got {result.metrics.module!r}"
                 )
-            await _validate_result_records(
-                db,
+            _validate_result_records(
                 result.records,
                 parser_version=request.parser_version,
                 artifacts_by_path=artifacts_by_path,

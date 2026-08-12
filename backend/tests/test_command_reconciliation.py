@@ -25,6 +25,7 @@ from models.command_provenance import (
     EvidenceLevel,
 )
 from services.command_parsers import (
+    ArchiveIntegrityParser,
     ModuleMetrics,
     ModuleParseResult,
     ParserRegistry,
@@ -126,6 +127,15 @@ class FakeParser:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+class CountingArchiveIntegrityParser(ArchiveIntegrityParser):
+    def __init__(self) -> None:
+        self.parse_calls = 0
+
+    def parse(self, artifacts, parser_version):
+        self.parse_calls += 1
+        return super().parse(artifacts, parser_version)
 
 
 async def seed_artifacts(command_db, *artifacts: ArchiveArtifactInput) -> None:
@@ -329,6 +339,110 @@ async def test_verify_only_selects_exactly_archive_integrity(command_db):
     assert integrity.parse_calls == 1
     assert contacts.parse_calls == 0
     assert tuple(result.module for result in summary.results) == ("archive_integrity",)
+
+
+async def test_verify_only_rejects_bundle_catalog_mismatch_before_integrity_parse(
+    command_db,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    bundled = artifact_for(b"alpha")
+    command_db.add(
+        archive_artifact_row(source_path=bundled.source_path, content=b"bravo")
+    )
+    await command_db.commit()
+    parser = CountingArchiveIntegrityParser()
+
+    with pytest.raises(ReconciliationRunError, match="hash mismatch"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (bundled,),
+            RunRequest(mode="verify_only", parser_version="command-v1"),
+        )
+
+    assert parser.parse_calls == 0
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert "hash mismatch" in run.error_text
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMReconciliationResult)
+        )
+        == 0
+    )
+
+
+async def test_dry_run_rejects_unreferenced_bundle_member_mismatch_before_parse(
+    command_db,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    referenced = artifact_for(
+        b"first-good",
+        source_path="kw_command_repaired/contacts/first.json",
+        artifact_id=1,
+    )
+    unreferenced = artifact_for(
+        b"second-good",
+        source_path="kw_command_repaired/contacts/second.json",
+        artifact_id=2,
+    )
+    command_db.add_all(
+        [
+            archive_artifact_row(
+                source_path=referenced.source_path,
+                content=referenced.content_bytes or b"",
+            ),
+            archive_artifact_row(
+                source_path=unreferenced.source_path,
+                content=b"second-bad!",
+            ),
+        ]
+    )
+    await command_db.commit()
+    parser = FakeParser(
+        "contacts",
+        [
+            parse_result(
+                module="contacts",
+                records=(source_draft(artifact_paths=(referenced.source_path,)),),
+            )
+        ],
+    )
+
+    with pytest.raises(ReconciliationRunError, match="second.json"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (referenced, unreferenced),
+            RunRequest(
+                mode="dry_run",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    assert parser.parse_calls == 0
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert "second.json" in run.error_text
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMReconciliationResult)
+        )
+        == 0
+    )
 
 
 async def test_module_filter_runs_in_registry_order_and_serializes_modules(command_db):
