@@ -7,8 +7,11 @@ import hashlib
 
 import httpx
 import pytest
+from jose import jwt
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from config import settings
 from database import Base, get_db
 from main import app
 from middleware.auth import require_admin
@@ -20,6 +23,7 @@ from models.command_provenance import (
     CRMSourceRecord,
     CRMSourceRecordArtifact,
 )
+from routers import command_provenance
 
 
 PROVENANCE_TABLES = (
@@ -245,6 +249,65 @@ async def test_provenance_routes_reject_an_invalid_bearer_token(provenance_db):
     app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/command/source-records",
+        "/api/v1/command/source-records/1",
+        "/api/v1/command/entities/contact/12/sources",
+        "/api/v1/command/reconciliation/runs",
+        "/api/v1/command/reconciliation/runs/latest",
+        "/api/v1/command/reconciliation/runs/1",
+    ],
+)
+async def test_same_secret_public_token_cannot_access_provenance_routes(
+    provenance_db,
+    path,
+):
+    async def override_db():
+        yield provenance_db
+
+    public_token = jwt.encode(
+        {"item_id": 42, "scope": "link_pack_gate"},
+        settings.JWT_SECRET,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+    app.dependency_overrides[get_db] = override_db
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {public_token}"},
+    ) as client:
+        response = await client.get(path)
+    app.dependency_overrides.clear()
+
+    assert response.status_code in {401, 403}
+
+
+async def test_artifact_lookup_sql_does_not_select_private_content_bytes():
+    class EmptyRows:
+        def all(self):
+            return []
+
+    class CapturingDB:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return EmptyRows()
+
+    db = CapturingDB()
+    await command_provenance._artifact_map(db, [1])
+    compiled = str(
+        db.statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "content_bytes" not in compiled
 
 
 async def test_source_records_page_filters_reports_total_and_has_stable_order(

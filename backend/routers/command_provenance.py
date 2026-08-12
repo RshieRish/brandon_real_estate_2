@@ -8,9 +8,9 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from database import get_db
 from middleware.auth import require_admin
@@ -37,26 +37,7 @@ from schemas.command_provenance import (
 )
 
 
-_optional_admin_bearer = HTTPBearer(auto_error=False)
-
-
-def _require_admin_bearer(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None,
-        Depends(_optional_admin_bearer),
-    ],
-) -> None:
-    if credentials is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-router = APIRouter(
-    dependencies=[Depends(_require_admin_bearer), Depends(require_admin)]
-)
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 ALLOWED_ENTITY_TYPES = frozenset(
     {
@@ -178,6 +159,7 @@ async def _artifact_map(
             CRMArchiveArtifact.id == CRMSourceRecordArtifact.artifact_id,
         )
         .where(CRMSourceRecordArtifact.source_record_id.in_(source_record_ids))
+        .options(defer(CRMArchiveArtifact.content_bytes, raiseload=True))
         .order_by(
             CRMSourceRecordArtifact.source_record_id.asc(),
             CRMArchiveArtifact.source_path.asc(),
