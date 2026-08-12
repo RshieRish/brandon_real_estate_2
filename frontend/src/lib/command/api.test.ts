@@ -256,4 +256,13 @@ describe('commandApi', () => {
     await commandApi.createAgreement({ title: 'Buyer agreement', contact_id: null, template_id: 3 });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Buyer agreement', contact_id: null, template_id: 3 }) }));
   });
+
+  it('persists an agreement against its selected internal contact', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-agreement-contact' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 7, title: 'Seller agreement', contact_id: 11, template_id: null, status: 'draft' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.createAgreement({ title: 'Seller agreement', contact_id: 11, template_id: null });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Seller agreement', contact_id: 11, template_id: null }) }));
+  });
 });

@@ -1475,3 +1475,6 @@ Completed Checklist Video Integration
 
 - Task-to-record links now use internal record selectors rather than raw IDs, display the persisted record name, are idempotent, and enforce unique task/entity links at the database layer.
 - Verification: migration `ab4d9e2c7108` is applied; 22 focused Command backend tests, 62 frontend tests, and TypeScript pass.
+
+- Agreement creation now includes a complete internal contact selector and persists that relationship with the selected template and agreement metadata.
+- Verification: 63 frontend tests and TypeScript pass.

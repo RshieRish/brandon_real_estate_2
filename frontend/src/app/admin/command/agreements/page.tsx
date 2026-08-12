@@ -5,6 +5,7 @@ import { FileText, Plus, UploadSimple, UserPlus } from "@phosphor-icons/react";
 import {
   commandApi,
   type Agreement,
+  type Contact,
   type AgreementTemplate,
   type AgreementWorkspace,
 } from "@/lib/command/api";
@@ -23,7 +24,9 @@ const statuses = [
 export default function Page() {
   const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [templates, setTemplates] = useState<AgreementTemplate[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [title, setTitle] = useState("");
+  const [contactId, setContactId] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [detail, setDetail] = useState<AgreementWorkspace | null>(null);
@@ -31,14 +34,22 @@ export default function Page() {
   const [recipientEmail, setRecipientEmail] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
-    void commandApi
-      .agreements()
-      .then(setAgreements)
-      .catch((err) => setError(err.message));
-    void commandApi
-      .agreementTemplates()
-      .then(setTemplates)
-      .catch((err) => setError(err.message));
+    const load = async () => {
+      const contactRows: Contact[] = [];
+      for (let offset = 0; ; offset += 100) {
+        const page = await commandApi.contacts(100, offset);
+        contactRows.push(...page);
+        if (page.length < 100) break;
+      }
+      const [agreementRows, templateRows] = await Promise.all([
+        commandApi.agreements(),
+        commandApi.agreementTemplates(),
+      ]);
+      setAgreements(agreementRows);
+      setTemplates(templateRows);
+      setContacts(contactRows);
+    };
+    void load().catch((err) => setError(err.message));
   }, []);
   async function open(id: number) {
     try {
@@ -53,11 +64,12 @@ export default function Page() {
     try {
       const item = await commandApi.createAgreement({
         title: title.trim(),
-        contact_id: null,
+        contact_id: contactId ? Number(contactId) : null,
         template_id: templateId ? Number(templateId) : null,
       });
       setAgreements((all) => [item, ...all]);
       setTitle("");
+      setContactId("");
       setTemplateId("");
       await open(item.id);
     } catch (err) {
@@ -169,13 +181,24 @@ export default function Page() {
           Private internal tracking and review. This workspace does not execute
           legal signatures.
         </p>
-        <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_220px_auto]">
+        <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_220px_220px_auto]">
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             className="flex-1 rounded-xl border border-white/10 bg-white/5 p-3"
             placeholder="New agreement title"
           />
+          <select
+            aria-label="Agreement contact"
+            value={contactId}
+            onChange={(event) => setContactId(event.target.value)}
+            className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white"
+          >
+            <option value="">No linked contact</option>
+            {contacts.map((contact) => (
+              <option key={contact.id} value={contact.id}>{contact.first_name} {contact.last_name}</option>
+            ))}
+          </select>
           <select
             aria-label="Agreement template"
             value={templateId}
