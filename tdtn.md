@@ -1437,3 +1437,6 @@ Completed Checklist Video Integration
 
 - Goal management is now complete in Command Home: admins can set a goal name, target, and cadence, then update a goal’s actual progress directly from its progress card. All writes use the persisted authenticated goals API and refresh local UI state only after the server response.
 - Verification: Command frontend API tests pass (23), TypeScript passes, and `git diff --check` is clean.
+
+- Smart Plans now have their own validated lifecycle (`active`, `paused`, `archived`), separate from contact enrollment state. The plan editor updates the stored plan status through a dedicated authenticated API without altering its steps or enrollments.
+- Verification: 15 focused Command backend tests, 24 Command frontend API tests, and TypeScript pass. An authenticated invalid Smart Plan lifecycle mutation returned HTTP 422.

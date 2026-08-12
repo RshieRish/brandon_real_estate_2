@@ -211,4 +211,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateGoalProgress(3, 5)).resolves.toMatchObject({ current_value: 5 });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/goals/3'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ current_value: 5 }) }));
   });
+
+  it('updates a Smart Plan lifecycle without changing its enrollments', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-plan-lifecycle' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 7, name: 'Buyer follow-up', description: '', status: 'paused' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateSmartPlanStatus(7, 'paused')).resolves.toMatchObject({ status: 'paused' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }));
+  });
 });

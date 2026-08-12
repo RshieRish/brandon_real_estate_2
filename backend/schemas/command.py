@@ -80,6 +80,9 @@ class NamedRecordOut(NamedRecordCreate):
     status: str
     class Config: from_attributes = True
 
+class SmartPlanStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|paused|archived)$")
+
 
 class OpportunityCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)

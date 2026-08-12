@@ -15,7 +15,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -419,6 +419,12 @@ async def smart_plans(db: AsyncSession = Depends(get_db)):
 @router.post("/smart-plans", response_model=NamedRecordOut)
 async def create_smart_plan(payload: NamedRecordCreate, db: AsyncSession = Depends(get_db)):
     item = CRMSmartPlan(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.patch("/smart-plans/{plan_id}", response_model=NamedRecordOut)
+async def update_smart_plan_status(plan_id: int, payload: SmartPlanStatusUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMSmartPlan, plan_id)
+    if not item: raise HTTPException(404, "Smart Plan not found")
+    item.status = payload.status; await db.flush(); return item
 
 @router.get("/smart-plans/{plan_id}/workspace")
 async def smart_plan_workspace(plan_id:int, db:AsyncSession=Depends(get_db)):
