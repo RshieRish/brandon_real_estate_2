@@ -1,0 +1,38 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import type { ComponentType } from 'react';
+import { motion } from 'framer-motion';
+import { ChartBar, CheckCircle, ClipboardText, FileText, House, MapPin, Megaphone, Users, WarningCircle, Sparkle } from '@phosphor-icons/react';
+import { commandApi, type Contact, type Overview, type Task } from '@/lib/command/api';
+
+const nav = [
+  ['Contacts', Users], ['Tasks', CheckCircle], ['Smart Plans', Sparkle], ['Opportunities', ChartBar], ['Marketing', Megaphone], ['Agreements', FileText], ['Reports', ClipboardText], ['Listings & Map', MapPin], ['Websites', House],
+] as const;
+
+export default function CommandPage() {
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [section, setSection] = useState('Command Home');
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { Promise.all([commandApi.overview(), commandApi.contacts(), commandApi.tasks()]).then(([o,c,t]) => { setOverview(o); setContacts(c); setTasks(t); }).catch(e => setError(e.message)); }, []);
+  const metrics: [string, number, ComponentType<{ size?: number; className?: string }>][] = overview ? [['Contacts', overview.contacts, Users], ['Open Tasks', overview.open_tasks, CheckCircle], ['Opportunities', overview.opportunities, ChartBar], ['Active Smart Plans', overview.active_smart_plans, Sparkle]] : [];
+  return <div className="min-h-[100dvh] bg-[#080807] text-white p-5 lg:p-8">
+    <div className="mx-auto max-w-[1500px] grid gap-5 lg:grid-cols-[210px_1fr]">
+      <aside className="rounded-2xl border border-white/10 bg-white/[0.035] p-3 h-fit lg:sticky lg:top-6">
+        <p className="px-3 py-3 text-[10px] uppercase tracking-[.26em] text-[#eac469]">Sold With Sweeney</p>
+        <button onClick={() => setSection('Command Home')} className={`w-full rounded-xl px-3 py-3 text-left text-sm ${section === 'Command Home' ? 'bg-[#eac469] text-black font-bold' : 'text-white/60 hover:bg-white/5'}`}>Command Home</button>
+        {nav.map(([label, Icon]) => <button key={label} onClick={() => setSection(label)} className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm ${section === label ? 'bg-white/10 text-white' : 'text-white/60 hover:bg-white/5'}`}><Icon size={17}/>{label}</button>)}
+      </aside>
+      <main className="min-w-0">
+        <header className="mb-6 flex items-center justify-between"><div><p className="text-xs uppercase tracking-[.22em] text-[#eac469]">Internal CRM workspace</p><h1 className="mt-1 text-3xl font-black">{section}</h1></div><button className="rounded-xl border border-[#eac469]/40 px-4 py-2 text-sm text-[#eac469]">Ask Sweeney AI</button></header>
+        {error ? <div className="flex gap-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-5 text-red-200"><WarningCircle size={22}/><p>{error}</p></div> : !overview ? <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{[1,2,3,4].map(i => <div key={i} className="h-32 animate-pulse rounded-2xl bg-white/5"/>)}</div> : <>
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label,value,Icon], i) => <motion.div key={String(label)} initial={{opacity:0,y:16}} animate={{opacity:1,y:0}} transition={{type:'spring',stiffness:100,damping:20,delay:i*.05}} className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[.08] to-transparent p-5"><Icon className="text-[#eac469]" size={22}/><p className="mt-6 text-3xl font-black">{value}</p><p className="mt-1 text-xs uppercase tracking-widest text-white/45">{label}</p></motion.div>)}</section>
+          <section className="mt-6 grid gap-5 xl:grid-cols-[1.25fr_.75fr]"><div className="rounded-2xl border border-white/10 bg-white/[.035] p-5"><h2 className="font-bold">Priority tasks</h2><div className="mt-4 divide-y divide-white/10">{tasks.slice(0,6).map(task => <div key={task.id} className="flex items-center justify-between py-3"><div><p className="text-sm font-medium">{task.title}</p><p className="text-xs text-white/40">{task.priority} priority {task.due_at ? `· due ${new Date(task.due_at).toLocaleDateString()}` : ''}</p></div><span className="rounded-full bg-[#eac469]/15 px-2 py-1 text-[10px] uppercase text-[#eac469]">{task.status}</span></div>)}{tasks.length===0 && <p className="py-8 text-sm text-white/40">No tasks yet. Tasks created here are persisted in the internal CRM.</p>}</div></div>
+          <div className="rounded-2xl border border-white/10 bg-white/[.035] p-5"><h2 className="font-bold">Recent contacts</h2><div className="mt-4 space-y-3">{contacts.slice(0,5).map(c => <div key={c.id} className="rounded-xl bg-black/20 p-3"><p className="text-sm font-medium">{c.first_name} {c.last_name}</p><p className="mt-1 text-xs text-white/40">{c.email ?? c.phone ?? 'No contact method'}</p></div>)}{contacts.length===0 && <p className="py-8 text-sm text-white/40">Contacts will appear here as they are added or linked from leads.</p>}</div></div></section>
+        </>}
+      </main>
+    </div>
+  </div>;
+}
