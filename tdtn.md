@@ -1369,3 +1369,6 @@ Completed Checklist Video Integration
 
 - Agreement detail workspaces now support private file upload directly to the selected agreement using the existing server-side object-storage path and `agreement_id` relation.
 - Verification: frontend typecheck passes.
+
+- Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
+- Verification: frontend typecheck passes.
