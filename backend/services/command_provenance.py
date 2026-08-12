@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import hashlib
@@ -48,6 +48,7 @@ class SourceRecordDraft:
     parser_version: str
     capture_quality: CaptureQuality = CaptureQuality.COMPLETE
     captured_at: datetime | None = None
+    _payload_json: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -76,6 +77,20 @@ class SourceRecordDraft:
 
         if not isinstance(self.payload, Mapping):
             raise SourceDraftValidationError("payload must be a mapping")
+        try:
+            payload_json = json.dumps(
+                self.payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SourceDraftValidationError(
+                "payload must contain canonical JSON-serializable values"
+            ) from exc
+        object.__setattr__(self, "_payload_json", payload_json)
+
         if not isinstance(self.artifact_paths, tuple):
             raise SourceDraftValidationError("artifact_paths must be a tuple")
 
@@ -104,12 +119,7 @@ class SourceRecordDraft:
 
     @property
     def payload_json(self) -> str:
-        return json.dumps(
-            self.payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return self._payload_json
 
 
 _EnumType = TypeVar("_EnumType", bound=Enum)
@@ -143,6 +153,8 @@ def _validate_relative_path(
         raise error_type(f"{field_name} must contain a nonblank relative path")
     if "\x00" in path:
         raise error_type(f"{field_name} contains an unsafe NUL byte")
+    if "\\" in path:
+        raise error_type(f"{field_name} must use canonical POSIX separators: {path}")
 
     posix_path = PurePosixPath(path)
     windows_path = PureWindowsPath(path)
@@ -154,9 +166,13 @@ def _validate_relative_path(
     ):
         raise error_type(f"{field_name} must be relative: {path}")
 
-    path_segments = path.replace("\\", "/").split("/")
+    path_segments = path.split("/")
     if ".." in path_segments:
         raise error_type(f"{field_name} cannot contain '..': {path}")
+    if path != posix_path.as_posix() or any(
+        segment in {"", "."} for segment in path_segments
+    ):
+        raise error_type(f"{field_name} must already be canonical POSIX: {path}")
 
 
 def verify_artifact_bytes(artifact: ArchiveArtifactInput) -> None:

@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 import hashlib
 
 import pytest
@@ -87,6 +87,51 @@ def test_source_draft_serializes_nested_payload_as_canonical_unicode_json():
     )
 
 
+def test_source_draft_snapshots_canonical_payload_during_construction():
+    original_payload = {
+        "contact": {"name": "José Rivera"},
+        "tags": ["buyer"],
+    }
+    draft = source_draft(payload=original_payload)
+
+    original_payload["contact"]["name"] = "Changed"
+    original_payload["tags"].append("seller")
+    original_payload["added_later"] = True
+
+    assert draft.payload_json == (
+        '{"contact":{"name":"José Rivera"},"tags":["buyer"]}'
+    )
+
+
+def test_source_draft_keeps_payload_snapshot_as_a_hidden_non_identity_field():
+    payload_snapshot_field = next(
+        item for item in fields(SourceRecordDraft) if item.name == "_payload_json"
+    )
+
+    assert payload_snapshot_field.init is False
+    assert payload_snapshot_field.repr is False
+    assert payload_snapshot_field.compare is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"unsupported": {"set-value"}},
+        {("unsupported", "key"): "value"},
+    ],
+    ids=["set-value", "nonstring-unsupported-key"],
+)
+def test_source_draft_rejects_payload_values_json_cannot_serialize(payload):
+    with pytest.raises(SourceDraftValidationError, match="payload"):
+        source_draft(payload=payload)
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_source_draft_rejects_non_finite_payload_numbers(non_finite):
+    with pytest.raises(SourceDraftValidationError, match="payload"):
+        source_draft(payload={"amount": non_finite})
+
+
 @pytest.mark.parametrize(
     "field",
     ["source_system", "module", "record_kind", "source_key", "parser_version"],
@@ -150,6 +195,19 @@ def test_source_draft_rejects_duplicate_artifact_paths():
         source_draft(artifact_paths=(path, path))
 
 
+@pytest.mark.parametrize(
+    "artifact_path",
+    ["a/./b", "a//b", "a/b/", r"a\b"],
+)
+def test_source_draft_rejects_noncanonical_posix_artifact_paths(artifact_path):
+    with pytest.raises(SourceDraftValidationError, match="artifact_paths"):
+        source_draft(artifact_paths=(artifact_path,))
+
+
+def test_source_draft_accepts_canonical_posix_artifact_path():
+    assert source_draft(artifact_paths=("a/b",)).artifact_paths == ("a/b",)
+
+
 def test_verify_artifact_bytes_accepts_exact_private_source_bytes():
     artifact = artifact_for(b"\x00private\xff")
 
@@ -207,6 +265,19 @@ def test_verify_artifact_bytes_rejects_negative_size():
 def test_verify_artifact_bytes_rejects_unsafe_or_blank_source_path(source_path):
     with pytest.raises(ArchiveIntegrityError, match="source_path"):
         verify_artifact_bytes(artifact_for(source_path=source_path))
+
+
+@pytest.mark.parametrize(
+    "source_path",
+    ["a/./b", "a//b", "a/b/", r"a\b"],
+)
+def test_verify_artifact_bytes_rejects_noncanonical_posix_source_paths(source_path):
+    with pytest.raises(ArchiveIntegrityError, match="source_path"):
+        verify_artifact_bytes(artifact_for(source_path=source_path))
+
+
+def test_verify_artifact_bytes_accepts_canonical_posix_source_path():
+    assert verify_artifact_bytes(artifact_for(source_path="a/b")) is None
 
 
 def test_bundle_fingerprint_is_order_independent_and_uses_canonical_rows():
