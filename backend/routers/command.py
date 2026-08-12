@@ -177,6 +177,15 @@ async def opportunities(db: AsyncSession = Depends(get_db)):
 async def create_opportunity(payload: OpportunityCreate, db: AsyncSession = Depends(get_db)):
     item = CRMOpportunity(**payload.model_dump()); db.add(item); await db.flush(); return item
 
+@router.get("/opportunities/{opportunity_id}/workspace")
+async def opportunity_workspace(opportunity_id:int,db:AsyncSession=Depends(get_db)):
+    item=await db.get(CRMOpportunity,opportunity_id)
+    if not item: raise HTTPException(404,"Opportunity not found")
+    contacts=(await db.execute(select(CRMOpportunityContact).where(CRMOpportunityContact.opportunity_id==opportunity_id))).scalars().all()
+    vendors=(await db.execute(select(CRMOpportunityVendor).where(CRMOpportunityVendor.opportunity_id==opportunity_id))).scalars().all()
+    offers=(await db.execute(select(CRMOpportunityOffer).where(CRMOpportunityOffer.opportunity_id==opportunity_id))).scalars().all()
+    return {"opportunity":item,"contacts":[{"id":x.id,"contact_id":x.contact_id,"role":x.role} for x in contacts],"vendors":[{"id":x.id,"name":x.name,"role":x.role} for x in vendors],"offers":[{"id":x.id,"amount_cents":x.amount_cents,"status":x.status} for x in offers]}
+
 @router.post("/opportunities/{opportunity_id}/contacts", response_model=RelationshipOut)
 async def add_opportunity_contact(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMOpportunity, opportunity_id) or not payload.contact_id or not await db.get(CRMContact,payload.contact_id): raise HTTPException(404,"Opportunity or contact not found")
