@@ -225,3 +225,4 @@ Added interactive videos to Seller Staging Checklist
 - Agreement detail UI now uploads private files directly to the selected agreement through the existing protected storage endpoint.
 - Contact workspace now supports direct idempotent tag creation and assignment.
 - Agreement state transitions are now server-validated and forward-only, with terminal completed/voided/expired states protected.
+- Agreement templates now expose a persisted body update API for template-editor UI work.

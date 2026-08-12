@@ -13,7 +13,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -259,6 +259,11 @@ async def templates(db: AsyncSession = Depends(get_db)):
 @router.post("/agreement-templates", response_model=TemplateOut)
 async def create_template(payload: TemplateCreate, db: AsyncSession = Depends(get_db)):
     item=CRMAgreementTemplate(**payload.model_dump()); db.add(item); await db.flush(); return item
+@router.patch("/agreement-templates/{template_id}", response_model=TemplateOut)
+async def update_template(template_id: int, payload: TemplateUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMAgreementTemplate, template_id)
+    if not item: raise HTTPException(404, "Agreement template not found")
+    item.body = payload.body; await db.flush(); return item
 @router.get("/files", response_model=list[FileAssetOut])
 async def files(db: AsyncSession = Depends(get_db)):
     return (await db.execute(select(CRMFileAsset))).scalars().all()

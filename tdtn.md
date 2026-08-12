@@ -1373,5 +1373,8 @@ Completed Checklist Video Integration
 - Agreement lifecycle integrity is now enforced server-side: draft → review → ready → shared → viewed → completed, with void/expiry exits and terminal-state protection. Invalid/backward transitions return 422 and do not append an event.
 - Verification: Command lifecycle/model tests pass (7).
 
+- Agreement templates now have a persisted body-update API (`PATCH /agreement-templates/{template_id}`) for internal template editing.
+- Verification: all Command backend tests pass (10).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

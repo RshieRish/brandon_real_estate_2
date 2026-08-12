@@ -103,6 +103,8 @@ class ListingOut(ListingCreate):
 class TemplateCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     body: str = ""
+class TemplateUpdate(BaseModel):
+    body: str = ""
 class TemplateOut(TemplateCreate):
     id: int
     class Config: from_attributes = True
