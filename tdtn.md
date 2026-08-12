@@ -15,6 +15,7 @@ Last Updated: 2026-08-02
 - Added SQLAlchemy Command models for contacts linked to existing leads, activities, notes, tasks, Smart Plans, opportunities, listings, internal agreements/events, and file metadata.
 - Added a focused test-first model contract; `backend/tests/test_command_models.py` passes (2 tests) with an explicit non-production test configuration.
 - Next: additive Alembic migration, Pydantic contracts, authenticated `/api/v1/command` router, then the `/admin/command` UI shell.
+- Completed the additive migration, authenticated Command overview/contact/task/agreement API, dark Command dashboard, and route navigation shells. Frontend typecheck, 34 Vitest tests, and production build pass. Remaining work is the full feature views and resource endpoints for each workspace module.
 
 ### 2026-08-02 - Production Header Logo Sizing Fix
 - Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
