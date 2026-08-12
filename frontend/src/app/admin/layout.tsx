@@ -15,6 +15,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   // Skip auth check on login page
   const isLoginPage = pathname === '/admin/login';
+  const isCommandPage = pathname.startsWith('/admin/command');
 
   useEffect(() => {
     if (isLoginPage) {
@@ -70,6 +71,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   // Not authed: return null while redirect fires
   if (!isAuthed) {
     return null;
+  }
+
+  if (isCommandPage) {
+    return <>{children}</>;
   }
 
   // Authenticated shell
