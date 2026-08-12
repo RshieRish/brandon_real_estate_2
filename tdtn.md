@@ -1449,3 +1449,5 @@ Completed Checklist Video Integration
 
 - Contact workspace actions now use the shared typed Command client for notes, saved searches, tags, and tag assignments. New saved searches persist self-describing criteria (`contact_id`, `scope`, and `saved_from`) rather than an empty object, making their context auditable and displayable.
 - Verification: 16 focused Command backend tests, 26 Command frontend API tests, and TypeScript pass.
+
+- Full current-branch regression sweep: all 60 frontend tests pass, all 16 focused Command backend tests pass, configured PostgreSQL is at `b7e1f2d4a906 (head)`, and the optimized frontend production build completes with every Command route present. Static generation retains the known non-fatal local `content blocks` connection-refused warning because no public API was running for that build.
