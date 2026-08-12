@@ -1355,3 +1355,6 @@ Completed Checklist Video Integration
 
 - Smart Plan steps now support persisted editing of action type and position/payload contract through the internal API; the editor exposes an edit action per step.
 - Verification: Command API tests pass (11) and frontend typecheck passes.
+
+- Command nested routes now have a responsive mobile drawer with labelled open/close controls, an overlay dismiss action, and the same navigation destinations as the desktop rail.
+- Verification: frontend typecheck passes and Command API tests remain passing (11).
