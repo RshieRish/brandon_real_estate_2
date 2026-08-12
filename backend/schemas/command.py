@@ -1,0 +1,47 @@
+from datetime import datetime
+from pydantic import BaseModel, Field
+
+
+class ContactCreate(BaseModel):
+    first_name: str = Field(min_length=1, max_length=120)
+    last_name: str = Field(default="", max_length=120)
+    email: str | None = None
+    phone: str | None = None
+    lead_id: int | None = None
+
+
+class ContactOut(ContactCreate):
+    id: int
+    stage: str
+    class Config: from_attributes = True
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    contact_id: int | None = None
+    description: str = ""
+    priority: str = "normal"
+    due_at: datetime | None = None
+
+
+class TaskUpdate(BaseModel):
+    status: str | None = None
+    title: str | None = None
+    due_at: datetime | None = None
+
+
+class TaskOut(TaskCreate):
+    id: int
+    status: str
+    class Config: from_attributes = True
+
+
+class OverviewOut(BaseModel):
+    contacts: int
+    open_tasks: int
+    opportunities: int
+    active_smart_plans: int
+
+
+class AgreementStatusUpdate(BaseModel):
+    status: str
