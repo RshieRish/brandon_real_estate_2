@@ -217,6 +217,18 @@ All imports are idempotent by `(source_system, module, record_kind, source_key, 
 
 The importer supports `--dry-run`, `--apply`, `--resume`, `--module`, and `--verify-only`. Production import uses a single recorded source-bundle fingerprint and resumable module transactions.
 
+### Reconciliation operations contract
+
+Production reconciliation follows
+[`docs/command-reconciliation-runbook.md`](../../command-reconciliation-runbook.md).
+Verify-only and dry-run create audit rows but do not create semantic source
+records; apply is the only mode allowed to materialize parser output. Apply
+must receive the exact fingerprint computed from the target database's most
+recent accepted verification and is not authorized until every selected domain
+parser has a reviewed reconciliation expectation and a completed, reviewed dry
+run. Migration, module-bounded rollout, resume, post-run evidence, and rollback
+procedures are part of the acceptance contract rather than operator discretion.
+
 ## API and Ownership
 
 - Split the current monolithic Command router into focused router/service modules without breaking existing URLs.
