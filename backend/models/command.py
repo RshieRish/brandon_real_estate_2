@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -130,6 +130,7 @@ class CRMOpportunity(Timestamped, Base):
 
 class CRMOpportunityContact(Base):
     __tablename__ = "crm_opportunity_contacts"
+    __table_args__ = (UniqueConstraint("opportunity_id", "contact_id", "role", name="uq_crm_opportunity_contact_role"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))

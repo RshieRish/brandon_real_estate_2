@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMReferral, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
 
@@ -100,3 +100,8 @@ def test_opportunity_stage_is_limited_to_the_internal_pipeline():
 def test_opportunity_contact_identity_includes_the_role():
     assert is_same_opportunity_contact(8, "buyer", 8, "buyer")
     assert not is_same_opportunity_contact(8, "buyer", 8, "seller")
+
+
+def test_opportunity_contact_table_has_a_database_uniqueness_contract():
+    constraint_columns = {tuple(column.name for column in constraint.columns) for constraint in CRMOpportunityContact.__table__.constraints if getattr(constraint, "columns", None)}
+    assert ("opportunity_id", "contact_id", "role") in constraint_columns

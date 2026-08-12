@@ -1460,3 +1460,6 @@ Completed Checklist Video Integration
 
 - Opportunity-contact assignments are now idempotent by contact and role. Repeating the same relationship returns its existing record instead of creating a duplicate; a different role for the same contact remains a distinct valid relationship.
 - Verification: 17 focused Command backend tests and `git diff --check` pass.
+
+- Opportunity-contact deduplication is now enforced at the PostgreSQL layer with `uq_crm_opportunity_contact_role` across opportunity, contact, and role. This protects concurrent writes in addition to the API’s idempotent behavior.
+- Verification: migration `c3a8b5e1d204` is applied to the configured database; 18 focused Command backend tests pass.
