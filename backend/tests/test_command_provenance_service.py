@@ -1,12 +1,17 @@
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import datetime
+import asyncio
 import hashlib
 from types import MappingProxyType
 
 import pytest
 from sqlalchemy import func, select
 
-from command_db import archive_artifact_row, command_db as command_db_session
+from command_db import (
+    archive_artifact_row,
+    command_db as command_db_session,
+    command_file_session_factory,
+)
 from models.command_provenance import (
     CRMSourceRecord,
     CRMSourceRecordArtifact,
@@ -470,7 +475,6 @@ async def test_persistence_updates_semantics_when_artifact_set_is_unchanged(
     original = source_draft(artifact_paths=(path,))
     changed = source_draft(
         artifact_paths=(path,),
-        evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
         display_label="José Rivera — updated",
         payload={"name": "José Rivera", "stage": "lead"},
         capture_quality=CaptureQuality.PARTIAL,
@@ -487,11 +491,43 @@ async def test_persistence_updates_semantics_when_artifact_set_is_unchanged(
 
     row = await command_db.scalar(select(CRMSourceRecord))
     assert row is not None
-    assert row.evidence_level == EvidenceLevel.RENDERED_OCCURRENCE.value
+    assert row.evidence_level == EvidenceLevel.OBSERVED_RECORD.value
     assert row.display_label == "José Rivera — updated"
     assert row.payload_json == '{"name":"José Rivera","stage":"lead"}'
     assert row.capture_quality == CaptureQuality.PARTIAL.value
     assert row.captured_at == captured_at
+
+
+async def test_persistence_requires_new_parser_version_for_evidence_level_change(
+    command_db,
+):
+    from services.command_provenance import (
+        ParserVersionConflict,
+        persist_source_records,
+    )
+
+    path = "kw_command_repaired/contacts/contact.json"
+    command_db.add(archive_artifact_row(source_path=path))
+    await command_db.flush()
+    await persist_source_records(
+        command_db,
+        (source_draft(artifact_paths=(path,)),),
+    )
+
+    with pytest.raises(ParserVersionConflict, match="evidence level"):
+        await persist_source_records(
+            command_db,
+            (
+                source_draft(
+                    artifact_paths=(path,),
+                    evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
+                ),
+            ),
+        )
+
+    row = await command_db.scalar(select(CRMSourceRecord))
+    assert row is not None
+    assert row.evidence_level == EvidenceLevel.OBSERVED_RECORD.value
 
 
 async def test_persistence_rejects_parser_identity_with_changed_artifact_set(
@@ -641,6 +677,57 @@ async def test_persistence_rejects_non_draft_values_before_db_writes(command_db)
     assert (
         await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
     )
+
+
+async def test_concurrent_persistence_creates_one_identity_without_errors(tmp_path):
+    from services.command_provenance import PersistenceCounts, persist_source_records
+
+    engine, session_factory = await command_file_session_factory(
+        tmp_path / "persistence-race.db"
+    )
+    path = "kw_command_repaired/contacts/contact.json"
+    async with session_factory() as seed_session:
+        seed_session.add(archive_artifact_row(source_path=path))
+        await seed_session.commit()
+    start = asyncio.Event()
+
+    async def worker():
+        async with session_factory() as session:
+            await start.wait()
+            counts = await persist_source_records(
+                session,
+                (source_draft(artifact_paths=(path,)),),
+            )
+            await session.commit()
+            return counts
+
+    tasks = [asyncio.create_task(worker()), asyncio.create_task(worker())]
+    start.set()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    errors = [result for result in results if isinstance(result, Exception)]
+    assert not errors, repr(errors)
+    assert sorted(
+        results,
+        key=lambda counts: (counts.created, counts.unchanged),
+    ) == [
+        PersistenceCounts(unchanged=1),
+        PersistenceCounts(created=1, links_created=1),
+    ]
+    async with session_factory() as verification_session:
+        assert (
+            await verification_session.scalar(
+                select(func.count()).select_from(CRMSourceRecord)
+            )
+            == 1
+        )
+        assert (
+            await verification_session.scalar(
+                select(func.count()).select_from(CRMSourceRecordArtifact)
+            )
+            == 1
+        )
+    await engine.dispose()
 
 
 def test_persistence_counts_are_frozen_slotted_and_nonnegative():

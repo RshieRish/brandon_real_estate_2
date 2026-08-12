@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, timedelta
 import hashlib
 from pathlib import Path
+import asyncio
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 
-from command_db import archive_artifact_row, command_db as command_db_session
+from command_db import (
+    archive_artifact_row,
+    command_db as command_db_session,
+    command_file_session_factory,
+)
 from models.command_provenance import (
     CRMReconciliationResult,
     CRMReconciliationRun,
@@ -184,6 +191,26 @@ def test_run_request_and_summary_are_validated_frozen_slotted_values():
             )
 
 
+def test_claim_heartbeat_compiles_as_postgresql_conditional_row_update():
+    from services.command_reconciliation import _owned_run_update
+
+    claim_token = "b" * 64
+    statement = _owned_run_update(7, claim_token).values(
+        claimed_at=datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+    )
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert compiled.startswith("UPDATE crm_reconciliation_runs SET claimed_at=")
+    assert "crm_reconciliation_runs.id = 7" in compiled
+    assert "crm_reconciliation_runs.status = 'running'" in compiled
+    assert f"crm_reconciliation_runs.claim_token = '{claim_token}'" in compiled
+
+
 async def test_dry_run_audits_completed_result_without_source_mutation(command_db):
     from services.command_reconciliation import RunRequest, execute_reconciliation
 
@@ -333,6 +360,28 @@ async def test_module_filter_runs_in_registry_order_and_serializes_modules(comma
 
     assert calls == ["contacts", "tasks"]
     assert skipped.parse_calls == 0
+    run = await command_db.get(CRMReconciliationRun, summary.run_id)
+    assert run is not None
+    assert run.requested_modules_json == '["contacts","tasks"]'
+
+
+async def test_empty_module_filter_persists_exact_selected_module_snapshot(command_db):
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    calls: list[str] = []
+    tasks = FakeParser("tasks", [parse_result(module="tasks")], call_order=calls)
+    contacts = FakeParser(
+        "contacts", [parse_result(module="contacts")], call_order=calls
+    )
+
+    summary = await execute_reconciliation(
+        command_db,
+        registry_for(tasks, contacts),
+        (),
+        RunRequest(mode="dry_run", parser_version="command-v1"),
+    )
+
+    assert calls == ["contacts", "tasks"]
     run = await command_db.get(CRMReconciliationRun, summary.run_id)
     assert run is not None
     assert run.requested_modules_json == '["contacts","tasks"]'
@@ -512,6 +561,42 @@ async def test_resume_validates_compatibility_skips_success_and_completes(comman
         )
 
 
+async def test_resume_rejects_registry_drift_for_original_all_modules_run(command_db):
+    from services.command_reconciliation import (
+        ReconciliationResumeError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    contacts = FakeParser("contacts", [parse_result(module="contacts")])
+    tasks = FakeParser("tasks", [RuntimeError("temporary task failure")])
+    with pytest.raises(RuntimeError, match="temporary"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(tasks, contacts),
+            (),
+            RunRequest(mode="dry_run", parser_version="command-v1"),
+        )
+    failed_run = await command_db.scalar(select(CRMReconciliationRun))
+    assert failed_run is not None
+    assert failed_run.requested_modules_json == '["contacts","tasks"]'
+
+    replacement_contacts = FakeParser("contacts", [parse_result(module="contacts")])
+    with pytest.raises(ReconciliationResumeError, match="module set"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(replacement_contacts),
+            (),
+            RunRequest(
+                mode="dry_run",
+                parser_version="command-v1",
+                resume_run_id=failed_run.id,
+            ),
+        )
+
+    assert replacement_contacts.parse_calls == 0
+
+
 async def test_missing_resume_run_is_rejected(command_db):
     from services.command_reconciliation import (
         ReconciliationResumeError,
@@ -533,9 +618,149 @@ async def test_missing_resume_run_is_rejected(command_db):
         )
 
 
-async def test_fingerprint_and_parser_selection_failures_create_no_audit_run(
-    command_db,
-):
+async def test_recent_running_claim_rejects_resume_without_parsing(command_db):
+    from services.command_reconciliation import (
+        ReconciliationResumeError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    run = CRMReconciliationRun(
+        bundle_fingerprint=hashlib.sha256(b"").hexdigest(),
+        parser_version="command-v1",
+        mode="dry_run",
+        status="running",
+        requested_modules_json='["contacts"]',
+        claim_token="a" * 64,
+        claimed_at=datetime.now(UTC),
+    )
+    command_db.add(run)
+    await command_db.commit()
+    parser = FakeParser("contacts", [parse_result(module="contacts")])
+
+    with pytest.raises(ReconciliationResumeError, match="claimed"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (),
+            RunRequest(
+                mode="dry_run",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+                resume_run_id=run.id,
+            ),
+        )
+
+    await command_db.refresh(run)
+    assert run.status == "running"
+    assert run.claim_token == "a" * 64
+    assert parser.parse_calls == 0
+
+
+async def test_stale_running_claim_can_be_resumed(command_db):
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    run = CRMReconciliationRun(
+        bundle_fingerprint=hashlib.sha256(b"").hexdigest(),
+        parser_version="command-v1",
+        mode="dry_run",
+        status="running",
+        requested_modules_json='["contacts"]',
+        claim_token="a" * 64,
+        claimed_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    command_db.add(run)
+    await command_db.commit()
+
+    summary = await execute_reconciliation(
+        command_db,
+        registry_for(FakeParser("contacts", [parse_result(module="contacts")])),
+        (),
+        RunRequest(
+            mode="dry_run",
+            parser_version="command-v1",
+            modules=frozenset({"contacts"}),
+            resume_run_id=run.id,
+        ),
+    )
+
+    await command_db.refresh(run)
+    assert summary.status == "completed"
+    assert run.claim_token == ""
+    assert run.claimed_at is None
+
+
+async def test_concurrent_resume_claim_allows_one_worker_and_one_result(tmp_path):
+    from services.command_reconciliation import (
+        ReconciliationResumeError,
+        ReconciliationSummary,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    engine, session_factory = await command_file_session_factory(
+        tmp_path / "resume-claim.db"
+    )
+    async with session_factory() as seed_session:
+        run = CRMReconciliationRun(
+            bundle_fingerprint=hashlib.sha256(b"").hexdigest(),
+            parser_version="command-v1",
+            mode="dry_run",
+            status="failed",
+            requested_modules_json='["contacts"]',
+            error_text="retryable",
+        )
+        seed_session.add(run)
+        await seed_session.commit()
+        run_id = run.id
+    start = asyncio.Event()
+    parsers = [
+        FakeParser("contacts", [parse_result(module="contacts")]),
+        FakeParser("contacts", [parse_result(module="contacts")]),
+    ]
+
+    async def worker(parser):
+        async with session_factory() as session:
+            await start.wait()
+            return await execute_reconciliation(
+                session,
+                registry_for(parser),
+                (),
+                RunRequest(
+                    mode="dry_run",
+                    parser_version="command-v1",
+                    modules=frozenset({"contacts"}),
+                    resume_run_id=run_id,
+                ),
+            )
+
+    tasks = [
+        asyncio.create_task(worker(parsers[0])),
+        asyncio.create_task(worker(parsers[1])),
+    ]
+    start.set()
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert sum(isinstance(item, ReconciliationSummary) for item in outcomes) == 1
+    assert sum(isinstance(item, ReconciliationResumeError) for item in outcomes) == 1, (
+        repr(outcomes)
+    )
+    assert sum(parser.parse_calls for parser in parsers) == 1
+    async with session_factory() as verification_session:
+        persisted_run = await verification_session.get(CRMReconciliationRun, run_id)
+        assert persisted_run is not None
+        assert persisted_run.status == "completed"
+        assert persisted_run.claim_token == ""
+        assert (
+            await verification_session.scalar(
+                select(func.count()).select_from(CRMReconciliationResult)
+            )
+            == 1
+        )
+    await engine.dispose()
+
+
+async def test_fingerprint_failure_creates_no_audit_run(command_db):
     from services.command_reconciliation import RunRequest, execute_reconciliation
 
     invalid = artifact_for()
@@ -557,13 +782,236 @@ async def test_fingerprint_and_parser_selection_failures_create_no_audit_run(
     with pytest.raises(ValueError, match="checksum"):
         await execute_reconciliation(command_db, ParserRegistry(), (invalid,), request)
 
-    with pytest.raises(UnknownParserModuleError):
-        await execute_reconciliation(command_db, ParserRegistry(), (), request)
-
     assert (
         await command_db.scalar(select(func.count()).select_from(CRMReconciliationRun))
         == 0
     )
+
+
+async def test_unknown_parser_selection_creates_failed_audit_run(command_db):
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    request = RunRequest(
+        mode="dry_run",
+        parser_version="command-v1",
+        modules=frozenset({"contacts"}),
+    )
+    with pytest.raises(UnknownParserModuleError):
+        await execute_reconciliation(command_db, ParserRegistry(), (), request)
+
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.requested_modules_json == '["contacts"]'
+    assert "contacts" in run.error_text
+
+
+async def test_mutated_parser_selection_creates_failed_audit_run(command_db):
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    parser = FakeParser("contacts", [parse_result(module="contacts")])
+    registry = registry_for(parser)
+    parser.module = "tasks"
+
+    with pytest.raises(ParserRegistryError, match="now reports"):
+        await execute_reconciliation(
+            command_db,
+            registry,
+            (),
+            RunRequest(mode="dry_run", parser_version="command-v1"),
+        )
+
+    assert parser.parse_calls == 0
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.requested_modules_json == '["contacts"]'
+    assert "now reports" in run.error_text
+
+
+async def test_apply_rejects_draft_parser_version_mismatch(command_db):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    artifact = artifact_for()
+    await seed_artifacts(command_db, artifact)
+    parser = FakeParser(
+        "contacts",
+        [
+            parse_result(
+                module="contacts",
+                records=(source_draft(parser_version="command-v2"),),
+            )
+        ],
+    )
+
+    with pytest.raises(ReconciliationRunError, match="parser_version"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+
+
+async def test_dry_run_rejects_draft_evidence_outside_fingerprinted_bundle(
+    command_db,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    bundled = artifact_for()
+    outside_path = "kw_command_repaired/contacts/outside.json"
+    command_db.add_all(
+        [
+            archive_artifact_row(
+                source_path=bundled.source_path,
+                content=bundled.content_bytes or b"",
+            ),
+            archive_artifact_row(source_path=outside_path, content=b"outside"),
+        ]
+    )
+    await command_db.commit()
+    parser = FakeParser(
+        "contacts",
+        [
+            parse_result(
+                module="contacts",
+                records=(source_draft(artifact_paths=(outside_path,)),),
+            )
+        ],
+    )
+
+    with pytest.raises(ReconciliationRunError, match="fingerprinted bundle"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (bundled,),
+            RunRequest(
+                mode="dry_run",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+
+
+async def test_apply_rejects_draft_evidence_outside_fingerprinted_bundle(command_db):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    bundled = artifact_for()
+    outside_path = "kw_command_repaired/contacts/outside.json"
+    command_db.add_all(
+        [
+            archive_artifact_row(
+                source_path=bundled.source_path,
+                content=bundled.content_bytes or b"",
+            ),
+            archive_artifact_row(source_path=outside_path, content=b"outside"),
+        ]
+    )
+    await command_db.commit()
+
+    with pytest.raises(ReconciliationRunError, match="fingerprinted bundle"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(
+                FakeParser(
+                    "contacts",
+                    [
+                        parse_result(
+                            module="contacts",
+                            records=(source_draft(artifact_paths=(outside_path,)),),
+                        )
+                    ],
+                )
+            ),
+            (bundled,),
+            RunRequest(
+                mode="apply",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    assert (
+        await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    )
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMSourceRecordArtifact)
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["id", "hash", "size"])
+async def test_result_evidence_must_match_archive_catalog_and_bundle(
+    command_db,
+    mismatch,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    bundled = artifact_for(artifact_id=99 if mismatch == "id" else 1)
+    db_content = b"different" if mismatch in {"hash", "size"} else bundled.content_bytes
+    artifact_row = archive_artifact_row(
+        source_path=bundled.source_path,
+        content=db_content or b"",
+    )
+    if mismatch == "hash":
+        artifact_row.size_bytes = bundled.size_bytes
+    if mismatch == "size":
+        artifact_row.sha256 = bundled.sha256
+    command_db.add(artifact_row)
+    await command_db.commit()
+    parser = FakeParser(
+        "contacts",
+        [parse_result(module="contacts", records=(source_draft(),))],
+    )
+
+    with pytest.raises(ReconciliationRunError, match=mismatch):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (bundled,),
+            RunRequest(
+                mode="dry_run",
+                parser_version="command-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
 
 
 async def test_parser_module_mutation_is_rejected_before_affected_parse(command_db):

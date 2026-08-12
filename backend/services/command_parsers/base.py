@@ -191,6 +191,10 @@ class ParserRegistry:
             )
         self._parsers[module] = parser
 
+    def registered_modules(self) -> frozenset[str]:
+        """Return the stable registration keys without invoking parser code."""
+        return frozenset(self._parsers)
+
     def select(
         self,
         modules: frozenset[str] | set[str] | None,

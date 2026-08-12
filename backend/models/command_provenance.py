@@ -140,6 +140,8 @@ class CRMReconciliationRun(Base):
     status: Mapped[str] = mapped_column(String(24), default="running")
     requested_modules_json: Mapped[str] = mapped_column(Text, default="[]")
     error_text: Mapped[str] = mapped_column(Text, default="")
+    claim_token: Mapped[str] = mapped_column(String(64), default="")
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

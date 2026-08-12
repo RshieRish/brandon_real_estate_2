@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import TypeVar
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.command import CRMArchiveArtifact
@@ -208,15 +209,14 @@ async def persist_source_records(
     unchanged = 0
     links_created = 0
     for draft in materialized:
-        source_record = await db.scalar(
-            select(CRMSourceRecord).where(
-                CRMSourceRecord.source_system == draft.source_system,
-                CRMSourceRecord.module == draft.module,
-                CRMSourceRecord.record_kind == draft.record_kind,
-                CRMSourceRecord.source_key == draft.source_key,
-                CRMSourceRecord.parser_version == draft.parser_version,
-            )
+        identity_query = select(CRMSourceRecord).where(
+            CRMSourceRecord.source_system == draft.source_system,
+            CRMSourceRecord.module == draft.module,
+            CRMSourceRecord.record_kind == draft.record_kind,
+            CRMSourceRecord.source_key == draft.source_key,
+            CRMSourceRecord.parser_version == draft.parser_version,
         )
+        source_record = await db.scalar(identity_query)
         if source_record is None:
             source_record = CRMSourceRecord(
                 source_system=draft.source_system,
@@ -230,19 +230,29 @@ async def persist_source_records(
                 captured_at=draft.captured_at,
                 parser_version=draft.parser_version,
             )
-            db.add(source_record)
-            await db.flush()
-            for path in draft.artifact_paths:
-                db.add(
-                    CRMSourceRecordArtifact(
-                        source_record_id=source_record.id,
-                        artifact_id=artifacts_by_path[path].id,
-                        relation="evidence",
-                    )
+            try:
+                async with db.begin_nested():
+                    db.add(source_record)
+                    await db.flush()
+                    for path in draft.artifact_paths:
+                        db.add(
+                            CRMSourceRecordArtifact(
+                                source_record_id=source_record.id,
+                                artifact_id=artifacts_by_path[path].id,
+                                relation="evidence",
+                            )
+                        )
+                    await db.flush()
+            except IntegrityError:
+                source_record = await db.scalar(
+                    identity_query.execution_options(populate_existing=True)
                 )
-                links_created += 1
-            created += 1
-            continue
+                if source_record is None:
+                    raise
+            else:
+                links_created += len(draft.artifact_paths)
+                created += 1
+                continue
 
         existing_paths = set(
             await db.scalars(
@@ -260,9 +270,13 @@ async def persist_source_records(
                 "source artifact set changed; a new parser version is required "
                 f"for identity {draft.identity}"
             )
+        if source_record.evidence_level != draft.evidence_level.value:
+            raise ParserVersionConflict(
+                "source evidence level changed; a new parser version is required "
+                f"for identity {draft.identity}"
+            )
 
         semantic_values = {
-            "evidence_level": draft.evidence_level.value,
             "display_label": draft.display_label,
             "payload_json": draft.payload_json,
             "capture_quality": draft.capture_quality.value,

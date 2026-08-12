@@ -81,6 +81,15 @@ def test_reconciliation_run_states_have_exact_database_check_constraints():
     }
 
 
+def test_reconciliation_runs_store_exclusive_worker_claims():
+    columns = CRMReconciliationRun.__table__.columns
+
+    assert columns["claim_token"].type.length == 64
+    assert columns["claim_token"].nullable is False
+    assert columns["claimed_at"].nullable is True
+    assert columns["claimed_at"].type.timezone is True
+
+
 def test_source_record_identity_is_exactly_parser_versioned():
     assert unique_constraint_columns(CRMSourceRecord) == {
         ("source_system", "module", "record_kind", "source_key", "parser_version"),
@@ -114,6 +123,7 @@ def test_provenance_models_expose_safe_defaults():
         "status": "running",
         "requested_modules_json": "[]",
         "error_text": "",
+        "claim_token": "",
     }
     assert column_defaults(CRMReconciliationResult) == {
         "observed_count": 0,

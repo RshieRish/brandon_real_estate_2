@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
+import secrets
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from models.command import CRMArchiveArtifact
 from models.command_provenance import (
     CRMReconciliationResult,
     CRMReconciliationRun,
@@ -22,9 +24,13 @@ from services.command_parsers import (
 )
 from services.command_provenance import (
     ArchiveArtifactInput,
+    SourceRecordDraft,
     bundle_fingerprint,
     persist_source_records,
 )
+
+
+_CLAIM_LEASE = timedelta(minutes=30)
 
 
 class ReconciliationRunError(RuntimeError):
@@ -112,6 +118,17 @@ def _requested_modules_json(modules: frozenset[str]) -> str:
     return _canonical_json(sorted(modules))
 
 
+def _selected_modules(
+    registry: ParserRegistry,
+    request: RunRequest,
+) -> frozenset[str]:
+    if request.mode == "verify_only":
+        return frozenset({"archive_integrity"})
+    if request.modules:
+        return request.modules
+    return registry.registered_modules()
+
+
 def _stored_module_set(run: CRMReconciliationRun) -> frozenset[str]:
     try:
         value = json.loads(run.requested_modules_json)
@@ -168,6 +185,72 @@ def _result_row(
     )
 
 
+def _owned_run_update(run_id: int, claim_token: str):
+    """Build the conditional UPDATE that holds a PostgreSQL row lock to commit."""
+    return (
+        update(CRMReconciliationRun)
+        .where(
+            CRMReconciliationRun.id == run_id,
+            CRMReconciliationRun.status == "running",
+            CRMReconciliationRun.claim_token == claim_token,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def _validate_result_records(
+    db: AsyncSession,
+    records: Sequence[SourceRecordDraft],
+    *,
+    parser_version: str,
+    artifacts_by_path: Mapping[str, ArchiveArtifactInput],
+) -> None:
+    referenced_paths: set[str] = set()
+    for draft in records:
+        if draft.parser_version != parser_version:
+            raise ReconciliationRunError(
+                "source draft parser_version does not match reconciliation request: "
+                f"expected {parser_version!r}, got {draft.parser_version!r}"
+            )
+        for path in draft.artifact_paths:
+            if path not in artifacts_by_path:
+                raise ReconciliationRunError(
+                    f"source draft artifact is outside the fingerprinted bundle: {path}"
+                )
+            referenced_paths.add(path)
+
+    if not referenced_paths:
+        return
+    catalog_rows = await db.scalars(
+        select(CRMArchiveArtifact).where(
+            CRMArchiveArtifact.source_path.in_(referenced_paths)
+        )
+    )
+    catalog_by_path = {row.source_path: row for row in catalog_rows}
+    missing_paths = referenced_paths.difference(catalog_by_path)
+    if missing_paths:
+        raise ReconciliationRunError(
+            "fingerprinted bundle artifacts are missing from the archive catalog: "
+            + ", ".join(sorted(missing_paths))
+        )
+
+    for path in sorted(referenced_paths):
+        artifact = artifacts_by_path[path]
+        catalog = catalog_by_path[path]
+        if catalog.id != artifact.id:
+            raise ReconciliationRunError(
+                f"archive artifact id mismatch for {path}: "
+                f"bundle={artifact.id}, catalog={catalog.id}"
+            )
+        if catalog.sha256 != artifact.sha256:
+            raise ReconciliationRunError(f"archive artifact hash mismatch for {path}")
+        if catalog.size_bytes != artifact.size_bytes:
+            raise ReconciliationRunError(
+                f"archive artifact size mismatch for {path}: "
+                f"bundle={artifact.size_bytes}, catalog={catalog.size_bytes}"
+            )
+
+
 async def _summary(db: AsyncSession, run_id: int) -> ReconciliationSummary:
     run = await db.get(CRMReconciliationRun, run_id)
     if run is None:
@@ -209,16 +292,102 @@ async def _summary(db: AsyncSession, run_id: int) -> ReconciliationSummary:
 async def _mark_failed(
     db: AsyncSession,
     run_id: int,
+    claim_token: str,
     error: Exception,
 ) -> None:
     await db.rollback()
-    run = await db.get(CRMReconciliationRun, run_id)
-    if run is None:
-        return
-    run.status = "failed"
-    run.error_text = str(error)[:4000]
-    run.completed_at = datetime.now(UTC)
+    result = await db.execute(
+        _owned_run_update(run_id, claim_token).values(
+            status="failed",
+            error_text=str(error)[:4000],
+            completed_at=datetime.now(UTC),
+            claim_token="",
+            claimed_at=None,
+        )
+    )
+    if result.rowcount == 1:
+        await db.commit()
+        db.expire_all()
+    else:
+        await db.rollback()
+
+
+async def _claim_resume_run(
+    db: AsyncSession,
+    run_id: int,
+    claim_token: str,
+) -> None:
+    now = datetime.now(UTC)
+    stale_before = now - _CLAIM_LEASE
+    result = await db.execute(
+        update(CRMReconciliationRun)
+        .where(
+            CRMReconciliationRun.id == run_id,
+            or_(
+                CRMReconciliationRun.status == "failed",
+                and_(
+                    CRMReconciliationRun.status == "running",
+                    or_(
+                        CRMReconciliationRun.claim_token == "",
+                        CRMReconciliationRun.claimed_at.is_(None),
+                        CRMReconciliationRun.claimed_at < stale_before,
+                    ),
+                ),
+            ),
+        )
+        .values(
+            status="running",
+            error_text="",
+            completed_at=None,
+            claim_token=claim_token,
+            claimed_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ReconciliationResumeError(
+            f"reconciliation run {run_id} is already claimed by another worker"
+        )
     await db.commit()
+    db.expire_all()
+
+
+async def _lock_module_claim(
+    db: AsyncSession,
+    run_id: int,
+    claim_token: str,
+) -> None:
+    """Lock ownership through the module commit on PostgreSQL and SQLite."""
+    result = await db.execute(
+        _owned_run_update(run_id, claim_token).values(claimed_at=datetime.now(UTC))
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ReconciliationResumeError(f"reconciliation run {run_id} claim was lost")
+
+
+async def _complete_claimed_run(
+    db: AsyncSession,
+    run_id: int,
+    claim_token: str,
+) -> None:
+    result = await db.execute(
+        _owned_run_update(run_id, claim_token).values(
+            status="completed",
+            error_text="",
+            completed_at=datetime.now(UTC),
+            claim_token="",
+            claimed_at=None,
+        )
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        raise ReconciliationResumeError(
+            f"reconciliation run {run_id} claim was lost before completion"
+        )
+    await db.commit()
+    db.expire_all()
 
 
 async def execute_reconciliation(
@@ -232,14 +401,12 @@ async def execute_reconciliation(
         raise ReconciliationRunError("request must be a RunRequest")
     materialized_artifacts = tuple(artifacts)
     fingerprint = bundle_fingerprint(materialized_artifacts)
-    module_filter = (
-        frozenset({"archive_integrity"})
-        if request.mode == "verify_only"
-        else (request.modules or None)
-    )
-    parsers = registry.select(module_filter)
-    selected = tuple((parser.module, parser) for parser in parsers)
-    requested_modules_json = _requested_modules_json(request.modules)
+    artifacts_by_path = {
+        artifact.source_path: artifact for artifact in materialized_artifacts
+    }
+    selected_modules = _selected_modules(registry, request)
+    requested_modules_json = _requested_modules_json(selected_modules)
+    claim_token = secrets.token_hex(32)
 
     if request.resume_run_id is None:
         run = CRMReconciliationRun(
@@ -249,11 +416,13 @@ async def execute_reconciliation(
             status="running",
             requested_modules_json=requested_modules_json,
             error_text="",
+            claim_token=claim_token,
+            claimed_at=datetime.now(UTC),
         )
         db.add(run)
         await db.flush()
         run_id = run.id
-        completed_modules: set[str] = set()
+        await db.commit()
     else:
         run = await db.get(CRMReconciliationRun, request.resume_run_id)
         if run is None:
@@ -265,9 +434,14 @@ async def execute_reconciliation(
             fingerprint=fingerprint,
             parser_version=request.parser_version,
             mode=request.mode,
-            modules=request.modules,
+            modules=selected_modules,
         )
         run_id = run.id
+        await _claim_resume_run(db, run_id, claim_token)
+
+    try:
+        parsers = registry.select(selected_modules)
+        selected = tuple((parser.module, parser) for parser in parsers)
         completed_modules = set(
             await db.scalars(
                 select(CRMReconciliationResult.module).where(
@@ -275,13 +449,6 @@ async def execute_reconciliation(
                 )
             )
         )
-        run.status = "running"
-        run.error_text = ""
-        run.completed_at = None
-
-    await db.commit()
-
-    try:
         for expected_module, parser in selected:
             if expected_module in completed_modules:
                 continue
@@ -295,6 +462,13 @@ async def execute_reconciliation(
                     "parser result module does not match selected module: "
                     f"expected {expected_module!r}, got {result.metrics.module!r}"
                 )
+            await _validate_result_records(
+                db,
+                result.records,
+                parser_version=request.parser_version,
+                artifacts_by_path=artifacts_by_path,
+            )
+            await _lock_module_claim(db, run_id, claim_token)
             normalized_count = result.metrics.normalized_count
             if request.mode == "apply":
                 await persist_source_records(db, result.records)
@@ -308,17 +482,9 @@ async def execute_reconciliation(
             )
             await db.commit()
 
-        completed_run = await db.get(CRMReconciliationRun, run_id)
-        if completed_run is None:
-            raise ReconciliationRunError(
-                f"reconciliation run {run_id} disappeared during execution"
-            )
-        completed_run.status = "completed"
-        completed_run.error_text = ""
-        completed_run.completed_at = datetime.now(UTC)
-        await db.commit()
+        await _complete_claimed_run(db, run_id, claim_token)
     except Exception as exc:
-        await _mark_failed(db, run_id, exc)
+        await _mark_failed(db, run_id, claim_token, exc)
         raise
 
     return await _summary(db, run_id)

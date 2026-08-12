@@ -118,6 +118,17 @@ def test_registry_registration_does_not_invoke_parser():
     assert parser.parse_calls == 0
 
 
+def test_registry_exposes_stable_registered_module_snapshot():
+    registry = ParserRegistry()
+    contacts = FakeParser("contacts")
+    tasks = FakeParser("tasks")
+    registry.register(tasks)
+    registry.register(contacts)
+    tasks.module = "changed"
+
+    assert registry.registered_modules() == frozenset({"contacts", "tasks"})
+
+
 @pytest.mark.parametrize(
     "selected_modules",
     [None, {"tasks"}],
