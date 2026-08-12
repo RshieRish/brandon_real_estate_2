@@ -1496,3 +1496,6 @@ Completed Checklist Video Integration
 
 - Saved Searches now has its own internal Command registry with canonical contact context, readable persisted criteria, and explicit deletion. This completes management beyond the contact-profile creation entrypoint.
 - Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.
+
+- Contact notes, tags, and saved searches now use native inline workspace controls with loading/error states and in-place refresh instead of browser prompts or a full-page reload.
+- Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
