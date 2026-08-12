@@ -1487,3 +1487,6 @@ Completed Checklist Video Integration
 
 - Contact profile updates now persist explicit clears for optional email, phone, birthday, and anniversary values. This matches the profile UI and prevents stale private data from remaining after an admin clears it.
 - Verification: 23 focused Command backend tests, 65 frontend tests, and TypeScript pass.
+
+- Referral creation and genuine lifecycle changes now append immutable activity entries to their linked contact timeline, keeping relationship history visible from the canonical contact workspace.
+- Verification: 24 focused Command backend tests pass.

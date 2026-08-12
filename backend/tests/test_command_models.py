@@ -66,6 +66,13 @@ def test_referral_is_an_internal_record_with_a_lifecycle():
     assert referral.status == "new"
 
 
+def test_referral_lifecycle_is_limited_to_the_workspace_statuses():
+    from schemas.command import ReferralUpdate
+    assert ReferralUpdate(status="converted").status == "converted"
+    with pytest.raises(ValidationError):
+        ReferralUpdate(status="untracked")
+
+
 def test_contact_can_store_private_birthday_and_anniversary_dates():
     contact = CRMContact(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))
     payload = ContactCreate(first_name="Avery", birthday=date(1990, 8, 12), anniversary=date(2020, 6, 1))

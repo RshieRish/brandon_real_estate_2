@@ -416,12 +416,20 @@ async def referrals(db: AsyncSession = Depends(get_db)):
 @router.post("/referrals", response_model=ReferralOut)
 async def create_referral(payload: ReferralCreate, db: AsyncSession = Depends(get_db)):
     if payload.contact_id and not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Contact not found")
-    item = CRMReferral(**payload.model_dump()); db.add(item); await db.flush(); return item
+    item = CRMReferral(**payload.model_dump()); db.add(item); await db.flush()
+    if item.contact_id:
+        db.add(CRMActivity(contact_id=item.contact_id, kind="referral_created", summary=f"Referral created: {item.name}"))
+        await db.flush()
+    return item
 @router.patch("/referrals/{referral_id}", response_model=ReferralOut)
 async def update_referral(referral_id: int, payload: ReferralUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMReferral, referral_id)
     if not item: raise HTTPException(404, "Referral not found")
-    item.status = payload.status; await db.flush(); return item
+    changed = item.status != payload.status
+    item.status = payload.status
+    if changed and item.contact_id:
+        db.add(CRMActivity(contact_id=item.contact_id, kind="referral_status_changed", summary=f"Referral status changed to {item.status}"))
+    await db.flush(); return item
 
 
 @router.post("/listings/{listing_id}/geocode", response_model=ListingOut)
