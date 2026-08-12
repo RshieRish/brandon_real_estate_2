@@ -220,4 +220,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateSmartPlanStatus(7, 'paused')).resolves.toMatchObject({ status: 'paused' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }));
   });
+
+  it('generates an auditable review-required AI briefing through the typed client', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-ai-briefing' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ summary: 'Prioritize follow-up.', source: 'gemini-aggregate-internal-metrics', requires_review: true }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.generateAiBriefing()).resolves.toMatchObject({ requires_review: true });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/ai/briefing/generate'), expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer token-ai-briefing' }) }));
+  });
 });

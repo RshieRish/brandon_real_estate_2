@@ -1443,3 +1443,6 @@ Completed Checklist Video Integration
 
 - Opportunities now enforce the internal pipeline vocabulary (`cultivate`, `appointment`, `active`, `offer`, `under_contract`, `closed`, `lost`) for creation and stage moves. A real stage move appends immutable `opportunity_stage_changed` activity evidence without duplicating opportunity data.
 - Verification: 16 focused Command backend tests pass. An authenticated invalid opportunity-stage mutation returned HTTP 422.
+
+- Sweeney AI Briefing now uses the shared typed authenticated Command client for both its deterministic internal preview and explicit fresh-generation action. The existing backend contract remains aggregate-only, review-required, audit-logged for generation, and non-autonomous.
+- Verification: 16 focused Command backend tests, 25 Command frontend API tests, and TypeScript pass.
