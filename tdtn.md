@@ -1422,3 +1422,6 @@ Completed Checklist Video Integration
 
 - Every persisted task edit now appends an immutable `task_updated` CRM activity to the linked contact timeline. The audit summary names only the fields actually changed (for example, priority and due date), without duplicating task content in activity metadata.
 - Verification: 14 focused Command backend tests pass.
+
+- Referrals can now be linked to internal contacts from the referral workspace. The chooser loads every paginated contact record (rather than assuming a small contact set), passes the contact relationship through the existing validated referral API, and displays the resolved contact on the referral card.
+- Verification: 14 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass.
