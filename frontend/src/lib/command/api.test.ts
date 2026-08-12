@@ -157,4 +157,13 @@ describe('commandApi', () => {
     await commandApi.updateContact(11, { birthday: '1990-08-12', anniversary: null });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/11'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ birthday: '1990-08-12', anniversary: null }) }));
   });
+
+  it('requests contacts with server-side search and stage filters', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-filter' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.contacts(100, 0, { query: 'avery lake', stage: 'client' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=100&offset=0&query=avery+lake&stage=client'), expect.anything());
+  });
 });

@@ -1410,3 +1410,6 @@ Completed Checklist Video Integration
 
 - Contact profile editing now includes private birthday and anniversary dates, displays stored dates as contact metadata, and renders saved-search criteria alongside the saved-search record. Both use existing authenticated persisted APIs; date validation remains server-side through the contact schema.
 - Verification: Command frontend API tests pass (17) and TypeScript passes.
+
+- Contacts now have server-side search and lifecycle-stage filtering. The API accepts bounded pagination plus `query` (name/email/phone) and `stage`; the Contacts workspace debounces searches, keeps paging through matching records, and shows explicit loading/empty states.
+- Verification: 12 focused Command backend tests, 18 Command frontend API tests, and TypeScript pass. Authenticated runtime searches for both a query and stage filter returned HTTP 200.

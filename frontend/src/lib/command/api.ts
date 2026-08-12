@@ -22,7 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const commandApi = {
-  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0) => request<Contact[]>(`/contacts?limit=${Math.min(Math.max(limit, 1), 100)}&offset=${Math.max(offset, 0)}`), tasks: (filters: { status?: string; due_before?: string; due_after?: string } = {}) => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`); },
+  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0, filters: { query?: string; stage?: string } = {}) => { const params = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 100)), offset: String(Math.max(offset, 0)) }); if (filters.query?.trim()) params.set('query', filters.query.trim()); if (filters.stage) params.set('stage', filters.stage); return request<Contact[]>(`/contacts?${params.toString()}`); }, tasks: (filters: { status?: string; due_before?: string; due_after?: string } = {}) => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`); },
   celebrations: (month: number) => request<Celebrations>(`/celebrations?month=${Math.min(Math.max(month, 1), 12)}`),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   updateContactStage: (id: number, stage: string) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),

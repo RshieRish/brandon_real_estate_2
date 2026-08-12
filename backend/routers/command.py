@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -90,8 +90,14 @@ async def event_breakdown(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/contacts", response_model=list[ContactOut])
-async def contacts(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CRMContact).order_by(CRMContact.created_at.desc()).offset(offset).limit(min(limit, 100)))
+async def contacts(limit: int = 50, offset: int = 0, query: str | None = None, stage: str | None = None, db: AsyncSession = Depends(get_db)):
+    statement = select(CRMContact).order_by(CRMContact.created_at.desc())
+    if query and (term := query.strip()):
+        needle = f"%{term}%"
+        statement = statement.where(or_(CRMContact.first_name.ilike(needle), CRMContact.last_name.ilike(needle), CRMContact.email.ilike(needle), CRMContact.phone.ilike(needle)))
+    if stage:
+        statement = statement.where(CRMContact.stage == stage)
+    result = await db.execute(statement.offset(max(offset, 0)).limit(min(max(limit, 1), 100)))
     return result.scalars().all()
 
 
