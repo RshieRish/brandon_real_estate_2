@@ -18,6 +18,7 @@ Last Updated: 2026-08-02
 - Completed the additive migration, authenticated Command overview/contact/task/agreement API, dark Command dashboard, and route navigation shells. Frontend typecheck, 34 Vitest tests, and production build pass. Remaining work is the full feature views and resource endpoints for each workspace module.
 - Added live internal Contacts, Tasks, Smart Plans, Opportunities, Agreements, Listings/Map, connected Marketing/Reports/Websites, and Sweeney AI briefing modules. Contact detail now covers Timeline, Opportunities, Smart Plans, Tasks, Notes, and Saved Searches through one authenticated API endpoint.
 - Applied additive migration `f3a91c2d7e10` to the configured PostgreSQL database. Verified `alembic current` reports `f3a91c2d7e10 (head)`; no existing lead, booking, content, funnel, or analytics data was changed.
+- Added and applied `f6b24e1c8a03` for Tags and Saved Searches; saved searches are returned in the per-contact workspace.
 
 ### 2026-08-02 - Production Header Logo Sizing Fix
 - Root cause: the SWS-only PNG has a `9675x5084` canvas but its visible alpha content occupies only about 77% of the width and 57% of the height. The brokerage-swap navbar rendered that padded canvas at only `68x36px`, leaving a visible logo of roughly `52x21px` in production.
