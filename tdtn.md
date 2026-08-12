@@ -1334,3 +1334,6 @@ Completed Checklist Video Integration
 
 - Marketing and Websites now show actual internal content/funnel records, and Reports includes a persisted analytics event-type breakdown. These views remain linked to the existing internal content/funnel editors as the single write path.
 - Verification: focused Command backend tests pass (5), frontend Command API tests pass (6), and frontend typecheck passes.
+
+- Listings now have a server-side Google geocoding action (configured-key only) and a coordinate-derived internal map layout. Geocoding failures are explicit and do not fabricate a location.
+- Verification: focused Command model/geocoding tests pass (6) and frontend typecheck passes.

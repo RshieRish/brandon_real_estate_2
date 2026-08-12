@@ -211,3 +211,4 @@ Added interactive videos to Seller Staging Checklist
 - Smart Plan workspaces now create steps and enroll contacts through the same internal database APIs.
 - Agreement lifecycle is now audit-backed: creation/status changes/recipient additions create agreement events, detail workspaces show recipients/events/files, and a migration adds an optional agreement link to private file assets.
 - Marketing, website, and report Command views now query live internal content, funnels, and aggregate analytics event-type records instead of rendering only counters.
+- Listing map placement is now coordinate-based. The backend geocodes only when the configured Google Maps key is present and returns explicit errors otherwise.

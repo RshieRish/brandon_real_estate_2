@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from config import settings
 from services.gemini import generate_text_flash_lite
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
+from services.command_geocoding import geocode_listing_address
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -260,6 +262,20 @@ async def listings(db: AsyncSession = Depends(get_db)):
 @router.post("/listings", response_model=ListingOut)
 async def create_listing(payload: ListingCreate, db: AsyncSession = Depends(get_db)):
     item = CRMListingRecord(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+
+@router.post("/listings/{listing_id}/geocode", response_model=ListingOut)
+async def geocode_listing(listing_id: int, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMListingRecord, listing_id)
+    if not item: raise HTTPException(404, "Listing not found")
+    try:
+        item.latitude, item.longitude = await geocode_listing_address(item.address)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(422, "Unable to geocode listing address") from exc
+    await db.flush()
+    return item
 
 
 @router.get("/smart-plans", response_model=list[NamedRecordOut])
