@@ -1493,3 +1493,6 @@ Completed Checklist Video Integration
 
 - Public homepage static builds now deliberately use authored fallback content when no public API endpoint is configured, preventing build workers from attempting an unavailable localhost request.
 - Verification: 65 frontend tests, TypeScript, and a clean 33-route production build pass with no content-block fetch failure. Reclaimed only a stale generated `.next` cache to complete the local build.
+
+- Saved Searches now has its own internal Command registry with canonical contact context, readable persisted criteria, and explicit deletion. This completes management beyond the contact-profile creation entrypoint.
+- Verification: 25 focused Command backend tests, 66 frontend tests, and TypeScript pass.

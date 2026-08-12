@@ -272,6 +272,30 @@ async def create_saved_search(contact_id:int,payload:SavedSearchCreate,db:AsyncS
     if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
     item=CRMSavedSearch(contact_id=contact_id,name=payload.name,criteria_json=__import__('json').dumps(payload.criteria));db.add(item);await db.flush();return {"id":item.id,"name":item.name,"criteria":item.criteria_json}
 
+@router.get("/saved-searches")
+async def saved_searches(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(CRMSavedSearch, CRMContact)
+        .outerjoin(CRMContact, CRMContact.id == CRMSavedSearch.contact_id)
+        .order_by(CRMSavedSearch.updated_at.desc())
+    )).all()
+    return [{
+        "id": search.id,
+        "name": search.name,
+        "criteria": search.criteria_json,
+        "contact_id": search.contact_id,
+        "contact_name": f"{contact.first_name} {contact.last_name}".strip() if contact else None,
+        "updated_at": search.updated_at,
+    } for search, contact in rows]
+
+@router.delete("/saved-searches/{search_id}")
+async def delete_saved_search(search_id: int, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMSavedSearch, search_id)
+    if not item: raise HTTPException(404, "Saved search not found")
+    await db.delete(item)
+    await db.flush()
+    return {"deleted": True, "id": search_id}
+
 
 @router.get("/tasks", response_model=list[TaskOut])
 async def tasks(status: str | None = None, due_before: datetime | None = None, due_after: datetime | None = None, db: AsyncSession = Depends(get_db)):

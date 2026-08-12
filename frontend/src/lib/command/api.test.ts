@@ -264,6 +264,16 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/saved-searches'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Follow-up context', criteria: { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' } }) }));
   });
 
+  it('lists and deletes saved searches through the authenticated Command API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-saved-search-list' });
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => [] }).mockResolvedValueOnce({ ok: true, json: async () => ({ deleted: true, id: 4 }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(commandApi.savedSearches()).resolves.toEqual([]);
+    await expect(commandApi.deleteSavedSearch(4)).resolves.toMatchObject({ deleted: true });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, expect.stringContaining('/saved-searches'), expect.anything());
+    expect(fetchMock).toHaveBeenNthCalledWith(2, expect.stringContaining('/saved-searches/4'), expect.objectContaining({ method: 'DELETE' }));
+  });
+
   it('creates an internal agreement with a selected internal template', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-agreement-template' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 6, title: 'Buyer agreement', contact_id: null, template_id: 3, status: 'draft' }) });

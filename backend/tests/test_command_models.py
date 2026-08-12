@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
@@ -147,3 +147,8 @@ def test_task_link_identity_and_display_name_are_canonical():
     assert task_link_display_name("opportunity", CRMOpportunity(name="Lake purchase")) == "Lake purchase"
     assert task_link_display_name("agreement", CRMAgreement(title="Buyer agreement")) == "Buyer agreement"
     assert task_link_display_name("listing", CRMListingRecord(address="10 Main Street")) == "10 Main Street"
+
+
+def test_saved_search_belongs_to_optional_canonical_contact_context():
+    search = CRMSavedSearch(name="Follow up", contact_id=9, criteria_json='{"stage":"lead"}')
+    assert (search.contact_id, search.criteria_json) == (9, '{"stage":"lead"}')
