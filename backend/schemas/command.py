@@ -101,6 +101,7 @@ class OpportunityOut(OpportunityCreate):
 class AgreementCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     contact_id: int | None = None
+    template_id: int | None = None
 
 class AgreementOut(AgreementCreate):
     id: int

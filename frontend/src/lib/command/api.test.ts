@@ -238,4 +238,13 @@ describe('commandApi', () => {
     await commandApi.createContactSavedSearch(14, 'Follow-up context', { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/saved-searches'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Follow-up context', criteria: { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' } }) }));
   });
+
+  it('creates an internal agreement with a selected internal template', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-agreement-template' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 6, title: 'Buyer agreement', contact_id: null, template_id: 3, status: 'draft' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.createAgreement({ title: 'Buyer agreement', contact_id: null, template_id: 3 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Buyer agreement', contact_id: null, template_id: 3 }) }));
+  });
 });

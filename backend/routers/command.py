@@ -326,6 +326,8 @@ async def agreements(db: AsyncSession = Depends(get_db)):
 
 @router.post("/agreements", response_model=AgreementOut)
 async def create_agreement(payload: AgreementCreate, db: AsyncSession = Depends(get_db)):
+    if payload.contact_id is not None and not await db.get(CRMContact, payload.contact_id): raise HTTPException(404, "Contact not found")
+    if payload.template_id is not None and not await db.get(CRMAgreementTemplate, payload.template_id): raise HTTPException(404, "Agreement template not found")
     item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush()
     db.add(CRMAgreementEvent(agreement_id=item.id, event_type="draft")); await db.flush(); return item
 

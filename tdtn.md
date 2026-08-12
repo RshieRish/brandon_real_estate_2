@@ -1451,3 +1451,6 @@ Completed Checklist Video Integration
 - Verification: 16 focused Command backend tests, 26 Command frontend API tests, and TypeScript pass.
 
 - Full current-branch regression sweep: all 60 frontend tests pass, all 16 focused Command backend tests pass, configured PostgreSQL is at `b7e1f2d4a906 (head)`, and the optimized frontend production build completes with every Command route present. Static generation retains the known non-fatal local `content blocks` connection-refused warning because no public API was running for that build.
+
+- Internal agreement creation now supports selecting an existing internal template and persists `template_id` on the agreement record. The server validates optional contact/template references before creating the agreement and its initial audit event; this remains tracking/review only, not legal e-signature execution.
+- Verification: 16 focused Command backend tests, 27 Command frontend API tests, TypeScript, and `git diff --check` pass.
