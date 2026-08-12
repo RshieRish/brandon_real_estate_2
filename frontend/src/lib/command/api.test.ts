@@ -123,4 +123,12 @@ describe('commandApi', () => {
     await expect(commandApi.updateAgreementTemplate(6, 'Updated body')).resolves.toMatchObject({ body: 'Updated body' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreement-templates/6'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ body: 'Updated body' }) }));
   });
+
+  it('requests a filtered task queue with status and due date bounds', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-task-filter' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    vi.stubGlobal('fetch', fetchMock);
+    await commandApi.tasks({ status: 'open', due_before: '2026-08-31T23:59:59Z' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks?status=open&due_before=2026-08-31T23%3A59%3A59Z'), expect.anything());
+  });
 });

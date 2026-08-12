@@ -228,3 +228,4 @@ Added interactive videos to Seller Staging Checklist
 - Agreement templates now expose a persisted body update API for template-editor UI work.
 - Agreement template editor UI now creates and edits internal template bodies through the authenticated Command API.
 - Task links now have a retrieval API and are visible from the task workspace.
+- Tasks now support server-side status and due-date filtering with matching workspace controls.

@@ -1382,5 +1382,8 @@ Completed Checklist Video Integration
 - Task links are now retrievable and visible from Tasks: `GET /tasks/{task_id}/links` returns persisted internal links, and the task card can load/display their entity type and ID.
 - Verification: Command API tests pass (13), frontend typecheck passes, and all Command backend tests pass (10).
 
+- Tasks now support server-side status and due-date bounds (`status`, `due_before`, `due_after`) with matching open/completed and due-by controls in the Tasks workspace.
+- Verification: Command API tests pass (14), frontend typecheck passes, and all Command backend tests pass (10).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

@@ -20,7 +20,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const commandApi = {
-  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0) => request<Contact[]>(`/contacts?limit=${Math.min(Math.max(limit, 1), 100)}&offset=${Math.max(offset, 0)}`), tasks: () => request<Task[]>('/tasks'),
+  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0) => request<Contact[]>(`/contacts?limit=${Math.min(Math.max(limit, 1), 100)}&offset=${Math.max(offset, 0)}`), tasks: (filters: { status?: string; due_before?: string; due_after?: string } = {}) => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`); },
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   updateContactStage: (id: number, stage: string) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
   smartPlans: () => request<NamedRecord[]>('/smart-plans'), createSmartPlan: (payload: Pick<NamedRecord,'name'|'description'>) => request<NamedRecord>('/smart-plans',{method:'POST',body:JSON.stringify(payload)}),

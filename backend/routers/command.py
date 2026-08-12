@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
@@ -194,9 +195,11 @@ async def create_saved_search(contact_id:int,payload:SavedSearchCreate,db:AsyncS
 
 
 @router.get("/tasks", response_model=list[TaskOut])
-async def tasks(status: str | None = None, db: AsyncSession = Depends(get_db)):
+async def tasks(status: str | None = None, due_before: datetime | None = None, due_after: datetime | None = None, db: AsyncSession = Depends(get_db)):
     query = select(CRMTask).order_by(CRMTask.due_at.asc().nulls_last())
     if status: query = query.where(CRMTask.status == status)
+    if due_before: query = query.where(CRMTask.due_at <= due_before)
+    if due_after: query = query.where(CRMTask.due_at >= due_after)
     return (await db.execute(query)).scalars().all()
 
 
