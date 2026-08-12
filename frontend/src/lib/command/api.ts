@@ -10,6 +10,7 @@ export type AgreementWorkspace = { agreement: Agreement; recipients: Relationshi
 export type AgreementTemplate = { id: number; name: string; body: string };
 export type MarketingRecords = { content_blocks: { id: number; block_id: string; page: string | null; content_type: string; updated_at: string }[]; funnels: { id: number; title: string; slug: string; audience: string; status: string; registrations: number; updated_at: string }[] };
 export type Listing = { id:number; address:string; latitude:string|null; longitude:string|null; status:string };
+export type Referral = { id: number; name: string; source: string; contact_id: number | null; status: string };
 export type Relationship = { id:number; contact_id?:number; name?:string; email?:string; role:string; amount_cents?:number|null; status?:string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -45,6 +46,9 @@ export const commandApi = {
   updateAgreementTemplate: (id: number, body: string) => request<AgreementTemplate>(`/agreement-templates/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   listings: () => request<Listing[]>('/listings'), createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}), updateListingStatus: (id: number, status: 'active' | 'pending' | 'sold' | 'withdrawn') => request<Listing>(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   geocodeListing: (id: number) => request<Listing>(`/listings/${id}/geocode`, { method: 'POST' }),
+  referrals: () => request<Referral[]>('/referrals'),
+  createReferral: (payload: Omit<Referral, 'id' | 'status'>) => request<Referral>('/referrals', { method: 'POST', body: JSON.stringify(payload) }),
+  updateReferralStatus: (id: number, status: string) => request<Referral>(`/referrals/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   marketingRecords: () => request<MarketingRecords>('/marketing/records'),
   websiteRecords: () => request<{ pages: MarketingRecords['content_blocks'] }>('/websites/records'),
   eventBreakdown: () => request<{ events: { event_type: string; count: number }[] }>('/reports/event-breakdown'),

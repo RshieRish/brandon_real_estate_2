@@ -233,3 +233,5 @@ Added interactive videos to Seller Staging Checklist
 - Contact profile fields now support persisted edits with timeline activity auditing.
 - Sweeney AI briefing UI now explicitly renders provenance, review-required status, loading, and backend errors.
 - Tasks UI now captures persisted priority and due datetime at creation and displays stored due dates.
+- Referrals are now a persisted internal Command module (`crm_referrals`) with source, optional contact linkage, and a validated lifecycle. Migration `fd1c8e9a4703` is applied to the configured database; authenticated reads of referrals and core Command summaries return 200.
+- 2026-08-12 verification: focused Command backend tests (11), Command frontend API tests (15), TypeScript, and the optimized frontend build pass. The DB has 51 contacts and 52 activities projected from existing internal leads; the newly provisioned CRM tables remain empty. Do not describe KW Command or DocuSign data as imported: no external archive is present in this repository or database.

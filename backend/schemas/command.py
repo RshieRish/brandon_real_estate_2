@@ -106,6 +106,17 @@ class ListingCreate(BaseModel):
 class ListingStatusUpdate(BaseModel):
     status: str = Field(pattern="^(active|pending|sold|withdrawn)$")
 
+class ReferralCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    source: str = ""
+    contact_id: int | None = None
+class ReferralUpdate(BaseModel):
+    status: str = Field(pattern="^(new|contacted|nurture|converted|closed|lost)$")
+class ReferralOut(ReferralCreate):
+    id: int
+    status: str
+    class Config: from_attributes = True
+
 class ListingOut(ListingCreate):
     id: int
     status: str

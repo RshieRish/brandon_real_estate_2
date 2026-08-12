@@ -1399,3 +1399,8 @@ Completed Checklist Video Integration
 
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.
+
+- Added an internal Referrals workspace backed by persisted `crm_referrals` records. Referrals support source, optional linked contact, and a validated lifecycle (new, contacted, nurture, converted, closed, lost); the Command navigation and API now expose creation, retrieval, and status updates.
+- Verification: migration `fd1c8e9a4703` is the configured database head; 11 focused Command backend tests, 15 Command frontend API tests, TypeScript, and the optimized frontend build pass. Authenticated runtime reads for overview, contacts, referrals, reports, marketing, and websites each returned HTTP 200.
+
+- Data verification: the internal database currently contains 51 CRM contacts and 52 CRM activities, all from the existing internal lead projection. Tasks, Smart Plans, Opportunities, Listings, Referrals, Agreements, Templates, and private file assets are correctly provisioned but currently empty. No KW Command or DocuSign archive has been imported into this database.

@@ -1,5 +1,5 @@
 from schemas.command import ContactWorkspaceOpportunityOut
-from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMReferral, CRMTask, CRMTaskLink
 
 
 def test_command_models_expose_safe_defaults_and_links():
@@ -51,3 +51,8 @@ def test_agreement_files_and_events_are_scoped_to_an_internal_agreement():
 def test_task_link_connects_a_task_to_an_internal_record_without_copying_data():
     link = CRMTaskLink(task_id=3, entity_type="opportunity", entity_id=8)
     assert (link.task_id, link.entity_type, link.entity_id) == (3, "opportunity", 8)
+
+
+def test_referral_is_an_internal_record_with_a_lifecycle():
+    referral = CRMReferral(name="Buyer introduction", status="new")
+    assert referral.status == "new"

@@ -157,6 +157,15 @@ class CRMListingRecord(Timestamped, Base):
     status: Mapped[str] = mapped_column(String(32), default="active")
 
 
+class CRMReferral(Timestamped, Base):
+    __tablename__ = "crm_referrals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
+    source: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(32), default="new")
+
+
 class CRMAgreementTemplate(Timestamped, Base):
     __tablename__ = "crm_agreement_templates"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
