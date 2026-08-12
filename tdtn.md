@@ -1514,3 +1514,6 @@ Completed Checklist Video Integration
 
 - Archive intake now supports a structured permitted JSON bundle for contacts, tasks, notes, opportunities, referrals, listings, templates, and agreements. It reconciles email-based contact relationships, reports unresolved references, and deduplicates against canonical internal records.
 - Verification: 27 focused Command backend tests, 68 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Task editing now uses a native modal form with validation, date controls, save state, and error feedback instead of browser prompts. The Link Pack layout no longer makes production builds depend on remote Next font downloads.
+- Verification: 68 frontend tests, TypeScript, and clean 34-route production build pass.
