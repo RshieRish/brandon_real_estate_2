@@ -11,14 +11,16 @@ const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
 
 async function fetchContentBlocks() {
+  // Static builds deliberately render the authored fallbacks when no public API
+  // endpoint is configured; attempting localhost from the build worker is noise.
+  if (!process.env.NEXT_PUBLIC_API_URL && process.env.NODE_ENV === 'production') return [];
   try {
     const res = await fetch(`${API_URL}/api/v1/content/`, {
       next: { revalidate: 60 },
     });
     if (!res.ok) return [];
     return await res.json();
-  } catch (err) {
-    console.error('Failed to fetch content blocks:', err);
+  } catch {
     return [];
   }
 }

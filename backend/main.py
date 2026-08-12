@@ -16,6 +16,7 @@ from routers import (
     blog,
     booking,
     chat,
+    command,
     content,
     crm,
     evaluator,
@@ -76,6 +77,7 @@ app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
+app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
 
 
 async def _notification_retry_loop() -> None:
