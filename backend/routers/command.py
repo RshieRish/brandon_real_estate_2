@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMOpportunity, CRMSmartPlan, CRMTask
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMContact, CRMListingRecord, CRMOpportunity, CRMSmartPlan, CRMTask
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, TaskCreate, TaskOut, TaskUpdate
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -82,6 +82,14 @@ async def agreements(db: AsyncSession = Depends(get_db)):
 @router.post("/agreements", response_model=AgreementOut)
 async def create_agreement(payload: AgreementCreate, db: AsyncSession = Depends(get_db)):
     item = CRMAgreement(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.get("/listings", response_model=list[ListingOut])
+async def listings(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMListingRecord).order_by(CRMListingRecord.created_at.desc()))).scalars().all()
+
+@router.post("/listings", response_model=ListingOut)
+async def create_listing(payload: ListingCreate, db: AsyncSession = Depends(get_db)):
+    item = CRMListingRecord(**payload.model_dump()); db.add(item); await db.flush(); return item
 
 
 @router.get("/smart-plans", response_model=list[NamedRecordOut])

@@ -76,3 +76,13 @@ class AgreementOut(AgreementCreate):
     id: int
     status: str
     class Config: from_attributes = True
+
+class ListingCreate(BaseModel):
+    address: str = Field(min_length=3, max_length=500)
+    latitude: str | None = None
+    longitude: str | None = None
+
+class ListingOut(ListingCreate):
+    id: int
+    status: str
+    class Config: from_attributes = True
