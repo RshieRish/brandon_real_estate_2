@@ -1490,3 +1490,6 @@ Completed Checklist Video Integration
 
 - Referral creation and genuine lifecycle changes now append immutable activity entries to their linked contact timeline, keeping relationship history visible from the canonical contact workspace.
 - Verification: 24 focused Command backend tests pass.
+
+- Public homepage static builds now deliberately use authored fallback content when no public API endpoint is configured, preventing build workers from attempting an unavailable localhost request.
+- Verification: 65 frontend tests, TypeScript, and a clean 33-route production build pass with no content-block fetch failure. Reclaimed only a stale generated `.next` cache to complete the local build.
