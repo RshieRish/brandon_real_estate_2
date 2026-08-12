@@ -319,4 +319,49 @@ describe('commandApi', () => {
     await commandApi.createAgreement({ title: 'Seller agreement', contact_id: 11, template_id: null });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Seller agreement', contact_id: 11, template_id: null }) }));
   });
+
+  it('preserves optional factual readiness fields and authenticates the current read calls', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-home-readiness' });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          id: 4,
+          first_name: 'Avery',
+          last_name: 'Lake',
+          email: null,
+          phone: '+1 555 0104',
+          stage: 'lead',
+          birthday: null,
+          anniversary: null,
+          last_contacted_at: '2026-08-10T15:00:00.000Z',
+          recently_active_at: '2026-08-11T12:00:00.000Z',
+          health_score: 84,
+        }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          id: 8,
+          name: 'Lake purchase',
+          stage: 'active',
+          value_cents: 52_500_000,
+          updated_at: '2026-08-11T14:00:00.000Z',
+        }],
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts(100, 0)).resolves.toEqual([
+      expect.objectContaining({ last_contacted_at: '2026-08-10T15:00:00.000Z', health_score: 84 }),
+    ]);
+    await expect(commandApi.opportunities()).resolves.toEqual([
+      expect.objectContaining({ updated_at: '2026-08-11T14:00:00.000Z' }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer token-home-readiness' }),
+      }));
+    }
+  });
 });

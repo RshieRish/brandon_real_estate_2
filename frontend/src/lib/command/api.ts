@@ -1,7 +1,7 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export type Overview = { contacts: number; open_tasks: number; opportunities: number; active_smart_plans: number };
-export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null };
+export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null; last_contacted_at?: string | null; recently_active_at?: string | null; health_score?: number | null };
 export type Celebrations = { birthdays: Contact[]; anniversaries: Contact[] };
 export type ContactWorkspace = { contact: Contact; timeline: { id: number; kind: string; summary: string; created_at: string }[]; tasks: Task[]; notes: { id: number; body: string }[]; smart_plans: { id: number; plan_id: number; status: string }[]; opportunities: Opportunity[]; saved_searches: { id: number; name: string; criteria: string }[]; bookings: { id: number; meeting_type: string; context: string; scheduled_at: string; location: string | null; notes: string }[]; tags: { id: number; name: string }[] };
 export type ReportDetails = { metric: string; rows: { id: number; title: string; detail: string; occurred_at: string | null }[] };
@@ -16,7 +16,7 @@ export type ContactImportResult = { created: number; skipped_duplicates: number 
 export type ArchiveBundle = { contacts?: ContactImportRow[]; tasks?: { title: string; contact_email?: string | null; description?: string; status?: string; priority?: string; due_at?: string | null }[]; notes?: { contact_email: string; body: string }[]; opportunities?: { name: string; stage?: string; value_cents?: number | null; contact_emails?: string[] }[]; referrals?: { name: string; source?: string; status?: string; contact_email?: string | null }[]; listings?: { address: string; latitude?: string | null; longitude?: string | null; status?: string }[]; templates?: { name: string; body?: string }[]; agreements?: { title: string; contact_email?: string | null; template_name?: string | null; status?: string }[] };
 export type ArchiveBundleImportResult = { created: Record<string, number>; skipped_duplicates: Record<string, number>; unresolved_contact_references: number };
 export type SavedSearch = { id: number; name: string; criteria: string; contact_id: number | null; contact_name: string | null; updated_at: string };
-export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
+export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null; updated_at?:string|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; template_id?:number|null; status:string };
 export type AgreementWorkspace = { agreement: Agreement; recipients: Relationship[]; events: { id: number; event_type: string; created_at: string }[]; files: { id: number; filename: string; storage_key: string; content_type: string; agreement_id: number | null }[] };
 export type AgreementTemplate = { id: number; name: string; body: string };
