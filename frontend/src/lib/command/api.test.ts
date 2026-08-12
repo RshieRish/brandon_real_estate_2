@@ -202,4 +202,13 @@ describe('commandApi', () => {
     await expect(commandApi.reportDetails('contacts')).resolves.toMatchObject({ metric: 'contacts' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/reports/details/contacts'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-report-detail' }) }));
   });
+
+  it('updates persisted goal progress through the Command API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-goal' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 3, name: 'Appointments', target_value: 12, current_value: 5, period: 'monthly' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateGoalProgress(3, 5)).resolves.toMatchObject({ current_value: 5 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/goals/3'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ current_value: 5 }) }));
+  });
 });

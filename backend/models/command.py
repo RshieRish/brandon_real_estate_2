@@ -168,6 +168,15 @@ class CRMReferral(Timestamped, Base):
     status: Mapped[str] = mapped_column(String(32), default="new")
 
 
+class CRMGoal(Timestamped, Base):
+    __tablename__ = "crm_goals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    target_value: Mapped[int] = mapped_column(Integer)
+    current_value: Mapped[int] = mapped_column(Integer, default=0)
+    period: Mapped[str] = mapped_column(String(32), default="monthly")
+
+
 class CRMAgreementTemplate(Timestamped, Base):
     __tablename__ = "crm_agreement_templates"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from middleware.auth import require_admin
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMReferral, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMReferral, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask, CRMTaskLink
 from models.lead import Lead
 from models.booking import Booking
 from models.analytics_event import AnalyticsEvent
@@ -15,7 +15,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -36,6 +36,20 @@ async def overview(db: AsyncSession = Depends(get_db)):
         contacts=await _count(db, CRMContact), open_tasks=await _count(db, CRMTask, CRMTask.status != "completed"),
         opportunities=await _count(db, CRMOpportunity), active_smart_plans=await _count(db, CRMSmartPlan, CRMSmartPlan.status == "active"),
     )
+
+@router.get("/goals", response_model=list[GoalOut])
+async def goals(db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(CRMGoal).order_by(CRMGoal.updated_at.desc()))).scalars().all()
+
+@router.post("/goals", response_model=GoalOut)
+async def create_goal(payload: GoalCreate, db: AsyncSession = Depends(get_db)):
+    item = CRMGoal(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.patch("/goals/{goal_id}", response_model=GoalOut)
+async def update_goal_progress(goal_id: int, payload: GoalUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMGoal, goal_id)
+    if not item: raise HTTPException(404, "Goal not found")
+    item.current_value = payload.current_value; await db.flush(); return item
 
 @router.get("/ai/briefing")
 async def ai_briefing(db: AsyncSession = Depends(get_db)):

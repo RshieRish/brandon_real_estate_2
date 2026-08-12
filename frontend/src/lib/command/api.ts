@@ -5,6 +5,7 @@ export type Contact = { id: number; first_name: string; last_name: string; email
 export type Celebrations = { birthdays: Contact[]; anniversaries: Contact[] };
 export type ContactWorkspace = { contact: Contact; timeline: { id: number; kind: string; summary: string; created_at: string }[]; tasks: Task[]; notes: { id: number; body: string }[]; smart_plans: { id: number; plan_id: number; status: string }[]; opportunities: Opportunity[]; saved_searches: { id: number; name: string; criteria: string }[]; bookings: { id: number; meeting_type: string; context: string; scheduled_at: string; location: string | null; notes: string }[]; tags: { id: number; name: string }[] };
 export type ReportDetails = { metric: string; rows: { id: number; title: string; detail: string; occurred_at: string | null }[] };
+export type Goal = { id: number; name: string; target_value: number; current_value: number; period: 'weekly' | 'monthly' | 'quarterly' | 'annual' };
 export type Task = { id: number; title: string; contact_id: number | null; description: string; priority: string; due_at: string | null; status: string };
 export type NamedRecord = { id:number; name:string; description:string; status:string };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
@@ -27,6 +28,9 @@ export const commandApi = {
   overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0, filters: { query?: string; stage?: string } = {}) => { const params = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 100)), offset: String(Math.max(offset, 0)) }); if (filters.query?.trim()) params.set('query', filters.query.trim()); if (filters.stage) params.set('stage', filters.stage); return request<Contact[]>(`/contacts?${params.toString()}`); }, tasks: (filters: { status?: string; due_before?: string; due_after?: string } = {}) => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`); },
   celebrations: (month: number) => request<Celebrations>(`/celebrations?month=${Math.min(Math.max(month, 1), 12)}`),
   contactWorkspace: (id: number) => request<ContactWorkspace>(`/contacts/${id}/workspace`),
+  goals: () => request<Goal[]>('/goals'),
+  createGoal: (payload: Omit<Goal, 'id'>) => request<Goal>('/goals', { method: 'POST', body: JSON.stringify(payload) }),
+  updateGoalProgress: (id: number, current_value: number) => request<Goal>(`/goals/${id}`, { method: 'PATCH', body: JSON.stringify({ current_value }) }),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   updateContactStage: (id: number, stage: string) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
   updateContact: (id: number, payload: Partial<Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'stage' | 'birthday' | 'anniversary'>>) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),

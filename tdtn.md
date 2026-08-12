@@ -1431,3 +1431,6 @@ Completed Checklist Video Integration
 
 - Reports now has individual report-card drilldowns. Each aggregate card opens a bounded, read-only list of its current supporting contacts, leads, open tasks, opportunities, agreements, or analytics events. The report page also uses the typed authenticated client for its summary instead of a local fetch.
 - Verification: 14 focused Command backend tests, 22 Command frontend API tests, and TypeScript pass. Authenticated runtime `reports/details/contacts` returned the expected metric with a result set capped at 25 rows.
+
+- Command Home now includes persisted internal Goals with a measurable target, current progress, and period (weekly/monthly/quarterly/annual). The API supports creation, retrieval, and authenticated progress updates; the home workspace renders actual progress rather than a fixed dashboard widget.
+- Verification: migration `b7e1f2d4a906` is applied to the configured database; 15 focused Command backend tests, 23 Command frontend API tests, and TypeScript pass. Authenticated `GET /goals` returned HTTP 200.

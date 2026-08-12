@@ -123,6 +123,17 @@ class ReferralOut(ReferralCreate):
     status: str
     class Config: from_attributes = True
 
+class GoalCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    target_value: int = Field(gt=0)
+    current_value: int = Field(default=0, ge=0)
+    period: str = Field(default="monthly", pattern="^(weekly|monthly|quarterly|annual)$")
+class GoalUpdate(BaseModel):
+    current_value: int = Field(ge=0)
+class GoalOut(GoalCreate):
+    id: int
+    class Config: from_attributes = True
+
 class ListingOut(ListingCreate):
     id: int
     status: str
