@@ -1446,3 +1446,6 @@ Completed Checklist Video Integration
 
 - Sweeney AI Briefing now uses the shared typed authenticated Command client for both its deterministic internal preview and explicit fresh-generation action. The existing backend contract remains aggregate-only, review-required, audit-logged for generation, and non-autonomous.
 - Verification: 16 focused Command backend tests, 25 Command frontend API tests, and TypeScript pass.
+
+- Contact workspace actions now use the shared typed Command client for notes, saved searches, tags, and tag assignments. New saved searches persist self-describing criteria (`contact_id`, `scope`, and `saved_from`) rather than an empty object, making their context auditable and displayable.
+- Verification: 16 focused Command backend tests, 26 Command frontend API tests, and TypeScript pass.

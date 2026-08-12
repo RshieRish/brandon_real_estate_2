@@ -229,4 +229,13 @@ describe('commandApi', () => {
     await expect(commandApi.generateAiBriefing()).resolves.toMatchObject({ requires_review: true });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/ai/briefing/generate'), expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer token-ai-briefing' }) }));
   });
+
+  it('persists self-describing saved-search criteria for a contact workspace', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-saved-search' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 2, name: 'Follow-up context' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.createContactSavedSearch(14, 'Follow-up context', { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/saved-searches'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Follow-up context', criteria: { contact_id: 14, scope: 'contact_workspace', saved_from: 'command' } }) }));
+  });
 });
