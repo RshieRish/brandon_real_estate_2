@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { ChartBar, CheckCircle, ClipboardText, FileText, House, MapPin, Megaphone, Users, WarningCircle, Sparkle } from '@phosphor-icons/react';
 import { commandApi, type Contact, type Overview, type Task } from '@/lib/command/api';
 
 const nav = [
-  ['Contacts', Users], ['Tasks', CheckCircle], ['Smart Plans', Sparkle], ['Opportunities', ChartBar], ['Marketing', Megaphone], ['Agreements', FileText], ['Reports', ClipboardText], ['Listings & Map', MapPin], ['Websites', House],
+  ['Contacts', '/admin/command/contacts', Users], ['Tasks', '/admin/command/tasks', CheckCircle], ['Smart Plans', '/admin/command/smart-plans', Sparkle], ['Opportunities', '/admin/command/opportunities', ChartBar], ['Marketing', '/admin/command/marketing', Megaphone], ['Agreements', '/admin/command/agreements', FileText], ['Reports', '/admin/command/reports', ClipboardText], ['Listings & Map', '/admin/command/listings', MapPin], ['Websites', '/admin/command/websites', House],
 ] as const;
 
 export default function CommandPage() {
@@ -23,7 +24,7 @@ export default function CommandPage() {
       <aside className="rounded-2xl border border-white/10 bg-white/[0.035] p-3 h-fit lg:sticky lg:top-6">
         <p className="px-3 py-3 text-[10px] uppercase tracking-[.26em] text-[#eac469]">Sold With Sweeney</p>
         <button onClick={() => setSection('Command Home')} className={`w-full rounded-xl px-3 py-3 text-left text-sm ${section === 'Command Home' ? 'bg-[#eac469] text-black font-bold' : 'text-white/60 hover:bg-white/5'}`}>Command Home</button>
-        {nav.map(([label, Icon]) => <button key={label} onClick={() => setSection(label)} className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm ${section === label ? 'bg-white/10 text-white' : 'text-white/60 hover:bg-white/5'}`}><Icon size={17}/>{label}</button>)}
+        {nav.map(([label, href, Icon]) => <Link key={label} href={href} className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm ${section === label ? 'bg-white/10 text-white' : 'text-white/60 hover:bg-white/5'}`}><Icon size={17}/>{label}</Link>)}
       </aside>
       <main className="min-w-0">
         <header className="mb-6 flex items-center justify-between"><div><p className="text-xs uppercase tracking-[.22em] text-[#eac469]">Internal CRM workspace</p><h1 className="mt-1 text-3xl font-black">{section}</h1></div><button className="rounded-xl border border-[#eac469]/40 px-4 py-2 text-sm text-[#eac469]">Ask Sweeney AI</button></header>
