@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError, fields, replace
 import hashlib
+from types import MappingProxyType
 
 import pytest
 
@@ -87,7 +88,23 @@ def test_source_draft_serializes_nested_payload_as_canonical_unicode_json():
     )
 
 
-def test_source_draft_snapshots_canonical_payload_during_construction():
+def test_source_draft_has_exactly_the_public_contract_fields():
+    assert tuple(item.name for item in fields(SourceRecordDraft)) == (
+        "source_system",
+        "module",
+        "record_kind",
+        "source_key",
+        "evidence_level",
+        "display_label",
+        "payload",
+        "artifact_paths",
+        "parser_version",
+        "capture_quality",
+        "captured_at",
+    )
+
+
+def test_source_draft_deep_snapshots_payload_during_construction():
     original_payload = {
         "contact": {"name": "José Rivera"},
         "tags": ["buyer"],
@@ -101,16 +118,79 @@ def test_source_draft_snapshots_canonical_payload_during_construction():
     assert draft.payload_json == (
         '{"contact":{"name":"José Rivera"},"tags":["buyer"]}'
     )
+    assert draft.payload == {
+        "contact": {"name": "José Rivera"},
+        "tags": ("buyer",),
+    }
 
 
-def test_source_draft_keeps_payload_snapshot_as_a_hidden_non_identity_field():
-    payload_snapshot_field = next(
-        item for item in fields(SourceRecordDraft) if item.name == "_payload_json"
+def test_source_draft_accepts_and_freezes_nested_mapping_values():
+    original_payload = MappingProxyType(
+        {
+            "contact": MappingProxyType({"name": "José Rivera"}),
+            "tags": ["buyer"],
+        }
+    )
+    draft = source_draft(payload=original_payload)
+
+    assert draft.payload_json == (
+        '{"contact":{"name":"José Rivera"},"tags":["buyer"]}'
     )
 
-    assert payload_snapshot_field.init is False
-    assert payload_snapshot_field.repr is False
-    assert payload_snapshot_field.compare is False
+
+def test_source_draft_payload_rejects_top_level_mutation():
+    draft = source_draft(payload={"name": "José Rivera"})
+
+    with pytest.raises(TypeError):
+        draft.payload["name"] = "Changed"
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("__setitem__", ("added", True)),
+        ("__delitem__", ("name",)),
+        ("clear", ()),
+        ("pop", ("name",)),
+        ("popitem", ()),
+        ("setdefault", ("added", True)),
+        ("update", ({"added": True},)),
+        ("__ior__", ({"added": True},)),
+        ("__init__", ({"added": True},)),
+    ],
+)
+def test_source_draft_payload_blocks_every_dict_mutator(method_name, args):
+    draft = source_draft(payload={"name": "José Rivera"})
+
+    with pytest.raises(TypeError):
+        getattr(draft.payload, method_name)(*args)
+
+    assert draft.payload_json == '{"name":"José Rivera"}'
+
+
+def test_source_draft_payload_rejects_nested_mapping_mutation():
+    draft = source_draft(payload={"contact": {"name": "José Rivera"}})
+
+    with pytest.raises(TypeError):
+        draft.payload["contact"]["name"] = "Changed"
+
+
+def test_source_draft_payload_rejects_nested_array_mutation():
+    draft = source_draft(payload={"tags": ["buyer"]})
+
+    with pytest.raises(TypeError):
+        draft.payload["tags"][0] = "seller"
+
+
+def test_source_draft_equality_and_canonical_json_use_frozen_payload_values():
+    first = source_draft(payload={"zeta": [1, {"b": 2, "a": 1}], "alpha": None})
+    second = source_draft(payload={"alpha": None, "zeta": [1, {"a": 1, "b": 2}]})
+
+    assert first == second
+    assert first.payload_json == second.payload_json
+    assert first.payload_json == (
+        '{"alpha":null,"zeta":[1,{"a":1,"b":2}]}'
+    )
 
 
 @pytest.mark.parametrize(
@@ -130,6 +210,14 @@ def test_source_draft_rejects_payload_values_json_cannot_serialize(payload):
 def test_source_draft_rejects_non_finite_payload_numbers(non_finite):
     with pytest.raises(SourceDraftValidationError, match="payload"):
         source_draft(payload={"amount": non_finite})
+
+
+def test_source_draft_rejects_circular_payload_as_a_validation_error():
+    circular_payload = {}
+    circular_payload["self"] = circular_payload
+
+    with pytest.raises(SourceDraftValidationError, match="payload"):
+        source_draft(payload=circular_payload)
 
 
 @pytest.mark.parametrize(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import hashlib
@@ -48,7 +48,6 @@ class SourceRecordDraft:
     parser_version: str
     capture_quality: CaptureQuality = CaptureQuality.COMPLETE
     captured_at: datetime | None = None
-    _payload_json: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -78,8 +77,9 @@ class SourceRecordDraft:
         if not isinstance(self.payload, Mapping):
             raise SourceDraftValidationError("payload must be a mapping")
         try:
-            payload_json = json.dumps(
-                self.payload,
+            frozen_payload = _freeze_json_value(self.payload)
+            json.dumps(
+                frozen_payload,
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
@@ -89,7 +89,7 @@ class SourceRecordDraft:
             raise SourceDraftValidationError(
                 "payload must contain canonical JSON-serializable values"
             ) from exc
-        object.__setattr__(self, "_payload_json", payload_json)
+        object.__setattr__(self, "payload", frozen_payload)
 
         if not isinstance(self.artifact_paths, tuple):
             raise SourceDraftValidationError("artifact_paths must be a tuple")
@@ -119,11 +119,69 @@ class SourceRecordDraft:
 
     @property
     def payload_json(self) -> str:
-        return self._payload_json
+        return json.dumps(
+            self.payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
 
 
 _EnumType = TypeVar("_EnumType", bound=Enum)
 _LOWERCASE_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class _FrozenJSONDict(dict):
+    """A JSON-object-compatible dict that rejects mutation."""
+
+    @classmethod
+    def _from_items(
+        cls,
+        items: Iterable[tuple[object, object]],
+    ) -> _FrozenJSONDict:
+        frozen = dict.__new__(cls)
+        dict.update(frozen, items)
+        return frozen
+
+    @staticmethod
+    def _immutable(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise TypeError("frozen JSON object does not support mutation")
+
+    __init__ = _immutable
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+    __ior__ = _immutable
+
+
+def _freeze_json_value(
+    value: object,
+    ancestors: set[int] | None = None,
+) -> object:
+    if not isinstance(value, Mapping | list | tuple):
+        return value
+
+    if ancestors is None:
+        ancestors = set()
+    identity = id(value)
+    if identity in ancestors:
+        raise ValueError("payload cannot contain circular references")
+    ancestors.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            return _FrozenJSONDict._from_items(
+                (key, _freeze_json_value(item, ancestors))
+                for key, item in value.items()
+            )
+        return tuple(_freeze_json_value(item, ancestors) for item in value)
+    finally:
+        ancestors.remove(identity)
 
 
 def _enum_value(
