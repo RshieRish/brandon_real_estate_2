@@ -214,7 +214,10 @@ async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
 async def update_contact(contact_id: int, payload: ContactUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMContact, contact_id)
     if not item: raise HTTPException(404, "Contact not found")
-    changes = payload.model_dump(exclude_none=True)
+    changes = payload.model_dump(exclude_unset=True)
+    for required_field in ("first_name", "last_name", "stage"):
+        if changes.get(required_field) is None:
+            changes.pop(required_field, None)
     for field, value in changes.items(): setattr(item, field, value)
     kind = "stage_changed" if set(changes) == {"stage"} else "contact_updated"
     summary = f"Contact stage changed to {changes['stage']}" if kind == "stage_changed" else "Updated contact profile"

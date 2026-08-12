@@ -1484,3 +1484,6 @@ Completed Checklist Video Integration
 
 - Command now includes a permitted internal contact-archive intake workflow. Admins can preview validated CSV or JSON, import in bounded 1,000-contact batches, and receive canonical created/duplicate totals. Duplicate email checks are case-insensitive.
 - Verification: 22 focused Command backend tests, 65 frontend tests, and TypeScript pass.
+
+- Contact profile updates now persist explicit clears for optional email, phone, birthday, and anniversary values. This matches the profile UI and prevents stale private data from remaining after an admin clears it.
+- Verification: 23 focused Command backend tests, 65 frontend tests, and TypeScript pass.

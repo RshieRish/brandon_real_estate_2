@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
+from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
@@ -72,6 +72,11 @@ def test_contact_can_store_private_birthday_and_anniversary_dates():
 
     assert contact.birthday == date(1990, 8, 12)
     assert payload.anniversary == date(2020, 6, 1)
+
+
+def test_contact_profile_updates_keep_explicit_optional_field_clears():
+    update = ContactUpdate(email=None, phone=None, birthday=None, anniversary=None)
+    assert update.model_fields_set == {"email", "phone", "birthday", "anniversary"}
 
 
 def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
