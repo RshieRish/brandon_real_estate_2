@@ -1,3 +1,4 @@
+'use client';
 import Link from 'next/link';
 import { ArrowSquareOut, ChartBar, FunnelSimple, Globe, Megaphone } from '@phosphor-icons/react';
 const metadata={marketing:{title:'Marketing',description:'Campaign content, conversion paths, and lead capture live in the existing internal content system.',links:[['Content studio','/admin/content',Megaphone],['Funnels','/admin/funnels',FunnelSimple]]},reports:{title:'Reports',description:'Performance reporting is sourced from the existing internal analytics events and conversion data.',links:[['Analytics dashboard','/admin/analytics',ChartBar]]},websites:{title:'Websites',description:'Website and conversion experiences are managed through internal content and funnels.',links:[['Content studio','/admin/content',Globe],['Funnels','/admin/funnels',FunnelSimple]]}} as const;
