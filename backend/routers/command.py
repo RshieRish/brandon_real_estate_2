@@ -21,7 +21,7 @@ from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
-from services.command_task_links import task_link_model
+from services.command_task_links import task_link_display_name, task_link_model
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -300,15 +300,24 @@ async def add_task_link(task_id: int, payload: TaskLinkCreate, db: AsyncSession 
     if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
     entity_model = task_link_model(payload.entity_type)
     if entity_model is None: raise HTTPException(422, "Unsupported task-link entity type")
-    if not await db.get(entity_model, payload.entity_id): raise HTTPException(404, "Linked internal record not found")
+    record = await db.get(entity_model, payload.entity_id)
+    if not record: raise HTTPException(404, "Linked internal record not found")
+    existing = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id, CRMTaskLink.entity_type == payload.entity_type, CRMTaskLink.entity_id == payload.entity_id))).scalar_one_or_none()
+    if existing:
+        return {"id": existing.id, "task_id": existing.task_id, "entity_type": existing.entity_type, "entity_id": existing.entity_id, "display_name": task_link_display_name(payload.entity_type, record)}
     link = CRMTaskLink(task_id=task_id, **payload.model_dump()); db.add(link); await db.flush()
-    return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id}
+    return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id, "display_name": task_link_display_name(payload.entity_type, record)}
 
 @router.get("/tasks/{task_id}/links")
 async def task_links(task_id: int, db: AsyncSession = Depends(get_db)):
     if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
     rows = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id).order_by(CRMTaskLink.id.desc()))).scalars().all()
-    return [{"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id} for row in rows]
+    links = []
+    for row in rows:
+        entity_model = task_link_model(row.entity_type)
+        record = await db.get(entity_model, row.entity_id) if entity_model else None
+        links.append({"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id, "display_name": task_link_display_name(row.entity_type, record) if record else "Removed internal record"})
+    return links
 
 
 @router.patch("/agreements/{agreement_id}/status")

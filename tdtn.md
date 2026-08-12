@@ -1472,3 +1472,6 @@ Completed Checklist Video Integration
 
 - Smart Plan enrollment now uses a complete internal contact selector, returns the enrolled contact's display name, and prevents duplicate plan/contact enrollment records at both the API and PostgreSQL layers.
 - Verification: migration `e8f2c4a6b901` is applied; 21 focused Command backend tests, 28 Command API tests, and TypeScript pass.
+
+- Task-to-record links now use internal record selectors rather than raw IDs, display the persisted record name, are idempotent, and enforce unique task/entity links at the database layer.
+- Verification: migration `ab4d9e2c7108` is applied; 22 focused Command backend tests, 62 frontend tests, and TypeScript pass.

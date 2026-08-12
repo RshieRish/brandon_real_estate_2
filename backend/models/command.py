@@ -65,6 +65,9 @@ class CRMTask(Timestamped, Base):
 
 class CRMTaskLink(Base):
     __tablename__ = "crm_task_links"
+    __table_args__ = (
+        UniqueConstraint("task_id", "entity_type", "entity_id", name="uq_crm_task_link"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("crm_tasks.id"))
     entity_type: Mapped[str] = mapped_column(String(50))

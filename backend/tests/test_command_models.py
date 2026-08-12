@@ -4,10 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.command import ContactCreate, ContactImportRow, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
+from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMListingRecord, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
-from services.command_task_links import task_link_model
+from services.command_task_links import task_link_display_name, task_link_model
 
 
 def test_command_models_expose_safe_defaults_and_links():
@@ -122,3 +122,12 @@ def test_contact_import_supports_private_celebration_dates():
 def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():
     constraint_columns = {tuple(column.name for column in constraint.columns) for constraint in CRMSmartPlanEnrollment.__table__.constraints if getattr(constraint, "columns", None)}
     assert ("smart_plan_id", "contact_id") in constraint_columns
+
+
+def test_task_link_identity_and_display_name_are_canonical():
+    constraint_columns = {tuple(column.name for column in constraint.columns) for constraint in CRMTaskLink.__table__.constraints if getattr(constraint, "columns", None)}
+    assert ("task_id", "entity_type", "entity_id") in constraint_columns
+    assert task_link_display_name("contact", CRMContact(first_name="Avery", last_name="Lake")) == "Avery Lake"
+    assert task_link_display_name("opportunity", CRMOpportunity(name="Lake purchase")) == "Lake purchase"
+    assert task_link_display_name("agreement", CRMAgreement(title="Buyer agreement")) == "Buyer agreement"
+    assert task_link_display_name("listing", CRMListingRecord(address="10 Main Street")) == "10 Main Street"

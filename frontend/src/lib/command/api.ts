@@ -10,6 +10,7 @@ export type AiBriefing = { summary: string; source: string; requires_review: boo
 export type Task = { id: number; title: string; contact_id: number | null; description: string; priority: string; due_at: string | null; status: string };
 export type NamedRecord = { id:number; name:string; description:string; status:string };
 export type SmartPlanEnrollment = { id: number; contact_id: number; contact_name: string; status: 'active' | 'paused' | 'completed' };
+export type TaskLink = { id: number; task_id: number; entity_type: string; entity_id: number; display_name: string };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; template_id?:number|null; status:string };
 export type AgreementWorkspace = { agreement: Agreement; recipients: Relationship[]; events: { id: number; event_type: string; created_at: string }[]; files: { id: number; filename: string; storage_key: string; content_type: string; agreement_id: number | null }[] };
@@ -73,7 +74,7 @@ export const commandApi = {
   reportsSummary: () => request<Record<string, number>>('/reports/summary'),
   reportDetails: (metric: string) => request<ReportDetails>(`/reports/details/${encodeURIComponent(metric)}`),
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
-  addTaskLink: (taskId: number, entityType: string, entityId: number) => request<{ id: number; task_id: number; entity_type: string; entity_id: number }>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
-  taskLinks: (taskId: number) => request<{ id: number; task_id: number; entity_type: string; entity_id: number }[]>(`/tasks/${taskId}/links`),
+  addTaskLink: (taskId: number, entityType: string, entityId: number) => request<TaskLink>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
+  taskLinks: (taskId: number) => request<TaskLink[]>(`/tasks/${taskId}/links`),
   updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'due_at'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 };
