@@ -1517,3 +1517,6 @@ Completed Checklist Video Integration
 
 - Task editing now uses a native modal form with validation, date controls, save state, and error feedback instead of browser prompts. The Link Pack layout no longer makes production builds depend on remote Next font downloads.
 - Verification: 68 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Archive intake now provides a downloadable JSON template covering every supported record collection and email relationship key, making the source-data handoff directly actionable.
+- Verification: 68 frontend tests, TypeScript, and clean 34-route production build pass.
