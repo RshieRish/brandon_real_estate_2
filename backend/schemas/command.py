@@ -119,3 +119,8 @@ class SmartPlanEnrollmentCreate(BaseModel):
     contact_id: int
 class TagCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+class NoteCreate(BaseModel):
+    body: str = Field(min_length=1)
+class SavedSearchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    criteria: dict = {}

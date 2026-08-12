@@ -6,7 +6,7 @@ from database import get_db
 from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
 from models.lead import Lead
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -93,6 +93,15 @@ async def assign_tag(contact_id:int,tag_id:int,db:AsyncSession=Depends(get_db)):
     existing=(await db.execute(select(CRMContactTag).where(CRMContactTag.contact_id==contact_id,CRMContactTag.tag_id==tag_id))).scalar_one_or_none()
     if not existing:db.add(CRMContactTag(contact_id=contact_id,tag_id=tag_id));await db.flush()
     return {"contact_id":contact_id,"tag_id":tag_id}
+
+@router.post("/contacts/{contact_id}/notes")
+async def create_contact_note(contact_id:int,payload:NoteCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
+    note=CRMNote(contact_id=contact_id,body=payload.body);db.add(note);db.add(CRMActivity(contact_id=contact_id,kind="note",summary="Added a contact note"));await db.flush();return {"id":note.id,"body":note.body}
+@router.post("/contacts/{contact_id}/saved-searches")
+async def create_saved_search(contact_id:int,payload:SavedSearchCreate,db:AsyncSession=Depends(get_db)):
+    if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
+    item=CRMSavedSearch(contact_id=contact_id,name=payload.name,criteria_json=__import__('json').dumps(payload.criteria));db.add(item);await db.flush();return {"id":item.id,"name":item.name,"criteria":item.criteria_json}
 
 
 @router.get("/tasks", response_model=list[TaskOut])
