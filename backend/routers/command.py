@@ -541,6 +541,9 @@ async def update_opportunity(opportunity_id: int, payload: OpportunityUpdate, db
     if item.stage != payload.stage:
         item.stage = payload.stage
         db.add(CRMActivity(kind="opportunity_stage_changed", summary=f"Opportunity {item.name} moved to {payload.stage}", metadata_json=f'{{"opportunity_id":{item.id}}}'))
+        contact_ids = (await db.execute(select(CRMOpportunityContact.contact_id).where(CRMOpportunityContact.opportunity_id == item.id))).scalars().all()
+        for contact_id in contact_ids:
+            db.add(CRMActivity(contact_id=contact_id, kind="opportunity_stage_changed", summary=f"Opportunity {item.name} moved to {payload.stage}", metadata_json=f'{{"opportunity_id":{item.id}}}'))
     await db.flush(); return item
 
 @router.get("/opportunities/{opportunity_id}/workspace")
@@ -559,7 +562,10 @@ async def add_opportunity_contact(opportunity_id:int,payload:RelationshipCreate,
     existing = next((row for row in candidates if is_same_opportunity_contact(row.contact_id, row.role, payload.contact_id, payload.role)), None)
     if existing:
         return {"id":existing.id,"contact_id":existing.contact_id,"role":existing.role}
-    item=CRMOpportunityContact(opportunity_id=opportunity_id,contact_id=payload.contact_id,role=payload.role);db.add(item);await db.flush();return {"id":item.id,"contact_id":item.contact_id,"role":item.role}
+    item=CRMOpportunityContact(opportunity_id=opportunity_id,contact_id=payload.contact_id,role=payload.role);db.add(item);await db.flush()
+    opportunity = await db.get(CRMOpportunity, opportunity_id)
+    db.add(CRMActivity(contact_id=item.contact_id, kind="opportunity_linked", summary=f"Linked to opportunity: {opportunity.name if opportunity else opportunity_id}"))
+    await db.flush();return {"id":item.id,"contact_id":item.contact_id,"role":item.role}
 @router.post("/opportunities/{opportunity_id}/vendors", response_model=RelationshipOut)
 async def add_opportunity_vendor(opportunity_id:int,payload:RelationshipCreate,db:AsyncSession=Depends(get_db)):
     if not await db.get(CRMOpportunity,opportunity_id) or not payload.name: raise HTTPException(404,"Opportunity or vendor name not found")

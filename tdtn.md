@@ -1502,3 +1502,6 @@ Completed Checklist Video Integration
 
 - Contact profile editing now uses an inline, validated form with real date controls and explicit optional-field clears, replacing the remaining prompt-driven workflow.
 - Verification: 66 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Opportunity stage changes and new contact/opportunity relationships now create contact-scoped immutable timeline activity, so the contact workspace retains the full pipeline history.
+- Verification: 25 focused Command backend tests pass.
