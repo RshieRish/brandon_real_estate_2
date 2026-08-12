@@ -75,7 +75,10 @@ def test_contact_can_store_private_birthday_and_anniversary_dates():
 
 
 def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
-    assert TaskUpdate(status="in_progress", priority="high", description="Call before noon").priority == "high"
+    update = TaskUpdate(status="in_progress", priority="high", description="Call before noon", contact_id=12, due_at=None)
+    assert update.priority == "high"
+    assert update.contact_id == 12
+    assert {"contact_id", "due_at"}.issubset(update.model_fields_set)
     with pytest.raises(ValidationError):
         TaskUpdate(status="deleted")
     with pytest.raises(ValidationError):

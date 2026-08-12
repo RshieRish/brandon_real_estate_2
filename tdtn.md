@@ -1478,3 +1478,6 @@ Completed Checklist Video Integration
 
 - Agreement creation now includes a complete internal contact selector and persists that relationship with the selected template and agreement metadata.
 - Verification: 63 frontend tests and TypeScript pass.
+
+- Tasks can now be created and reassigned against canonical internal contacts through selectors in the task workspace. The backend validates contact existence on create/update while preserving explicit unassignment.
+- Verification: 22 focused Command backend tests, 64 frontend tests, and TypeScript pass.

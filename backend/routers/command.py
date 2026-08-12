@@ -280,6 +280,8 @@ async def tasks(status: str | None = None, due_before: datetime | None = None, d
 
 @router.post("/tasks", response_model=TaskOut)
 async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_db)):
+    if payload.contact_id is not None and not await db.get(CRMContact, payload.contact_id):
+        raise HTTPException(404, "Task contact not found")
     item = CRMTask(**payload.model_dump()); db.add(item); await db.flush()
     db.add(CRMActivity(contact_id=item.contact_id, kind="task_created", summary=item.title)); await db.flush()
     return item
@@ -289,7 +291,12 @@ async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_db)):
 async def update_task(task_id: int, payload: TaskUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMTask, task_id)
     if not item: raise HTTPException(404, "Task not found")
-    changes = payload.model_dump(exclude_none=True)
+    changes = payload.model_dump(exclude_unset=True)
+    for nullable_field in ("status", "title", "description", "priority"):
+        if changes.get(nullable_field) is None:
+            changes.pop(nullable_field, None)
+    if "contact_id" in changes and changes["contact_id"] is not None and not await db.get(CRMContact, changes["contact_id"]):
+        raise HTTPException(404, "Task contact not found")
     for field, value in changes.items(): setattr(item, field, value)
     if changes:
         db.add(CRMActivity(contact_id=item.contact_id, kind="task_updated", summary=task_activity_summary(changes)))

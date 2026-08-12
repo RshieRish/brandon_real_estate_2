@@ -76,5 +76,5 @@ export const commandApi = {
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   addTaskLink: (taskId: number, entityType: string, entityId: number) => request<TaskLink>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
   taskLinks: (taskId: number) => request<TaskLink[]>(`/tasks/${taskId}/links`),
-  updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'due_at'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'due_at' | 'contact_id'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 };

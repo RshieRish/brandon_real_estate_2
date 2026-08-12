@@ -46,6 +46,7 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
     due_at: datetime | None = None
+    contact_id: int | None = Field(default=None, ge=1)
 
 
 class TaskLinkCreate(BaseModel):

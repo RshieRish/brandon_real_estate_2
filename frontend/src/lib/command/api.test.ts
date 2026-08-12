@@ -194,6 +194,14 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null }) }));
   });
 
+  it('assigns a task to a selected internal contact', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-task-contact' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, contact_id: 14 }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await commandApi.updateTask(9, { contact_id: 14 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ contact_id: 14 }) }));
+  });
+
   it('loads the complete contact workspace including internal booking history', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-contact-workspace' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ contact: {}, bookings: [] }) });
