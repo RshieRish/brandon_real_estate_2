@@ -23,6 +23,14 @@ async def overview(db: AsyncSession = Depends(get_db)):
         opportunities=await _count(db, CRMOpportunity), active_smart_plans=await _count(db, CRMSmartPlan, CRMSmartPlan.status == "active"),
     )
 
+@router.get("/ai/briefing")
+async def ai_briefing(db: AsyncSession = Depends(get_db)):
+    """Deterministic, auditable pre-AI briefing; no contact data leaves the API."""
+    open_tasks = await _count(db, CRMTask, CRMTask.status != "completed")
+    contacts = await _count(db, CRMContact)
+    opportunities = await _count(db, CRMOpportunity)
+    return {"summary": f"{open_tasks} open tasks across {contacts} contacts and {opportunities} opportunities.", "source": "internal-crm", "requires_review": True}
+
 
 @router.get("/contacts", response_model=list[ContactOut])
 async def contacts(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
