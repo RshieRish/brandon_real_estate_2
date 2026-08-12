@@ -16,6 +16,7 @@ from services.gemini import generate_text_flash_lite
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
+from services.command_lifecycle import ensure_agreement_transition
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -225,6 +226,10 @@ async def update_agreement_status(agreement_id: int, payload: AgreementStatusUpd
     if payload.status not in {s.value for s in AgreementStatus}: raise HTTPException(422, "Invalid agreement status")
     item = await db.get(CRMAgreement, agreement_id)
     if not item: raise HTTPException(404, "Agreement not found")
+    try:
+        ensure_agreement_transition(item.status, payload.status)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     item.status = payload.status; await db.flush()
     db.add(CRMAgreementEvent(agreement_id=item.id, event_type=payload.status))
     await db.flush()

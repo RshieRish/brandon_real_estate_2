@@ -1370,5 +1370,8 @@ Completed Checklist Video Integration
 - Agreement detail workspaces now support private file upload directly to the selected agreement using the existing server-side object-storage path and `agreement_id` relation.
 - Verification: frontend typecheck passes.
 
+- Agreement lifecycle integrity is now enforced server-side: draft → review → ready → shared → viewed → completed, with void/expiry exits and terminal-state protection. Invalid/backward transitions return 422 and do not append an event.
+- Verification: Command lifecycle/model tests pass (7).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.
