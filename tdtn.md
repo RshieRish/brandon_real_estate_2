@@ -1340,3 +1340,6 @@ Completed Checklist Video Integration
 
 - Runtime migration verification: `fb74d2c0a611` is applied to the configured internal PostgreSQL database and `crm_file_assets.agreement_id` is present. Authenticated read checks returned HTTP 200 for Command overview, reports, marketing records, website records, event breakdown, listings, and agreements.
 - Final frontend verification: 40 tests pass, TypeScript passes, and the production build completes. Static generation logs the pre-existing unavailable-local-API content-block fetch but does not fail the build.
+
+- Contact loading now requests every paginated internal CRM page (100 rows per request) before applying client-side search, preventing the previous first-50-record truncation.
+- Verification: Command API tests pass (7) and frontend typecheck passes.

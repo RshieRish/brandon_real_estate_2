@@ -19,7 +19,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const commandApi = {
-  overview: () => request<Overview>('/overview'), contacts: () => request<Contact[]>('/contacts'), tasks: () => request<Task[]>('/tasks'),
+  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0) => request<Contact[]>(`/contacts?limit=${Math.min(Math.max(limit, 1), 100)}&offset=${Math.max(offset, 0)}`), tasks: () => request<Task[]>('/tasks'),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   smartPlans: () => request<NamedRecord[]>('/smart-plans'), createSmartPlan: (payload: Pick<NamedRecord,'name'|'description'>) => request<NamedRecord>('/smart-plans',{method:'POST',body:JSON.stringify(payload)}),
   smartPlanWorkspace: (id: number) => request<{ plan: NamedRecord; steps: { id: number; position: number; action_type: string; payload: string }[]; enrollments: { id: number; contact_id: number; status: string }[] }>(`/smart-plans/${id}/workspace`),

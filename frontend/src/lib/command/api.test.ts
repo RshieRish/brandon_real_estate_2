@@ -62,4 +62,13 @@ describe('commandApi', () => {
     await expect(commandApi.marketingRecords()).resolves.toEqual({ content_blocks: [], funnels: [] });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/marketing/records'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-marketing' }) }));
   });
+
+  it('requests a bounded contacts page using limit and offset', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-page' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.contacts(50, 100);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=50&offset=100'), expect.anything());
+  });
 });
