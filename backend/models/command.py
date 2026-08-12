@@ -112,6 +112,27 @@ class CRMOpportunity(Timestamped, Base):
     stage: Mapped[str] = mapped_column(String(50), default="cultivate")
     value_cents: Mapped[int | None] = mapped_column(Integer)
 
+class CRMOpportunityContact(Base):
+    __tablename__ = "crm_opportunity_contacts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
+    contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
+    role: Mapped[str] = mapped_column(String(50), default="client")
+
+class CRMOpportunityVendor(Base):
+    __tablename__ = "crm_opportunity_vendors"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(80), default="vendor")
+
+class CRMOpportunityOffer(Base):
+    __tablename__ = "crm_opportunity_offers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
+    amount_cents: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+
 
 class CRMListingRecord(Timestamped, Base):
     __tablename__ = "crm_listing_records"
@@ -144,6 +165,14 @@ class CRMAgreementEvent(Base):
     agreement_id: Mapped[int] = mapped_column(ForeignKey("crm_agreements.id"))
     event_type: Mapped[str] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+class CRMAgreementRecipient(Base):
+    __tablename__ = "crm_agreement_recipients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agreement_id: Mapped[int] = mapped_column(ForeignKey("crm_agreements.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(50), default="recipient")
 
 
 class CRMFileAsset(Timestamped, Base):
