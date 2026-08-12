@@ -471,7 +471,10 @@ async def create_opportunity(payload: OpportunityCreate, db: AsyncSession = Depe
 async def update_opportunity(opportunity_id: int, payload: OpportunityUpdate, db: AsyncSession = Depends(get_db)):
     item = await db.get(CRMOpportunity, opportunity_id)
     if not item: raise HTTPException(404, "Opportunity not found")
-    item.stage = payload.stage; await db.flush(); return item
+    if item.stage != payload.stage:
+        item.stage = payload.stage
+        db.add(CRMActivity(kind="opportunity_stage_changed", summary=f"Opportunity {item.name} moved to {payload.stage}", metadata_json=f'{{"opportunity_id":{item.id}}}'))
+    await db.flush(); return item
 
 @router.get("/opportunities/{opportunity_id}/workspace")
 async def opportunity_workspace(opportunity_id:int,db:AsyncSession=Depends(get_db)):

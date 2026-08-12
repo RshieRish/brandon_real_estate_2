@@ -1440,3 +1440,6 @@ Completed Checklist Video Integration
 
 - Smart Plans now have their own validated lifecycle (`active`, `paused`, `archived`), separate from contact enrollment state. The plan editor updates the stored plan status through a dedicated authenticated API without altering its steps or enrollments.
 - Verification: 15 focused Command backend tests, 24 Command frontend API tests, and TypeScript pass. An authenticated invalid Smart Plan lifecycle mutation returned HTTP 422.
+
+- Opportunities now enforce the internal pipeline vocabulary (`cultivate`, `appointment`, `active`, `offer`, `under_contract`, `closed`, `lost`) for creation and stage moves. A real stage move appends immutable `opportunity_stage_changed` activity evidence without duplicating opportunity data.
+- Verification: 16 focused Command backend tests pass. An authenticated invalid opportunity-stage mutation returned HTTP 422.

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, TaskUpdate
+from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMGoal, CRMReferral, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 
@@ -88,3 +88,9 @@ def test_goal_is_an_internal_target_with_a_measurable_progress_value():
     goal = CRMGoal(name="August appointments", target_value=12, current_value=4, period="monthly")
 
     assert (goal.target_value, goal.current_value, goal.period) == (12, 4, "monthly")
+
+
+def test_opportunity_stage_is_limited_to_the_internal_pipeline():
+    assert OpportunityUpdate(stage="under_contract").stage == "under_contract"
+    with pytest.raises(ValidationError):
+        OpportunityUpdate(stage="outside_pipeline")

@@ -86,12 +86,12 @@ class SmartPlanStatusUpdate(BaseModel):
 
 class OpportunityCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    stage: str = "cultivate"
+    stage: str = Field(default="cultivate", pattern="^(cultivate|appointment|active|offer|under_contract|closed|lost)$")
     value_cents: int | None = None
 
 
 class OpportunityUpdate(BaseModel):
-    stage: str = Field(min_length=1, max_length=50)
+    stage: str = Field(pattern="^(cultivate|appointment|active|offer|under_contract|closed|lost)$")
 
 
 class OpportunityOut(OpportunityCreate):
