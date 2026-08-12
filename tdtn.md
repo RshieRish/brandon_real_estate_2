@@ -1331,3 +1331,6 @@ Completed Checklist Video Integration
 
 - Agreement workspaces now provide recipient management, lifecycle state changes, event history, and agreement-scoped private-file metadata. The schema change is additive (`fb74d2c0a611_link_files_to_agreements`) and its generated PostgreSQL SQL was verified offline.
 - Verification: focused Command backend tests pass (5), frontend Command API tests pass (5), and frontend typecheck passes.
+
+- Marketing and Websites now show actual internal content/funnel records, and Reports includes a persisted analytics event-type breakdown. These views remain linked to the existing internal content/funnel editors as the single write path.
+- Verification: focused Command backend tests pass (5), frontend Command API tests pass (6), and frontend typecheck passes.

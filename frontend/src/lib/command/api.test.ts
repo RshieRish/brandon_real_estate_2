@@ -53,4 +53,13 @@ describe('commandApi', () => {
       method: 'PATCH', body: JSON.stringify({ status: 'in_review' }),
     }));
   });
+
+  it('loads internal marketing records with the administrator credential', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-marketing' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ content_blocks: [], funnels: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.marketingRecords()).resolves.toEqual({ content_blocks: [], funnels: [] });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/marketing/records'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-marketing' }) }));
+  });
 });

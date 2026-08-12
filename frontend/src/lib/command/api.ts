@@ -7,6 +7,7 @@ export type NamedRecord = { id:number; name:string; description:string; status:s
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; status:string };
 export type AgreementWorkspace = { agreement: Agreement; recipients: Relationship[]; events: { id: number; event_type: string; created_at: string }[]; files: { id: number; filename: string; storage_key: string; content_type: string; agreement_id: number | null }[] };
+export type MarketingRecords = { content_blocks: { id: number; block_id: string; page: string | null; content_type: string; updated_at: string }[]; funnels: { id: number; title: string; slug: string; audience: string; status: string; registrations: number; updated_at: string }[] };
 export type Listing = { id:number; address:string; latitude:string|null; longitude:string|null; status:string };
 export type Relationship = { id:number; contact_id?:number; name?:string; email?:string; role:string; amount_cents?:number|null; status?:string };
 
@@ -34,6 +35,9 @@ export const commandApi = {
   updateAgreementStatus: (id: number, status: string) => request<{ id: number; status: string }>(`/agreements/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   addAgreementRecipient: (agreementId: number, name: string, email: string, role = 'recipient') => request<Relationship>(`/agreements/${agreementId}/recipients`, { method: 'POST', body: JSON.stringify({ name, email, role }) }),
   listings: () => request<Listing[]>('/listings'), createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}),
+  marketingRecords: () => request<MarketingRecords>('/marketing/records'),
+  websiteRecords: () => request<{ pages: MarketingRecords['content_blocks'] }>('/websites/records'),
+  eventBreakdown: () => request<{ events: { event_type: string; count: number }[] }>('/reports/event-breakdown'),
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'status' | 'due_at'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 };

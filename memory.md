@@ -210,3 +210,4 @@ Added interactive videos to Seller Staging Checklist
 - Opportunity details support real contact, vendor, and offer relationship writes through the internal API; they are not mock UI state.
 - Smart Plan workspaces now create steps and enroll contacts through the same internal database APIs.
 - Agreement lifecycle is now audit-backed: creation/status changes/recipient additions create agreement events, detail workspaces show recipients/events/files, and a migration adds an optional agreement link to private file assets.
+- Marketing, website, and report Command views now query live internal content, funnels, and aggregate analytics event-type records instead of rendering only counters.

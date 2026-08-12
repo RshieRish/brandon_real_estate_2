@@ -63,6 +63,28 @@ async def growth_summary(db:AsyncSession=Depends(get_db)):
     return {"content_blocks":await _count(db,ContentBlock),"funnels":await _count(db,Funnel),"leads":await _count(db,Lead),"analytics_events":await _count(db,AnalyticsEvent)}
 
 
+@router.get("/marketing/records")
+async def marketing_records(db: AsyncSession = Depends(get_db)):
+    blocks = (await db.execute(select(ContentBlock).order_by(ContentBlock.updated_at.desc()).limit(100))).scalars().all()
+    funnels = (await db.execute(select(Funnel).order_by(Funnel.updated_at.desc()).limit(100))).scalars().all()
+    return {
+        "content_blocks": [{"id": item.id, "block_id": item.block_id, "page": item.page, "content_type": item.content_type, "updated_at": item.updated_at} for item in blocks],
+        "funnels": [{"id": item.id, "title": item.title, "slug": item.slug, "audience": item.audience, "status": item.status, "registrations": item.registrations, "updated_at": item.updated_at} for item in funnels],
+    }
+
+
+@router.get("/websites/records")
+async def website_records(db: AsyncSession = Depends(get_db)):
+    blocks = (await db.execute(select(ContentBlock).order_by(ContentBlock.page.asc().nulls_last(), ContentBlock.updated_at.desc()).limit(200))).scalars().all()
+    return {"pages": [{"id": item.id, "block_id": item.block_id, "page": item.page or "unassigned", "content_type": item.content_type, "updated_at": item.updated_at} for item in blocks]}
+
+
+@router.get("/reports/event-breakdown")
+async def event_breakdown(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(AnalyticsEvent.event_type, func.count(AnalyticsEvent.id)).group_by(AnalyticsEvent.event_type).order_by(func.count(AnalyticsEvent.id).desc()).limit(25))).all()
+    return {"events": [{"event_type": event_type, "count": int(count)} for event_type, count in rows]}
+
+
 @router.get("/contacts", response_model=list[ContactOut])
 async def contacts(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CRMContact).order_by(CRMContact.created_at.desc()).offset(offset).limit(min(limit, 100)))
