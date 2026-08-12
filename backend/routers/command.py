@@ -56,10 +56,19 @@ async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
     for lead in leads:
         if lead.id in linked: continue
         parts = (lead.name or "Unnamed contact").strip().split(maxsplit=1)
-        db.add(CRMContact(lead_id=lead.id, first_name=parts[0], last_name=parts[1] if len(parts) > 1 else "", email=lead.email, phone=lead.phone, stage=lead.routing_status or "lead"))
+        contact=CRMContact(lead_id=lead.id, first_name=parts[0], last_name=parts[1] if len(parts) > 1 else "", email=lead.email, phone=lead.phone, stage=lead.routing_status or "lead")
+        db.add(contact); await db.flush()
+        db.add(CRMActivity(contact_id=contact.id,kind="lead_imported",summary=f"Imported from internal lead source: {lead.source or 'website'}"))
         created += 1
+    contacts = (await db.execute(select(CRMContact).where(CRMContact.lead_id.is_not(None)))).scalars().all()
+    backfilled = 0
+    for contact in contacts:
+        has_activity = (await db.execute(select(CRMActivity.id).where(CRMActivity.contact_id == contact.id).limit(1))).scalar_one_or_none()
+        if has_activity is None:
+            db.add(CRMActivity(contact_id=contact.id, kind="lead_imported", summary="Imported from internal lead source"))
+            backfilled += 1
     await db.flush()
-    return {"created": created, "total_legacy_leads": len(leads)}
+    return {"created": created, "timeline_backfilled": backfilled, "total_legacy_leads": len(leads)}
 
 
 @router.get("/contacts/{contact_id}", response_model=ContactOut)
