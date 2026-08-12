@@ -14,7 +14,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactStageUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -295,6 +295,12 @@ async def listings(db: AsyncSession = Depends(get_db)):
 @router.post("/listings", response_model=ListingOut)
 async def create_listing(payload: ListingCreate, db: AsyncSession = Depends(get_db)):
     item = CRMListingRecord(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.patch("/listings/{listing_id}", response_model=ListingOut)
+async def update_listing_status(listing_id: int, payload: ListingStatusUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMListingRecord, listing_id)
+    if not item: raise HTTPException(404, "Listing not found")
+    item.status = payload.status; await db.flush(); return item
 
 
 @router.post("/listings/{listing_id}/geocode", response_model=ListingOut)

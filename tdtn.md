@@ -1385,5 +1385,8 @@ Completed Checklist Video Integration
 - Tasks now support server-side status and due-date bounds (`status`, `due_before`, `due_after`) with matching open/completed and due-by controls in the Tasks workspace.
 - Verification: Command API tests pass (14), frontend typecheck passes, and all Command backend tests pass (10).
 
+- Listings now support validated persisted lifecycle states (active, pending, sold, withdrawn) through the Listings workspace and API.
+- Verification: Command API tests pass (15), frontend typecheck passes, and all Command backend tests pass (10).
+
 - Contact workspace now creates/assigns tags directly through the internal CRM APIs; repeated tag names reuse the existing tag before assigning it.
 - Verification: frontend typecheck passes.

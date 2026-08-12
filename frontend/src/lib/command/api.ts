@@ -42,7 +42,7 @@ export const commandApi = {
   agreementTemplates: () => request<AgreementTemplate[]>('/agreement-templates'),
   createAgreementTemplate: (name: string, body = '') => request<AgreementTemplate>('/agreement-templates', { method: 'POST', body: JSON.stringify({ name, body }) }),
   updateAgreementTemplate: (id: number, body: string) => request<AgreementTemplate>(`/agreement-templates/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
-  listings: () => request<Listing[]>('/listings'), createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}),
+  listings: () => request<Listing[]>('/listings'), createListing: (payload: Omit<Listing,'id'|'status'>) => request<Listing>('/listings',{method:'POST',body:JSON.stringify(payload)}), updateListingStatus: (id: number, status: 'active' | 'pending' | 'sold' | 'withdrawn') => request<Listing>(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   geocodeListing: (id: number) => request<Listing>(`/listings/${id}/geocode`, { method: 'POST' }),
   marketingRecords: () => request<MarketingRecords>('/marketing/records'),
   websiteRecords: () => request<{ pages: MarketingRecords['content_blocks'] }>('/websites/records'),

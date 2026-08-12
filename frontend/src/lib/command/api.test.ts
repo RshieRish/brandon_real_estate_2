@@ -131,4 +131,12 @@ describe('commandApi', () => {
     await commandApi.tasks({ status: 'open', due_before: '2026-08-31T23:59:59Z' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks?status=open&due_before=2026-08-31T23%3A59%3A59Z'), expect.anything());
   });
+
+  it('updates a listing lifecycle status through the internal API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-listing' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, address: '10 Main St', latitude: null, longitude: null, status: 'pending' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(commandApi.updateListingStatus(9, 'pending')).resolves.toMatchObject({ status: 'pending' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/listings/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'pending' }) }));
+  });
 });

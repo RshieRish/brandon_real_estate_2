@@ -95,6 +95,9 @@ class ListingCreate(BaseModel):
     latitude: str | None = None
     longitude: str | None = None
 
+class ListingStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|pending|sold|withdrawn)$")
+
 class ListingOut(ListingCreate):
     id: int
     status: str
