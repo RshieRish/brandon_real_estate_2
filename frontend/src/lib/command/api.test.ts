@@ -80,4 +80,13 @@ describe('commandApi', () => {
     await expect(commandApi.updateSmartPlanEnrollment(7, 9, 'paused')).resolves.toMatchObject({ status: 'paused' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/smart-plans/7/enrollments/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }));
   });
+
+  it('moves an opportunity to a new persisted pipeline stage', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-opportunity' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 3, name: 'Oak Street', stage: 'offer', value_cents: null }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.updateOpportunity(3, 'offer')).resolves.toMatchObject({ stage: 'offer' });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/opportunities/3'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ stage: 'offer' }) }));
+  });
 });

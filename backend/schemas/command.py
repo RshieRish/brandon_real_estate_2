@@ -64,6 +64,10 @@ class OpportunityCreate(BaseModel):
     value_cents: int | None = None
 
 
+class OpportunityUpdate(BaseModel):
+    stage: str = Field(min_length=1, max_length=50)
+
+
 class OpportunityOut(OpportunityCreate):
     id: int
     class Config: from_attributes = True

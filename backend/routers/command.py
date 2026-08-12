@@ -13,7 +13,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 
@@ -320,6 +320,12 @@ async def opportunities(db: AsyncSession = Depends(get_db)):
 @router.post("/opportunities", response_model=OpportunityOut)
 async def create_opportunity(payload: OpportunityCreate, db: AsyncSession = Depends(get_db)):
     item = CRMOpportunity(**payload.model_dump()); db.add(item); await db.flush(); return item
+
+@router.patch("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+async def update_opportunity(opportunity_id: int, payload: OpportunityUpdate, db: AsyncSession = Depends(get_db)):
+    item = await db.get(CRMOpportunity, opportunity_id)
+    if not item: raise HTTPException(404, "Opportunity not found")
+    item.stage = payload.stage; await db.flush(); return item
 
 @router.get("/opportunities/{opportunity_id}/workspace")
 async def opportunity_workspace(opportunity_id:int,db:AsyncSession=Depends(get_db)):

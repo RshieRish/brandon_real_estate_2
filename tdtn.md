@@ -1346,3 +1346,6 @@ Completed Checklist Video Integration
 
 - Smart Plan enrollments now support persisted `active`, `paused`, and `completed` lifecycle states; the UI provides pause/resume control from the plan workspace.
 - Verification: Command API tests pass (8), frontend typecheck passes, and focused Command backend tests pass (6).
+
+- Opportunities now support persisted pipeline stage movement from the detail workspace across cultivate, appointment, active, offer, under contract, closed, and lost.
+- Verification: Command API tests pass (9), frontend typecheck passes, and focused Command model tests pass (4).
