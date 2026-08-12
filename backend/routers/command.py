@@ -12,7 +12,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactOut, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -99,6 +99,17 @@ async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
     await db.flush()
     return {"created": created, "timeline_backfilled": backfilled, "total_legacy_leads": len(leads)}
 
+@router.post("/contacts/import")
+async def import_contacts(payload:ContactImportRequest,db:AsyncSession=Depends(get_db)):
+    created=0;skipped=0
+    for row in payload.contacts:
+        existing=None
+        if row.email: existing=(await db.execute(select(CRMContact).where(CRMContact.email==row.email))).scalar_one_or_none()
+        if existing: skipped+=1; continue
+        contact=CRMContact(**row.model_dump());db.add(contact);await db.flush()
+        db.add(CRMActivity(contact_id=contact.id,kind="contact_imported",summary="Imported through internal CRM import"));created+=1
+    await db.flush();return {"created":created,"skipped_duplicates":skipped}
+
 
 @router.get("/contacts/{contact_id}", response_model=ContactOut)
 async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
@@ -116,9 +127,16 @@ async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db))
     notes = await rows(CRMNote, CRMNote.contact_id)
     activity = await rows(CRMActivity, CRMActivity.contact_id)
     enrollments = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.contact_id == contact_id))).scalars().all()
+    opportunity_rows = (await db.execute(
+        select(CRMOpportunity, CRMOpportunityContact.role)
+        .join(CRMOpportunityContact, CRMOpportunity.id == CRMOpportunityContact.opportunity_id)
+        .where(CRMOpportunityContact.contact_id == contact_id)
+        .order_by(CRMOpportunity.created_at.desc())
+    )).all()
     searches=(await db.execute(select(CRMSavedSearch).where(CRMSavedSearch.contact_id == contact_id))).scalars().all()
     tag_rows=(await db.execute(select(CRMTag).join(CRMContactTag,CRMTag.id==CRMContactTag.tag_id).where(CRMContactTag.contact_id==contact_id))).scalars().all()
-    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": [], "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
+    opportunities = [ContactWorkspaceOpportunityOut(id=item.id, name=item.name, stage=item.stage, value_cents=item.value_cents, role=role).model_dump() for item, role in opportunity_rows]
+    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": opportunities, "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
 
 @router.post("/tags")
 async def create_tag(payload:TagCreate,db:AsyncSession=Depends(get_db)):

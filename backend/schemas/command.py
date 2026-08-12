@@ -124,3 +124,19 @@ class NoteCreate(BaseModel):
 class SavedSearchCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     criteria: dict = {}
+class ContactImportRow(BaseModel):
+    first_name: str = Field(min_length=1,max_length=120)
+    last_name: str = ""
+    email: str | None = None
+    phone: str | None = None
+    stage: str = "lead"
+class ContactImportRequest(BaseModel):
+    contacts: list[ContactImportRow] = Field(max_length=1000)
+
+
+class ContactWorkspaceOpportunityOut(BaseModel):
+    id: int
+    name: str
+    stage: str
+    value_cents: int | None = None
+    role: str
