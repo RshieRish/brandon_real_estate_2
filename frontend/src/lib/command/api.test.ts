@@ -175,4 +175,13 @@ describe('commandApi', () => {
     await commandApi.listings({ query: 'Main', status: 'active' });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/listings?query=Main&status=active'), expect.anything());
   });
+
+  it('persists a complete task edit through the internal API', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-task-edit' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null, contact_id: null }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.updateTask(9, { title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null }) }));
+  });
 });

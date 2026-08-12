@@ -1,6 +1,9 @@
 from datetime import date
 
-from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut
+import pytest
+from pydantic import ValidationError
+
+from schemas.command import ContactCreate, ContactWorkspaceOpportunityOut, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreementEvent, CRMContact, CRMFileAsset, CRMReferral, CRMTask, CRMTaskLink
 
 
@@ -66,3 +69,11 @@ def test_contact_can_store_private_birthday_and_anniversary_dates():
 
     assert contact.birthday == date(1990, 8, 12)
     assert payload.anniversary == date(2020, 6, 1)
+
+
+def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
+    assert TaskUpdate(status="in_progress", priority="high", description="Call before noon").priority == "high"
+    with pytest.raises(ValidationError):
+        TaskUpdate(status="deleted")
+    with pytest.raises(ValidationError):
+        TaskUpdate(priority="urgentish")

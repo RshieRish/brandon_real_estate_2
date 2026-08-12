@@ -36,13 +36,15 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     contact_id: int | None = None
     description: str = ""
-    priority: str = "normal"
+    priority: str = Field(default="normal", pattern="^(low|normal|high)$")
     due_at: datetime | None = None
 
 
 class TaskUpdate(BaseModel):
-    status: str | None = None
-    title: str | None = None
+    status: str | None = Field(default=None, pattern="^(open|in_progress|completed|cancelled)$")
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
     due_at: datetime | None = None
 
 

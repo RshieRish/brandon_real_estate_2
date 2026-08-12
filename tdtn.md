@@ -1416,3 +1416,6 @@ Completed Checklist Video Integration
 
 - Listings & Map now supports server-side address search and lifecycle filtering. The map/list workspace debounces the selected filters so mapped pins and cards remain scoped to the same persisted listing result set.
 - Verification: 12 focused Command backend tests, 19 Command frontend API tests, and TypeScript pass. Authenticated listing query and status-filter runtime reads returned HTTP 200.
+
+- Tasks now support a complete persisted edit path for title, details, priority, and due date. Server-side contracts constrain task states to `open`, `in_progress`, `completed`, or `cancelled`, and priorities to `low`, `normal`, or `high`; the workspace can filter the additional states and edit existing task records.
+- Verification: 13 focused Command backend tests, 20 Command frontend API tests, and TypeScript pass. An authenticated invalid task-state mutation was rejected with HTTP 422.
