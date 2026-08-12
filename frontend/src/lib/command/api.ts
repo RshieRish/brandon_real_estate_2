@@ -13,6 +13,8 @@ export type SmartPlanEnrollment = { id: number; contact_id: number; contact_name
 export type TaskLink = { id: number; task_id: number; entity_type: string; entity_id: number; display_name: string };
 export type ContactImportRow = Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'birthday' | 'anniversary'> & { stage?: string };
 export type ContactImportResult = { created: number; skipped_duplicates: number };
+export type ArchiveBundle = { contacts?: ContactImportRow[]; tasks?: { title: string; contact_email?: string | null; description?: string; status?: string; priority?: string; due_at?: string | null }[]; notes?: { contact_email: string; body: string }[]; opportunities?: { name: string; stage?: string; value_cents?: number | null; contact_emails?: string[] }[]; referrals?: { name: string; source?: string; status?: string; contact_email?: string | null }[]; listings?: { address: string; latitude?: string | null; longitude?: string | null; status?: string }[]; templates?: { name: string; body?: string }[]; agreements?: { title: string; contact_email?: string | null; template_name?: string | null; status?: string }[] };
+export type ArchiveBundleImportResult = { created: Record<string, number>; skipped_duplicates: Record<string, number>; unresolved_contact_references: number };
 export type SavedSearch = { id: number; name: string; criteria: string; contact_id: number | null; contact_name: string | null; updated_at: string };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null };
 export type Agreement = { id:number; title:string; contact_id:number|null; template_id?:number|null; status:string };
@@ -49,6 +51,7 @@ export const commandApi = {
   generateAiBriefing: () => request<AiBriefing>('/ai/briefing/generate', { method: 'POST' }),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   importContacts: (contacts: ContactImportRow[]) => request<ContactImportResult>('/contacts/import', { method: 'POST', body: JSON.stringify({ contacts }) }),
+  importArchiveBundle: (bundle: ArchiveBundle) => request<ArchiveBundleImportResult>('/archive/import', { method: 'POST', body: JSON.stringify(bundle) }),
   updateContactStage: (id: number, stage: string) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
   updateContact: (id: number, payload: Partial<Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'stage' | 'birthday' | 'anniversary'>>) => request<Contact>(`/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   smartPlans: () => request<NamedRecord[]>('/smart-plans'), createSmartPlan: (payload: Pick<NamedRecord,'name'|'description'>) => request<NamedRecord>('/smart-plans',{method:'POST',body:JSON.stringify(payload)}),

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
+from schemas.command import ArchiveBundleImportRequest, ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
 from services.command_tasks import task_activity_summary
 from services.command_relationships import is_same_opportunity_contact
@@ -133,6 +133,11 @@ def test_contact_import_supports_private_celebration_dates():
     assert row.birthday == date(1990, 8, 12)
     assert row.anniversary == date(2020, 6, 1)
     assert ContactImportResult(created=1, skipped_duplicates=2).model_dump() == {"created": 1, "skipped_duplicates": 2}
+
+
+def test_archive_bundle_accepts_every_internal_record_collection():
+    bundle = ArchiveBundleImportRequest(contacts=[{"first_name": "Avery", "email": "avery@example.com"}], tasks=[{"title": "Call Avery", "contact_email": "avery@example.com"}], notes=[{"contact_email": "avery@example.com", "body": "Imported context"}], opportunities=[{"name": "Main Street", "contact_emails": ["avery@example.com"]}], referrals=[{"name": "Avery referral"}], listings=[{"address": "10 Main Street"}], templates=[{"name": "Buyer agreement"}], agreements=[{"title": "Buyer agreement", "contact_email": "avery@example.com", "template_name": "Buyer agreement"}])
+    assert (len(bundle.contacts), len(bundle.tasks), len(bundle.agreements)) == (1, 1, 1)
 
 
 def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():

@@ -15,7 +15,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
-from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactImportRequest, ContactImportResult, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ArchiveBundleImportRequest, ArchiveBundleImportResult, ContactCreate, ContactImportRequest, ContactImportResult, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -202,6 +202,91 @@ async def import_contacts(payload:ContactImportRequest,db:AsyncSession=Depends(g
         contact=CRMContact(**row.model_dump());db.add(contact);await db.flush()
         db.add(CRMActivity(contact_id=contact.id,kind="contact_imported",summary="Imported through internal CRM import"));created+=1
     await db.flush();return {"created":created,"skipped_duplicates":skipped}
+
+
+@router.post("/archive/import", response_model=ArchiveBundleImportResult)
+async def import_archive_bundle(payload: ArchiveBundleImportRequest, db: AsyncSession = Depends(get_db)):
+    created = {key: 0 for key in ("contacts", "tasks", "notes", "opportunities", "referrals", "listings", "templates", "agreements")}
+    skipped = {key: 0 for key in created}
+    unresolved = 0
+    contacts_by_email: dict[str, CRMContact] = {}
+    existing_contacts = (await db.execute(select(CRMContact).where(CRMContact.email.is_not(None)))).scalars().all()
+    for contact in existing_contacts:
+        contacts_by_email[contact.email.strip().lower()] = contact
+    for row in payload.contacts:
+        email = row.email.strip().lower() if row.email else None
+        if email and email in contacts_by_email:
+            skipped["contacts"] += 1
+            continue
+        contact = CRMContact(**row.model_dump())
+        db.add(contact); await db.flush()
+        if email: contacts_by_email[email] = contact
+        db.add(CRMActivity(contact_id=contact.id, kind="archive_contact_imported", summary="Imported from permitted archive bundle"))
+        created["contacts"] += 1
+
+    def resolve(email: str | None):
+        return contacts_by_email.get(email.strip().lower()) if email else None
+
+    templates_by_name = {item.name.strip().lower(): item for item in (await db.execute(select(CRMAgreementTemplate))).scalars().all()}
+    for row in payload.templates:
+        key = row.name.strip().lower()
+        if key in templates_by_name:
+            skipped["templates"] += 1
+            continue
+        item = CRMAgreementTemplate(name=row.name, body=row.body); db.add(item); await db.flush()
+        templates_by_name[key] = item; created["templates"] += 1
+
+    for row in payload.tasks:
+        contact = resolve(row.contact_email)
+        if row.contact_email and not contact: unresolved += 1
+        existing = (await db.execute(select(CRMTask).where(CRMTask.title == row.title, CRMTask.contact_id == (contact.id if contact else None)))).scalar_one_or_none()
+        if existing: skipped["tasks"] += 1; continue
+        item = CRMTask(title=row.title, description=row.description, status=row.status, priority=row.priority, due_at=row.due_at, contact_id=contact.id if contact else None)
+        db.add(item); await db.flush(); created["tasks"] += 1
+        if contact: db.add(CRMActivity(contact_id=contact.id, kind="archive_task_imported", summary=f"Imported task: {item.title}"))
+
+    for row in payload.notes:
+        contact = resolve(row.contact_email)
+        if not contact: unresolved += 1; continue
+        existing = (await db.execute(select(CRMNote).where(CRMNote.contact_id == contact.id, CRMNote.body == row.body))).scalar_one_or_none()
+        if existing: skipped["notes"] += 1; continue
+        db.add(CRMNote(contact_id=contact.id, body=row.body)); db.add(CRMActivity(contact_id=contact.id, kind="archive_note_imported", summary="Imported contact note")); created["notes"] += 1
+
+    for row in payload.opportunities:
+        item = (await db.execute(select(CRMOpportunity).where(CRMOpportunity.name == row.name))).scalar_one_or_none()
+        if item: skipped["opportunities"] += 1
+        else:
+            item = CRMOpportunity(name=row.name, stage=row.stage, value_cents=row.value_cents); db.add(item); await db.flush(); created["opportunities"] += 1
+        for email in row.contact_emails:
+            contact = resolve(email)
+            if not contact: unresolved += 1; continue
+            link = (await db.execute(select(CRMOpportunityContact).where(CRMOpportunityContact.opportunity_id == item.id, CRMOpportunityContact.contact_id == contact.id, CRMOpportunityContact.role == "client"))).scalar_one_or_none()
+            if not link:
+                db.add(CRMOpportunityContact(opportunity_id=item.id, contact_id=contact.id, role="client")); db.add(CRMActivity(contact_id=contact.id, kind="archive_opportunity_linked", summary=f"Imported opportunity: {item.name}"))
+
+    for row in payload.referrals:
+        contact = resolve(row.contact_email)
+        if row.contact_email and not contact: unresolved += 1
+        item = (await db.execute(select(CRMReferral).where(CRMReferral.name == row.name, CRMReferral.contact_id == (contact.id if contact else None)))).scalar_one_or_none()
+        if item: skipped["referrals"] += 1; continue
+        db.add(CRMReferral(name=row.name, source=row.source, status=row.status, contact_id=contact.id if contact else None)); created["referrals"] += 1
+
+    for row in payload.listings:
+        item = (await db.execute(select(CRMListingRecord).where(CRMListingRecord.address == row.address))).scalar_one_or_none()
+        if item: skipped["listings"] += 1; continue
+        db.add(CRMListingRecord(address=row.address, latitude=row.latitude, longitude=row.longitude, status=row.status)); created["listings"] += 1
+
+    for row in payload.agreements:
+        contact = resolve(row.contact_email)
+        if row.contact_email and not contact: unresolved += 1
+        template = templates_by_name.get(row.template_name.strip().lower()) if row.template_name else None
+        item = (await db.execute(select(CRMAgreement).where(CRMAgreement.title == row.title, CRMAgreement.contact_id == (contact.id if contact else None)))).scalar_one_or_none()
+        if item: skipped["agreements"] += 1; continue
+        item = CRMAgreement(title=row.title, contact_id=contact.id if contact else None, template_id=template.id if template else None, status=row.status)
+        db.add(item); await db.flush(); db.add(CRMAgreementEvent(agreement_id=item.id, event_type=row.status)); created["agreements"] += 1
+        if contact: db.add(CRMActivity(contact_id=contact.id, kind="archive_agreement_imported", summary=f"Imported agreement: {item.title}"))
+    await db.flush()
+    return {"created": created, "skipped_duplicates": skipped, "unresolved_contact_references": unresolved}
 
 
 @router.get("/contacts/{contact_id}", response_model=ContactOut)

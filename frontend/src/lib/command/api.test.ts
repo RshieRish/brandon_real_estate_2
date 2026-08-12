@@ -175,6 +175,14 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/import'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ contacts: [{ first_name: 'Avery', last_name: 'Lake', email: 'avery@example.com', phone: null, stage: 'lead', birthday: null, anniversary: null }] }) }));
   });
 
+  it('imports a permitted multi-record archive bundle through the protected CRM endpoint', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-archive-bundle' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ created: { contacts: 1 }, skipped_duplicates: {}, unresolved_contact_references: 0 }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(commandApi.importArchiveBundle({ contacts: [{ first_name: 'Avery', last_name: '', email: 'avery@example.com', phone: null }] })).resolves.toMatchObject({ unresolved_contact_references: 0 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/archive/import'), expect.objectContaining({ method: 'POST' }));
+  });
+
   it('requests contacts with server-side search and stage filters', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-contact-filter' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });

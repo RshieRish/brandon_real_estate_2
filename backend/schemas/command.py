@@ -203,6 +203,70 @@ class ContactImportResult(BaseModel):
     skipped_duplicates: int
 
 
+class ArchiveTaskImportRow(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    contact_email: str | None = None
+    description: str = ""
+    status: str = Field(default="open", pattern="^(open|in_progress|completed|cancelled)$")
+    priority: str = Field(default="normal", pattern="^(low|normal|high)$")
+    due_at: datetime | None = None
+
+
+class ArchiveNoteImportRow(BaseModel):
+    contact_email: str
+    body: str = Field(min_length=1)
+
+
+class ArchiveOpportunityImportRow(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    stage: str = Field(default="cultivate", pattern="^(cultivate|appointment|active|offer|under_contract|closed|lost)$")
+    value_cents: int | None = None
+    contact_emails: list[str] = Field(default_factory=list, max_length=100)
+
+
+class ArchiveReferralImportRow(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    source: str = ""
+    status: str = Field(default="new", pattern="^(new|contacted|nurture|converted|closed|lost)$")
+    contact_email: str | None = None
+
+
+class ArchiveListingImportRow(BaseModel):
+    address: str = Field(min_length=3, max_length=500)
+    latitude: str | None = None
+    longitude: str | None = None
+    status: str = Field(default="active", pattern="^(active|pending|sold|withdrawn)$")
+
+
+class ArchiveTemplateImportRow(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    body: str = ""
+
+
+class ArchiveAgreementImportRow(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    contact_email: str | None = None
+    template_name: str | None = None
+    status: str = Field(default="draft", pattern="^(draft|in_review|ready|shared|viewed|completed|voided|expired)$")
+
+
+class ArchiveBundleImportRequest(BaseModel):
+    contacts: list[ContactImportRow] = Field(default_factory=list, max_length=10000)
+    tasks: list[ArchiveTaskImportRow] = Field(default_factory=list, max_length=10000)
+    notes: list[ArchiveNoteImportRow] = Field(default_factory=list, max_length=10000)
+    opportunities: list[ArchiveOpportunityImportRow] = Field(default_factory=list, max_length=10000)
+    referrals: list[ArchiveReferralImportRow] = Field(default_factory=list, max_length=10000)
+    listings: list[ArchiveListingImportRow] = Field(default_factory=list, max_length=10000)
+    templates: list[ArchiveTemplateImportRow] = Field(default_factory=list, max_length=10000)
+    agreements: list[ArchiveAgreementImportRow] = Field(default_factory=list, max_length=10000)
+
+
+class ArchiveBundleImportResult(BaseModel):
+    created: dict[str, int]
+    skipped_duplicates: dict[str, int]
+    unresolved_contact_references: int
+
+
 class ContactWorkspaceOpportunityOut(BaseModel):
     id: int
     name: str

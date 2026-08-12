@@ -1511,3 +1511,6 @@ Completed Checklist Video Integration
 
 - Contact notes and tags now have complete scoped removal workflows. Removals are protected by contact ownership, refresh in place, and append immutable contact-timeline activity.
 - Verification: 26 focused Command backend tests, 67 frontend tests, TypeScript, and clean 34-route production build pass.
+
+- Archive intake now supports a structured permitted JSON bundle for contacts, tasks, notes, opportunities, referrals, listings, templates, and agreements. It reconciles email-based contact relationships, reports unresolved references, and deduplicates against canonical internal records.
+- Verification: 27 focused Command backend tests, 68 frontend tests, TypeScript, and clean 34-route production build pass.
