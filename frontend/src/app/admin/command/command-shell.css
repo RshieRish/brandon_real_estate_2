@@ -729,6 +729,12 @@
   accent-color: var(--command-gold-strong);
 }
 
+.command-root .command-checkbox-target {
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
 .command-root .command-selection-column {
   width: 44px;
   min-width: 44px;
@@ -737,7 +743,7 @@
 
 .command-root .command-sort-button {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 44px;
   align-items: center;
   gap: 5px;
   padding: 0;
@@ -900,7 +906,7 @@
 
 .command-root .command-secondary-button {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 7px;

@@ -4,7 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { CaretLeft, List } from '@phosphor-icons/react';
 import { usePathname } from 'next/navigation';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   commandNavigation,
   isCommandDestinationActive,
@@ -71,6 +71,32 @@ export function CommandRail() {
     restoreFocusRef: triggerRef,
   });
 
+  useEffect(() => {
+    if (!expanded) return;
+    const root = triggerRef.current?.closest('.command-root');
+    const background = Array.from(root?.querySelectorAll<HTMLElement>(
+      '.command-utility-header, .command-mobile-header, .command-canvas',
+    ) ?? []);
+    const previous = background.map((element) => ({
+      element,
+      ariaHidden: element.getAttribute('aria-hidden'),
+      inert: element.hasAttribute('inert'),
+    }));
+
+    background.forEach((element) => {
+      element.setAttribute('aria-hidden', 'true');
+      element.setAttribute('inert', '');
+    });
+
+    return () => {
+      previous.forEach(({ element, ariaHidden, inert }) => {
+        if (ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', ariaHidden);
+        if (!inert) element.removeAttribute('inert');
+      });
+    };
+  }, [expanded]);
+
   return (
     <>
       <aside className="command-rail command-print-hidden">
@@ -115,6 +141,8 @@ export function CommandRail() {
       {expanded ? (
         <aside
           ref={overlayRef}
+          role="dialog"
+          aria-modal="true"
           className="command-rail-overlay command-print-hidden"
           data-testid="command-rail-overlay"
           aria-label="Expanded Command navigation"

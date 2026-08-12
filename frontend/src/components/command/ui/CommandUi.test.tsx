@@ -284,7 +284,9 @@ describe('Command workspace primitives', () => {
 
     const nameHeading = screen.getByRole('columnheader', { name: /Name/ });
     expect(nameHeading).toHaveAttribute('aria-sort', 'ascending');
-    await user.click(within(nameHeading).getByRole('button', { name: 'Sort by Name' }));
+    const sortButton = within(nameHeading).getByRole('button', { name: 'Sort by Name' });
+    expect(sortButton).toHaveClass('command-touch-target');
+    await user.click(sortButton);
     expect(onSortChange).toHaveBeenCalledWith({ key: 'name', direction: 'descending' });
     expect(screen.getByRole('columnheader', { name: /Stage/ })).toHaveAttribute('aria-sort', 'none');
   });
@@ -305,6 +307,14 @@ describe('Command workspace primitives', () => {
     );
 
     const selectAll = screen.getByRole('checkbox', { name: 'Select all Contacts rows' });
+    expect(selectAll.closest('label')).toHaveClass(
+      'command-checkbox-target',
+      'command-touch-target',
+    );
+    expect(screen.getByRole('checkbox', { name: 'Select row 1' }).closest('label')).toHaveClass(
+      'command-checkbox-target',
+      'command-touch-target',
+    );
     expect(selectAll).toBePartiallyChecked();
     expect(screen.getByRole('region', { name: 'Bulk actions' })).toHaveTextContent(
       '1 selected',
@@ -436,7 +446,9 @@ describe('Command workspace primitives', () => {
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent('Contacts unavailable');
-    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toHaveClass('command-touch-target');
+    await user.click(retry);
     expect(onAction).toHaveBeenCalledTimes(1);
   });
 

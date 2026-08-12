@@ -63,7 +63,11 @@ export function CommandStatePanel({
         {children}
       </div>
       {actionLabel && onAction ? (
-        <button type="button" className="command-secondary-button" onClick={onAction}>
+        <button
+          type="button"
+          className="command-secondary-button command-touch-target"
+          onClick={onAction}
+        >
           {kind === 'error' ? <ArrowClockwise aria-hidden="true" size={17} /> : null}
           {actionLabel}
         </button>

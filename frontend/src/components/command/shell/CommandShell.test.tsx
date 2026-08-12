@@ -115,11 +115,12 @@ describe('CommandShell', () => {
     );
 
     const trigger = screen.getByRole('button', { name: 'Expand Command navigation' });
+    const canvas = screen.getByRole('main').parentElement;
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     await user.click(trigger);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('command-rail-overlay')).toHaveClass('command-rail-overlay');
-    expect(screen.getByRole('main').parentElement).toHaveClass('command-canvas');
+    expect(canvas).toHaveClass('command-canvas');
     await user.click(screen.getByRole('button', { name: 'Collapse Command navigation' }));
     expect(screen.queryByTestId('command-rail-overlay')).not.toBeInTheDocument();
   });
@@ -133,8 +134,12 @@ describe('CommandShell', () => {
     );
 
     const trigger = screen.getByRole('button', { name: 'Expand Command navigation' });
+    const canvas = screen.getByRole('main').parentElement;
     await user.click(trigger);
-    const overlay = screen.getByTestId('command-rail-overlay');
+    const overlay = screen.getByRole('dialog', { name: 'Expanded Command navigation' });
+    expect(overlay).toHaveAttribute('aria-modal', 'true');
+    expect(canvas).toHaveAttribute('aria-hidden', 'true');
+    expect(canvas).toHaveAttribute('inert');
     await waitFor(() => expect(overlay).toContainElement(document.activeElement as HTMLElement));
     expect(document.body.style.overflow).toBe('hidden');
     await user.keyboard('{Shift>}{Tab}{/Shift}');
@@ -142,6 +147,8 @@ describe('CommandShell', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByTestId('command-rail-overlay')).not.toBeInTheDocument();
     expect(document.body.style.overflow).toBe('');
+    expect(canvas).not.toHaveAttribute('aria-hidden');
+    expect(canvas).not.toHaveAttribute('inert');
     expect(trigger).toHaveFocus();
   });
 

@@ -43,7 +43,7 @@ type CommandRowActivationProps<Row> =
 
 export type CommandDataTableProps<Row> = CommandDataTableBaseProps<Row> & CommandRowActivationProps<Row>;
 
-const INTERACTIVE_SELECTOR = 'a, button, input, select, textarea, [role="button"], [role="link"]';
+const INTERACTIVE_SELECTOR = 'a, button, input, label, select, textarea, [role="button"], [role="link"]';
 
 export function CommandDataTable<Row>({
   ariaLabel,
@@ -126,13 +126,15 @@ export function CommandDataTable<Row>({
             <tr>
               {selectable ? (
                 <th scope="col" className="command-selection-column">
-                  <input
-                    ref={selectAllRef}
-                    type="checkbox"
-                    aria-label={`Select all ${ariaLabel} rows`}
-                    checked={allSelected}
-                    onChange={() => onSelectionChange?.(allSelected ? [] : rowEntries.map((entry) => entry.key))}
-                  />
+                  <label className="command-checkbox-target command-touch-target">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      aria-label={`Select all ${ariaLabel} rows`}
+                      checked={allSelected}
+                      onChange={() => onSelectionChange?.(allSelected ? [] : rowEntries.map((entry) => entry.key))}
+                    />
+                  </label>
                 </th>
               ) : null}
               {columns.map((column) => {
@@ -146,7 +148,12 @@ export function CommandDataTable<Row>({
                     aria-sort={column.sortable ? direction : undefined}
                   >
                     {column.sortable ? (
-                      <button type="button" className="command-sort-button" aria-label={`Sort by ${column.header}`} onClick={() => requestSort(column)}>
+                      <button
+                        type="button"
+                        className="command-sort-button command-touch-target"
+                        aria-label={`Sort by ${column.header}`}
+                        onClick={() => requestSort(column)}
+                      >
                         <span>{column.header}</span>
                         <SortIcon aria-hidden="true" size={15} />
                       </button>
@@ -179,13 +186,15 @@ export function CommandDataTable<Row>({
               >
                 {selectable ? (
                   <td className="command-selection-column">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select row ${String(key)}`}
-                      checked={selectedSet.has(String(key))}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={() => toggleRow(key)}
-                    />
+                    <label className="command-checkbox-target command-touch-target">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select row ${String(key)}`}
+                        checked={selectedSet.has(String(key))}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={() => toggleRow(key)}
+                      />
+                    </label>
                   </td>
                 ) : null}
                 {columns.map((column) => <td key={column.key}>{column.render(row)}</td>)}
