@@ -97,6 +97,7 @@ export function CommandGlobalSearch() {
               <MagnifyingGlass aria-hidden="true" size={20} />
               <input
                 ref={inputRef}
+                className="command-search-input"
                 role="combobox"
                 aria-label="Search Command"
                 aria-expanded="true"
@@ -124,7 +125,12 @@ export function CommandGlobalSearch() {
                   }
                 }}
               />
-              <button type="button" className="command-icon-button" aria-label="Close search" onClick={close}>
+              <button
+                type="button"
+                className="command-icon-button command-touch-target"
+                aria-label="Close search"
+                onClick={close}
+              >
                 <X aria-hidden="true" size={18} />
               </button>
             </div>

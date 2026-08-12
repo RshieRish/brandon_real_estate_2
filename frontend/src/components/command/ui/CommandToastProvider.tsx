@@ -6,12 +6,22 @@ import type { ReactNode } from 'react';
 
 export type CommandToastTone = 'success' | 'info' | 'warning' | 'error';
 
-export type CommandToastInput = Readonly<{
-  tone: CommandToastTone;
+type CommandToastBase = Readonly<{
   message: string;
-  undoLabel?: string;
-  onUndo?: () => void;
 }>;
+
+export type CommandToastInput = CommandToastBase & (
+  | Readonly<{
+      tone: 'success';
+      undoLabel?: string;
+      onUndo?: () => void;
+    }>
+  | Readonly<{
+      tone: Exclude<CommandToastTone, 'success'>;
+      undoLabel?: never;
+      onUndo?: never;
+    }>
+);
 
 type CommandToast = CommandToastInput & Readonly<{ id: number }>;
 
@@ -33,9 +43,10 @@ function ToastList({
       {toasts.map((toast) => (
         <div key={toast.id} className={`command-toast is-${toast.tone}`}>
           <span>{toast.message}</span>
-          {toast.onUndo ? (
+          {toast.tone === 'success' && toast.onUndo ? (
             <button
               type="button"
+              className="command-touch-target"
               onClick={() => {
                 toast.onUndo?.();
                 dismiss(toast.id);
@@ -44,7 +55,12 @@ function ToastList({
               {toast.undoLabel ?? 'Undo'}
             </button>
           ) : null}
-          <button type="button" aria-label={`Dismiss ${toast.message}`} onClick={() => dismiss(toast.id)}>
+          <button
+            type="button"
+            className="command-touch-target"
+            aria-label={`Dismiss ${toast.message}`}
+            onClick={() => dismiss(toast.id)}
+          >
             <X aria-hidden="true" size={16} />
           </button>
         </div>

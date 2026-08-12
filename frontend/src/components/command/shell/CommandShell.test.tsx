@@ -35,6 +35,15 @@ describe('CommandShell', () => {
       'href',
       '/admin/command?create=task',
     );
+    expect(screen.queryByRole('button', { name: 'Notifications' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Get Command help' })).toHaveAttribute(
+      'href',
+      'mailto:info@soldwithsweeney.com?subject=Command%20workspace%20help',
+    );
+    expect(screen.getByRole('link', { name: 'Brandon account settings' })).toHaveAttribute(
+      'href',
+      '/admin/settings',
+    );
   });
 
   it('matches nested module routes without leaving Home active', () => {
@@ -64,6 +73,10 @@ describe('CommandShell', () => {
     await user.keyboard('{Control>}k{/Control}');
     const search = screen.getByRole('combobox', { name: 'Search Command' });
     expect(search).toHaveFocus();
+    expect(search).toHaveClass('command-search-input');
+    expect(screen.getByRole('button', { name: 'Close search' })).toHaveClass(
+      'command-touch-target',
+    );
     await user.type(search, 'todo');
     expect(screen.getByRole('option', { name: 'Tasks' })).toBeInTheDocument();
     await user.keyboard('{ArrowDown}{Enter}');
@@ -109,6 +122,27 @@ describe('CommandShell', () => {
     expect(screen.getByRole('main').parentElement).toHaveClass('command-canvas');
     await user.click(screen.getByRole('button', { name: 'Collapse Command navigation' }));
     expect(screen.queryByTestId('command-rail-overlay')).not.toBeInTheDocument();
+  });
+
+  it('contains expanded-rail focus, closes with Escape, and restores its trigger and scrolling', async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandShell>
+        <p>Body</p>
+      </CommandShell>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Expand Command navigation' });
+    await user.click(trigger);
+    const overlay = screen.getByTestId('command-rail-overlay');
+    await waitFor(() => expect(overlay).toContainElement(document.activeElement as HTMLElement));
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(overlay).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('command-rail-overlay')).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('');
+    expect(trigger).toHaveFocus();
   });
 
   it('closes the mobile drawer with Escape, restores focus, and restores body scrolling', async () => {

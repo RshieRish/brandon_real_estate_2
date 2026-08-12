@@ -45,7 +45,12 @@ export function CommandOverlay({
         className={`command-overlay command-overlay-${variant}`}
         tabIndex={-1}
       >
-        <button type="button" className="command-overlay-close command-icon-button" aria-label="Close detail" onClick={dismiss}>
+        <button
+          type="button"
+          className="command-overlay-close command-icon-button command-touch-target"
+          aria-label="Close detail"
+          onClick={dismiss}
+        >
           <X aria-hidden="true" size={20} />
         </button>
         <div className="command-overlay-content">{children}</div>

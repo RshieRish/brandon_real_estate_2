@@ -9,14 +9,24 @@ export type CommandStateKind =
   | 'partial_capture'
   | 'error';
 
-export type CommandStatePanelProps = Readonly<{
-  kind: CommandStateKind;
+type CommandStatePanelBaseProps = Readonly<{
   title: string;
   message: string;
-  actionLabel?: string;
-  onAction?: () => void;
   children?: ReactNode;
 }>;
+
+export type CommandStatePanelProps = CommandStatePanelBaseProps & (
+  | Readonly<{
+      kind: 'error';
+      actionLabel: string;
+      onAction: () => void;
+    }>
+  | Readonly<{
+      kind: Exclude<CommandStateKind, 'error'>;
+      actionLabel?: string;
+      onAction?: () => void;
+    }>
+);
 
 export function CommandStatePanel({
   kind,

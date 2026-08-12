@@ -2,7 +2,7 @@
 
 import { CaretDown, CaretUp, CaretUpDown } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 
 export type CommandColumn<Row> = Readonly<{
   key: string;
@@ -17,7 +17,7 @@ export type CommandSort = Readonly<{
   direction: 'ascending' | 'descending';
 }>;
 
-export type CommandDataTableProps<Row> = Readonly<{
+type CommandDataTableBaseProps<Row> = Readonly<{
   ariaLabel: string;
   columns: readonly CommandColumn<Row>[];
   rows: readonly Row[];
@@ -29,8 +29,21 @@ export type CommandDataTableProps<Row> = Readonly<{
   toolbar?: ReactNode;
   bulkActions?: ReactNode;
   emptyState?: ReactNode;
-  onRowActivate?: (row: Row) => void;
 }>;
+
+type CommandRowActivationProps<Row> =
+  | Readonly<{
+      onRowActivate: (row: Row) => void;
+      rowActionLabel: (row: Row) => string;
+    }>
+  | Readonly<{
+      onRowActivate?: never;
+      rowActionLabel?: never;
+    }>;
+
+export type CommandDataTableProps<Row> = CommandDataTableBaseProps<Row> & CommandRowActivationProps<Row>;
+
+const INTERACTIVE_SELECTOR = 'a, button, input, select, textarea, [role="button"], [role="link"]';
 
 export function CommandDataTable<Row>({
   ariaLabel,
@@ -45,6 +58,7 @@ export function CommandDataTable<Row>({
   bulkActions,
   emptyState,
   onRowActivate,
+  rowActionLabel,
 }: CommandDataTableProps<Row>) {
   const selectable = Boolean(onSelectionChange);
   const selectedSet = useMemo(() => new Set(selectedKeys.map(String)), [selectedKeys]);
@@ -75,9 +89,22 @@ export function CommandDataTable<Row>({
   }
 
   function activateFromKeyboard(event: KeyboardEvent<HTMLTableRowElement>, row: Row) {
-    if (!onRowActivate || (event.key !== 'Enter' && event.key !== ' ')) return;
+    if (
+      !onRowActivate
+      || (event.key !== 'Enter' && event.key !== ' ')
+      || isInteractiveDescendant(event)
+    ) return;
     event.preventDefault();
     onRowActivate(row);
+  }
+
+  function isInteractiveDescendant(
+    event: KeyboardEvent<HTMLTableRowElement> | MouseEvent<HTMLTableRowElement>,
+  ): boolean {
+    const target = event.target;
+    return target instanceof Element
+      && target !== event.currentTarget
+      && Boolean(target.closest(INTERACTIVE_SELECTOR));
   }
 
   return (
@@ -127,12 +154,16 @@ export function CommandDataTable<Row>({
                   </th>
                 );
               })}
+              {onRowActivate ? <th scope="col" className="command-row-action-column">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
             {rowEntries.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + (selectable ? 1 : 0)} className="command-table-empty">
+                <td
+                  colSpan={columns.length + (selectable ? 1 : 0) + (onRowActivate ? 1 : 0)}
+                  className="command-table-empty"
+                >
                   {emptyState ?? 'No records to display.'}
                 </td>
               </tr>
@@ -141,7 +172,9 @@ export function CommandDataTable<Row>({
                 key={String(key)}
                 tabIndex={onRowActivate ? 0 : undefined}
                 className={onRowActivate ? 'is-activatable' : undefined}
-                onClick={() => onRowActivate?.(row)}
+                onClick={(event) => {
+                  if (!isInteractiveDescendant(event)) onRowActivate?.(row);
+                }}
                 onKeyDown={(event) => activateFromKeyboard(event, row)}
               >
                 {selectable ? (
@@ -156,6 +189,21 @@ export function CommandDataTable<Row>({
                   </td>
                 ) : null}
                 {columns.map((column) => <td key={column.key}>{column.render(row)}</td>)}
+                {onRowActivate && rowActionLabel ? (
+                  <td className="command-row-action-column">
+                    <button
+                      type="button"
+                      className="command-row-action command-touch-target"
+                      aria-label={rowActionLabel(row)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRowActivate(row);
+                      }}
+                    >
+                      Open
+                    </button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

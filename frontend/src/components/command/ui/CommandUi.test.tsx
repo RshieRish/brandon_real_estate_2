@@ -1,14 +1,18 @@
 import { useCallback, useRef, useState } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { CommandDataTable, type CommandColumn } from './CommandDataTable';
 import { CommandEvidencePanel } from './CommandEvidencePanel';
 import { CommandModuleHeader } from './CommandModuleHeader';
 import { CommandOverlay } from './CommandOverlay';
-import { CommandStatePanel } from './CommandStatePanel';
+import { CommandStatePanel, type CommandStatePanelProps } from './CommandStatePanel';
 import { CommandTabs } from './CommandTabs';
-import { CommandToastProvider, useCommandToast } from './CommandToastProvider';
+import {
+  CommandToastProvider,
+  useCommandToast,
+  type CommandToastInput,
+} from './CommandToastProvider';
 
 const taskTabs = [
   { value: 'todo', label: 'To Do' },
@@ -71,9 +75,41 @@ function SuccessToastProbe() {
   );
 }
 
+function InvalidErrorUndoProbe() {
+  const { pushToast } = useCommandToast();
+  return (
+    <button
+      type="button"
+      onClick={() => pushToast({
+        tone: 'error',
+        message: 'Save failed',
+        onUndo: vi.fn(),
+      } as never)}
+    >
+      Fail save
+    </button>
+  );
+}
+
 describe('Command workspace primitives', () => {
   beforeEach(() => {
     document.body.style.overflow = '';
+  });
+
+  it('requires an explicit retry action for error state props', () => {
+    expectTypeOf<{
+      kind: 'error';
+      title: string;
+      message: string;
+    }>().not.toMatchTypeOf<CommandStatePanelProps>();
+  });
+
+  it('rejects reversible callbacks on non-success toast inputs', () => {
+    expectTypeOf<{
+      tone: 'error';
+      message: string;
+      onUndo: () => void;
+    }>().not.toMatchTypeOf<CommandToastInput>();
   });
 
   it('moves tab focus with arrows, Home, and End without activating disabled tabs', async () => {
@@ -129,6 +165,32 @@ describe('Command workspace primitives', () => {
     expect(onValueChange).toHaveBeenCalledWith('completed');
   });
 
+  it('synchronizes the roving tab stop when the controlled value changes', () => {
+    const onValueChange = vi.fn();
+    const view = render(
+      <CommandTabs
+        idBase="task-state"
+        ariaLabel="Task states"
+        tabs={taskTabs}
+        value="todo"
+        onValueChange={onValueChange}
+      />,
+    );
+
+    expect(screen.getByRole('tab', { name: 'To Do' })).toHaveAttribute('tabindex', '0');
+    view.rerender(
+      <CommandTabs
+        idBase="task-state"
+        ariaLabel="Task states"
+        tabs={taskTabs}
+        value="completed"
+        onValueChange={onValueChange}
+      />,
+    );
+    expect(screen.getByRole('tab', { name: 'To Do' })).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('tab', { name: 'Completed' })).toHaveAttribute('tabindex', '0');
+  });
+
   it('distinguishes aggregate evidence from observed records without fabricating imports', () => {
     render(
       <CommandEvidencePanel
@@ -159,6 +221,7 @@ describe('Command workspace primitives', () => {
         evidenceLevel="rendered_occurrence"
         captureQuality="limitation"
         displayLabel="Recovered designs"
+        normalizedCount={null}
         renderedCount={34}
         artifactCount={1}
       />,
@@ -167,6 +230,25 @@ describe('Command workspace primitives', () => {
     expect(screen.getByText('Rendered occurrence')).toBeInTheDocument();
     expect(screen.getByText('34')).toBeInTheDocument();
     expect(screen.getByText('Not materialized')).toBeInTheDocument();
+    expect(screen.queryByText('Observed records')).not.toBeInTheDocument();
+  });
+
+  it('renders only supplied evidence counts and never implies capture completeness', () => {
+    render(
+      <CommandEvidencePanel
+        evidenceLevel="observed_record"
+        captureQuality="partial"
+        displayLabel="Recovered contact"
+        observedCount={1}
+      />,
+    );
+
+    expect(screen.getByText('Observed records')).toBeInTheDocument();
+    expect(screen.queryByText('Normalized records')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rendered occurrences')).not.toBeInTheDocument();
+    expect(screen.queryByText('Displayed count')).not.toBeInTheDocument();
+    expect(screen.queryByText('Source artifacts')).not.toBeInTheDocument();
+    expect(screen.getByText('Partial capture')).toBeInTheDocument();
   });
 
   it('keeps a wide semantic data table inside its own scroll container', () => {
@@ -271,6 +353,7 @@ describe('Command workspace primitives', () => {
         rows={rows}
         rowKey={(row) => row.id}
         onRowActivate={onRowActivate}
+        rowActionLabel={(row) => `Open ${row.name}`}
       />,
     );
 
@@ -280,6 +363,35 @@ describe('Command workspace primitives', () => {
     row.focus();
     await user.keyboard('{Enter}');
     expect(onRowActivate).toHaveBeenCalledTimes(2);
+    const action = screen.getByRole('button', { name: 'Open Avery Lake' });
+    expect(action).toHaveClass('command-touch-target');
+    await user.click(action);
+    expect(onRowActivate).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not activate a row when an interactive cell descendant is used', async () => {
+    const user = userEvent.setup();
+    const onRowActivate = vi.fn();
+    render(
+      <CommandDataTable
+        ariaLabel="Contacts"
+        columns={[
+          ...columns,
+          {
+            key: 'inline-action',
+            header: 'Inline action',
+            render: () => <button type="button">Send message</button>,
+          },
+        ]}
+        rows={rows}
+        rowKey={(row) => row.id}
+        onRowActivate={onRowActivate}
+        rowActionLabel={(row) => `Open ${row.name}`}
+      />,
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'Send message' })[0]);
+    expect(onRowActivate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -339,12 +451,18 @@ describe('Command workspace primitives', () => {
     const trigger = screen.getByRole('button', { name: 'Open detail' });
     await user.click(trigger);
     expect(screen.getByRole('dialog', { name: 'Detail' })).toHaveClass('command-overlay-drawer');
+    expect(screen.getByRole('button', { name: 'Close detail' })).toHaveClass(
+      'command-touch-target',
+    );
     expect(document.body.style.overflow).toBe('hidden');
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Detail' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     expect(document.body.style.overflow).toBe('');
     expect(screen.getByRole('alert')).toHaveTextContent('Unable to save');
+    expect(screen.getByRole('button', { name: 'Dismiss Unable to save' })).toHaveClass(
+      'command-touch-target',
+    );
   });
 
   it('announces success politely without creating an assertive error region', async () => {
@@ -358,6 +476,19 @@ describe('Command workspace primitives', () => {
     await user.click(screen.getByRole('button', { name: 'Save task' }));
     expect(screen.getByRole('status')).toHaveTextContent('Task saved');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('never exposes Undo for an error toast even if malformed runtime data supplies it', async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandToastProvider>
+        <InvalidErrorUndoProbe />
+      </CommandToastProvider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Fail save' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Save failed');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
   it('renders a dense module header with breadcrumbs, actions, tabs, and tools', () => {

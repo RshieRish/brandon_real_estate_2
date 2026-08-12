@@ -4,12 +4,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { CaretLeft, List } from '@phosphor-icons/react';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   commandNavigation,
   isCommandDestinationActive,
   type CommandDestination,
 } from './commandNavigation';
+import { useFocusContainment } from './useFocusContainment';
 
 const primaryDestinations = commandNavigation.filter((item) => item.group !== 'tools');
 const toolDestinations = commandNavigation.filter((item) => item.group === 'tools');
@@ -59,6 +60,16 @@ function ExpandedLinks({ pathname, onNavigate }: { pathname: string; onNavigate:
 export function CommandRail() {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const overlayRef = useRef<HTMLElement>(null);
+  const close = useCallback(() => setExpanded(false), []);
+
+  useFocusContainment({
+    active: expanded,
+    containerRef: overlayRef,
+    onDismiss: close,
+    restoreFocusRef: triggerRef,
+  });
 
   return (
     <>
@@ -77,6 +88,7 @@ export function CommandRail() {
           />
         </Link>
         <button
+          ref={triggerRef}
           type="button"
           className="command-rail-link command-touch-target"
           aria-label="Expand Command navigation"
@@ -102,12 +114,13 @@ export function CommandRail() {
 
       {expanded ? (
         <aside
+          ref={overlayRef}
           className="command-rail-overlay command-print-hidden"
           data-testid="command-rail-overlay"
           aria-label="Expanded Command navigation"
         >
           <div className="command-expanded-heading">
-            <Link href="/admin/command" onClick={() => setExpanded(false)}>
+            <Link href="/admin/command" onClick={close}>
               <span className="command-brand-kicker">SOLD WITH SWEENEY</span>
               <span className="command-brand-title">Workspace</span>
             </Link>
@@ -115,13 +128,13 @@ export function CommandRail() {
               type="button"
               className="command-icon-button command-touch-target"
               aria-label="Collapse Command navigation"
-              onClick={() => setExpanded(false)}
+              onClick={close}
             >
               <CaretLeft aria-hidden="true" size={20} />
             </button>
           </div>
           <nav className="command-expanded-navigation" aria-label="Expanded modules">
-            <ExpandedLinks pathname={pathname} onNavigate={() => setExpanded(false)} />
+            <ExpandedLinks pathname={pathname} onNavigate={close} />
           </nav>
         </aside>
       ) : null}

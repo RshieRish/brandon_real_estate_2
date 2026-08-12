@@ -32,12 +32,22 @@ export function CommandTabs<Value extends string>({
   const initialFocus = tabs.find((tab) => tab.value === value && !tab.disabled)?.value
     ?? tabs.find((tab) => !tab.disabled)?.value
     ?? value;
-  const [focusedValue, setFocusedValue] = useState<Value>(initialFocus);
+  const [focusState, setFocusState] = useState(() => ({
+    controlledValue: value,
+    focusedValue: initialFocus,
+  }));
+  const focusedValue = focusState.controlledValue === value
+    ? focusState.focusedValue
+    : initialFocus;
   const tabRefs = useRef(new Map<Value, HTMLButtonElement>());
+
+  function rememberFocus(nextValue: Value) {
+    setFocusState({ controlledValue: value, focusedValue: nextValue });
+  }
 
   function focusTab(next: CommandTab<Value> | undefined) {
     if (!next || next.disabled) return;
-    setFocusedValue(next.value);
+    rememberFocus(next.value);
     tabRefs.current.get(next.value)?.focus();
   }
 
@@ -82,7 +92,7 @@ export function CommandTabs<Value extends string>({
             disabled={tab.disabled}
             tabIndex={tab.value === focusedValue ? 0 : -1}
             className={`command-tab${selected ? ' is-selected' : ''}`}
-            onFocus={() => setFocusedValue(tab.value)}
+            onFocus={() => rememberFocus(tab.value)}
             onKeyDown={(event) => handleKeyDown(event, tab.value)}
             onClick={() => onValueChange(tab.value)}
           >

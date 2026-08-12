@@ -10,9 +10,10 @@ export type CommandArtifactLink = Readonly<{
 
 export type CommandEvidencePanelProps = Readonly<{
   evidenceLevel: EvidenceLevel;
-  captureQuality?: CaptureQuality;
+  captureQuality: CaptureQuality;
   displayLabel: string;
   observedCount?: number;
+  normalizedCount?: number | null;
   renderedCount?: number;
   displayedCount?: number;
   artifactCount?: number;
@@ -34,15 +35,12 @@ const captureLabels: Record<CaptureQuality, string> = {
 
 const numberFormatter = new Intl.NumberFormat('en-US');
 
-function countValue(value: number | undefined): string {
-  return value === undefined ? 'Not materialized' : numberFormatter.format(value);
-}
-
 export function CommandEvidencePanel({
   evidenceLevel,
-  captureQuality = 'complete',
+  captureQuality,
   displayLabel,
   observedCount,
+  normalizedCount,
   renderedCount,
   displayedCount,
   artifactCount,
@@ -68,26 +66,34 @@ export function CommandEvidencePanel({
         </div>
       </div>
       <dl className="command-evidence-counts">
-        <div>
-          <dt>Observed records</dt>
-          <dd>{countValue(observedCount)}</dd>
-        </div>
+        {observedCount !== undefined ? (
+          <div>
+            <dt>Observed records</dt>
+            <dd>{numberFormatter.format(observedCount)}</dd>
+          </div>
+        ) : null}
+        {normalizedCount !== undefined ? (
+          <div>
+            <dt>Normalized records</dt>
+            <dd>{normalizedCount === null ? 'Not materialized' : numberFormatter.format(normalizedCount)}</dd>
+          </div>
+        ) : null}
         {renderedCount !== undefined ? (
           <div>
             <dt>Rendered occurrences</dt>
-            <dd>{countValue(renderedCount)}</dd>
+            <dd>{numberFormatter.format(renderedCount)}</dd>
           </div>
         ) : null}
         {displayedCount !== undefined ? (
           <div>
             <dt>Displayed count</dt>
-            <dd>{countValue(displayedCount)}</dd>
+            <dd>{numberFormatter.format(displayedCount)}</dd>
           </div>
         ) : null}
         {artifactCount !== undefined ? (
           <div>
             <dt>Source artifacts</dt>
-            <dd>{countValue(artifactCount)}</dd>
+            <dd>{numberFormatter.format(artifactCount)}</dd>
           </div>
         ) : null}
       </dl>

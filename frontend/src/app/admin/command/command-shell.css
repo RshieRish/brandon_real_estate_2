@@ -309,6 +309,7 @@
   color: var(--command-surface);
   font-size: 12px;
   font-weight: 650;
+  text-decoration: none;
 }
 
 .command-root .command-search-trigger {
@@ -387,13 +388,18 @@
 
 .command-root .command-search-input-row input {
   min-width: 0;
-  min-height: 42px;
+  min-height: 44px;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--command-ink);
   font: inherit;
   font-size: 15px;
+}
+
+.command-root .command-search-input:focus-visible {
+  outline: 3px solid var(--command-gold);
+  outline-offset: -3px;
 }
 
 .command-root .command-search-option {
@@ -744,6 +750,23 @@
   cursor: pointer;
 }
 
+.command-root .command-row-action-column {
+  width: 76px;
+  min-width: 76px;
+  text-align: right !important;
+}
+
+.command-root .command-row-action {
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 .command-root .command-table-empty {
   min-width: min(520px, calc(100vw - 56px));
   height: auto !important;
@@ -789,8 +812,8 @@
   top: 8px;
   z-index: 2;
   float: right;
-  width: 40px;
-  min-height: 40px;
+  width: 44px;
+  min-height: 44px;
   margin: 8px 8px -48px 0;
   border-color: var(--command-border);
   background: var(--command-surface);
@@ -1040,8 +1063,8 @@
 .command-root .command-toast.is-error { border-left-color: var(--command-danger); }
 
 .command-root .command-toast button {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   border-radius: 4px;
   background: transparent;

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Bell, Plus, Question, UserCircle } from '@phosphor-icons/react';
+import { Plus, Question, UserCircle } from '@phosphor-icons/react';
 import { usePathname } from 'next/navigation';
 import { findCommandDestination } from './commandNavigation';
 import { CommandGlobalSearch } from './CommandGlobalSearch';
@@ -27,16 +27,21 @@ export function CommandUtilityHeader() {
             <span>{destination.createLabel}</span>
           </Link>
         ) : null}
-        <button type="button" className="command-icon-button command-touch-target" aria-label="Notifications">
-          <Bell aria-hidden="true" size={20} />
-        </button>
-        <button type="button" className="command-icon-button command-touch-target" aria-label="Help">
+        <a
+          href="mailto:info@soldwithsweeney.com?subject=Command%20workspace%20help"
+          className="command-icon-button command-touch-target"
+          aria-label="Get Command help"
+        >
           <Question aria-hidden="true" size={20} />
-        </button>
-        <button type="button" className="command-account-button command-touch-target" aria-label="Brandon account menu">
+        </a>
+        <Link
+          href="/admin/settings"
+          className="command-account-button command-touch-target"
+          aria-label="Brandon account settings"
+        >
           <UserCircle aria-hidden="true" size={24} weight="fill" />
           <span>Brandon</span>
-        </button>
+        </Link>
       </div>
     </header>
   );
