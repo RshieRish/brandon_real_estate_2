@@ -7,6 +7,8 @@ from middleware.auth import require_admin
 from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementRecipient, CRMAgreementTemplate, CRMContact, CRMContactTag, CRMFileAsset, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMOpportunityOffer, CRMOpportunityVendor, CRMSavedSearch, CRMSmartPlan, CRMSmartPlanEnrollment, CRMSmartPlanStep, CRMTag, CRMTask
 from models.lead import Lead
 from models.analytics_event import AnalyticsEvent
+from models.content_block import ContentBlock
+from models.funnel import Funnel
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ContactCreate, ContactOut, FileAssetCreate, FileAssetOut, ListingCreate, ListingOut, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OverviewOut, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut
 from services.command_file_storage import upload_command_file
 
@@ -37,6 +39,10 @@ async def ai_briefing(db: AsyncSession = Depends(get_db)):
 @router.get("/reports/summary")
 async def reports_summary(db:AsyncSession=Depends(get_db)):
     return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,CRMTask.status!="completed"),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
+
+@router.get("/growth/summary")
+async def growth_summary(db:AsyncSession=Depends(get_db)):
+    return {"content_blocks":await _count(db,ContentBlock),"funnels":await _count(db,Funnel),"leads":await _count(db,Lead),"analytics_events":await _count(db,AnalyticsEvent)}
 
 
 @router.get("/contacts", response_model=list[ContactOut])
