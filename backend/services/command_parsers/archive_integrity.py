@@ -35,6 +35,11 @@ class ArchiveIntegrityParser:
 
         for artifact in materialized:
             verify_artifact_bytes(artifact)
+            if not isinstance(artifact.domain, str) or not artifact.domain.strip():
+                raise ArchiveIntegrityError(
+                    f"artifact {artifact.source_path!r} domain must be a "
+                    "nonblank string"
+                )
             if artifact.source_path in seen_paths:
                 raise ArchiveIntegrityError(
                     "archive contains duplicate source_path: "

@@ -5,6 +5,7 @@ from types import MappingProxyType
 import pytest
 
 from models.command_provenance import EvidenceLevel
+import services.command_parsers as command_parsers
 from services.command_parsers import (
     ArchiveIntegrityParser,
     CommandArchiveParser,
@@ -115,6 +116,60 @@ def test_registry_registration_does_not_invoke_parser():
     ParserRegistry().register(parser)
 
     assert parser.parse_calls == 0
+
+
+@pytest.mark.parametrize(
+    "selected_modules",
+    [None, {"tasks"}],
+    ids=["all-modules", "registered-key"],
+)
+def test_registry_rejects_parser_whose_module_changed_after_registration(
+    selected_modules,
+):
+    parser = FakeParser("tasks")
+    registry = ParserRegistry()
+    registry.register(parser)
+    parser.module = "contacts"
+
+    with pytest.raises(ParserRegistryError) as exc_info:
+        registry.select(selected_modules)
+
+    assert str(exc_info.value) == (
+        "parser registered under 'tasks' now reports module 'contacts'"
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_module", "display"),
+    [("", "''"), (" \t", "' \\t'"), (17, "17")],
+    ids=["empty", "whitespace", "non-string"],
+)
+def test_registry_rejects_invalid_module_value_after_registration(
+    current_module, display
+):
+    parser = FakeParser("tasks")
+    registry = ParserRegistry()
+    registry.register(parser)
+    parser.module = current_module
+
+    with pytest.raises(ParserRegistryError) as exc_info:
+        registry.select(None)
+
+    assert str(exc_info.value) == (
+        f"parser registered under 'tasks' now reports module {display}"
+    )
+
+
+def test_public_parser_module_validator_rejects_mutated_parser():
+    parser = FakeParser("tasks")
+    parser.module = "contacts"
+
+    with pytest.raises(ParserRegistryError) as exc_info:
+        command_parsers.validate_parser_module(parser, "tasks")
+
+    assert str(exc_info.value) == (
+        "parser registered under 'tasks' now reports module 'contacts'"
+    )
 
 
 def test_registry_rejects_duplicate_module():
@@ -334,6 +389,67 @@ def test_archive_integrity_parser_handles_empty_input():
         "domains": {},
         "duplicate_content": 0,
     }
+
+
+@pytest.mark.parametrize(
+    "invalid_domain",
+    ["", " \t\n", [], object()],
+    ids=["empty", "whitespace", "list", "object"],
+)
+def test_archive_integrity_parser_rejects_invalid_domain_with_path_context(
+    invalid_domain,
+):
+    artifact = artifact_for(domain=invalid_domain)
+
+    with pytest.raises(ArchiveIntegrityError) as exc_info:
+        ArchiveIntegrityParser().parse(
+            [artifact], parser_version="command-v1"
+        )
+
+    assert str(exc_info.value) == (
+        "artifact 'kw_command_repaired/contacts/contact.json' domain must be "
+        "a nonblank string"
+    )
+
+
+def test_archive_integrity_parser_verifies_bytes_before_domain():
+    artifact = replace(
+        artifact_for(domain=[]),
+        sha256="0" * 64,
+    )
+
+    with pytest.raises(ArchiveIntegrityError, match="checksum"):
+        ArchiveIntegrityParser().parse(
+            [artifact], parser_version="command-v1"
+        )
+
+
+def test_archive_integrity_parser_preserves_arbitrary_nonblank_domains_sorted():
+    zeta = artifact_for(
+        b"zeta",
+        id=1,
+        source_path="z/zeta.json",
+        domain="z.custom/v2",
+    )
+    alpha = artifact_for(
+        b"alpha",
+        id=2,
+        source_path="a/alpha.json",
+        domain="A custom domain",
+    )
+
+    result = ArchiveIntegrityParser().parse(
+        [zeta, alpha], parser_version="command-v1"
+    )
+
+    assert result.metrics.details["domains"] == {
+        "A custom domain": 1,
+        "z.custom/v2": 1,
+    }
+    assert tuple(result.metrics.details["domains"]) == (
+        "A custom domain",
+        "z.custom/v2",
+    )
 
 
 @pytest.mark.parametrize(

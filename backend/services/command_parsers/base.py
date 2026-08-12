@@ -26,6 +26,23 @@ class UnknownParserModuleError(ParserRegistryError):
     """Raised when requested parser modules have not been registered."""
 
 
+def validate_parser_module(
+    parser: CommandArchiveParser,
+    expected_module: str,
+) -> None:
+    """Require a parser to retain the module identity it was registered under."""
+    current_module = getattr(parser, "module", None)
+    if (
+        not isinstance(current_module, str)
+        or not current_module.strip()
+        or current_module != expected_module
+    ):
+        raise ParserRegistryError(
+            f"parser registered under {expected_module!r} now reports module "
+            f"{current_module!r}"
+        )
+
+
 def _immutable_snapshot(
     value: object,
     ancestors: set[int] | None = None,
@@ -199,6 +216,9 @@ class ParserRegistry:
             names = ", ".join(sorted(unknown_modules))
             raise UnknownParserModuleError(f"unknown parser modules: {names}")
 
-        return tuple(
-            self._parsers[module] for module in sorted(selected_modules)
-        )
+        selected_parsers = []
+        for module in sorted(selected_modules):
+            parser = self._parsers[module]
+            validate_parser_module(parser, module)
+            selected_parsers.append(parser)
+        return tuple(selected_parsers)

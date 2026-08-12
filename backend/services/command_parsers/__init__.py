@@ -10,6 +10,7 @@ from services.command_parsers.base import (
     ParserRegistryError,
     ParserResultValidationError,
     UnknownParserModuleError,
+    validate_parser_module,
 )
 from services.command_provenance import ArchiveIntegrityError
 
@@ -33,4 +34,5 @@ __all__ = (
     "ParserResultValidationError",
     "UnknownParserModuleError",
     "default_parser_registry",
+    "validate_parser_module",
 )
