@@ -1509,15 +1509,35 @@ describe('ContactDetailWorkspace', () => {
     expect(document.querySelector('[class*="kw-red"], [style*="#b40101"]')).toBeNull();
   });
 
-  it('closes the mobile profile disclosure with Escape and restores its trigger', async () => {
-    renderWorkspace(fakeApi());
+  it('keeps pending profile saves inside the mobile disclosure and preserves nested Escape ownership', async () => {
+    const api = fakeApi();
+    const pendingUpdate = deferred<ContactInternalWorkspace['contact']>();
+    vi.mocked(api.update).mockReturnValueOnce(pendingUpdate.promise);
+    renderWorkspace(api);
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
     const disclosure = screen.getByRole('button', { name: 'Profile details' });
     await userEvent.click(disclosure);
     expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    const editProfile = screen.getByRole('button', { name: 'Edit profile' });
-    editProfile.focus();
-    fireEvent.keyDown(editProfile, { key: 'Escape' });
+    let editProfile = screen.getByRole('button', { name: 'Edit profile' });
+    await userEvent.click(editProfile);
+    await userEvent.clear(screen.getByLabelText('Stage'));
+    await userEvent.type(screen.getByLabelText('Stage'), 'active review');
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    const pendingEditor = screen.getByRole('region', { name: 'Edit SWS profile' });
+    await waitFor(() => expect(pendingEditor).toHaveFocus());
+    fireEvent.keyDown(pendingEditor, { key: 'Escape' });
+    expect(screen.getByRole('region', { name: 'Edit SWS profile' })).toBeInTheDocument();
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(pendingEditor).toHaveFocus();
+
+    await act(async () => pendingUpdate.resolve({ ...internalWorkspace.contact, stage: 'active review' }));
+    editProfile = await screen.findByRole('button', { name: 'Edit profile' });
+    await waitFor(() => expect(editProfile).toHaveFocus());
+    await userEvent.click(editProfile);
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Edit SWS profile' }), { key: 'Escape' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Edit profile' }), { key: 'Escape' });
     expect(disclosure).toHaveAttribute('aria-expanded', 'false');
     expect(disclosure).toHaveFocus();
   });

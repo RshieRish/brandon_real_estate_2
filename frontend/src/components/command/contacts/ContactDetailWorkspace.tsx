@@ -1068,6 +1068,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
           id="command-contact-profile-region"
           className={profileOpen ? 'is-mobile-open' : ''}
           onKeyDown={(event) => {
+            if (event.defaultPrevented) return;
             if (event.key === 'Escape' && profileOpen) {
               event.preventDefault();
               setProfileOpen(false);

@@ -80,6 +80,7 @@ export function ContactProfileEditor({
   const [restoreFocus, setRestoreFocus] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const editorRef = useRef<HTMLElement | null>(null);
   const mountedRef = useRef(true);
   const contactIdRef = useRef(contact.id);
   const latestFieldsRef = useRef(fields(contact));
@@ -92,6 +93,14 @@ export function ContactProfileEditor({
       setRestoreFocus(false);
     }
   }, [open, restoreFocus]);
+
+  useEffect(() => {
+    if (saving) editorRef.current?.focus();
+  }, [saving]);
+
+  useEffect(() => {
+    if (open) editorRef.current?.focus();
+  }, [open]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -263,7 +272,11 @@ export function ContactProfileEditor({
   }
 
   return (
-    <section className="command-contact-editor" aria-label="Edit SWS profile" onKeyDown={(event) => { if (event.key === 'Escape' && !saving) { event.preventDefault(); close(); } }}>
+    <section ref={editorRef} tabIndex={-1} className="command-contact-editor" aria-label="Edit SWS profile" onKeyDown={(event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      if (!saving) close();
+    }}>
       <div className="command-contact-editor-heading">
         <h3>Edit SWS profile</h3>
         <button
