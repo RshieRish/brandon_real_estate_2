@@ -1,6 +1,9 @@
+from typing import Annotated
+
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+
 from config import settings
 
 ADMIN_SESSION_TOKEN_TYPE = "admin_session"
@@ -12,8 +15,25 @@ _LEGACY_ADMIN_CLAIMS = frozenset(
 bearer = HTTPBearer(auto_error=False)
 
 
+def _canonical_admin_subject(claims: dict[str, object]) -> str:
+    subject = claims.get("sub")
+    if (
+        type(subject) is not str
+        or not 1 <= len(subject) <= 255
+        or not subject.isascii()
+        or not subject.isdigit()
+        or int(subject) <= 0
+        or subject != str(int(subject))
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid administrator subject",
+        )
+    return subject
+
+
 def require_admin(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),  # noqa: B008
 ):
     if credentials is None:
         raise HTTPException(
@@ -39,18 +59,7 @@ def require_admin(
             detail="Admin session expiration required",
         )
 
-    subject = payload.get("sub")
-    if (
-        not isinstance(subject, str)
-        or not subject.isascii()
-        or not subject.isdigit()
-        or int(subject) <= 0
-        or subject != str(int(subject))
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin subject",
-        )
+    _canonical_admin_subject(payload)
 
     explicit_admin_session = (
         payload.get("token_type") == ADMIN_SESSION_TOKEN_TYPE
@@ -68,3 +77,12 @@ def require_admin(
         )
 
     return payload
+
+
+async def require_admin_subject(
+    claims: dict[str, object] = Depends(require_admin),  # noqa: B008
+) -> str:
+    return _canonical_admin_subject(claims)
+
+
+AdminSubject = Annotated[str, Depends(require_admin_subject)]

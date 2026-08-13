@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt
-import pytest
 
 from config import settings
-from middleware.auth import require_admin
+from middleware.auth import (
+    _canonical_admin_subject,
+    require_admin,
+    require_admin_subject,
+)
 from models.admin_user import AdminUser
 from routers.auth import login, pwd_context
 from schemas.auth import LoginRequest
@@ -124,3 +128,45 @@ def test_require_admin_rejects_missing_or_noncanonical_subject(subject):
         require_admin(credentials_for(payload))
 
     assert error.value.status_code in {401, 403}
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [None, "", "0", "-1", "+1", "01", " 17", "17 ", "١٧", 17, True],
+)
+def test_canonical_admin_subject_rejects_every_noncanonical_value(subject):
+    with pytest.raises(HTTPException) as error:
+        _canonical_admin_subject({"sub": subject})
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Invalid administrator subject"
+
+
+def test_canonical_admin_subject_preserves_valid_value_through_255_digits():
+    subject = "1" + "0" * 254
+
+    assert _canonical_admin_subject({"sub": subject}) == subject
+
+
+def test_require_admin_rejects_overlong_subject_before_integer_conversion():
+    subject = "1" * 5_000
+
+    with pytest.raises(HTTPException) as error:
+        require_admin(
+            credentials_for(
+                {
+                    "sub": subject,
+                    "token_type": "admin_session",
+                    "scope": "admin",
+                }
+            )
+        )
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Invalid administrator subject"
+
+
+async def test_require_admin_subject_returns_the_same_canonical_string():
+    subject = "17"
+
+    assert await require_admin_subject({"sub": subject}) is subject
