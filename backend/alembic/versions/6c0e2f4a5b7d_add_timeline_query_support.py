@@ -14,6 +14,7 @@ branch_labels = None
 depends_on = None
 
 _PLACEHOLDERS = frozenset({"", "--", "—", "n/a", "none", "null"})
+_BACKFILL_BATCH_SIZE = 1_000
 
 
 def _canonical_email(value: object) -> str | None:
@@ -36,17 +37,52 @@ def _canonical_email(value: object) -> str | None:
 
 def _backfill(table_name: str) -> None:
     connection = op.get_bind()
-    rows = connection.execute(
-        sa.text(f"SELECT id, email FROM {table_name} ORDER BY id")
-    )
     update_statement = sa.text(
         f"UPDATE {table_name} SET normalized_email = :normalized WHERE id = :id"
     )
-    for row in rows:
+    last_id = 0
+    while True:
+        rows = connection.execute(
+            sa.text(
+                f"SELECT id, email FROM {table_name} "
+                "WHERE id > :last_id ORDER BY id LIMIT :batch_size"
+            ),
+            {"last_id": last_id, "batch_size": _BACKFILL_BATCH_SIZE},
+        ).all()
+        if not rows:
+            return
         connection.execute(
             update_statement,
-            {"id": row.id, "normalized": _canonical_email(row.email)},
+            [
+                {"id": row.id, "normalized": _canonical_email(row.email)}
+                for row in rows
+            ],
         )
+        last_id = rows[-1].id
+        if len(rows) < _BACKFILL_BATCH_SIZE:
+            return
+
+
+def _verify_backfill(table_name: str) -> None:
+    connection = op.get_bind()
+    last_id = 0
+    while True:
+        rows = connection.execute(
+            sa.text(
+                f"SELECT id, email, normalized_email FROM {table_name} "
+                "WHERE id > :last_id ORDER BY id LIMIT :batch_size"
+            ),
+            {"last_id": last_id, "batch_size": _BACKFILL_BATCH_SIZE},
+        ).all()
+        if not rows:
+            return
+        if any(
+            row.normalized_email != _canonical_email(row.email) for row in rows
+        ):
+            raise RuntimeError("canonical-email backfill verification failed")
+        last_id = rows[-1].id
+        if len(rows) < _BACKFILL_BATCH_SIZE:
+            return
 
 
 def upgrade() -> None:
@@ -66,6 +102,8 @@ def upgrade() -> None:
 
     _backfill("crm_contacts")
     _backfill("bookings")
+    _verify_backfill("crm_contacts")
+    _verify_backfill("bookings")
 
     op.create_index(
         "ix_crm_contacts_normalized_email_id",

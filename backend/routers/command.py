@@ -16,6 +16,7 @@ from models.funnel import Funnel
 from config import settings
 from services.gemini import generate_text_flash_lite
 from schemas.command import AgreementCreate, AgreementOut, AgreementStatusUpdate, ArchiveBundleImportRequest, ArchiveBundleImportResult, ContactCreate, ContactImportRequest, ContactImportResult, ContactOut, ContactStageUpdate, ContactUpdate, ContactWorkspaceOpportunityOut, FileAssetCreate, FileAssetOut, GoalCreate, GoalOut, GoalUpdate, ListingCreate, ListingOut, ListingStatusUpdate, NamedRecordCreate, NamedRecordOut, NoteCreate, OpportunityCreate, OpportunityOut, OpportunityUpdate, OverviewOut, ReferralCreate, ReferralOut, ReferralUpdate, RelationshipCreate, RelationshipOut, SavedSearchCreate, SmartPlanEnrollmentCreate, SmartPlanEnrollmentUpdate, SmartPlanStatusUpdate, SmartPlanStepCreate, TagCreate, TaskCreate, TaskLinkCreate, TaskOut, TaskUpdate, TemplateCreate, TemplateOut, TemplateUpdate
+from services.command_contact_identity import canonical_email
 from services.command_file_storage import upload_command_file
 from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
@@ -30,6 +31,29 @@ async def _count(db: AsyncSession, model, *where) -> int:
     query = select(func.count()).select_from(model)
     if where: query = query.where(*where)
     return int((await db.execute(query)).scalar_one())
+
+
+async def _contacts_by_normalized_emails(
+    db: AsyncSession, values: set[str]
+) -> dict[str, CRMContact]:
+    """Load only explicitly referenced canonical primary emails, in safe batches."""
+    contacts: dict[str, CRMContact] = {}
+    ordered = sorted(values)
+    for start in range(0, len(ordered), 500):
+        batch = ordered[start : start + 500]
+        rows = (
+            await db.scalars(
+                select(CRMContact)
+                .where(CRMContact.normalized_email.in_(batch))
+                .order_by(CRMContact.id)
+            )
+        ).all()
+        for contact in rows:
+            if canonical_email(contact.email) != contact.normalized_email:
+                raise RuntimeError("contact email normalization is invalid")
+            assert contact.normalized_email is not None
+            contacts.setdefault(contact.normalized_email, contact)
+    return contacts
 
 
 @router.get("/overview", response_model=OverviewOut)
@@ -223,16 +247,37 @@ async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
     return {"created": created, "timeline_backfilled": backfilled, "total_legacy_leads": len(leads)}
 
 @router.post("/contacts/import", response_model=ContactImportResult)
-async def import_contacts(payload:ContactImportRequest,db:AsyncSession=Depends(get_db)):
-    created=0;skipped=0
+async def import_contacts(
+    payload: ContactImportRequest, db: AsyncSession = Depends(get_db)
+):
+    created = 0
+    skipped = 0
+    canonical_emails = {
+        canonical
+        for row in payload.contacts
+        if (canonical := canonical_email(row.email)) is not None
+    }
+    contacts_by_email = await _contacts_by_normalized_emails(db, canonical_emails)
     for row in payload.contacts:
-        existing=None
-        if row.email:
-            existing=(await db.execute(select(CRMContact).where(func.lower(CRMContact.email) == row.email.strip().lower()))).scalar_one_or_none()
-        if existing: skipped+=1; continue
-        contact=CRMContact(**row.model_dump());db.add(contact);await db.flush()
-        db.add(CRMActivity(contact_id=contact.id,kind="contact_imported",summary="Imported through internal CRM import"));created+=1
-    await db.flush();return {"created":created,"skipped_duplicates":skipped}
+        canonical = canonical_email(row.email)
+        if canonical is not None and canonical in contacts_by_email:
+            skipped += 1
+            continue
+        contact = CRMContact(**row.model_dump())
+        db.add(contact)
+        await db.flush()
+        if canonical is not None:
+            contacts_by_email[canonical] = contact
+        db.add(
+            CRMActivity(
+                contact_id=contact.id,
+                kind="contact_imported",
+                summary="Imported through internal CRM import",
+            )
+        )
+        created += 1
+    await db.flush()
+    return {"created": created, "skipped_duplicates": skipped}
 
 
 @router.post("/archive/import", response_model=ArchiveBundleImportResult)
@@ -240,23 +285,39 @@ async def import_archive_bundle(payload: ArchiveBundleImportRequest, db: AsyncSe
     created = {key: 0 for key in ("contacts", "tasks", "notes", "opportunities", "referrals", "listings", "templates", "agreements")}
     skipped = {key: 0 for key in created}
     unresolved = 0
-    contacts_by_email: dict[str, CRMContact] = {}
-    existing_contacts = (await db.execute(select(CRMContact).where(CRMContact.email.is_not(None)))).scalars().all()
-    for contact in existing_contacts:
-        contacts_by_email[contact.email.strip().lower()] = contact
+    referenced_emails = {
+        canonical
+        for value in (
+            *(row.email for row in payload.contacts),
+            *(row.contact_email for row in payload.tasks),
+            *(row.contact_email for row in payload.notes),
+            *(
+                email
+                for row in payload.opportunities
+                for email in row.contact_emails
+            ),
+            *(row.contact_email for row in payload.referrals),
+            *(row.contact_email for row in payload.agreements),
+        )
+        if (canonical := canonical_email(value)) is not None
+    }
+    contacts_by_email = await _contacts_by_normalized_emails(db, referenced_emails)
     for row in payload.contacts:
-        email = row.email.strip().lower() if row.email else None
-        if email and email in contacts_by_email:
+        email = canonical_email(row.email)
+        if email is not None and email in contacts_by_email:
             skipped["contacts"] += 1
             continue
         contact = CRMContact(**row.model_dump())
-        db.add(contact); await db.flush()
-        if email: contacts_by_email[email] = contact
+        db.add(contact)
+        await db.flush()
+        if email is not None:
+            contacts_by_email[email] = contact
         db.add(CRMActivity(contact_id=contact.id, kind="archive_contact_imported", summary="Imported from permitted archive bundle"))
         created["contacts"] += 1
 
     def resolve(email: str | None):
-        return contacts_by_email.get(email.strip().lower()) if email else None
+        normalized = canonical_email(email)
+        return contacts_by_email.get(normalized) if normalized is not None else None
 
     templates_by_name = {item.name.strip().lower(): item for item in (await db.execute(select(CRMAgreementTemplate))).scalars().all()}
     for row in payload.templates:

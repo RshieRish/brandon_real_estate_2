@@ -169,6 +169,86 @@ def test_timeline_revision_backfills_exact_canonical_email_and_downgrades_lossle
         }
 
 
+def test_timeline_revision_backfill_and_verification_use_thousand_row_keyset_batches():
+    revision = _load_revision()
+    engine = sa.create_engine("sqlite://")
+    statements: list[tuple[str, object]] = []
+
+    def capture(_connection, _cursor, statement, parameters, _context, _many):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("SELECT id, email"):
+            statements.append((normalized, parameters))
+
+    sa.event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with engine.connect() as connection:
+            _create_prior_schema(connection)
+            connection.execute(
+                sa.text(
+                    "INSERT INTO crm_contacts (id, email) VALUES (:id, :email)"
+                ),
+                [
+                    {"id": row_id, "email": f"row-{row_id}@example.test"}
+                    for row_id in range(1, 2_002)
+                ],
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO bookings (id, lead_id, email, scheduled_at) "
+                    "VALUES (:id, NULL, :email, '2026-08-13 12:00:00')"
+                ),
+                [
+                    {"id": row_id, "email": f"row-{row_id}@example.test"}
+                    for row_id in range(1, 2_002)
+                ],
+            )
+            connection.commit()
+            revision.op = Operations(MigrationContext.configure(connection))
+            revision.upgrade()
+            connection.commit()
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", capture)
+
+    assert len(statements) == 12
+    for table_name in ("crm_contacts", "bookings"):
+        table_statements = [
+            (statement, parameters)
+            for statement, parameters in statements
+            if f"FROM {table_name}" in statement
+        ]
+        assert len(table_statements) == 6
+        assert all("WHERE id >" in statement for statement, _ in table_statements)
+        assert all("ORDER BY id" in statement for statement, _ in table_statements)
+        assert all("LIMIT" in statement for statement, _ in table_statements)
+        assert all(1_000 in tuple(parameters) for _, parameters in table_statements)
+
+
+def test_timeline_revision_verification_refuses_derived_email_drift():
+    revision = _load_revision()
+    engine = sa.create_engine("sqlite://")
+    with engine.connect() as connection:
+        _create_prior_schema(connection)
+        connection.execute(
+            sa.text("INSERT INTO crm_contacts (id, email) VALUES (1, :email)"),
+            {"email": "fixture@example.test"},
+        )
+        with connection.begin_nested():
+            revision.op = Operations(MigrationContext.configure(connection))
+            with revision.op.batch_alter_table("crm_contacts") as batch_op:
+                batch_op.add_column(
+                    sa.Column("normalized_email", sa.String(255), nullable=True)
+                )
+            revision._backfill("crm_contacts")
+            connection.execute(
+                sa.text(
+                    "UPDATE crm_contacts SET normalized_email = 'drift@example.test' "
+                    "WHERE id = 1"
+                )
+            )
+            with pytest.raises(RuntimeError, match="verification failed"):
+                revision._verify_backfill("crm_contacts")
+
+
 def test_timeline_revision_refuses_offline_upgrade_before_emitting_sql():
     revision = _load_revision()
     output = StringIO()

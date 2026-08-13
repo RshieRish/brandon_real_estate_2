@@ -425,6 +425,111 @@ async def test_timeline_rejects_source_corruption_outside_page_and_before_cursor
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "missing_source",
+        "wrong_source_system",
+        "wrong_source_module",
+        "wrong_source_kind",
+        "wrong_event_system",
+        "missing_occurrence",
+        "wrong_occurrence_owner",
+        "wrong_occurrence_section",
+        "wrong_position_owner",
+    ),
+)
+async def test_timeline_rejects_recovered_source_corruption_without_an_activity(
+    timeline_db: AsyncSession,
+    corruption: str,
+):
+    first = CRMContact(id=1, first_name="First", last_name="Contact", stage="lead")
+    second = CRMContact(id=2, first_name="Second", last_name="Contact", stage="lead")
+    source = _source(1)
+    if corruption == "wrong_source_system":
+        source.source_system = "internal_crm"
+    elif corruption == "wrong_source_module":
+        source.module = "tasks"
+    elif corruption == "wrong_source_kind":
+        source.record_kind = "contact_note"
+    ownership = _timeline_ownership(
+        source.id,
+        contact_id=(second.id if corruption == "wrong_occurrence_owner" else first.id),
+        section_name=("notes" if corruption == "wrong_occurrence_section" else "timeline"),
+        position_contact_id=(second.id if corruption == "wrong_position_owner" else None),
+    )
+    if corruption == "missing_occurrence":
+        ownership = ownership[:-1]
+    rows: list[object] = [first, second, *ownership]
+    if corruption != "missing_source":
+        rows.append(source)
+    rows.append(
+        CRMContactTimelineEvent(
+            id=1,
+            contact_id=first.id,
+            source_record_id=source.id,
+            source_system=(
+                "internal_crm" if corruption == "wrong_event_system" else "kw_command"
+            ),
+            source_event_key="synthetic:recovered-corruption",
+            kind="email",
+            title="Recovered event",
+            occurred_at=BASE_TIME,
+            attributes_json="{}",
+        )
+    )
+    await _flush(timeline_db, *rows)
+
+    with pytest.raises(ContactTimelineIntegrityError) as error:
+        await list_contact_timeline(
+            timeline_db, first.id, cursor=None, page_size=10
+        )
+    assert "synthetic" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activity_owner", (None, 2))
+async def test_timeline_rejects_mirror_owned_by_null_or_another_contact(
+    timeline_db: AsyncSession,
+    activity_owner: int | None,
+):
+    first = CRMContact(id=1, first_name="First", last_name="Contact", stage="lead")
+    second = CRMContact(id=2, first_name="Second", last_name="Contact", stage="lead")
+    source = _source(1)
+    await _flush(
+        timeline_db,
+        first,
+        second,
+        source,
+        *_timeline_ownership(source.id, contact_id=first.id),
+        CRMContactTimelineEvent(
+            id=1,
+            contact_id=first.id,
+            source_record_id=source.id,
+            source_system="kw_command",
+            source_event_key="synthetic:mirror-owner",
+            kind="email",
+            title="Recovered event",
+            occurred_at=BASE_TIME,
+            attributes_json="{}",
+        ),
+        CRMActivity(
+            id=1,
+            contact_id=activity_owner,
+            source_record_id=source.id,
+            kind="email",
+            summary="Invalid mirror owner",
+            created_at=BASE_TIME,
+        ),
+    )
+
+    with pytest.raises(ContactTimelineIntegrityError):
+        await list_contact_timeline(
+            timeline_db, first.id, cursor=None, page_size=10
+        )
+
+
+@pytest.mark.asyncio
 async def test_booking_linkage_is_lead_exclusive_when_contact_has_a_lead(
     timeline_db: AsyncSession,
 ):
@@ -479,6 +584,114 @@ async def test_booking_linkage_is_lead_exclusive_when_contact_has_a_lead(
     assert [row.key for row in page.rows if row.origin is TimelineOrigin.BOOKING] == [
         "booking:1"
     ]
+
+
+@pytest.mark.asyncio
+async def test_lead_booking_drift_is_rejected_before_cursor_and_beyond_page(
+    timeline_db: AsyncSession,
+):
+    await _flush(
+        timeline_db,
+        Lead(id=1, name="Exact lead", created_at=BASE_TIME),
+        CRMContact(
+            id=1,
+            lead_id=1,
+            first_name="Lead",
+            last_name="Backed",
+            stage="lead",
+        ),
+        Booking(
+            id=1,
+            lead_id=1,
+            name="Visible booking",
+            email="visible@example.test",
+            meeting_type="visible",
+            context="general",
+            scheduled_at=BASE_TIME,
+            notes="",
+        ),
+        Booking(
+            id=2,
+            lead_id=1,
+            name="Off-page booking",
+            email="private@example.test",
+            meeting_type="hidden",
+            context="general",
+            scheduled_at=BASE_TIME - timedelta(days=100),
+            notes="",
+        ),
+    )
+    await timeline_db.execute(
+        update(Booking)
+        .where(Booking.id == 2)
+        .values(normalized_email="drift@example.test")
+    )
+    timeline_db.expire_all()
+    cursor = encode_timeline_cursor(
+        TimelineCursorV1(0, BASE_TIME - timedelta(days=50), 3, 999)
+    )
+
+    with pytest.raises(ContactTimelineIntegrityError) as error:
+        await list_contact_timeline(
+            timeline_db, 1, cursor=cursor, page_size=1
+        )
+    assert "private@example.test" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_lead_booking_integrity_uses_thousand_row_keyset_batches(
+    timeline_db: AsyncSession,
+):
+    await _flush(
+        timeline_db,
+        Lead(id=1, name="Exact lead", created_at=BASE_TIME),
+        CRMContact(
+            id=1,
+            lead_id=1,
+            first_name="Lead",
+            last_name="Backed",
+            stage="lead",
+        ),
+        *(
+            Booking(
+                id=index,
+                lead_id=1,
+                name=f"Booking {index}",
+                email=f"booking-{index}@example.test",
+                meeting_type="fixture",
+                context="general",
+                scheduled_at=BASE_TIME - timedelta(minutes=index),
+                notes="",
+            )
+            for index in range(1, 2_002)
+        ),
+    )
+
+    statements: list[tuple[str, object]] = []
+
+    def capture(_connection, _cursor, statement, parameters, _context, _many):
+        normalized = " ".join(statement.split())
+        if normalized.startswith(
+            "SELECT bookings.id, bookings.email, bookings.normalized_email"
+        ):
+            statements.append((normalized, parameters))
+
+    assert timeline_db.bind is not None
+    event.listen(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        page = await list_contact_timeline(
+            timeline_db, 1, cursor=None, page_size=1
+        )
+    finally:
+        event.remove(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    assert [row.key for row in page.rows] == ["lead:1"]
+    assert len(statements) == 3
+    assert all("bookings.lead_id =" in statement for statement, _ in statements)
+    assert all("bookings.id >" in statement for statement, _ in statements)
+    assert all("ORDER BY bookings.id" in statement for statement, _ in statements)
+    assert all("LIMIT" in statement for statement, _ in statements)
+    assert all(1_000 in tuple(parameters) for _, parameters in statements)
 
 
 @pytest.mark.asyncio
@@ -764,6 +977,9 @@ async def _seed_ordering_rows(db: AsyncSession, *, reverse: bool = False) -> Non
         _source(1),
         _source(2),
         _source(3),
+        *_timeline_ownership(1, contact_id=1),
+        *_timeline_ownership(2, contact_id=1),
+        *_timeline_ownership(3, contact_id=1),
         CRMContactTimelineEvent(
             id=2,
             contact_id=1,
@@ -1078,7 +1294,7 @@ async def test_origin_queries_are_bounded_and_mirrors_do_not_underfill_page(
             )
         )
     ]
-    assert len(origin_statements) == 4
+    assert len(origin_statements) == 6
     assert all("LIMIT" in statement.upper() for statement in origin_statements)
 
     keys = [row.key for row in page.rows]

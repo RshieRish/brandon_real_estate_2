@@ -81,6 +81,7 @@ async def list_contact_timeline(
     if contact.lead_id is not None and lead is None:
         raise ContactTimelineIntegrityError("linked lead is unavailable")
     _require_contact_email_integrity(contact)
+    await _require_recovered_source_integrity(db, contact_id=contact.id)
     await _require_activity_source_integrity(db, contact_id=contact.id)
 
     fetch_limit = page_size + 1
@@ -260,9 +261,14 @@ async def _require_activity_source_integrity(
             CRMContactTimelineEvent.source_record_id == CRMActivity.source_record_id,
         )
         .where(
-            CRMActivity.contact_id == contact_id,
             CRMActivity.source_record_id.is_not(None),
             or_(
+                CRMActivity.contact_id == contact_id,
+                CRMContactTimelineEvent.contact_id == contact_id,
+            ),
+            or_(
+                CRMActivity.contact_id.is_(None),
+                CRMActivity.contact_id != contact_id,
                 CRMSourceRecord.id.is_(None),
                 CRMSourceRecord.source_system != "kw_command",
                 CRMSourceRecord.module != "contacts",
@@ -283,6 +289,54 @@ async def _require_activity_source_integrity(
     if (await db.scalar(invalid_source)) is not None:
         raise ContactTimelineIntegrityError(
             "timeline activity source integrity is invalid"
+        )
+
+
+async def _require_recovered_source_integrity(
+    db: AsyncSession, *, contact_id: int
+) -> None:
+    invalid_source = (
+        select(CRMContactTimelineEvent.id)
+        .outerjoin(
+            CRMSourceRecord,
+            CRMSourceRecord.id == CRMContactTimelineEvent.source_record_id,
+        )
+        .outerjoin(
+            CRMContactSourceOccurrence,
+            CRMContactSourceOccurrence.source_record_id
+            == CRMContactTimelineEvent.source_record_id,
+        )
+        .outerjoin(
+            CRMContactSectionCapture,
+            CRMContactSectionCapture.id
+            == CRMContactSourceOccurrence.section_capture_id,
+        )
+        .outerjoin(
+            CRMContactCapturePosition,
+            CRMContactCapturePosition.id
+            == CRMContactSectionCapture.capture_position_id,
+        )
+        .where(
+            CRMContactTimelineEvent.contact_id == contact_id,
+            or_(
+                CRMSourceRecord.id.is_(None),
+                CRMSourceRecord.source_system != "kw_command",
+                CRMSourceRecord.module != "contacts",
+                CRMSourceRecord.record_kind != "contact_timeline_event",
+                CRMContactTimelineEvent.source_system != "kw_command",
+                CRMContactSourceOccurrence.id.is_(None),
+                CRMContactSourceOccurrence.contact_id != contact_id,
+                CRMContactSectionCapture.id.is_(None),
+                CRMContactSectionCapture.section_name != "timeline",
+                CRMContactCapturePosition.id.is_(None),
+                CRMContactCapturePosition.contact_id != contact_id,
+            ),
+        )
+        .limit(1)
+    )
+    if (await db.scalar(invalid_source)) is not None:
+        raise ContactTimelineIntegrityError(
+            "recovered timeline source integrity is invalid"
         )
 
 
@@ -329,6 +383,7 @@ async def _booking_candidates(
     limit: int,
 ) -> tuple[_TimelineCandidate, ...]:
     if contact.lead_id is not None:
+        await _require_lead_booking_email_integrity(db, lead_id=contact.lead_id)
         return await _lead_booking_candidates(
             db,
             lead_id=contact.lead_id,
@@ -345,6 +400,29 @@ async def _booking_candidates(
         cursor=cursor,
         limit=limit,
     )
+
+
+async def _require_lead_booking_email_integrity(
+    db: AsyncSession, *, lead_id: int
+) -> None:
+    last_id = 0
+    batch_size = 1_000
+    while True:
+        rows = (
+            await db.execute(
+                select(Booking.id, Booking.email, Booking.normalized_email)
+                .where(Booking.lead_id == lead_id, Booking.id > last_id)
+                .order_by(Booking.id)
+                .limit(batch_size)
+            )
+        ).all()
+        if any(canonical_email(row.email) != row.normalized_email for row in rows):
+            raise ContactTimelineIntegrityError(
+                "booking email normalization is invalid"
+            )
+        if not rows or len(rows) < batch_size:
+            return
+        last_id = rows[-1].id
 
 
 async def _lead_booking_candidates(
