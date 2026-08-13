@@ -203,9 +203,12 @@ def test_parser_uses_accessibility_snapshot_when_visible_text_is_absent(bundle):
 
 def test_parser_does_not_treat_supporting_html_and_text_as_extra_occurrences(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    assert Counter(record.record_kind for record in result.records)[
-        "contact_section_capture"
-    ] == 24
+    assert (
+        Counter(record.record_kind for record in result.records)[
+            "contact_section_capture"
+        ]
+        == 24
+    )
     assert result.metrics.duplicate_content_count == 1
 
 
@@ -215,24 +218,155 @@ def test_parser_emits_child_rows_with_truthful_evidence_and_stable_keys(bundle):
     task = next(
         record
         for record in result.records
-        if record.source_key.startswith(
-            "contact:63ac84e09655a08ec4d5d3ef:task:to_do:"
-        )
+        if record.source_key.startswith("contact:63ac84e09655a08ec4d5d3ef:task:to_do:")
     )
     smart_plan = next(
         record
         for record in result.records
-        if record.source_key.startswith(
-            "contact:63ac84e09655a08ec4d5d3ef:smart-plan:"
-        )
+        if record.source_key.startswith("contact:63ac84e09655a08ec4d5d3ef:smart-plan:")
     )
     assert note.evidence_level is EvidenceLevel.OBSERVED_RECORD
     assert task.evidence_level is EvidenceLevel.RENDERED_OCCURRENCE
     assert smart_plan.evidence_level is EvidenceLevel.RENDERED_OCCURRENCE
     assert task.payload["state"] == "to_do"
     assert note.artifact_paths == (
+        "kw_command_repaired/contacts/nested/0000001/notes.json",
+        "kw_command_repaired/contacts/sections/0000001/notes.html",
         "kw_command_repaired/contacts/sections/0000001/notes.json",
+        "kw_command_repaired/contacts/sections/0000001/notes.txt",
     )
+
+
+def test_completed_task_header_emits_every_rendered_completed_row(bundle):
+    result = ContactsParser().parse(bundle, "contacts-v1")
+    completed = [
+        record
+        for record in result.records
+        if record.record_kind == "contact_task"
+        and record.payload["state"] == "completed"
+    ]
+    assert len(completed) == 1
+    assert completed[0].display_label == "Fixture completed task"
+    assert completed[0].payload["values"] == {
+        "title": "Fixture completed task",
+        "assigned_to": "Fixture Owner",
+        "priority": "None",
+        "completed_date": "07/01/2026",
+        "due_date": "06/30/2026",
+        "completed_by": "Fixture Owner",
+        "state": "completed",
+    }
+    assert completed[0].evidence_level is EvidenceLevel.RENDERED_OCCURRENCE
+
+
+def test_accessibility_completed_table_emits_every_exposed_child_row(bundle):
+    def completed_table(payload):
+        payload.pop("rows", None)
+        payload["visible_text"] = None
+        payload[
+            "accessibility_snapshot"
+        ] = """- table:
+  - rowgroup:
+    - row "Task Sort Assigned To Priority Sort Date completed Sort Due Date Sort Completed by":
+  - rowgroup:
+    - row "First completed task BS Fixture Owner None 07/01/2026 06/30/2026 Fixture Owner":
+      - cell "First completed task":
+      - cell "BS Fixture Owner":
+      - cell "None":
+      - cell "07/01/2026":
+      - cell "06/30/2026":
+      - cell "Fixture Owner":
+    - row "Second completed task BS Fixture Owner High 07/02/2026 07/01/2026 Fixture Owner":
+      - cell "Second completed task":
+      - cell "BS Fixture Owner":
+      - cell "High":
+      - cell "07/02/2026":
+      - cell "07/01/2026":
+      - cell "Fixture Owner":
+"""
+
+    changed = replace_json_artifact(
+        bundle,
+        "kw_command_repaired/contacts/sections/0000002/tasks/completed.json",
+        completed_table,
+    )
+    result = ContactsParser().parse(changed, "contacts-v1")
+    completed = [
+        record
+        for record in result.records
+        if record.record_kind == "contact_task"
+        and record.payload["capture_ordinal"] == "0000002"
+        and record.payload["state"] == "completed"
+    ]
+    assert [record.display_label for record in completed] == [
+        "First completed task",
+        "Second completed task",
+    ]
+    assert [record.payload["values"]["completed_date"] for record in completed] == [
+        "07/01/2026",
+        "07/02/2026",
+    ]
+
+
+def test_only_profile_and_stable_note_id_are_observed_records(bundle):
+    result = ContactsParser().parse(bundle, "contacts-v1")
+    observed_children = [
+        record
+        for record in result.records
+        if record.record_kind not in {"contact_profile"}
+        and record.evidence_level is EvidenceLevel.OBSERVED_RECORD
+    ]
+    assert [
+        (record.record_kind, record.source_key) for record in observed_children
+    ] == [("contact_note", "contact:63ac84e09655a08ec4d5d3ef:note:note-1")]
+
+
+def test_stable_ids_outside_note_remain_rendered_occurrences(bundle):
+    def add_ids(payload):
+        for row in payload["rows"]:
+            row["id"] = "provider-row-id"
+
+    changed = bundle
+    for path in (
+        "kw_command_repaired/contacts/sections/0000001/timeline.json",
+        "kw_command_repaired/contacts/sections/0000001/smartplans.json",
+        "kw_command_repaired/contacts/sections/0000001/tasks/to_do.json",
+    ):
+        changed = replace_json_artifact(changed, path, add_ids)
+    result = ContactsParser().parse(changed, "contacts-v1")
+    rows = [
+        record
+        for record in result.records
+        if record.source_key.endswith("provider-row-id")
+    ]
+    assert {record.record_kind for record in rows} == {
+        "contact_timeline_event",
+        "contact_smart_plan",
+        "contact_task",
+    }
+    assert all(
+        record.evidence_level is EvidenceLevel.RENDERED_OCCURRENCE for record in rows
+    )
+
+
+def test_rendered_note_uses_matching_stable_nested_note_evidence(bundle):
+    def rendered_note(payload):
+        payload.pop("rows", None)
+        payload["visible_text"] = (
+            "Search Contacts\nAvery Lake\nNotes\nMost Recent\nAdd Note\n"
+            "NOTE\n3:11 PM\nCreated\nBy Fixture Owner\n"
+            "Fixture note\nSynthetic note body\nDelete\nEdit"
+        )
+
+    changed = replace_json_artifact(
+        bundle,
+        "kw_command_repaired/contacts/sections/0000001/notes.json",
+        rendered_note,
+    )
+    result = ContactsParser().parse(changed, "contacts-v1")
+    note = source_record(result, "contact:63ac84e09655a08ec4d5d3ef:note:note-1")
+    assert note.evidence_level is EvidenceLevel.OBSERVED_RECORD
+    assert note.payload["stable_id"] == "note-1"
 
 
 def test_parser_records_partial_section_quality_and_limitations(bundle):
@@ -304,8 +438,8 @@ def test_parser_extracts_timeline_rows_from_accessibility_capture(bundle):
         payload["accessibility_snapshot"] = (
             '- generic: Saved Searches\n- button "All Time": All Time\n'
             '- heading "Apr 2, 2026" [level=5]\n- generic: Note\n'
-            '- generic: 8:20 PM\n- generic: Created\n'
-            '- generic: By Fixture Owner\n- separator\n- generic: Fixture note\n'
+            "- generic: 8:20 PM\n- generic: Created\n"
+            "- generic: By Fixture Owner\n- separator\n- generic: Fixture note\n"
             '- heading "Notifications" [level=2]'
         )
 
@@ -324,6 +458,66 @@ def test_parser_extracts_timeline_rows_from_accessibility_capture(bundle):
     assert len(events) == 1
     assert events[0].payload["values"]["kind"] == "NOTE"
     assert "Fixture note" in events[0].payload["values"]["raw_lines"]
+
+
+@pytest.mark.parametrize(
+    ("path", "empty_text", "source_key"),
+    [
+        (
+            "kw_command_repaired/contacts/sections/0000002/smartplans.json",
+            "It looks like Avery Lake doesn’t have any SmartPlans yet.",
+            "position:0000002:section:smart_plans",
+        ),
+        (
+            "kw_command_repaired/contacts/sections/0000002/tasks/to_do.json",
+            "No Tasks\nCreate a new task to start a to-do list for this Contact.",
+            "position:0000002:section:tasks_to_do",
+        ),
+        (
+            "kw_command_repaired/contacts/sections/0000002/notes.json",
+            "Most Recent\nAdd Note",
+            "position:0000002:section:notes",
+        ),
+    ],
+)
+def test_real_empty_state_variants_remain_complete_empty_sections(
+    bundle, path, empty_text, source_key
+):
+    def replace_empty(payload):
+        payload["visible_text"] = f"Search Contacts\nAvery Lake\n{empty_text}"
+        payload.pop("accessibility_snapshot", None)
+        payload.pop("rows", None)
+
+    changed = replace_json_artifact(bundle, path, replace_empty)
+    result = ContactsParser().parse(changed, "contacts-v1")
+    section = source_record(result, source_key)
+    assert section.payload["is_empty"] is True
+    assert section.capture_quality is CaptureQuality.COMPLETE
+    assert section.payload["row_count"] == 0
+
+
+def test_section_and_child_link_all_deterministic_supporting_evidence(bundle):
+    result = ContactsParser().parse(bundle, "contacts-v1")
+    section = source_record(result, "position:0000001:section:notes")
+    child = source_record(result, "contact:63ac84e09655a08ec4d5d3ef:note:note-1")
+    expected = (
+        "kw_command_repaired/contacts/nested/0000001/notes.json",
+        "kw_command_repaired/contacts/sections/0000001/notes.html",
+        "kw_command_repaired/contacts/sections/0000001/notes.json",
+        "kw_command_repaired/contacts/sections/0000001/notes.txt",
+    )
+    assert section.artifact_paths == expected
+    assert child.artifact_paths == expected
+
+
+def test_profile_links_all_contributing_structured_and_rendered_artifacts(bundle):
+    result = ContactsParser().parse(bundle, "contacts-v1")
+    profile = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    assert profile.artifact_paths == (
+        "kw_command_repaired/contacts/details/0000001.html",
+        "kw_command_repaired/contacts/nested/0000001/contact.json",
+        "kw_command_repaired/contacts/sections/0000001/timeline.json",
+    )
 
 
 def test_parser_propagates_version_and_orders_output_stably(bundle):

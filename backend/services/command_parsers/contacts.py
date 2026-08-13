@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
+import json
 import re
 
 from models.command_provenance import CaptureQuality, EvidenceLevel
@@ -14,6 +16,7 @@ from services.command_parsers.contact_extractors import (
     ContactParseError,
     ParsedCelebration,
     ParsedContactProfile,
+    ParsedOccurrence,
     ParsedSection,
     canonical_occurrence_key,
     parse_contact_profile,
@@ -98,15 +101,45 @@ class ContactsParser:
                 )
                 for section in CONTACT_SECTIONS
             )
+            parsed_sections = tuple(
+                _associate_stable_note_evidence(profile, section, artifacts_by_path)
+                for section in parsed_sections
+            )
             records.append(_profile_draft(profile, parser_version))
-            records.append(_position_draft(profile, parsed_sections, parser_version))
+            section_evidence = {
+                section.section: _section_evidence_paths(
+                    section.artifact_path, artifacts_by_path
+                )
+                for section in parsed_sections
+            }
+            records.append(
+                _position_draft(
+                    profile,
+                    parsed_sections,
+                    tuple(
+                        sorted(
+                            {
+                                path
+                                for paths in section_evidence.values()
+                                for path in paths
+                            }
+                        )
+                    ),
+                    parser_version,
+                )
+            )
             for parsed_section in parsed_sections:
                 section_counts[parsed_section.section] += 1
+                artifact_paths = section_evidence[parsed_section.section]
                 records.append(
-                    _section_draft(profile, parsed_section, parser_version)
+                    _section_draft(
+                        profile, parsed_section, artifact_paths, parser_version
+                    )
                 )
                 records.extend(
-                    _occurrence_drafts(profile, parsed_section, parser_version)
+                    _occurrence_drafts(
+                        profile, parsed_section, artifact_paths, parser_version
+                    )
                 )
 
         supporting_hashes: set[str] = set()
@@ -189,6 +222,7 @@ def _profile_draft(
 def _position_draft(
     profile: ParsedContactProfile,
     sections: tuple[ParsedSection, ...],
+    artifact_paths: tuple[str, ...],
     parser_version: str,
 ) -> SourceRecordDraft:
     quality = _lowest_quality(section.capture_quality for section in sections)
@@ -205,7 +239,7 @@ def _position_draft(
             "source_url": profile.source_url,
             "section_names": CONTACT_SECTIONS,
         },
-        artifact_paths=tuple(section.artifact_path for section in sections),
+        artifact_paths=artifact_paths,
         parser_version=parser_version,
         capture_quality=quality,
         captured_at=profile.captured_at,
@@ -215,15 +249,14 @@ def _position_draft(
 def _section_draft(
     profile: ParsedContactProfile,
     section: ParsedSection,
+    artifact_paths: tuple[str, ...],
     parser_version: str,
 ) -> SourceRecordDraft:
     return SourceRecordDraft(
         source_system="kw_command",
         module="contacts",
         record_kind="contact_section_capture",
-        source_key=(
-            f"position:{profile.capture_ordinal}:section:{section.section}"
-        ),
+        source_key=(f"position:{profile.capture_ordinal}:section:{section.section}"),
         evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
         display_label=(
             f"{profile.display_name} · {section.section.replace('_', ' ').title()}"
@@ -239,7 +272,7 @@ def _section_draft(
             "limitations": section.limitations,
             "raw_fields": section.raw_fields,
         },
-        artifact_paths=(section.artifact_path,),
+        artifact_paths=artifact_paths,
         parser_version=parser_version,
         capture_quality=section.capture_quality,
         captured_at=section.captured_at,
@@ -249,6 +282,7 @@ def _section_draft(
 def _occurrence_drafts(
     profile: ParsedContactProfile,
     section: ParsedSection,
+    artifact_paths: tuple[str, ...],
     parser_version: str,
 ) -> tuple[SourceRecordDraft, ...]:
     values = []
@@ -263,7 +297,7 @@ def _occurrence_drafts(
         )
         evidence = (
             EvidenceLevel.OBSERVED_RECORD
-            if occurrence.stable_id is not None
+            if section.section == "notes" and occurrence.stable_id is not None
             else EvidenceLevel.RENDERED_OCCURRENCE
         )
         values.append(
@@ -287,7 +321,7 @@ def _occurrence_drafts(
                     ),
                     "values": occurrence.values,
                 },
-                artifact_paths=(section.artifact_path,),
+                artifact_paths=artifact_paths,
                 parser_version=parser_version,
                 capture_quality=section.capture_quality,
                 captured_at=section.captured_at,
@@ -344,3 +378,99 @@ def _is_supporting_artifact(source_path: str) -> bool:
     if "/sections/" not in source_path:
         return False
     return source_path.endswith((".html", ".txt", ".snapshot.txt"))
+
+
+def _section_evidence_paths(
+    canonical_path: str,
+    artifacts: Mapping[str, ArchiveArtifactInput],
+) -> tuple[str, ...]:
+    if not canonical_path.endswith(".json"):
+        raise ContactParseError(
+            f"canonical section artifact must be JSON: {canonical_path}"
+        )
+    stem = canonical_path.removesuffix(".json")
+    candidates = [
+        f"{stem}.html",
+        canonical_path,
+        f"{stem}.snapshot.txt",
+        f"{stem}.txt",
+    ]
+    section_match = re.fullmatch(
+        rf"{_CONTACT_ROOT}/sections/(\d{{7}})/(notes|timeline)\.json",
+        canonical_path,
+    )
+    if section_match:
+        ordinal, nested_name = section_match.groups()
+        candidates.append(f"{_CONTACT_ROOT}/nested/{ordinal}/{nested_name}.json")
+    return tuple(sorted(path for path in candidates if path in artifacts))
+
+
+def _associate_stable_note_evidence(
+    profile: ParsedContactProfile,
+    section: ParsedSection,
+    artifacts: Mapping[str, ArchiveArtifactInput],
+) -> ParsedSection:
+    if section.section != "notes" or not section.occurrences:
+        return section
+    nested_path = f"{_CONTACT_ROOT}/nested/{profile.capture_ordinal}/notes.json"
+    artifact = artifacts.get(nested_path)
+    if artifact is None or artifact.content_bytes is None:
+        return section
+    try:
+        payload = json.loads(artifact.content_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContactParseError(
+            f"invalid structured note artifact: {nested_path}"
+        ) from exc
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise ContactParseError(f"invalid structured note payload: {nested_path}")
+    raw_data = payload["data"]
+    assert isinstance(raw_data, list)
+    candidates: list[tuple[str, tuple[str, ...]]] = []
+    for raw_note in raw_data:
+        if not isinstance(raw_note, Mapping):
+            raise ContactParseError(f"invalid structured note row: {nested_path}")
+        stable_id = raw_note.get("id")
+        if not isinstance(stable_id, str) or not stable_id.strip():
+            continue
+        matching_values = tuple(
+            normalized
+            for key in ("title", "note")
+            if isinstance((value := raw_note.get(key)), str)
+            and (normalized := _normalized_evidence_value(value))
+        )
+        if matching_values:
+            candidates.append((stable_id.strip(), matching_values))
+
+    unused = set(range(len(candidates)))
+    associated: list[ParsedOccurrence] = []
+    for occurrence in section.occurrences:
+        if occurrence.stable_id is not None:
+            associated.append(occurrence)
+            continue
+        raw_lines = occurrence.values.get("raw_lines", ())
+        if not isinstance(raw_lines, Sequence) or isinstance(raw_lines, str | bytes):
+            raw_lines = ()
+        observed_values = {_normalized_evidence_value(occurrence.display_label)}
+        observed_values.update(
+            _normalized_evidence_value(value)
+            for value in raw_lines
+            if isinstance(value, str)
+        )
+        observed_values.discard("")
+        matches = [
+            index
+            for index in sorted(unused)
+            if any(value in observed_values for value in candidates[index][1])
+        ]
+        if len(matches) == 1:
+            match = matches[0]
+            unused.remove(match)
+            associated.append(replace(occurrence, stable_id=candidates[match][0]))
+        else:
+            associated.append(occurrence)
+    return replace(section, occurrences=tuple(associated))
+
+
+def _normalized_evidence_value(value: str) -> str:
+    return " ".join(value.casefold().split())

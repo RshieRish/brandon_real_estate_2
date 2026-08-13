@@ -62,17 +62,7 @@ _OVERLAY_BOUNDARIES = (
     "\nKWIQ\nChat\nHistory\n",
     "\nAI Information Accuracy\n",
     "\nNotifications\nUnread\nRead\n",
-    "\n- heading \"Notifications\"",
-)
-_EMPTY_MARKERS = (
-    "no activities yet",
-    "no opportunities",
-    "no smartplans",
-    "no notes yet",
-    "no saved searches yet",
-    "no to do tasks",
-    "no completed tasks",
-    "no archived tasks",
+    '\n- heading "Notifications"',
 )
 _EVENT_KINDS = frozenset(
     {"CALL", "EMAIL", "TEXT", "SMARTPLANS", "NOTE", "SYSTEM", "CONTACT"}
@@ -163,7 +153,9 @@ def strip_application_boilerplate(text: str) -> str:
     """Remove overlays after their first known boundary without stripping the app header."""
     if not isinstance(text, str):
         raise ContactParseError("captured text must be a string")
-    indexes = [index for marker in _OVERLAY_BOUNDARIES if (index := text.find(marker)) >= 0]
+    indexes = [
+        index for marker in _OVERLAY_BOUNDARIES if (index := text.find(marker)) >= 0
+    ]
     return text[: min(indexes)].strip() if indexes else text.strip()
 
 
@@ -198,7 +190,9 @@ def parse_contact_profile(
         f"{_CONTACT_ROOT}/sections/{capture_ordinal}/{SECTION_RELATIVE_PATHS[name]}"
         for name in CONTACT_SECTIONS
     )
-    canonical_sections = [_json_mapping(_require(artifacts, path)) for path in section_paths]
+    canonical_sections = [
+        _json_mapping(_require(artifacts, path)) for path in section_paths
+    ]
 
     source_ids = {
         extract_source_contact_id(value)
@@ -278,9 +272,9 @@ def parse_contact_profile(
         anniversary_value = _mapping(personal.get("homeAnniversary"))
         birthday = _parse_structured_celebration(birthday_value)
         anniversary = _parse_structured_celebration(anniversary_value)
-        profile_source: Literal[
-            "structured_json", "detail_html", "section_capture"
-        ] = "structured_json"
+        profile_source: Literal["structured_json", "detail_html", "section_capture"] = (
+            "structured_json"
+        )
     else:
         display_name = raw_display["name"]
         legal_name = _nonplaceholder(raw_display["legal_name"])
@@ -294,7 +288,12 @@ def parse_contact_profile(
             if detail_text is not None
             and any(
                 _after_label(detail_text, label) is not None
-                for label in ("Primary Email", "Primary Phone", "Birthday", "Legal Name")
+                for label in (
+                    "Primary Email",
+                    "Primary Phone",
+                    "Birthday",
+                    "Legal Name",
+                )
             )
             else "section_capture"
         )
@@ -303,9 +302,11 @@ def parse_contact_profile(
         raise ContactParseError(f"position {capture_ordinal} has no contact name")
     captured_at = _parse_datetime(section_payload.get("captured_at"))
     artifact_paths = tuple(
-        path
-        for path in (nested_path, detail_path, section_paths[0])
-        if path in artifacts
+        sorted(
+            path
+            for path in (nested_path, detail_path, section_paths[0])
+            if path in artifacts
+        )
     )
     return ParsedContactProfile(
         ordinal=ordinal,
@@ -348,7 +349,10 @@ def parse_section_capture(
         )
     payload = _json_mapping(artifact)
     url = payload.get("url")
-    if not isinstance(url, str) or extract_source_contact_id(url) != profile.source_contact_id:
+    if (
+        not isinstance(url, str)
+        or extract_source_contact_id(url) != profile.source_contact_id
+    ):
         raise ContactParseError(
             f"section {section!r} does not belong to contact "
             f"{profile.source_contact_id}"
@@ -369,12 +373,13 @@ def parse_section_capture(
         raise ContactParseError(f"section {section!r} limitations must be a list")
     limitations = tuple(str(value) for value in limitations_raw)
     occurrences = _parse_occurrences(section, payload, exposed_text)
-    is_empty = not occurrences and any(
-        marker in exposed_text.casefold() for marker in _EMPTY_MARKERS
-    )
+    is_empty = not occurrences and _is_rendered_empty_state(section, exposed_text)
     if not occurrences and not is_empty and quality is CaptureQuality.COMPLETE:
         quality = CaptureQuality.PARTIAL
-        limitations = (*limitations, "rendered rows were not structurally distinguishable")
+        limitations = (
+            *limitations,
+            "rendered rows were not structurally distinguishable",
+        )
     return ParsedSection(
         section=section,
         captured_at=_parse_datetime(payload.get("captured_at")),
@@ -435,28 +440,36 @@ def _parse_occurrences(
 
 def _task_occurrences(section: str, text: str) -> tuple[ParsedOccurrence, ...]:
     state = section.removeprefix("tasks_")
+    accessibility_rows = _accessibility_task_rows(state, text)
+    if accessibility_rows:
+        return accessibility_rows
     header = {
         "to_do": "TASK\nASSIGNED TO\nPRIORITY\nDUE DATE\nCREATED BY\n",
-        "completed": "TASK\nASSIGNED TO\nPRIORITY\nDUE DATE\nCREATED BY\n",
+        "completed": (
+            "TASK\nASSIGNED TO\nPRIORITY\nDATE COMPLETED\nDUE DATE\nCOMPLETED BY\n"
+        ),
         "archived": "TASK\nASSIGNED TO\nPRIORITY\nDATE ARCHIVED\nDUE DATE\nARCHIVED BY\n",
     }[state]
     if header not in text:
         return ()
-    lines = [line.strip() for line in text.split(header, 1)[1].splitlines() if line.strip()]
+    lines = [
+        line.strip() for line in text.split(header, 1)[1].splitlines() if line.strip()
+    ]
     rows: list[ParsedOccurrence] = []
-    if state == "archived":
+    if state in {"completed", "archived"}:
         index = 0
         while index + 6 < len(lines):
             if not (_is_us_date(lines[index + 4]) and _is_us_date(lines[index + 5])):
                 index += 1
                 continue
+            action = "completed" if state == "completed" else "archived"
             values = {
                 "title": lines[index],
                 "assigned_to": lines[index + 2],
                 "priority": lines[index + 3],
-                "archived_date": lines[index + 4],
+                f"{action}_date": lines[index + 4],
                 "due_date": lines[index + 5],
-                "archived_by": lines[index + 6],
+                f"{action}_by": lines[index + 6],
                 "state": state,
             }
             rows.append(ParsedOccurrence(values, None, lines[index]))
@@ -479,7 +492,7 @@ def _task_occurrences(section: str, text: str) -> tuple[ParsedOccurrence, ...]:
 
 
 def _smart_plan_occurrences(text: str) -> tuple[ParsedOccurrence, ...]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = _normalized_capture_lines(text)
     rows = []
     for index, line in enumerate(lines):
         match = re.fullmatch(r"(\d+) days? · (\d+) touches", line)
@@ -510,7 +523,11 @@ def _timeline_occurrences(text: str) -> tuple[ParsedOccurrence, ...]:
     ]
     rows = []
     for occurrence_index, start in enumerate(event_indexes):
-        end = event_indexes[occurrence_index + 1] if occurrence_index + 1 < len(event_indexes) else len(lines)
+        end = (
+            event_indexes[occurrence_index + 1]
+            if occurrence_index + 1 < len(event_indexes)
+            else len(lines)
+        )
         raw_lines = lines[start:end]
         if len(raw_lines) < 2:
             continue
@@ -584,10 +601,10 @@ def _saved_search_occurrences(text: str) -> tuple[ParsedOccurrence, ...]:
 
 
 def _note_occurrences(text: str) -> tuple[ParsedOccurrence, ...]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = _normalized_capture_lines(text)
     rows = []
     for index, line in enumerate(lines):
-        if line != "NOTE":
+        if line.upper() != "NOTE":
             continue
         tail = lines[index + 1 : index + 8]
         values = {"raw_lines": tail}
@@ -698,18 +715,16 @@ def _after_label(text: str, label: str) -> str | None:
     if match:
         return match.group(1).strip()
     snapshot_match = re.search(
-        rf'(?:^|\n)- (?:paragraph|generic): {re.escape(label)}\n'
+        rf"(?:^|\n)- (?:paragraph|generic): {re.escape(label)}\n"
         rf'(?:\s+- )?(?:paragraph|generic|text):\s*"?([^"\n]+)"?'
-        rf'|(?:^|\n)- (?:paragraph|generic): {re.escape(label)}\n'
+        rf"|(?:^|\n)- (?:paragraph|generic): {re.escape(label)}\n"
         rf'- button "([^"]+)"',
         text,
         re.IGNORECASE,
     )
     if snapshot_match:
         return next(
-            value.strip()
-            for value in snapshot_match.groups()
-            if value is not None
+            value.strip() for value in snapshot_match.groups() if value is not None
         )
     return None
 
@@ -718,19 +733,27 @@ def _json_mapping(artifact: ArchiveArtifactInput) -> Mapping[str, object]:
     try:
         value = json.loads(_content_text(artifact))
     except json.JSONDecodeError as exc:
-        raise ContactParseError(f"invalid JSON artifact: {artifact.source_path}") from exc
+        raise ContactParseError(
+            f"invalid JSON artifact: {artifact.source_path}"
+        ) from exc
     if not isinstance(value, Mapping):
-        raise ContactParseError(f"JSON artifact must contain an object: {artifact.source_path}")
+        raise ContactParseError(
+            f"JSON artifact must contain an object: {artifact.source_path}"
+        )
     return value
 
 
 def _content_text(artifact: ArchiveArtifactInput) -> str:
     if artifact.content_bytes is None:
-        raise ContactParseError(f"artifact bytes are unavailable: {artifact.source_path}")
+        raise ContactParseError(
+            f"artifact bytes are unavailable: {artifact.source_path}"
+        )
     try:
         return artifact.content_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ContactParseError(f"artifact is not UTF-8: {artifact.source_path}") from exc
+        raise ContactParseError(
+            f"artifact is not UTF-8: {artifact.source_path}"
+        ) from exc
 
 
 def _require(
@@ -739,7 +762,9 @@ def _require(
     try:
         return artifacts[source_path]
     except KeyError as exc:
-        raise ContactParseError(f"missing canonical section artifact: {source_path}") from exc
+        raise ContactParseError(
+            f"missing canonical section artifact: {source_path}"
+        ) from exc
 
 
 def _capture_ordinal(ordinal: int) -> str:
@@ -830,9 +855,107 @@ def _is_us_date(value: str) -> bool:
 
 def _looks_like_date(value: str) -> bool:
     return bool(
-        _is_us_date(value)
-        or re.fullmatch(r"[A-Za-z]{3,9} \d{1,2}, \d{4}", value)
+        _is_us_date(value) or re.fullmatch(r"[A-Za-z]{3,9} \d{1,2}, \d{4}", value)
     )
+
+
+def _is_rendered_empty_state(section: str, text: str) -> bool:
+    normalized = " ".join(_normalized_capture_lines(text)).casefold()
+    markers = {
+        "timeline": ("no activities yet",),
+        "opportunities": ("no opportunities",),
+        "smart_plans": (
+            "no smartplans",
+            "doesn't have any smartplans yet",
+            "doesn’t have any smartplans yet",
+        ),
+        "notes": ("no notes yet",),
+        "saved_searches": ("no saved searches yet",),
+        "tasks_to_do": ("no to do tasks", "no tasks"),
+        "tasks_completed": ("no completed tasks",),
+        "tasks_archived": ("no archived tasks",),
+    }[section]
+    if any(marker in normalized for marker in markers):
+        return True
+    if section == "notes" and "add note" in normalized:
+        return True
+    task_headers = {
+        "tasks_to_do": ("task", "assigned to", "priority", "due date", "created by"),
+        "tasks_completed": (
+            "task",
+            "assigned to",
+            "priority",
+            "date completed",
+            "due date",
+            "completed by",
+        ),
+        "tasks_archived": (
+            "task",
+            "assigned to",
+            "priority",
+            "date archived",
+            "due date",
+            "archived by",
+        ),
+    }
+    return section in task_headers and all(
+        marker in normalized for marker in task_headers[section]
+    )
+
+
+def _accessibility_task_rows(state: str, text: str) -> tuple[ParsedOccurrence, ...]:
+    row_starts = list(re.finditer(r'^\s+- row "[^"]+":\s*$', text, re.MULTILINE))
+    rows: list[ParsedOccurrence] = []
+    for row_index, match in enumerate(row_starts):
+        end = (
+            row_starts[row_index + 1].start()
+            if row_index + 1 < len(row_starts)
+            else len(text)
+        )
+        cells = re.findall(
+            r'^\s+- cell(?: "([^"]*)")?:\s*$',
+            text[match.end() : end],
+            re.MULTILINE,
+        )
+        if len(cells) < 5:
+            continue
+        cells = [_clean_accessibility_cell(value) for value in cells]
+        title, assigned_to, priority = cells[:3]
+        if state == "to_do":
+            due_date = re.match(r"\d{2}/\d{2}/\d{4}", cells[3])
+            if due_date is None:
+                continue
+            values: dict[str, object] = {
+                "title": title,
+                "assigned_to": assigned_to,
+                "priority": priority,
+                "due_date": due_date.group(0),
+                "created_by": cells[4],
+                "state": state,
+            }
+        else:
+            if len(cells) < 6 or not (_is_us_date(cells[3]) and _is_us_date(cells[4])):
+                continue
+            action = "completed" if state == "completed" else "archived"
+            values = {
+                "title": title,
+                "assigned_to": assigned_to,
+                "priority": priority,
+                f"{action}_date": cells[3],
+                "due_date": cells[4],
+                f"{action}_by": cells[5],
+                "state": state,
+            }
+        rows.append(ParsedOccurrence(values, None, title))
+    return tuple(rows)
+
+
+def _clean_accessibility_cell(value: str) -> str:
+    return re.sub(r"^[\ue000-\uf8ff]+\s*", "", value).strip()
+
+
+def _normalized_capture_lines(text: str) -> list[str]:
+    return [value for line in text.splitlines() if (value := _snapshot_value(line))]
 
 
 def _snapshot_value(line: str) -> str:
@@ -849,11 +972,16 @@ def _snapshot_value(line: str) -> str:
     link = re.match(r'- link "([^"]+)"', value)
     if link:
         return link.group(1).strip()
+    named = re.match(r'- (?:button|cell) "([^"]+)"', value)
+    if named:
+        return named.group(1).strip()
     return value if not value.startswith(("- ", "/url:")) else ""
 
 
 def _immutable_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({str(key): _immutable_value(item) for key, item in value.items()})
+    return MappingProxyType(
+        {str(key): _immutable_value(item) for key, item in value.items()}
+    )
 
 
 def _immutable_value(value: object) -> object:
