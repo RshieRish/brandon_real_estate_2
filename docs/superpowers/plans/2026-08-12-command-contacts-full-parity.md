@@ -3472,8 +3472,19 @@ git commit -m "feat: rebuild Command contacts directory"
 - Create: `frontend/src/components/command/contacts/ContactNotesTab.tsx`
 - Create: `frontend/src/components/command/contacts/ContactSavedSearchesTab.tsx`
 - Create: `frontend/src/components/command/contacts/ContactCaptureEvidence.tsx`
+- Modify: `frontend/src/lib/command/contacts.ts`
+- Modify: `frontend/src/lib/command/contacts.test.ts`
+- Modify: `frontend/src/lib/command/api.ts`
+- Modify: `frontend/src/lib/command/api.test.ts`
+- Modify: `frontend/src/components/command/ContactsWorkspace.tsx`
+- Modify: `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`
+- Modify: `frontend/src/components/command/contacts/useContactDirectoryQuery.ts`
+- Modify: `frontend/src/components/command/contacts/useContactDirectoryQuery.test.tsx`
+- Modify: `frontend/src/components/command/ui/CommandEvidencePanel.tsx`
+- Modify: `frontend/src/components/command/ui/CommandUi.test.tsx`
 - Modify: `frontend/src/components/command/ContactActions.tsx`
 - Modify: `frontend/src/components/command/ContactProfileEditor.tsx`
+- Modify: `frontend/src/app/admin/command/command-shell.css`
 - Replace: `frontend/src/app/admin/command/contacts/[contactId]/page.tsx`
 - Create: `frontend/src/components/command/contacts/ContactDetailWorkspace.test.tsx`
 
@@ -3492,6 +3503,55 @@ Tasks is one ARIA tab with three nested state tabs, producing the required eight
 
 Assert previous/next navigation preserves current filters; contact jump search; profile/map fields; owner/assignee/collaborators; tags; yearless and sentinel birthday display; explicit anniversary year; actual timeline event bodies; empty notes/searches; source-only opportunity/plan/task rows; materialized links; per-view evidence quality; 317 provider/317 identity/zero-alias evidence; the redacted 51/2/49 overlap partition; artifact downloads; loading/error/retry; and no vendor marks/copy.
 
+The `317/317/0` provider/identity/alias values and `51/2/49`
+lead-backed/reviewed-overlap/legacy-only partition are archive-wide aggregates,
+not facts about the active contact. Label that block exactly `Recovered archive
+(global)` (or an equally explicit global-scope label). Only capture positions,
+section matrix rows, source metadata, and artifacts filtered to this contact may
+be labelled as this contact's evidence. A regression uses a contact with zero
+positions and nonzero global aggregates so these scopes cannot be conflated.
+
+The seven focused section endpoints are capture-occurrence pages, not live
+internal lists. Their exact `source_only|materialized` union remains unchanged.
+The workspace summary separately counts the distinct union of SWS-owned rows
+and source-only occurrences, so a new internal note, task, or saved search may
+increase the summary without appearing in a capture page. Tests must therefore
+pin two visibly separate regions in each applicable tab:
+
+- **Captured source** comes only from `contactsApi.section()` and preserves the
+  immutable occurrence DTO byte-for-byte. It is never synthesized from an SWS
+  row. A `materialized` card links to its current SWS row only by the exact
+  `(entity_type, entity_id)` pair; a missing target is an unavailable/integrity
+  state, never relabeled as `source_only`.
+- **SWS internal** comes only from a strictly decoded live workspace response
+  and contains current mutable tasks, notes, Smart Plan enrollments,
+  opportunities, saved searches, and bookings. An internal row without capture
+  evidence stays visible after reload. A materialized capture card and its SWS
+  row may both render in their labelled regions; do not merge the archive
+  snapshot into current state or add their counts.
+
+Also assert that directory activation carries the canonical owned directory
+query into the detail URL. Back, previous, next, and jump navigation reuse that
+same sanitized filter/sort universe and preserve unrelated query keys. The
+selected top tab and nested task state are URL-deep-linkable.
+
+Export one canonical detail query parser/builder from
+`useContactDirectoryQuery.ts`; the directory hook, row activation, detail
+neighbors, and detail navigation all use it. Jump copies the current sanitized
+filter/sort universe, replaces `query` with the trimmed jump draft, resets
+`page=1`, and uses `page_size=10` only for its transient directory lookup. The
+selected detail URL promotes the new semantic filter/sort/query universe and
+`page=1` while retaining the operator's canonical directory `page_size`
+(`25|50|100`); lookup-only `10` never becomes a return-page setting. It does
+not select from a global search then retain an incompatible old query universe.
+A neighbor-only `404|409` leaves the valid detail workspace rendered with
+navigation unavailable; it never replaces the whole contact with an error.
+
+The dynamic route accepts only a canonical positive safe decimal contact ID:
+`^[1-9][0-9]*$` followed by `Number.isSafeInteger`. Values such as `1e2`,
+`+7`, `07`, whitespace, zero, and unsafe integers render a safe not-found state
+and make zero API calls. Never use permissive `Number(contactId)` parsing.
+
 - [ ] **Step 2: Run and confirm RED**
 
 Run: `cd frontend && npm test -- src/components/command/contacts/ContactDetailWorkspace.test.tsx`
@@ -3502,12 +3562,73 @@ Expected: FAIL because the current page uses `any`, one generic list renderer, s
 
 At desktop, keep a 320–360px sticky profile column and a flexible tab workspace. At mobile, profile collapses into an accessible disclosure above tabs. Use `CommandTabs` for top/nested tabs, `CommandStatePanel` for all states, and `CommandEvidencePanel` inside each source-only/partial view.
 
+Implement the split/profile/map/evidence/internal-region geometry in the shared
+`command-shell.css`; do not recreate a standalone dark page or duplicate the
+Command shell. Component tests pin structural classes, desktop sticky width,
+mobile disclosure, responsive overflow, and print hiding of actions/download
+controls while keeping the profile and evidence text printable.
+
+Keep all eight top-level tabpanels and all three nested task-state tabpanels in the
+DOM. Inactive panels use `hidden`; each panel ID exactly matches its tab's
+`aria-controls`, and each `aria-labelledby` points back to that tab. Tests pin
+all relationships plus keyboard navigation so no inactive control references a
+missing element.
+
+A zero-row captured section or timeline is verified empty only when the active
+contact's matching evidence cells prove `complete`, `is_empty=true`, and
+`row_count=0`. Zero positions or any matching `partial|shell|error` cell renders
+an explicit limitation/partial/unavailable state, never `No notes`, `No tasks`,
+or `No timeline events`. A successful internal-workspace response may prove its
+own SWS array empty; an unavailable internal workspace may not.
+
+`CommandEvidencePanel` accepts the exact non-interchangeable union
+`complete|partial|shell|error|limitation`, with distinct constant labels for
+all five values. Do not coerce `shell|error` into `limitation`. Per-view
+evidence renders every matching `section_matrix` cell keyed by capture position,
+not an invented worst/latest aggregate. Replace the primitive's raw
+`artifactLinks` navigation contract with typed button actions (or forbid/remove
+that prop); authenticated content is activated only through the blob flow below.
+
 `ContactObservedMap` receives only server-returned coordinates/static-map metadata. If coordinates are absent, show the observed formatted address and `Map location was not captured`; do not geocode in the browser or infer a pin.
 
+The current address contract has no server-returned static-map image or URL.
+Coordinates may be rendered as observed text, but the page must say `Static map
+preview is unavailable` rather than fabricating a Google/OSM link, shipping a
+client map key, or geocoding. Missing coordinates use the exact limitation copy
+above.
+
 Replacing `[contactId]/page.tsx` in this task removes the final
-`commandApi.contactWorkspace(id)` rich-legacy consumer. Do not remove or
-redirect that consumer during Task 8; the Task 9 page switches directly to the
-decoded `contactsApi` detail, summary, timeline, and section methods.
+unchecked `commandApi.contactWorkspace(id)` consumer. Do not remove or redirect
+that consumer during Task 8. Task 9 adds
+`contactsApi.internalWorkspace(id,{signal})` over the existing safety-hardened
+`GET /contacts/{id}/workspace` response and strictly validates the full
+`LegacyContactWorkspaceOut` envelope before projecting it. It must use
+`commandJson`, not the legacy `request<T>`, and must contain no `any`, unchecked
+cast, or partial decoder. `contactsApi.detail/timeline/section/evidence` remain
+authoritative for normalized profile display, merged timeline, captured
+sections, and provenance. `internalWorkspace` contributes only the real SWS
+arrays listed above; its duplicate contact/timeline/tags fields are decoded but
+not used for those views. The adapter additionally requires
+`workspace.contact.id === requested_contact_id`, every note's `contact_id` to
+equal that ID, and every task's `contact_id` to equal that ID exactly before it
+exposes any mutable record ID. Internal task status must be exactly
+`open|completed|archived`; any null/cross-contact task or unknown status makes
+the entire internal surface unavailable rather than silently dropping a row.
+Complete internal arrays are client-sorted
+deterministically with an ID tie-break; the UI does not claim server pagination.
+An internal-workspace failure makes all internal subsections unavailable, never
+truthfully empty. Bookings comes from the decoded `bookings` array and
+is labelled `SWS internal`; never drain or client-filter a timeline page and
+claim it is a complete booking list. This route is the existing unpaginated
+auxiliary contract, so the UI must not claim server pagination.
+
+The decoded internal envelope's raw `contact` is the only profile-edit input.
+`ContactDetail.contact.primary_email` and `primary_phone` are display values and
+may contain recovered fallbacks; they must never prefill writable email/phone.
+Submit only explicitly changed raw fields. Likewise, recovered birthday or
+anniversary observations never prefill an SWS-owned date. A profile mutation
+returns a basic legacy contact row and triggers a detail/internal refresh; it
+is never merged into `ContactDetail` as though it were the expanded DTO.
 
 Recovered celebration examples render as:
 
@@ -3521,7 +3642,63 @@ They never render `1900` as a verified year.
 
 - [ ] **Step 4: Keep mutations scoped to SWS-owned records**
 
-Edit/add/remove controls operate on internal contact fields, notes, tags, searches, and tasks. A `source_only` occurrence offers `View source evidence`, not Complete/Delete/Edit. Profile editing does not prefill missing SWS-owned dates from recovered month/day values.
+The exact safe action matrix is: edit internal contact fields; add/delete
+internal notes; create/assign/remove tags; create contact-owned saved searches;
+and create contact-owned tasks. A `source_only` occurrence offers `View source
+evidence`, not Complete/Delete/Edit. Profile editing does not prefill missing
+SWS-owned dates from recovered month/day values.
+
+Extend the strict `contactsApi` facade with exact input/response decoders for
+note create/delete, saved-search create, tag create/assign/remove, and task
+create. The current task update and saved-search delete endpoints are global
+ID-only mutations: a client-side post-response owner check would detect a stale
+or reassigned ID only after mutating another contact. Task 9 therefore offers
+no task Edit/Complete/Reopen/Delete and no saved-search Delete. Adding those
+actions requires a later contact-scoped server route that locks the exact
+`(contact_id, record_id)` pair before mutation. The Archived nested view is
+read-only. A newly created task must return the active `contact_id` and exact
+status `open`; the detail flow never emits the globally allowed but summary-
+incompatible `in_progress|cancelled` values. Internal mutation
+success refetches the authoritative surfaces: note/search/task refresh internal
+workspace plus summary (and timeline when the activity changes); profile/tag
+refresh detail plus internal workspace where needed. Never optimistically add
+an archive occurrence.
+
+Mutation invalidation is exact. Refresh timeline after every backend writer of
+`CRMActivity`: profile/stage update, note create/delete, tag removal, and task
+create. Saved-search create and idempotent tag assignment do not claim a new
+timeline event. Profile and tag mutations also refresh neighbors against the
+preserved directory request because they can change filter/sort membership. If
+the refreshed contact is no longer in that universe, clear stale previous/next
+IDs and show a stable `This contact is outside the current directory view`
+state rather than retaining old navigation.
+
+Deleting an SWS note also refetches the captured Notes section. Deletion removes
+the exact materialization link, so the immutable source occurrence keeps the
+same source record/hash/ordinal/value while its current association legitimately
+changes from `materialized` to `source_only`. Never flip that status locally.
+
+Every mutation attempt owns one AbortController plus the current contact/
+action semantic key. A pending non-idempotent mutation disables its editor or
+action dismissal, Escape close, and duplicate submit; browser abort alone never
+claims that the server rolled back. Contact change and unmount still abort and
+suppress every prior-contact continuation. After every await—including tag
+create followed by assign—gate state, toast, refetch, and navigation on mounted,
+current-controller identity, and `!signal.aborted`. A mock or transport that
+resolves/rejects after abort must not update the prior contact. A mutation error
+on the still-mounted contact renders stable privacy-safe copy, never exposes
+`Error.message`, and performs an authoritative affected-surface refresh before
+another action. If tag creation succeeds but assignment is not confirmed, show
+`Tag assignment status is unknown` and refresh detail/internal state; never
+report either full success or a clean rollback.
+
+Artifact `content_href` is an authenticated Command endpoint, not a browser
+navigation URL. Add an abortable typed blob method using `commandBlob`; create
+and revoke the object URL, guard stale/unmounted continuations, and expose
+busy/error state. A normal `<Link href={content_href}>` is forbidden because it
+does not attach the admin bearer token. Base detail, captured-section, internal
+workspace, evidence, and artifact loads each need their own current-request and
+abort guards.
 
 - [ ] **Step 5: Run contact/component/type checks and commit**
 
@@ -3529,10 +3706,17 @@ Edit/add/remove controls operate on internal contact fields, notes, tags, search
 cd frontend
 npm test -- src/components/command/contacts/ContactDetailWorkspace.test.tsx \
   src/components/command/contacts/ContactsWorkspace.test.tsx \
+  src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/lib/command/contacts.test.ts src/lib/command/api.test.ts \
   src/components/command/ui/CommandUi.test.tsx
 npm run typecheck
 git add src/components/command/contacts src/components/command/ContactActions.tsx \
   src/components/command/ContactProfileEditor.tsx \
+  src/components/command/ui/CommandEvidencePanel.tsx \
+  src/components/command/ui/CommandUi.test.tsx \
+  src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
+  src/lib/command/api.ts src/lib/command/api.test.ts \
+  src/app/admin/command/command-shell.css \
   src/app/admin/command/contacts/[contactId]/page.tsx
 git commit -m "feat: add full Command contact detail workspace"
 ```
