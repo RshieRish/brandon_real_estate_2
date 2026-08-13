@@ -2567,6 +2567,10 @@
   border-top: 1px solid var(--command-border);
 }
 
+.command-root .command-contact-timeline strong + time {
+  margin-left: 8px;
+}
+
 .command-root .command-contact-detail-tools {
   justify-content: space-between;
   width: 100%;

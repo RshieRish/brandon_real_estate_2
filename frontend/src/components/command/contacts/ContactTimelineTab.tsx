@@ -54,7 +54,7 @@ export function ContactTimelineTab({
               <h3>{row.title}</h3>
               {row.body ? <p>{row.body}</p> : null}
               {row.outcome ? <strong>{row.outcome}</strong> : null}
-              <time>{row.occurred_at ? new Date(row.occurred_at).toLocaleString() : 'Time was not captured'}</time>
+              <time dateTime={row.occurred_at ?? undefined}>{row.occurred_at ? new Date(row.occurred_at).toLocaleString() : 'Time was not captured'}</time>
             </div>
           </article>
         ))}

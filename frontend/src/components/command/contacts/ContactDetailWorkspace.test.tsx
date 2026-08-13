@@ -591,6 +591,7 @@ describe('ContactDetailWorkspace', () => {
     expect(await screen.findByText('Discovery call completed')).toBeInTheDocument();
     expect(screen.getByText('Discussed a possible September listing.')).toBeInTheDocument();
     expect(screen.getByText('Follow up next Tuesday')).toBeInTheDocument();
+    expect(screen.getByText('Follow up next Tuesday').nextElementSibling).toHaveAttribute('datetime');
     expect(screen.getByText('Consultation booked')).toBeInTheDocument();
     expect(screen.getByText('SWS consultation at the office.')).toBeInTheDocument();
     const timelineRegion = screen.getByRole('region', { name: 'Contact timeline' });
