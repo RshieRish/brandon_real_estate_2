@@ -2867,6 +2867,10 @@
     flex-basis: 100%;
   }
 
+  .command-root .command-contacts-search input {
+    min-height: 44px;
+  }
+
   .command-root .command-contacts-table {
     min-width: 720px;
   }
