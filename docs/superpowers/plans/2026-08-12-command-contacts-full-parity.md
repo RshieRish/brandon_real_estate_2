@@ -1280,11 +1280,11 @@ class ContactSectionPage:
 
 @dataclass(frozen=True, slots=True)
 class ContactArtifactMetadata:
-    id: int
-    filename: str
+    artifact_id: int
     artifact_type: str
     sha256: str
     size_bytes: int
+    content_href: str
 
 @dataclass(frozen=True, slots=True)
 class ContactSourceMetadata:
@@ -1426,8 +1426,17 @@ class ContactMutationResult:
     contact_id: int
     record_id: int | None
     changed: bool
-    audit_entity_type: Literal["contact_audit", "workspace_activity"] | None
+    audit_entity_type: Literal["contact_audit"] | None
     audit_event_id: int | None
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceMutationResult:
+    record_id: int
+    changed: bool
+    audit_entity_type: Literal["workspace_activity"]
+    audit_event_id: int | None
+
+SavedSearchDeletionResult = ContactMutationResult | WorkspaceMutationResult
 
 @dataclass(frozen=True, slots=True)
 class ContactLegacySyncResult:
@@ -1454,7 +1463,14 @@ class ContactSavedSearchValue:
 
 Source filter predicates are exact and may overlap: `kw_command` means a `contact_profile` source link from `source_system="kw_command"`; `legacy_lead` means `CRMContact.lead_id IS NOT NULL`; `internal_crm` means the row exists in `crm_contacts` and has neither of those two predicates. Repeated source values are ORed within the source group; repeated origin values are ORed within the origin group; the source and origin groups are ANDed with every other filter. Origins use the definitions in the enum comments, with `recovered` allowed to overlap `lead_backed`; `legacy_only` and `internal_only` are mutually exclusive terminal classifications.
 
-SmartView semantics are fixed: `never_contacted` requires lead stage plus no explicit recovered/internal last-contact observation; unknown capture is excluded rather than called never contacted. `recently_active` means an explicit last-interaction timestamp in `[now-30 days, now]`. Birthday/anniversary views use explicit month/day from the internal date first, otherwise an exposed recovered profile month/day; sentinel/yearless years remain null. The two month views use the injected `now` month. No tag, task title, name, or current date supplies a missing celebration/contact timestamp.
+SmartView semantics are fixed. `never_contacted` is the conjunction of all of these executable predicates:
+
+1. `lower(trim(CRMContact.stage)) = 'lead'`.
+2. The authoritative capture is the contact's latest `CRMContactCapturePosition` ordered by `(captured_at IS NULL) ASC, captured_at DESC, id DESC`; its one `timeline` section must have `capture_quality='complete'`, `is_empty=true`, `row_count=0`, and canonical `limitations_json='[]'`.
+3. `CRMContactProfile.last_contacted_at IS NULL`.
+4. No `CRMContactTimelineEvent` exists for the contact, and no non-mirrored `CRMActivity` exists for it with `kind` in the exact immutable `CONTACT_TOUCH_ACTIVITY_KINDS = frozenset({'call', 'email', 'sms', 'text', 'meeting', 'contacted'})`. A mirrored activity is already represented by its source-linked timeline event and does not alter the result.
+
+No capture, a missing timeline cell, `partial|shell|error`, a non-empty/limited/contradictory complete cell, or any last-contact evidence makes the predicate false; unknown evidence is never labeled never contacted. A null capture timestamp does not erase a complete observation: the final `id DESC` tie-break still selects one authoritative capture deterministically. SQL uses correlated `EXISTS`/`NOT EXISTS` predicates against that selected capture and does not infer from `CRMContact.created_at`, lead creation, notes, tasks, tags, or current time. Service tests independently pin every clause, a complete null-time capture, two capture revisions with only the latest authoritative, a prior recovered event despite a later empty cell, every internal touch kind, non-touch administrative activities, mirrored activities, and reversed fixture insertion order. `recently_active` means an explicit last-interaction timestamp in `[now-30 days, now]`. Birthday/anniversary views use explicit month/day from the internal date first, otherwise an exposed recovered profile month/day; sentinel/yearless years remain null. The two month views use the injected `now` month. No tag, task title, name, or current date supplies a missing celebration/contact timestamp.
 
 Sort uses the requested primary expression, then case-folded last name, case-folded first name, then contact ID. Null values are always last in either direction; contact ID follows the requested direction. `name` sorts by case-folded last name, first name, then ID. Literal search escapes `%`, `_`, and `\\` and searches first name, last name, legal/preferred name, normalized methods, company, and title; it never interpolates SQL.
 
@@ -1481,18 +1497,18 @@ async create_contact_note(db, contact_id: int, payload: ContactNoteCreateCommand
 async delete_contact_note(db, contact_id: int, note_id: int, *, actor_subject: str) -> ContactMutationResult
 async create_contact_saved_search(db, contact_id: int, payload: ContactSavedSearchCreateCommand, *, actor_subject: str) -> ContactMutationResult
 async list_saved_searches(db) -> tuple[ContactSavedSearchValue, ...]
-async delete_saved_search(db, search_id: int, *, actor_subject: str) -> ContactMutationResult
+async delete_saved_search(db, search_id: int, *, actor_subject: str) -> SavedSearchDeletionResult
 ```
 
 `list_contact_section` accepts page `>=1` and page size `1..100`. It queries `CRMContactSourceOccurrence`, not text. Each row is a discriminated union: `source_only` includes `source_record_id`, the domain-separated SHA-256 `source_key_hash`, section, occurrence ordinal, capture quality, captured time, and the exact whitelisted typed value above; `materialized` additionally includes the one `CRMEntitySource` target. Raw source keys, provider IDs, parser payloads, and archive paths are not response fields. Allowed target types are timeline event, note, saved search, task, smart plan, or opportunity according to source record kind. Zero targets is source-only, one compatible target is materialized, and multiple/incompatible/cross-contact targets are integrity errors. All rows order by section capture time descending nulls last, capture ordinal ascending, occurrence ordinal ascending, then ownership ID ascending. Timeline uses Task 5B rather than this page API.
 
-`get_contact_evidence` returns all provider rows/positions separately, eight section cells per position, source/artifact metadata only, the 317/317/zero-alias identity summary and redacted 51/2/49 overlap summary. It never loads artifact bytes or emits raw overlap evidence. Aggregate quality is complete only when all required cells are complete, partial when no cell is shell/error and at least one is partial, otherwise limitation.
+`get_contact_evidence` returns all provider rows/positions separately, eight section cells per position, source/artifact metadata only, the 317/317/zero-alias identity summary and redacted 51/2/49 overlap summary. `ContactSourceMetadata` exposes only internal `source_record_id`, `record_kind`, `evidence_level`, `capture_quality`, nullable `captured_at`, and safe artifact entries. Each artifact entry exposes only `artifact_id`, `artifact_type`, SHA-256, byte count, and the canonical authenticated link `/api/v1/command/archive/artifacts/{artifact_id}/content`; it excludes filename as well as source key, provider identifier, source/archive path, preview, payload, and artifact bytes. The service constructs the link from the positive artifact ID rather than accepting a stored URL. It never loads artifact bytes or emits raw overlap evidence. Aggregate quality is complete only when all required cells are complete, partial when no cell is shell/error and at least one is partial, otherwise limitation.
 
 Celebrations merge internal and recovered observations per `(contact_id, kind)`: an internal date wins; otherwise an explicitly exposed recovered month/day is returned with its year-quality, including `yearless` when no source year was exposed. Rows order by day, case-folded name, and ID. Missing month/day, sentinel year, tags, or task text never create a date.
 
 Every mutation receives the exact validated admin subject. `CRMContactAuditEvent.before_json` and `after_json` use a strict allowlist: raw values are allowed only for record IDs, tag IDs, stage, action, changed-field names, booleans, and ISO calendar dates. Names, email, phone, note bodies, saved-search names/criteria, and import values are represented as `{"present": bool, "length": int, "sha256": "<domain-separated-lowercase-hex>"}`; raw values, bearer tokens, provider IDs, source keys/payloads, artifact paths/bytes, manifest data, and timeline text are forbidden. Canonical JSON sorts keys, uses compact separators, and rejects nonfinite numbers. The actor is stored once in `actor_subject`, not copied into JSON.
 
-`delete_saved_search()` loads the target before deletion. A contact-owned search writes `CRMContactAuditEvent(action="contact.saved_search_deleted")` for that exact contact. A legacy global search with `contact_id IS NULL` preserves the existing delete behavior and writes `CRMActivity(contact_id=NULL, kind="workspace.saved_search_deleted", source_record_id=NULL)` with metadata containing only the admin subject, action, search ID, and the redacted saved-search fingerprint. Both audit variants are inserted in the same transaction as deletion; an audit failure rolls deletion back. Mutation tests cover all service signatures above, snapshot the canonical redacted JSON/metadata, prove no forbidden value appears in rows or exceptions, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
+`delete_saved_search()` loads the target before deletion. A contact-owned search writes `CRMContactAuditEvent(action="contact.saved_search_deleted")` for that exact contact and returns `ContactMutationResult`; a legacy global search with `contact_id IS NULL` preserves the existing delete behavior, writes `CRMActivity(contact_id=NULL, kind="workspace.saved_search_deleted", source_record_id=NULL)`, and returns `WorkspaceMutationResult` with no contact field. Its metadata contains only the admin subject, action, search ID, and the redacted saved-search fingerprint. Both audit variants are inserted in the same transaction as deletion; an audit failure rolls deletion back. Mutation tests assert the concrete result variant and exact fields for both ownership branches, cover all service signatures above, snapshot the canonical redacted JSON/metadata, prove no forbidden value appears in rows or exceptions, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
 
 - [ ] **Step 3: Implement source/materialized joins, exact pagination, and commits**
 
@@ -1599,6 +1615,23 @@ class ContactTimelinePageOut(BaseModel):
     next_cursor: str | None
     has_more: bool
 
+class ContactArtifactMetadataOut(BaseModel):
+    artifact_id: int = Field(gt=0)
+    artifact_type: str = Field(min_length=1, max_length=64)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
+    content_href: str
+
+class ContactSourceMetadataOut(BaseModel):
+    source_record_id: int = Field(gt=0)
+    record_kind: str = Field(min_length=1, max_length=64)
+    evidence_level: Literal[
+        "observed_record", "rendered_occurrence", "displayed_aggregate",
+    ]
+    capture_quality: Literal["complete", "partial", "shell", "error"]
+    captured_at: datetime | None
+    artifacts: list[ContactArtifactMetadataOut] = Field(default_factory=list)
+
 class ContactEvidenceOut(BaseModel):
     contact_id: int
     provider_contact_rows: int
@@ -1609,7 +1642,7 @@ class ContactEvidenceOut(BaseModel):
     legacy_only_contacts: int = Field(ge=0)
     capture_positions: list[ContactCapturePositionOut]
     section_matrix: list[ContactSectionEvidenceOut]
-    sources: list[SourceRecordDetailOut]
+    sources: list[ContactSourceMetadataOut]
     capture_quality: Literal["complete", "partial", "limitation"]
 
 class ContactBulkSetStage(BaseModel):
@@ -1634,7 +1667,7 @@ class ContactBulkRequest(BaseModel):
     action: ContactBulkActionIn
 ```
 
-Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models as one-to-one adapters over the Task 5C DTOs, with `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. All stage inputs use `min_length=1,max_length=50`, matching `CRMContact.stage VARCHAR(50)`; there is no 51–64-character acceptance path. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. Evidence source rows exclude `payload_json`, raw source keys/paths, and artifact bytes.
+Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models as one-to-one adapters over the Task 5C DTOs, with `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. All stage inputs use `min_length=1,max_length=50`, matching `CRMContact.stage VARCHAR(50)`; there is no 51–64-character acceptance path. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. `ContactEvidenceOut` must use `ContactSourceMetadataOut` only; no import or adapter from `SourceRecordDetailOut` is permitted. Validate `content_href == f"/api/v1/command/archive/artifacts/{artifact_id}/content"` and reject filename, source key, provider ID, source/archive path, preview, payload, stored URL, and artifact bytes as extra fields. Router tests serialize a source fixture containing all those private database fields and prove none appears in the response while the ID-derived authenticated link does.
 
 Preserve existing mutation response shapes while delegating writes to Task 5C: `POST /contacts` and `PATCH /contacts/{contact_id}` return legacy `ContactOut`; sync/import retain `ContactLegacySyncResult`/`ContactImportResult`; tag assignment/removal, note creation/deletion, and saved-search creation retain their current public JSON keys. The router maps service DTOs to those explicit compatibility models. The new `contactsApi.create()`/`update()` clients therefore decode a `ContactCreated` basic-contact result containing the positive `id` and editable internal fields, then detail consumers call `detail(id)` when the expanded DTO is needed. No endpoint silently changes a legacy response from a contact row into `ContactDetailOut`.
 
@@ -1705,10 +1738,12 @@ git commit -m "feat: expose Command contact parity APIs"
 - Modify: `frontend/src/lib/command/api.test.ts`
 - Modify: `frontend/src/lib/command/home.ts`
 - Modify: `frontend/src/lib/command/home.test.ts`
+- Modify: `frontend/src/components/command/home/HomeContextPanels.tsx`
+- Create: `frontend/src/components/command/home/HomeContextPanels.test.tsx`
 
 - [ ] **Step 1: Specify the shared abortable HTTP boundary and write RED tests**
 
-Move authenticated JSON behavior from the untyped local `request<T>` cast in `api.ts` into `http.ts`:
+Introduce the decoded, abortable boundary for the new Contacts client and archive blob retrieval in `http.ts`. This task does not attempt to decode every unrelated Command domain:
 
 ```ts
 export type Decoder<T> = (input: unknown, path?: string) => T;
@@ -1826,7 +1861,9 @@ Tests pin the full canonical URL, repeated filters, reserved characters, stable 
 
 - [ ] **Step 3: Preserve legacy consumers through a decoded adapter**
 
-`api.ts` imports `commandJson`, `commandBlob`, and named decoders. Delete both private `request<T>` and `requestBlob`; every existing JSON method delegates to `commandJson`, while `archiveArtifactBlob(id, options?)` delegates to `commandBlob({path,signal:options?.signal})` without changing its default call shape. `commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page.
+`api.ts` imports `commandJson`, `commandBlob`, and the Contacts decoders. Delete only private `requestBlob`; retain the existing private `request<T>` unchanged for non-Contacts JSON methods until those domains receive named decoders in their own plans. The new `contactsApi`, `commandApi.contacts`, and `commandApi.celebrations` use `commandJson`; `archiveArtifactBlob(id, options?)` uses `commandBlob({path,signal:options?.signal})` without changing its default call shape. No overview, task, goal, SmartPlan, opportunity, agreement, listing, referral, marketing, website, report, archive-index, tag, or other legacy method is migrated or behaviorally changed in this task. An `api.test.ts` inventory snapshots those unrelated method URLs/results before and after this change and proves they still traverse the retained `request<T>`; the HTTP tests do not claim those responses are decoded.
+
+`commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page. Legacy contact mutation/workspace helpers not replaced by an exact `contactsApi` method also remain on `request<T>` in this task; Task 8 rewires the new Contacts workspace only to the decoded client without silently changing those compatibility responses.
 
 Add a separate `commandApi.contactDirectory(request, options)` delegate to `contactsApi.directory` for gradual compatibility. Tests assert:
 
@@ -1857,6 +1894,32 @@ It requests pages `1..page_count` at `page_size=100`, with `smart_view='all'`, `
 
 Home maps the decoded directory row into its existing `Contact` view explicitly and retains region-isolated error handling: a Contacts failure marks only `errors.contacts`; it does not erase tasks, opportunities, celebrations, goals, or briefing.
 
+Replace the old `Celebrations = {birthdays: Contact[]; anniversaries: Contact[]}` assumption. `CommandHomeApi.celebrations(month, options?)` returns the decoded `ContactCelebrations` wire contract from `contacts.ts`; `CommandHomeInput` and `CommandHomeModel` hold the UI-only shape below after `adaptHomeCelebrations()` runs inside `loadCommandHome`:
+
+```ts
+export type HomeCelebrationRow = Readonly<{
+  contactId: number;
+  displayName: string;
+  kind: 'birthday' | 'anniversary';
+  month: number;
+  day: number;
+  year: number | null;
+  yearQuality: 'verified' | 'yearless' | 'sentinel' | 'unknown';
+  origin: 'internal_crm' | 'recovered';
+}>;
+
+export type HomeCelebrations = Readonly<{
+  birthdays: readonly HomeCelebrationRow[];
+  anniversaries: readonly HomeCelebrationRow[];
+}>;
+
+export function adaptHomeCelebrations(value: ContactCelebrations): HomeCelebrations;
+```
+
+The adapter copies `contact_id`/`display_name` to the camel-case UI fields, validates each row's `kind` agrees with its containing array, preserves month/day/origin and every year-quality value, and never converts `yearless` or `sentinel` into a fabricated year. `yearless` and `sentinel` must both retain `year=null`; a non-null year is accepted only with `year_quality='verified'`; `unknown` also requires null. A mismatch throws `CommandDecodeError` without including the row value. `HomeContextPanels` renders `displayName`, uses `contactId` for the canonical `/admin/command/contacts/{id}` link/key, labels birthday versus anniversary from `kind`, and may display month/day but never prints `1900` or substitutes the current year. Remove the obsolete `Celebrations` alias from `api.ts`; no celebration row is coerced into `Contact` or given fake first/last names.
+
+`home.test.ts` pins `CommandHomeApi`, `CommandHomeInput`, and `CommandHomeModel` types/behavior, adapter mapping, array-kind mismatch rejection, verified/yearless/sentinel/unknown invariants, abort forwarding, and celebrations-only error isolation. `HomeContextPanels.test.tsx` renders verified, yearless, and sentinel rows, asserts their names and contact links, and proves neither `1900` nor the current year is fabricated. `api.test.ts` proves malformed snake_case celebration rows fail closed before the Home adapter runs.
+
 Replace the four Home contact shortcut URLs with canonical server-view links in this task: `?smart_view=never_contacted`, `?smart_view=recently_active`, `?smart_view=birthdays_this_month`, and `?smart_view=anniversaries_this_month`. Remove the Home-emitted `filter=never_contacted|birthdays|anniversaries` and `sort=recent_activity` forms; Task 8 retains those forms only as inbound compatibility aliases. `home.test.ts` asserts all four exact canonical URLs.
 
 - [ ] **Step 5: Run frontend contracts and commit**
@@ -1867,12 +1930,15 @@ npm test -- \
   src/lib/command/http.test.ts \
   src/lib/command/contacts.test.ts \
   src/lib/command/api.test.ts \
-  src/lib/command/home.test.ts
+  src/lib/command/home.test.ts \
+  src/components/command/home/HomeContextPanels.test.tsx
 npm run typecheck
 git add src/lib/command/http.ts src/lib/command/http.test.ts \
   src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
   src/lib/command/api.ts src/lib/command/api.test.ts \
-  src/lib/command/home.ts src/lib/command/home.test.ts
+  src/lib/command/home.ts src/lib/command/home.test.ts \
+  src/components/command/home/HomeContextPanels.tsx \
+  src/components/command/home/HomeContextPanels.test.tsx
 git commit -m "feat: add typed Command contacts client"
 ```
 
