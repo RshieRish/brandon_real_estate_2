@@ -1,4 +1,5 @@
-import type { Contact, Task } from '@/lib/command/api';
+import type { Task } from '@/lib/command/api';
+import type { ContactSmartView } from '@/lib/command/contacts';
 
 type QueryValue = string | readonly string[] | undefined;
 type QueryRecord = Readonly<Record<string, QueryValue>>;
@@ -8,13 +9,9 @@ export type TaskWorkspaceView = Readonly<{
   due: 'all' | 'past';
 }>;
 
-export type ContactWorkspaceView = Readonly<{
-  kind: 'all' | 'never_contacted' | 'birthdays' | 'anniversaries' | 'recent_activity';
+export type LegacyContactWorkspaceView = Readonly<{
+  smart_view: ContactSmartView;
 }>;
-
-export type ContactWorkspaceViewResult =
-  | Readonly<{ state: 'available'; rows: readonly Contact[] }>
-  | Readonly<{ state: 'unavailable'; rows: readonly []; message: string }>;
 
 function first(value: QueryValue): string | undefined {
   return typeof value === 'string' ? value : value?.[0];
@@ -47,73 +44,22 @@ export function applyTaskWorkspaceView(
   });
 }
 
-export function parseContactWorkspaceQuery(query: QueryRecord): ContactWorkspaceView {
+function isContactSmartView(value: string | undefined): value is ContactSmartView {
+  return value === 'all'
+    || value === 'never_contacted'
+    || value === 'recently_active'
+    || value === 'birthdays_this_month'
+    || value === 'anniversaries_this_month';
+}
+
+export function parseLegacyContactWorkspaceQuery(query: QueryRecord): LegacyContactWorkspaceView {
+  const smartView = first(query.smart_view);
+  if (isContactSmartView(smartView)) return { smart_view: smartView };
   const filter = first(query.filter);
   const sort = first(query.sort);
-  if (filter === 'never_contacted' || filter === 'birthdays' || filter === 'anniversaries') {
-    return { kind: filter };
-  }
-  if (sort === 'recent_activity') return { kind: 'recent_activity' };
-  return { kind: 'all' };
-}
-
-function hasExplicitOptionalValue(value: string | null | undefined): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function monthOf(value: string): number | null {
-  const match = /^\d{4}-(\d{2})-\d{2}/.exec(value);
-  if (!match) return null;
-  const month = Number(match[1]);
-  return month >= 1 && month <= 12 ? month : null;
-}
-
-export function applyContactWorkspaceView(
-  contacts: readonly Contact[],
-  view: ContactWorkspaceView,
-  now: Date,
-): ContactWorkspaceViewResult {
-  if (view.kind === 'all') return { state: 'available', rows: [...contacts] };
-
-  if (view.kind === 'never_contacted') {
-    const leads = contacts.filter((contact) => contact.stage.toLowerCase() === 'lead');
-    if (!leads.every((contact) => hasExplicitOptionalValue(contact.last_contacted_at))) {
-      return { state: 'unavailable', rows: [], message: 'Last-contact history is unavailable for this lead filter.' };
-    }
-    return {
-      state: 'available',
-      rows: leads.filter((contact) => contact.last_contacted_at === null),
-    };
-  }
-
-  const field = view.kind === 'birthdays' ? 'birthday'
-    : view.kind === 'anniversaries' ? 'anniversary'
-      : 'recently_active_at';
-  if (!contacts.every((contact) => hasExplicitOptionalValue(contact[field]))) {
-    return {
-      state: 'unavailable',
-      rows: [],
-      message: `${view.kind === 'recent_activity' ? 'Recent-activity' : 'Celebration'} evidence is unavailable for this view.`,
-    };
-  }
-
-  if (view.kind === 'recent_activity') {
-    return {
-      state: 'available',
-      rows: [...contacts].sort((left, right) => {
-        const leftTime = left.recently_active_at ? Date.parse(left.recently_active_at) : Number.NEGATIVE_INFINITY;
-        const rightTime = right.recently_active_at ? Date.parse(right.recently_active_at) : Number.NEGATIVE_INFINITY;
-        return rightTime - leftTime || left.id - right.id;
-      }),
-    };
-  }
-
-  const month = now.getMonth() + 1;
-  return {
-    state: 'available',
-    rows: contacts.filter((contact) => {
-      const value = contact[field];
-      return typeof value === 'string' && monthOf(value) === month;
-    }),
-  };
+  if (filter === 'never_contacted') return { smart_view: 'never_contacted' };
+  if (filter === 'birthdays') return { smart_view: 'birthdays_this_month' };
+  if (filter === 'anniversaries') return { smart_view: 'anniversaries_this_month' };
+  if (sort === 'recent_activity') return { smart_view: 'recently_active' };
+  return { smart_view: 'all' };
 }

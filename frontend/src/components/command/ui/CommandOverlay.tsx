@@ -10,6 +10,7 @@ export type CommandOverlayProps = Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   labelledBy: string;
+  closeLabel?: string;
   triggerRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }>;
@@ -19,6 +20,7 @@ export function CommandOverlay({
   open,
   onOpenChange,
   labelledBy,
+  closeLabel = 'Close detail',
   triggerRef,
   children,
 }: CommandOverlayProps) {
@@ -48,7 +50,7 @@ export function CommandOverlay({
         <button
           type="button"
           className="command-overlay-close command-icon-button command-touch-target"
-          aria-label="Close detail"
+          aria-label={closeLabel}
           onClick={dismiss}
         >
           <X aria-hidden="true" size={20} />

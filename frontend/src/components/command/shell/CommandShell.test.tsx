@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useCommandToast } from '../ui/CommandToastProvider';
 import { CommandShell } from './CommandShell';
 
 const mockRouterPush = vi.fn();
@@ -11,6 +12,18 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockRouterPush, replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
+
+function ToastProbe() {
+  const { pushToast } = useCommandToast();
+  return (
+    <button
+      type="button"
+      onClick={() => pushToast({ tone: 'success', message: 'Contact saved' })}
+    >
+      Show toast
+    </button>
+  );
+}
 
 describe('CommandShell', () => {
   beforeEach(() => {
@@ -227,6 +240,34 @@ describe('CommandShell', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Command navigation' })).not.toBeInTheDocument(),
     );
+  });
+
+  it('owns one persistent toast provider across route changes', async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <CommandShell>
+        <ToastProbe />
+      </CommandShell>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show toast' }));
+    const status = screen.getByRole('status');
+    expect(within(status).getByText('Contact saved')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Dismiss Contact saved' })).toHaveLength(1);
+    expect(view.container.querySelectorAll('.command-toast-viewport')).toHaveLength(1);
+    expect(view.container.querySelector('.command-toast-viewport')?.closest('.command-root')).not.toBeNull();
+
+    mockPathname = '/admin/command/contacts';
+    view.rerender(
+      <CommandShell>
+        <ToastProbe />
+      </CommandShell>,
+    );
+
+    expect(view.container.querySelectorAll('.command-toast-viewport')).toHaveLength(1);
+    expect(screen.getAllByText('Contact saved')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Dismiss Contact saved' }));
+    expect(screen.queryByText('Contact saved')).not.toBeInTheDocument();
   });
 
   it('ships only Sold With Sweeney shell branding', () => {
