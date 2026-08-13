@@ -653,6 +653,11 @@
   font-weight: 800;
 }
 
+.command-root .command-contact-detail-main .command-tab:not([aria-selected='true']),
+.command-root .command-contact-detail-main .command-contact-region-heading > span {
+  color: #555960;
+}
+
 .command-root .command-tab.is-selected::after {
   content: '';
   position: absolute;
