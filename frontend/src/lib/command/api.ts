@@ -1,7 +1,6 @@
 import {
   contactsApi,
   decodeLegacyContact,
-  type ContactCelebrationRow,
   type ContactDirectoryPage,
   type ContactDirectoryRequest,
   type LegacyContact,
@@ -26,13 +25,6 @@ export type TaskFilters = Readonly<{
 
 export type Overview = { contacts: number; open_tasks: number; opportunities: number; active_smart_plans: number };
 export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null; last_contacted_at?: string | null; recently_active_at?: string | null; health_score?: number | null };
-type CompatibleCelebrationContact =
-  | (Contact & Partial<ContactCelebrationRow>)
-  | (ContactCelebrationRow & Partial<Contact>);
-export type Celebrations = Readonly<{
-  birthdays: readonly CompatibleCelebrationContact[];
-  anniversaries: readonly CompatibleCelebrationContact[];
-}>;
 export type LegacyContactWorkspace = Readonly<{
   contact: LegacyContact;
   timeline: readonly Readonly<{
@@ -114,7 +106,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-const decodeLegacyContacts: Decoder<LegacyContact[]> = (
+const decodeLegacyContacts: Decoder<readonly LegacyContact[]> = (
   input,
   path = 'response',
 ) => {
@@ -141,7 +133,7 @@ async function legacyContacts(
   limit = 50,
   offset = 0,
   filters: Readonly<{ query?: string; stage?: string }> = {},
-): Promise<LegacyContact[]> {
+): Promise<readonly LegacyContact[]> {
   const params = new URLSearchParams({
     limit: String(requestInteger(limit, 'request.limit', 1, 100)),
     offset: String(requestInteger(offset, 'request.offset', 0)),

@@ -18,7 +18,7 @@ import { HomeShortcutStrip } from './HomeShortcutStrip';
 import { HomeTaskQueue } from './HomeTaskQueue';
 
 export type CommandHomeProps = Readonly<{
-  loadHome?: () => Promise<CommandHomeModel>;
+  loadHome?: (signal?: AbortSignal) => Promise<CommandHomeModel>;
 }>;
 
 type HomeLoadState =
@@ -32,13 +32,23 @@ type HomePreferences = Readonly<{
   evidence: boolean;
 }>;
 
-const defaultLoadHome = () => loadCommandHome();
+const defaultLoadHome = (signal?: AbortSignal) => loadCommandHome(commandApi, new Date(), signal);
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && error.name === 'AbortError';
+}
 
 export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const { replace } = useRouter();
   const searchParams = useSearchParams();
   const createToken = searchParams.get('create') ?? '';
   const createTriggerRef = useRef<HTMLButtonElement>(null);
+  const refreshControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(false);
+  const refreshIdRef = useRef(0);
   const [loadState, setLoadState] = useState<HomeLoadState>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -61,13 +71,21 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   }, [createToken]);
 
   useEffect(() => {
-    let active = true;
-    void loadHome().then(
+    const controller = new AbortController();
+    const loadId = refreshIdRef.current + 1;
+    refreshIdRef.current = loadId;
+    void loadHome(controller.signal).then(
       (model) => {
-        if (active) setLoadState({ kind: 'ready', model });
+        if (!controller.signal.aborted && refreshIdRef.current === loadId) {
+          setLoadState({ kind: 'ready', model });
+        }
       },
       (error: unknown) => {
-        if (active) {
+        if (
+          !controller.signal.aborted
+          && refreshIdRef.current === loadId
+          && !isAbortError(error)
+        ) {
           setLoadState({
             kind: 'error',
             message: error instanceof Error ? error.message : 'Command Home is unavailable.',
@@ -76,11 +94,20 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       },
     );
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [attempt, loadHome]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      refreshControllerRef.current?.abort();
+    };
+  }, []);
+
   function retryHome() {
+    refreshControllerRef.current?.abort();
     setLoadState({ kind: 'loading' });
     setAttempt((current) => current + 1);
   }
@@ -122,9 +149,20 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       return;
     }
 
+    if (!mountedRef.current) return;
     setTaskSaved(true);
+    refreshControllerRef.current?.abort();
+    const refreshController = new AbortController();
+    refreshControllerRef.current = refreshController;
+    const refreshId = refreshIdRef.current + 1;
+    refreshIdRef.current = refreshId;
     try {
-      const refreshedModel = await loadHome();
+      const refreshedModel = await loadHome(refreshController.signal);
+      if (
+        !mountedRef.current
+        || refreshController.signal.aborted
+        || refreshIdRef.current !== refreshId
+      ) return;
       setLoadState({ kind: 'ready', model: refreshedModel });
       setTaskTitle('');
       setTaskDescription('');
@@ -132,10 +170,19 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       setTaskDueAt('');
       closeTask();
     } catch (error) {
+      if (
+        !mountedRef.current
+        || refreshController.signal.aborted
+        || refreshIdRef.current !== refreshId
+        || isAbortError(error)
+      ) return;
       const detail = error instanceof Error ? ` ${error.message}` : '';
       setTaskError(`Task saved, but Home could not refresh.${detail}`);
     } finally {
-      setTaskSaving(false);
+      if (mountedRef.current && refreshControllerRef.current === refreshController) {
+        setTaskSaving(false);
+        refreshControllerRef.current = null;
+      }
     }
   }
 

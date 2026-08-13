@@ -1,18 +1,241 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  adaptHomeCelebrations,
   buildCommandHomeModel,
+  loadAllContacts,
   loadCommandHome,
+  loadHomeSmartViewCounts,
   type CommandHomeApi,
 } from './home';
+import { CommandDecodeError } from './http';
+import type { ContactDirectoryRow } from './contacts';
 import {
   completeHomeInput,
   emptyButAvailableInput,
   emptyButUnavailableInput,
-  inputWithoutLastContactFields,
-  inputWithoutRecentActivityFields,
 } from '@/test/fixtures/commandHome';
 
 const now = new Date('2026-08-12T13:00:00.000Z');
+
+function directoryRow(id: number, stage = 'lead'): ContactDirectoryRow {
+  return {
+    id,
+    first_name: `Contact ${id}`,
+    last_name: 'Synthetic',
+    display_name: `Contact ${id} Synthetic`,
+    primary_email: null,
+    primary_phone: null,
+    stage,
+    lead_backed: false,
+    origins: ['recovered'],
+    sources: ['kw_command'],
+    health_score: null,
+    last_contacted_at: null,
+    last_interaction_at: null,
+    owner: null,
+    assignee: null,
+    tags: [],
+    birthday: null,
+    anniversary: null,
+    evidence_quality: 'complete' as const,
+  };
+}
+
+function directoryPage(page: number, rows: readonly ContactDirectoryRow[], total = 366) {
+  return {
+    rows,
+    total,
+    page,
+    page_size: 100,
+    page_count: total === 0 ? 0 : Math.ceil(total / 100),
+    sort: 'name' as const,
+    direction: 'asc' as const,
+  };
+}
+
+describe('Home contact loading contracts', () => {
+  it('loads all 366 contacts across exact stable 100/100/100/66 pages with one signal', async () => {
+    const pages = [
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 1)),
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 101)),
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 201)),
+      Array.from({ length: 66 }, (_value, index) => directoryRow(index + 301)),
+    ];
+    const contactDirectory = vi.fn().mockImplementation(
+      async (request: { page?: number }) => directoryPage(request.page ?? 1, pages[(request.page ?? 1) - 1] ?? []),
+    );
+    const controller = new AbortController();
+
+    await expect(loadAllContacts({ contactDirectory }, controller.signal)).resolves.toHaveLength(366);
+    expect(contactDirectory).toHaveBeenCalledTimes(4);
+    pages.forEach((_rows, index) => {
+      expect(contactDirectory).toHaveBeenNthCalledWith(index + 1, {
+        smart_view: 'all',
+        sort: 'name',
+        direction: 'asc',
+        page: index + 1,
+        page_size: 100,
+      }, { signal: controller.signal });
+    });
+  });
+
+  it.each([
+    ['duplicate ids', [directoryPage(1, [directoryRow(1), directoryRow(1)], 2)]],
+    ['total drift', [
+      directoryPage(1, Array.from({ length: 100 }, (_value, index) => directoryRow(index + 1)), 101),
+      directoryPage(2, [directoryRow(101)], 102),
+    ]],
+    ['early empty page', [
+      directoryPage(1, Array.from({ length: 100 }, (_value, index) => directoryRow(index + 1)), 101),
+      directoryPage(2, [], 101),
+    ]],
+    ['final count mismatch', [
+      directoryPage(1, Array.from({ length: 100 }, (_value, index) => directoryRow(index + 1)), 102),
+      directoryPage(2, [directoryRow(101)], 102),
+    ]],
+  ])('rejects %s as unstable contact pagination', async (_name, pages) => {
+    const contactDirectory = vi.fn().mockImplementation(
+      async (request: { page?: number }) => pages[(request.page ?? 1) - 1] ?? pages[pages.length - 1],
+    );
+    await expect(loadAllContacts({ contactDirectory })).rejects.toMatchObject({
+      constructor: CommandDecodeError,
+      path: 'contacts',
+      expected: 'stable complete pagination',
+    });
+  });
+
+  it('returns an exact empty collection for the zero-page server contract', async () => {
+    const contactDirectory = vi.fn().mockResolvedValue(directoryPage(1, [], 0));
+    await expect(loadAllContacts({ contactDirectory })).resolves.toEqual([]);
+    expect(contactDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a native abort rejection unchanged', async () => {
+    const abort = new DOMException('Stopped', 'AbortError');
+    const contactDirectory = vi.fn().mockRejectedValue(abort);
+    await expect(loadAllContacts({ contactDirectory })).rejects.toBe(abort);
+  });
+
+  it('issues exactly four page-size-one SmartView count probes with one signal', async () => {
+    const totals = [12, 23, 4, 5];
+    const contactDirectory = vi.fn().mockImplementation(async (request: { page?: number }) => ({
+      ...directoryPage(request.page ?? 1, [directoryRow(1)], totals.shift() ?? 0),
+      page_size: 1,
+    }));
+    const controller = new AbortController();
+
+    await expect(loadHomeSmartViewCounts({ contactDirectory }, controller.signal)).resolves.toEqual({
+      never_contacted: 12,
+      recently_active: 23,
+      birthdays_this_month: 4,
+      anniversaries_this_month: 5,
+    });
+    expect(contactDirectory).toHaveBeenCalledTimes(4);
+    expect(contactDirectory.mock.calls.map(([request]) => request)).toEqual([
+      { smart_view: 'never_contacted', sort: 'name', direction: 'asc', page: 1, page_size: 1 },
+      { smart_view: 'recently_active', sort: 'name', direction: 'asc', page: 1, page_size: 1 },
+      { smart_view: 'birthdays_this_month', sort: 'name', direction: 'asc', page: 1, page_size: 1 },
+      { smart_view: 'anniversaries_this_month', sort: 'name', direction: 'asc', page: 1, page_size: 1 },
+    ]);
+    expect(contactDirectory.mock.calls.every((call) => call[1]?.signal === controller.signal)).toBe(true);
+  });
+
+  it('adapts and preserves all four valid celebration year qualities', () => {
+    const adapted = adaptHomeCelebrations({
+      birthdays: [
+        {
+          contact_id: 6,
+          display_name: 'Verified Year',
+          kind: 'birthday',
+          month: 8,
+          day: 12,
+          year: 1984,
+          year_quality: 'verified',
+          origin: 'internal_crm',
+        },
+        {
+          contact_id: 7,
+          display_name: 'Yearless',
+          kind: 'birthday',
+          month: 8,
+          day: 13,
+          year: null,
+          year_quality: 'yearless',
+          origin: 'recovered',
+        },
+        {
+          contact_id: 8,
+          display_name: 'Sentinel',
+          kind: 'birthday',
+          month: 8,
+          day: 14,
+          year: null,
+          year_quality: 'sentinel',
+          origin: 'recovered',
+        },
+        {
+          contact_id: 9,
+          display_name: 'Unknown',
+          kind: 'birthday',
+          month: 8,
+          day: 15,
+          year: null,
+          year_quality: 'unknown',
+          origin: 'recovered',
+        },
+      ],
+      anniversaries: [],
+    });
+
+    expect(adapted.birthdays.map((row) => ({
+      contactId: row.contactId,
+      year: row.year,
+      yearQuality: row.yearQuality,
+      origin: row.origin,
+    }))).toEqual([
+      { contactId: 6, year: 1984, yearQuality: 'verified', origin: 'internal_crm' },
+      { contactId: 7, year: null, yearQuality: 'yearless', origin: 'recovered' },
+      { contactId: 8, year: null, yearQuality: 'sentinel', origin: 'recovered' },
+      { contactId: 9, year: null, yearQuality: 'unknown', origin: 'recovered' },
+    ]);
+  });
+
+  it('rejects fabricated or mismatched celebration semantics without exposing row values', () => {
+
+    for (const value of [
+      { kind: 'anniversary', year: null, year_quality: 'yearless' },
+      { kind: 'birthday', year: 1900, year_quality: 'sentinel' },
+      { kind: 'birthday', year: null, year_quality: 'verified' },
+      { kind: 'birthday', year: 2020, year_quality: 'unknown' },
+    ] as const) {
+      expect(() => adaptHomeCelebrations({
+        birthdays: [{
+          contact_id: 7,
+          display_name: 'Private',
+          month: 8,
+          day: 13,
+          origin: 'recovered',
+          ...value,
+        }],
+        anniversaries: [],
+      })).toThrow(CommandDecodeError);
+    }
+
+    expect(() => adaptHomeCelebrations({
+      birthdays: [{
+        contact_id: 7,
+        display_name: 'Private',
+        kind: 'anniversary',
+        month: 8,
+        day: 13,
+        year: null,
+        year_quality: 'yearless',
+        origin: 'recovered',
+      }],
+      anniversaries: [],
+    })).toThrowError(expect.not.stringContaining('Private'));
+  });
+});
 
 describe('Follow-Up Readiness', () => {
   it('penalizes overdue work and never-contacted leads using observed values', () => {
@@ -41,8 +264,11 @@ describe('Follow-Up Readiness', () => {
     });
   });
 
-  it('marks readiness partial when last-contact coverage is unavailable', () => {
-    const model = buildCommandHomeModel(inputWithoutLastContactFields, now);
+  it('marks readiness partial when the server-owned SmartView totals are unavailable', () => {
+    const model = buildCommandHomeModel({
+      ...completeHomeInput,
+      smartViewCounts: null,
+    }, now);
 
     expect(model.readiness.status).toBe('partial');
     expect(model.readiness.coverage).toEqual({ available: 3, total: 4 });
@@ -57,23 +283,41 @@ describe('Follow-Up Readiness', () => {
     expect(model.nextActions.some((action) => action.kind === 'uncontacted_leads')).toBe(false);
   });
 
-  it('requires every lead last-contact value to be either a string or explicit null', () => {
-    const contacts = completeHomeInput.contacts ?? [];
+  it('uses only divergent server totals for all four SmartView counts and normalizes lead stages', () => {
     const model = buildCommandHomeModel({
       ...completeHomeInput,
-      contacts: contacts.map((contact, index) => index === 1
-        ? { ...contact, last_contacted_at: undefined }
-        : contact),
+      contacts: (completeHomeInput.contacts ?? []).map((contact, index) => ({
+        ...contact,
+        stage: index < 3 ? ' Lead ' : contact.stage,
+      })),
+      smartViewCounts: {
+        never_contacted: 1,
+        recently_active: 41,
+        birthdays_this_month: 42,
+        anniversaries_this_month: 43,
+      },
     }, now);
 
     expect(model.readiness.factors.find((factor) => factor.key === 'uncontacted_leads')).toMatchObject({
-      available: false,
-      score: null,
-      affected: null,
+      available: true,
+      score: 67,
+      affected: 1,
+      total: 3,
+      href: '/admin/command/contacts?smart_view=never_contacted',
     });
-    expect(model.shortcuts.find((shortcut) => shortcut.key === 'never_contacted')).toMatchObject({
-      count: null,
-      evidenceState: 'partial_capture',
+    expect(model.shortcuts.map(({ key, count, href }) => ({ key, count, href }))).toEqual([
+      { key: 'never_contacted', count: 1, href: '/admin/command/contacts?smart_view=never_contacted' },
+      { key: 'recently_active', count: 41, href: '/admin/command/contacts?smart_view=recently_active' },
+      { key: 'birthdays', count: 42, href: '/admin/command/contacts?smart_view=birthdays_this_month' },
+      { key: 'anniversaries', count: 43, href: '/admin/command/contacts?smart_view=anniversaries_this_month' },
+    ]);
+    expect(model.kpis.find((kpi) => kpi.key === 'never_contacted')).toMatchObject({
+      value: '1',
+      href: '/admin/command/contacts?smart_view=never_contacted',
+    });
+    expect(model.nextActions.find((action) => action.kind === 'uncontacted_leads')).toMatchObject({
+      affected: 1,
+      href: '/admin/command/contacts?smart_view=never_contacted',
     });
   });
 
@@ -116,11 +360,14 @@ describe('Follow-Up Readiness', () => {
     });
   });
 
-  it('keeps celebrations and recent activity unavailable when their source regions or fields are absent', () => {
-    const withoutRecentActivity = buildCommandHomeModel(inputWithoutRecentActivityFields, now);
+  it('keeps celebrations and SmartView shortcuts unavailable when their source regions are absent', () => {
+    const withoutSmartViews = buildCommandHomeModel({
+      ...completeHomeInput,
+      smartViewCounts: null,
+    }, now);
     const unavailable = buildCommandHomeModel(emptyButUnavailableInput, now);
 
-    expect(withoutRecentActivity.shortcuts.find((shortcut) => shortcut.key === 'recently_active')).toMatchObject({
+    expect(withoutSmartViews.shortcuts.find((shortcut) => shortcut.key === 'recently_active')).toMatchObject({
       count: null,
       evidenceState: 'partial_capture',
     });
@@ -139,22 +386,58 @@ describe('Follow-Up Readiness', () => {
 });
 
 function makeApi(overrides: Partial<CommandHomeApi> = {}): CommandHomeApi {
+  const rows = (completeHomeInput.contacts ?? []).map((contact) => ({
+    ...directoryRow(contact.id, contact.stage),
+    first_name: contact.first_name,
+    last_name: contact.last_name,
+    display_name: `${contact.first_name} ${contact.last_name}`,
+    primary_email: contact.email,
+    primary_phone: contact.phone,
+    health_score: contact.health_score ?? null,
+    last_contacted_at: contact.last_contacted_at ?? null,
+    last_interaction_at: contact.recently_active_at ?? null,
+  }));
+  const totals = {
+    never_contacted: 2,
+    recently_active: 2,
+    birthdays_this_month: 1,
+    anniversaries_this_month: 1,
+  } as const;
   return {
     overview: vi.fn().mockResolvedValue(completeHomeInput.overview),
-    contacts: vi.fn().mockImplementation(async (_limit: number, offset: number) => {
-      if (offset === 0) return Array.from({ length: 100 }, (_, index) => ({
-        id: index + 1,
-        first_name: `Contact ${index + 1}`,
-        last_name: 'Synthetic',
-        email: null,
-        phone: null,
-        stage: 'lead',
-      }));
-      return [{ id: 101, first_name: 'Last', last_name: 'Page', email: null, phone: null, stage: 'lead' }];
-    }),
+    contactDirectory: vi.fn().mockImplementation(async (
+      request: Parameters<CommandHomeApi['contactDirectory']>[0],
+    ) => request.smart_view === 'all'
+      ? directoryPage(request.page ?? 1, rows, rows.length)
+      : {
+          ...directoryPage(1, [rows[0]], totals[request.smart_view ?? 'never_contacted']),
+          page_size: 1,
+          page_count: totals[request.smart_view ?? 'never_contacted'],
+        }),
     tasks: vi.fn().mockResolvedValue(completeHomeInput.tasks),
     opportunities: vi.fn().mockResolvedValue(completeHomeInput.opportunities),
-    celebrations: vi.fn().mockResolvedValue(completeHomeInput.celebrations),
+    celebrations: vi.fn().mockResolvedValue({
+      birthdays: [{
+        contact_id: 1,
+        display_name: 'Avery Lake',
+        kind: 'birthday',
+        month: 8,
+        day: 21,
+        year: 1991,
+        year_quality: 'verified',
+        origin: 'internal_crm',
+      }],
+      anniversaries: [{
+        contact_id: 2,
+        display_name: 'Morgan Hill',
+        kind: 'anniversary',
+        month: 8,
+        day: 12,
+        year: 2018,
+        year_quality: 'verified',
+        origin: 'internal_crm',
+      }],
+    }),
     goals: vi.fn().mockResolvedValue(completeHomeInput.goals),
     aiBriefing: vi.fn().mockResolvedValue(completeHomeInput.briefing),
     ...overrides,
@@ -162,15 +445,126 @@ function makeApi(overrides: Partial<CommandHomeApi> = {}): CommandHomeApi {
 }
 
 describe('loadCommandHome', () => {
-  it('loads current regions independently and exhausts all 100-row contact pages', async () => {
-    const api = makeApi();
+  it('loads 366 contacts, four SmartView probes, and six regions with one identical signal', async () => {
+    const pages = [
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 1)),
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 101)),
+      Array.from({ length: 100 }, (_value, index) => directoryRow(index + 201)),
+      Array.from({ length: 66 }, (_value, index) => directoryRow(index + 301)),
+    ];
+    const api = makeApi({
+      contactDirectory: vi.fn().mockImplementation(async (
+        request: Parameters<CommandHomeApi['contactDirectory']>[0],
+      ) => request.smart_view === 'all'
+        ? directoryPage(request.page ?? 1, pages[(request.page ?? 1) - 1] ?? [])
+        : {
+            ...directoryPage(1, [directoryRow(1)], request.smart_view === 'never_contacted' ? 1 : 7),
+            page_size: 1,
+            page_count: request.smart_view === 'never_contacted' ? 1 : 7,
+          }),
+    });
+    const controller = new AbortController();
+    const model = await loadCommandHome(api, now, controller.signal);
+
+    expect(api.contactDirectory).toHaveBeenCalledTimes(8);
+    expect(api.tasks).toHaveBeenCalledWith({}, { signal: controller.signal });
+    expect(api.overview).toHaveBeenCalledWith({ signal: controller.signal });
+    expect(api.opportunities).toHaveBeenCalledWith({ signal: controller.signal });
+    expect(api.goals).toHaveBeenCalledWith({ signal: controller.signal });
+    expect(api.aiBriefing).toHaveBeenCalledWith({ signal: controller.signal });
+    expect(api.celebrations).toHaveBeenCalledWith(8, { signal: controller.signal });
+    const directoryCalls = vi.mocked(api.contactDirectory).mock.calls;
+    expect(directoryCalls.every((call) => call[1]?.signal === controller.signal)).toBe(true);
+    expect(
+      vi.mocked(api.contactDirectory).mock.calls.length
+      + vi.mocked(api.overview).mock.calls.length
+      + vi.mocked(api.tasks).mock.calls.length
+      + vi.mocked(api.opportunities).mock.calls.length
+      + vi.mocked(api.celebrations).mock.calls.length
+      + vi.mocked(api.goals).mock.calls.length
+      + vi.mocked(api.aiBriefing).mock.calls.length,
+    ).toBe(14);
+    expect(model.readiness.status).toBe('at_risk');
+    expect(model.readiness.coverage).toEqual({ available: 4, total: 4 });
+    expect(model.regionErrors).toEqual({});
+  });
+
+  it('maps decoded directory fields explicitly into Home contacts', async () => {
+    const row = {
+      ...directoryRow(91, ' Lead '),
+      first_name: 'Wire',
+      last_name: 'Person',
+      primary_email: 'wire@example.test',
+      primary_phone: '+1 555 0191',
+      health_score: 87,
+      last_contacted_at: null,
+      last_interaction_at: '2026-08-11T10:00:00.000Z',
+    };
+    const api = makeApi({
+      contactDirectory: vi.fn().mockImplementation(async (
+        request: Parameters<CommandHomeApi['contactDirectory']>[0],
+      ) => request.smart_view === 'all'
+        ? directoryPage(1, [row], 1)
+        : {
+            ...directoryPage(1, request.smart_view === 'never_contacted' ? [] : [row], request.smart_view === 'never_contacted' ? 0 : 1),
+            page_size: 1,
+            page_count: request.smart_view === 'never_contacted' ? 0 : 1,
+          }),
+    });
+
     const model = await loadCommandHome(api, now);
 
-    expect(api.contacts).toHaveBeenNthCalledWith(1, 100, 0);
-    expect(api.contacts).toHaveBeenNthCalledWith(2, 100, 100);
-    expect(model.readiness.status).toBe('partial');
-    expect(model.readiness.coverage).toEqual({ available: 3, total: 4 });
-    expect(model.regionErrors).toEqual({});
+    expect(model.recentContacts).toEqual([{
+      id: 91,
+      first_name: 'Wire',
+      last_name: 'Person',
+      email: 'wire@example.test',
+      phone: '+1 555 0191',
+      stage: ' Lead ',
+      last_contacted_at: null,
+      recently_active_at: '2026-08-11T10:00:00.000Z',
+      health_score: 87,
+    }]);
+  });
+
+  it('settles contact rows and SmartView counts as one region and rejects inconsistent lead totals', async () => {
+    const api = makeApi({
+      contactDirectory: vi.fn().mockImplementation(async (
+        request: Parameters<CommandHomeApi['contactDirectory']>[0],
+      ) => request.smart_view === 'all'
+        ? directoryPage(1, [directoryRow(1, 'client')], 1)
+        : {
+            ...directoryPage(1, [directoryRow(1)], request.smart_view === 'never_contacted' ? 1 : 0),
+            page_size: 1,
+            page_count: request.smart_view === 'never_contacted' ? 1 : 0,
+          }),
+    });
+
+    const model = await loadCommandHome(api, now);
+
+    expect(model.recentContacts).toEqual([]);
+    expect(model.readiness.factors.find((factor) => factor.key === 'uncontacted_leads')?.available).toBe(false);
+    expect(model.shortcuts.every((shortcut) => shortcut.count === null)).toBe(true);
+    expect(model.regionErrors.contacts).toContain('consistent SmartView totals');
+  });
+
+  it('fails the combined contacts region when any count probe rejects', async () => {
+    const api = makeApi({
+      contactDirectory: vi.fn().mockImplementation(async (
+        request: Parameters<CommandHomeApi['contactDirectory']>[0],
+      ) => {
+        if (request.smart_view === 'birthdays_this_month') throw new Error('Count unavailable');
+        return request.smart_view === 'all'
+          ? directoryPage(1, [directoryRow(1)], 1)
+          : { ...directoryPage(1, [], 0), page_size: 1 };
+      }),
+    });
+
+    const model = await loadCommandHome(api, now);
+
+    expect(model.recentContacts).toEqual([]);
+    expect(model.shortcuts.every((shortcut) => shortcut.count === null)).toBe(true);
+    expect(model.regionErrors.contacts).toBe('Count unavailable');
   });
 
   it('preserves successful hero/task regions when one optional dependency fails', async () => {
@@ -183,6 +577,30 @@ describe('loadCommandHome', () => {
     expect(model.tasks).toHaveLength(4);
     expect(model.celebrations).toBeNull();
     expect(model.regionErrors).toMatchObject({ celebrations: 'Celebrations unavailable' });
+  });
+
+  it('adapts celebrations before settlement so invalid year semantics fail only that region', async () => {
+    const api = makeApi({
+      celebrations: vi.fn().mockResolvedValue({
+        birthdays: [{
+          contact_id: 1,
+          display_name: 'Private',
+          kind: 'birthday',
+          month: 8,
+          day: 12,
+          year: 1900,
+          year_quality: 'sentinel',
+          origin: 'recovered',
+        }],
+        anniversaries: [],
+      }),
+    });
+
+    const model = await loadCommandHome(api, now);
+
+    expect(model.celebrations).toBeNull();
+    expect(model.tasks).toHaveLength(4);
+    expect(model.regionErrors.celebrations).toContain('consistent celebration rows');
   });
 
   it('preserves failed task and goal regions as unavailable instead of verified empty arrays', async () => {
@@ -204,12 +622,45 @@ describe('loadCommandHome', () => {
     const failed = vi.fn().mockRejectedValue(new Error('Offline'));
     await expect(loadCommandHome({
       overview: failed,
-      contacts: failed,
+      contactDirectory: failed,
       tasks: failed,
       opportunities: failed,
       celebrations: failed,
       goals: failed,
       aiBriefing: failed,
     }, now)).rejects.toThrow('Command Home could not load any region');
+  });
+
+  it('fails before requests for a pre-aborted signal and preserves the exact reason', async () => {
+    const api = makeApi();
+    const reason = { kind: 'pre-abort' };
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    await expect(loadCommandHome(api, now, controller.signal)).rejects.toBe(reason);
+    expect(api.overview).not.toHaveBeenCalled();
+    expect(api.contactDirectory).not.toHaveBeenCalled();
+    expect(api.tasks).not.toHaveBeenCalled();
+    expect(api.opportunities).not.toHaveBeenCalled();
+    expect(api.celebrations).not.toHaveBeenCalled();
+    expect(api.goals).not.toHaveBeenCalled();
+    expect(api.aiBriefing).not.toHaveBeenCalled();
+  });
+
+  it('preserves a mid-flight abort reason after all regions settle', async () => {
+    let resolveOverview!: (value: NonNullable<typeof completeHomeInput.overview>) => void;
+    const api = makeApi({
+      overview: vi.fn().mockImplementation(() => new Promise((resolve) => {
+        resolveOverview = resolve;
+      })),
+    });
+    const reason = new Error('mid-flight stop');
+    const controller = new AbortController();
+    const promise = loadCommandHome(api, now, controller.signal);
+
+    controller.abort(reason);
+    resolveOverview(completeHomeInput.overview ?? { contacts: 0, open_tasks: 0, opportunities: 0, active_smart_plans: 0 });
+
+    await expect(promise).rejects.toBe(reason);
   });
 });

@@ -6,7 +6,6 @@ import {
   completeHomeInput,
   emptyButAvailableInput,
   emptyButUnavailableInput,
-  inputWithoutLastContactFields,
 } from '@/test/fixtures/commandHome';
 import { CommandHome } from './CommandHome';
 
@@ -40,9 +39,25 @@ vi.mock('@/lib/command/api', async (importOriginal) => {
 
 const now = new Date('2026-08-12T13:00:00.000Z');
 const completeHomeModel = buildCommandHomeModel(completeHomeInput, now);
-const partialHomeModel = buildCommandHomeModel(inputWithoutLastContactFields, now);
+const partialHomeModel = buildCommandHomeModel({
+  ...completeHomeInput,
+  smartViewCounts: null,
+}, now);
 const emptyHomeModel = buildCommandHomeModel(emptyButAvailableInput, now);
 const unavailableHomeModel = buildCommandHomeModel(emptyButUnavailableInput, now);
+const regionFailureHomeModel = buildCommandHomeModel({
+  ...completeHomeInput,
+  tasks: null,
+  goals: null,
+  celebrations: null,
+  briefing: null,
+  errors: {
+    tasks: 'Tasks unavailable',
+    goals: 'Goals unavailable',
+    celebrations: 'Celebrations unavailable',
+    briefing: 'Briefing unavailable',
+  },
+}, now);
 
 function resolved(model: CommandHomeModel = completeHomeModel) {
   return vi.fn().mockResolvedValue(model);
@@ -73,7 +88,7 @@ describe('Command Home', () => {
   });
 
   it('answers what needs attention with one readiness hero and exactly four KPIs', async () => {
-    render(<CommandHome loadHome={resolved()} />);
+    const { container } = render(<CommandHome loadHome={resolved()} />);
 
     expect(await screen.findByRole('heading', { name: 'Follow-Up Readiness' })).toBeInTheDocument();
     expect(screen.getAllByRole('heading', { name: 'Follow-Up Readiness' })).toHaveLength(1);
@@ -82,6 +97,13 @@ describe('Command Home', () => {
     expect(screen.getByRole('link', { name: /Review overdue tasks/i })).toHaveAttribute(
       'href',
       '/admin/command/tasks?tab=todo&due=past',
+    );
+    expect(container.querySelectorAll('a[href="/admin/command/contacts?smart_view=never_contacted"]')).toHaveLength(3);
+    expect(container.querySelectorAll('a[href="/admin/command/contacts?smart_view=recently_active"]')).toHaveLength(1);
+    expect(container.querySelectorAll('a[href="/admin/command/contacts?smart_view=birthdays_this_month"]')).toHaveLength(1);
+    expect(container.querySelectorAll('a[href="/admin/command/contacts?smart_view=anniversaries_this_month"]')).toHaveLength(1);
+    expect(Array.from(container.querySelectorAll('a')).map((link) => link.getAttribute('href')).join(' ')).not.toMatch(
+      /filter=never_contacted|filter=birthdays|filter=anniversaries|sort=recent_activity/,
     );
   });
 
@@ -119,6 +141,60 @@ describe('Command Home', () => {
     await user.click(retry);
     expect(await screen.findByRole('heading', { name: 'Follow-Up Readiness' })).toBeInTheDocument();
     expect(loadHome).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates one fresh controller per attempt and aborts retry and unmount cleanup', async () => {
+    const signals: AbortSignal[] = [];
+    const loadHome = vi.fn((signal?: AbortSignal) => {
+      if (signal) signals.push(signal);
+      if (signals.length === 1) return Promise.reject(new Error('Retryable'));
+      return Promise.resolve(completeHomeModel);
+    });
+    const user = userEvent.setup();
+    const view = render(<CommandHome loadHome={loadHome} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Retry Home' }));
+    expect(await screen.findByRole('heading', { name: 'Follow-Up Readiness' })).toBeInTheDocument();
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    view.unmount();
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  it('suppresses stale fulfillment from a test loader that ignores its aborted signal', async () => {
+    let resolveFirst!: (model: CommandHomeModel) => void;
+    let firstSignal: AbortSignal | undefined;
+    const firstLoad = vi.fn((signal?: AbortSignal) => {
+      firstSignal = signal;
+      return new Promise<CommandHomeModel>((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+    const secondLoad = vi.fn().mockResolvedValue(emptyHomeModel);
+    const view = render(<CommandHome loadHome={firstLoad} />);
+
+    view.rerender(<CommandHome loadHome={secondLoad} />);
+    expect(await screen.findByText('Your follow-up queue is clear.')).toBeInTheDocument();
+    expect(firstSignal?.aborted).toBe(true);
+
+    await act(async () => resolveFirst(completeHomeModel));
+    expect(screen.getByText('Your follow-up queue is clear.')).toBeInTheDocument();
+    expect(screen.queryByText('Call Avery')).not.toBeInTheDocument();
+  });
+
+  it('keeps AbortError rejection silent instead of rendering the global error panel', async () => {
+    const abort = new DOMException('Synthetic stop', 'AbortError');
+    const loadHome = vi.fn().mockRejectedValue(abort);
+
+    render(<CommandHome loadHome={loadHome} />);
+
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('status', { name: 'Loading Command Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Synthetic stop')).not.toBeInTheDocument();
   });
 
   it('renders an available empty workspace as a positive operational state', async () => {
@@ -169,21 +245,8 @@ describe('Command Home', () => {
   });
 
   it('keeps failed task, goal, celebration, and briefing regions unavailable and retries the snapshot', async () => {
-    const regionFailureModel = buildCommandHomeModel({
-      ...completeHomeInput,
-      tasks: null,
-      goals: null,
-      celebrations: null,
-      briefing: null,
-      errors: {
-        tasks: 'Tasks unavailable',
-        goals: 'Goals unavailable',
-        celebrations: 'Celebrations unavailable',
-        briefing: 'Briefing unavailable',
-      },
-    }, now);
     const loadHome = vi.fn()
-      .mockResolvedValueOnce(regionFailureModel)
+      .mockResolvedValueOnce(regionFailureHomeModel)
       .mockResolvedValueOnce(completeHomeModel);
     const user = userEvent.setup();
     render(<CommandHome loadHome={loadHome} />);
@@ -326,6 +389,96 @@ describe('Command Home', () => {
     expect(await within(within(metrics).getByRole('link', { name: /Open tasks/i })).findByText('5')).toBeInTheDocument();
     expect(screen.getByText(/4 overdue tasks need attention first/i)).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
+  });
+
+  it('aborts a pending quick refresh on retry and ignores its later stale rejection', async () => {
+    const user = userEvent.setup();
+    const signals: Array<AbortSignal | undefined> = [];
+    let rejectQuickRefresh!: (reason: unknown) => void;
+    const loadHome = vi.fn((signal?: AbortSignal) => {
+      signals.push(signal);
+      if (signals.length === 1) return Promise.resolve(regionFailureHomeModel);
+      if (signals.length === 2) {
+        return new Promise<CommandHomeModel>((_resolve, reject) => {
+          rejectQuickRefresh = reject;
+        });
+      }
+      return Promise.resolve(emptyHomeModel);
+    });
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('button', { name: 'Retry unavailable regions' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Race-safe task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Retry unavailable regions' }));
+
+    expect(await screen.findByText('Your follow-up queue is clear.')).toBeInTheDocument();
+    expect(signals[1]?.aborted).toBe(true);
+    await act(async () => rejectQuickRefresh(new Error('Stale quick refresh')));
+    expect(screen.getByText('Your follow-up queue is clear.')).toBeInTheDocument();
+    expect(screen.queryByText(/Home could not refresh/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale quick refresh')).not.toBeInTheDocument();
+  });
+
+  it('aborts a pending quick-task refresh on unmount', async () => {
+    const user = userEvent.setup();
+    let refreshSignal: AbortSignal | undefined;
+    const loadHome = vi.fn((signal?: AbortSignal) => {
+      if (loadHome.mock.calls.length === 1) return Promise.resolve(completeHomeModel);
+      refreshSignal = signal;
+      return new Promise<CommandHomeModel>(() => undefined);
+    });
+    const view = render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Unmount-safe task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(2));
+
+    expect(refreshSignal?.aborted).toBe(false);
+    view.unmount();
+    expect(refreshSignal?.aborted).toBe(true);
+  });
+
+  it('does not start a Home refresh when unmounted during the task mutation', async () => {
+    const user = userEvent.setup();
+    let resolveCreateTask!: (value: {
+      id: number;
+      title: string;
+      contact_id: null;
+      description: string;
+      priority: string;
+      due_at: null;
+      status: string;
+    }) => void;
+    apiMocks.createTask.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveCreateTask = resolve;
+    }));
+    const loadHome = resolved();
+    const view = render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Deferred task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(1));
+    view.unmount();
+
+    await act(async () => resolveCreateTask({
+      id: 21,
+      title: 'Deferred task',
+      contact_id: null,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'open',
+    }));
+
+    expect(loadHome).toHaveBeenCalledTimes(1);
   });
 
   it('uses Customize only to change visible local Home panels', async () => {

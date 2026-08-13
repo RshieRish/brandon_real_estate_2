@@ -46,6 +46,12 @@ export const completeHomeInput: CommandHomeInput = {
       recently_active_at: '2026-08-10T12:00:00.000Z',
     },
   ],
+  smartViewCounts: {
+    never_contacted: 2,
+    recently_active: 2,
+    birthdays_this_month: 1,
+    anniversaries_this_month: 1,
+  },
   tasks: [
     { id: 1, title: 'Call Avery', contact_id: 1, description: '', priority: 'high', due_at: '2026-08-09T13:00:00.000Z', status: 'open' },
     { id: 2, title: 'Review offer', contact_id: 4, description: '', priority: 'high', due_at: '2026-08-10T13:00:00.000Z', status: 'open' },
@@ -64,24 +70,26 @@ export const completeHomeInput: CommandHomeInput = {
   celebrations: {
     birthdays: [
       {
-        id: 1,
-        first_name: 'Avery',
-        last_name: 'Lake',
-        email: 'avery@example.test',
-        phone: null,
-        stage: 'lead',
-        birthday: '1991-08-21',
+        contactId: 1,
+        displayName: 'Avery Lake',
+        kind: 'birthday',
+        month: 8,
+        day: 21,
+        year: 1991,
+        yearQuality: 'verified',
+        origin: 'internal_crm',
       },
     ],
     anniversaries: [
       {
-        id: 2,
-        first_name: 'Morgan',
-        last_name: 'Hill',
-        email: null,
-        phone: null,
-        stage: 'lead',
-        anniversary: '2018-08-12',
+        contactId: 2,
+        displayName: 'Morgan Hill',
+        kind: 'anniversary',
+        month: 8,
+        day: 12,
+        year: 2018,
+        yearQuality: 'verified',
+        origin: 'internal_crm',
       },
     ],
   },
@@ -97,45 +105,15 @@ export const completeHomeInput: CommandHomeInput = {
   errors: {},
 };
 
-export const inputWithoutLastContactFields: CommandHomeInput = {
-  ...completeHomeInput,
-  contacts: completeHomeInput.contacts === null
-    ? null
-    : completeHomeInput.contacts.map((contact) => ({
-        id: contact.id,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        email: contact.email,
-        phone: contact.phone,
-        stage: contact.stage,
-        birthday: contact.birthday,
-        anniversary: contact.anniversary,
-        recently_active_at: contact.recently_active_at,
-        health_score: contact.health_score,
-      })),
-};
-
-export const inputWithoutRecentActivityFields: CommandHomeInput = {
-  ...completeHomeInput,
-  contacts: completeHomeInput.contacts === null
-    ? null
-    : completeHomeInput.contacts.map((contact) => ({
-        id: contact.id,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        email: contact.email,
-        phone: contact.phone,
-        stage: contact.stage,
-        birthday: contact.birthday,
-        anniversary: contact.anniversary,
-        last_contacted_at: contact.last_contacted_at,
-        health_score: contact.health_score,
-      })),
-};
-
 export const emptyButAvailableInput: CommandHomeInput = {
   overview: { contacts: 0, open_tasks: 0, opportunities: 0, active_smart_plans: 0 },
   contacts: [],
+  smartViewCounts: {
+    never_contacted: 0,
+    recently_active: 0,
+    birthdays_this_month: 0,
+    anniversaries_this_month: 0,
+  },
   tasks: [],
   opportunities: [],
   celebrations: { birthdays: [], anniversaries: [] },
@@ -147,6 +125,7 @@ export const emptyButAvailableInput: CommandHomeInput = {
 export const emptyButUnavailableInput: CommandHomeInput = {
   overview: null,
   contacts: null,
+  smartViewCounts: null,
   tasks: null,
   opportunities: null,
   celebrations: null,

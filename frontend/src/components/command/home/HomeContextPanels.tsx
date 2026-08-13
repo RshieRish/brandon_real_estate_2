@@ -6,8 +6,8 @@ export function HomeContextPanels({ model }: { model: CommandHomeModel }) {
   const recentlyActive = model.shortcuts.find((shortcut) => shortcut.key === 'recently_active');
   const celebrationRows = model.celebrations
     ? [
-        ...model.celebrations.birthdays.map((contact) => ({ contact, kind: 'Birthday' })),
-        ...model.celebrations.anniversaries.map((contact) => ({ contact, kind: 'Anniversary' })),
+        ...model.celebrations.birthdays,
+        ...model.celebrations.anniversaries,
       ]
     : null;
 
@@ -59,10 +59,12 @@ export function HomeContextPanels({ model }: { model: CommandHomeModel }) {
           <p className="command-home-neutral-copy">Birthday and anniversary records are unavailable.</p>
         ) : celebrationRows.length > 0 ? (
           <ul className="command-home-celebrations">
-            {celebrationRows.slice(0, 5).map(({ contact, kind }) => (
-              <li key={`${kind}-${contact.id}`}>
-                <span>{contact.first_name} {contact.last_name}</span>
-                <strong>{kind}</strong>
+            {celebrationRows.slice(0, 5).map((row) => (
+              <li key={`${row.kind}-${row.contactId}`}>
+                <Link href={`/admin/command/contacts/${row.contactId}`}>
+                  {row.displayName}
+                </Link>
+                <strong>{row.kind === 'birthday' ? 'Birthday' : 'Anniversary'} · {row.month}/{row.day}</strong>
               </li>
             ))}
           </ul>

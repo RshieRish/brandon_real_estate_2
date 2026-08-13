@@ -374,6 +374,30 @@ describe('commandApi', () => {
     }
   });
 
+  it('fails closed on a malformed snake-case celebration response before Home adaptation', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-malformed-celebrations' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        birthdays: [{
+          contact_id: 7,
+          display_name: 'Private',
+          kind: 'birthday',
+          month: 8,
+          day: 13,
+          year: null,
+          year_quality: 'yearless',
+          origin: 'recovered',
+          unexpected: true,
+        }],
+        anniversaries: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.celebrations(8)).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
   it('pins decoded create and update results to required nullable legacy keys', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-contact-mutations' });
     const missingLeadId = {
