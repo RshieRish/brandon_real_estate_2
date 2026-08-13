@@ -3340,7 +3340,7 @@ export type ContactDirectoryQueryController = Readonly<{
 }>;
 ```
 
-The parser accepts only Task 5C enums and bounded integers. Invalid owned values resolve to defaults (`page=1`, `page_size=50`, `smart_view=all`, `sort=name`, `direction=asc`) and the next canonical replace removes them; repeated `tag/source/origin` values are parsed, deduplicated, and sorted. The serializer preserves unrelated query parameters, deletes all owned keys before writing canonical values in `CONTACT_QUERY_KEYS` order, and omits default/empty values except `page` and `page_size`. `replace()` resets page to 1 whenever any filter, SmartView, sort, direction, or page-size value changes; an explicit page-only patch preserves filters. It calls `router.replace(pathname + '?' + params, {scroll:false})` and never writes browser history per keystroke.
+The parser accepts only Task 5C enums, bounded integers, and the exact Task 5C bounded text shapes. `stage` is deliberately not an enum: blank means no stage filter, while every nonblank trimmed value of at most 50 characters remains representable. Do not narrow it to six UI values; a datalist may suggest familiar values only if the bound input still preserves and submits arbitrary valid current values. Invalid owned values resolve to defaults (`page=1`, `page_size=50`, `smart_view=all`, `sort=name`, `direction=asc`) and the next canonical replace removes them; repeated `tag/source/origin` values are parsed, deduplicated, and sorted. The serializer preserves unrelated query parameters, deletes all owned keys before writing canonical values in `CONTACT_QUERY_KEYS` order, and omits default/empty values except `page` and `page_size`. `replace()` resets page to 1 whenever any filter, SmartView, sort, direction, or page-size value changes; an explicit page-only patch preserves filters. It calls `router.replace(pathname + '?' + params, {scroll:false})` and never writes browser history per keystroke.
 
 Replace the client-filtering `ContactWorkspaceView` in `workspaceFilters.ts` with this one-way compatibility adapter; Tasks helpers in that file remain unchanged:
 
@@ -3371,7 +3371,7 @@ Tests cover round trip, invalid enum/range cleanup, repeated-value ordering, res
 `ContactsWorkspace.test.tsx` uses a typed fake `ContactsApi`, fake router/search params, and fake timers. It asserts:
 
 - a full-width light canvas with module title, exact total, SmartView tabs, search, filter trigger, column menu, Add Contact, and server page controls;
-- columns in default order: select, Name, Primary contact, Owner / Assignee, Tags, Stage, Health, Last activity, Origin / evidence, row action;
+- columns in default order: select, Name, Primary contact, Owner / Assignee, Tags, Stage, Health, Last activity, Origin / source, row action;
 - 52px body rows, sticky 44px header, 44px minimum controls, visible keyboard focus, and no card-per-contact layout at desktop width;
 - sort/filter/SmartView/page updates call the server with the canonical request and persist in the URL;
 - search waits exactly 250ms, aborts the superseded request, and ignores a stale response even if the mock resolves it after the latest request;
@@ -3379,8 +3379,9 @@ Tests cover round trip, invalid enum/range cleanup, repeated-value ordering, res
 - Enter/Space opens `/admin/command/contacts/{id}` unless focus is on checkbox/menu/action; pointer row click uses the same URL;
 - page checkbox selects only visible IDs, indeterminate state is correct, navigation/filter changes clear selection, and bulk stage/tag operations send the explicit sorted IDs once;
 - bulk success replaces/refetches the page, clears selection, and raises a success toast; 409/422 preserves selection and raises an error toast;
-- loading skeleton, global true-empty, filtered no-results with Clear filters, evidence-only rows, partial/shell limitation, recoverable request error, and retry all have distinct text/actions;
-- `recovered`, `lead_backed`, `legacy_only`, and `internal_only` badges are distinct; source-only evidence never uses the normalized/recovered-success badge;
+- loading skeleton, global true-empty, filtered no-results with Clear filters, refreshing prior page, recoverable request error, and retry all have distinct text/actions;
+- every row renders the exact `origins` and `sources` supplied by `ContactDirectoryRow`; `recovered`, `lead_backed`, `legacy_only`, and `internal_only` origin badges remain distinct, and no sparse-field heuristic relabels or suppresses them;
+- the optional stage filter preserves an arbitrary nonblank trimmed value up to 50 characters, while bulk stage and Add Contact stage controls require and submit arbitrary nonblank values up to 50 characters; suggested stages never form a closed six-value enum;
 - Add Contact opens the shared overlay, traps/restores focus, closes on Escape only when not submitting, validates fields, calls `contactsApi.create`, announces success, closes, and navigates to the returned internal contact.
 
 Run:
@@ -3412,19 +3413,19 @@ State rules are exact:
 loading + no page       -> table-shaped skeleton
 success total=0 + no active filters -> "No contacts yet" and Add Contact
 success rows=[] + active filters     -> "No contacts match these filters" and Clear filters
-row with recovered source but no normalized children -> "Source evidence only"
-row/evidence with partial|shell|error capture         -> "Recovered with limitations"
 non-abort request failure                             -> error panel + Retry
 refreshing prior page                                 -> aria-busy table, controls remain usable
 ```
 
-The table renders only server rows, supplies an accessible caption, uses `aria-sort`, labels checkboxes with contact display labels, and uses a native table inside a horizontally scrollable region. Selection is a `Set<number>` limited to current row IDs. Bulk action menus expose only Task 6 actions. The create drawer fields exactly match `ContactCreateInput`; recovered/provider fields are read-only and absent.
+Every Task 8 directory row is an already materialized `CRMContact` projection. The approved Task 5C `ContactDirectoryRow` has no exact source-only discriminator, and the current Task 5C service supplies no directory capture-quality state. Therefore Task 8 renders only the row's exact `origins` and `sources`; it must not infer `Source evidence only`, `Recovered with limitations`, or badge suppression from null email/phone, missing owner/assignee/tags, or any other sparse presentation fields. Source-only/materialized occurrence status and capture quality remain required in Task 9 section/evidence views because those DTOs expose the discriminants explicitly.
+
+The table renders only server rows, supplies an accessible caption, uses `aria-sort`, labels checkboxes with contact display labels, and uses a native table inside a horizontally scrollable region. Selection is a `Set<number>` limited to current row IDs. Bulk action menus expose only Task 6 actions. Stage is an arbitrary bounded Task 5C string, not a six-value frontend enum: filter controls allow blank/unset or any trimmed value up to 50 characters, and bulk/create controls require any nonblank value up to 50 characters while preserving existing unknown values. The create drawer fields exactly match `ContactCreateInput`; recovered/provider fields are read-only and absent.
 
 - [ ] **Step 5: Apply Command geometry and responsive behavior in shared CSS**
 
 Use existing SWS color/type/spacing tokens in `frontend/src/app/admin/command/command-shell.css`; introduce only `command-contacts-*` structural classes. At the 1800×982 reference viewport the content fills the Command canvas, toolbar controls remain on one line, the table uses a 44px header and 52px rows, Name is sticky after selection, and page controls remain below the table. Do not reproduce source-brand colors or add another rail/header.
 
-At `max-width: 1100px`, hide Owner/Assignee and evidence columns behind the column menu. At `max-width: 760px`, keep Name, Primary contact, Stage, and action visible, move filters into the shared overlay, and retain horizontal scroll rather than changing rows into cards. Print hides selection, actions, toolbar, bulk controls, pagination, and toast viewport. Icons are Phosphor with `aria-hidden`; icon-only buttons have explicit labels. Text and focus contrast use the existing accessible tokens.
+At `max-width: 1100px`, hide Owner/Assignee and Origin/source columns behind the column menu. At `max-width: 760px`, keep Name, Primary contact, Stage, and action visible, move filters into the shared overlay, and retain horizontal scroll rather than changing rows into cards. Print hides selection, actions, toolbar, bulk controls, pagination, and toast viewport. Icons are Phosphor with `aria-hidden`; icon-only buttons have explicit labels. Text and focus contrast use the existing accessible tokens.
 
 - [ ] **Step 6: Wire the route, run focused/full checks, and commit**
 
@@ -3548,11 +3549,11 @@ git commit -m "feat: add full Command contact detail workspace"
 
 - [ ] **Step 1: Add deterministic browser fixtures/routes**
 
-Use synthetic names/data and intercept every contact endpoint. Include 317 recovered identities/317 positions/zero aliases, 51 lead-backed contacts partitioned into two verified overlaps and 49 legacy-only contacts, five redacted placeholder-evidence fixtures identified only by fake ordinals/hashes and field categories, every view state, one materialized and one source-only cross-domain row, one sentinel birthday, one yearless birthday, and one verified anniversary.
+Use synthetic names/data and intercept every contact endpoint. Include 317 recovered identities/317 positions/zero aliases, 51 lead-backed contacts partitioned into two verified overlaps and 49 legacy-only contacts, five redacted placeholder-evidence fixtures identified only by fake ordinals/hashes and field categories, every view state, one materialized and one source-only cross-domain row, one sentinel birthday, one yearless birthday, and one verified anniversary. Directory fixtures expose only exact Task 5C origin/source facts; the materialized/source-only and capture-quality fixtures belong to the Task 9 detail section/evidence endpoints whose DTOs carry those discriminants.
 
 - [ ] **Step 2: Write Playwright journeys**
 
-Cover directory search/filter/sort/page, selection/bulk action, add drawer, contact activation, previous/next/jump, all eight views, nested task states, evidence download request, partial/error retry, mobile profile disclosure, keyboard-only operation, focus restoration, escape, no horizontal page overflow, and browser console error gate.
+Cover directory search/filter/sort/page, selection/bulk action, add drawer, arbitrary nonblank bounded stage filter/bulk/create values, contact activation, previous/next/jump, all eight views, nested task states, evidence download request, detail partial/error evidence and retry, mobile profile disclosure, keyboard-only operation, focus restoration, escape, no horizontal page overflow, and browser console error gate.
 
 Run axe on directory, detail Timeline, source-only Tasks, and evidence drawer. Verify tab/tabpanel relationships, live announcements, headings, table names, target sizes, forced colors, and reduced motion.
 
