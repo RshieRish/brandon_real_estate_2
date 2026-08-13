@@ -1,12 +1,13 @@
 import asyncio
+import logging
 import os
 import random
-from datetime import datetime, timezone
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 import traceback
-import logging
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import settings
 from routers import (
@@ -17,6 +18,8 @@ from routers import (
     booking,
     chat,
     command,
+    command_contacts,
+    command_provenance,
     content,
     crm,
     evaluator,
@@ -77,7 +80,17 @@ app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
+app.include_router(
+    command_contacts.router,
+    prefix="/api/v1/command",
+    tags=["command-contacts"],
+)
 app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
+app.include_router(
+    command_provenance.router,
+    prefix="/api/v1/command",
+    tags=["command-provenance"],
+)
 
 
 async def _notification_retry_loop() -> None:
@@ -221,11 +234,13 @@ async def stop_background_loops() -> None:
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logging.error(f"Global exception caught: {exc}")
-    logging.error(traceback.format_exc())
+    # This is the final privacy boundary for failures raised while FastAPI is
+    # unwinding yield dependencies (including transaction finalizers). Never
+    # log or return exception text, request values, database paths, or payloads.
+    logging.error("Unhandled application exception")
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "error": str(exc)},
+        content={"detail": "Internal Server Error"},
     )
 
 

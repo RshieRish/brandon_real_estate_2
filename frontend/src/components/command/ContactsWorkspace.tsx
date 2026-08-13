@@ -1,13 +1,539 @@
 'use client';
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { Plus, Users, WarningCircle } from '@phosphor-icons/react';
-import { commandApi, type Contact } from '@/lib/command/api';
 
-export function ContactsWorkspace(){
-  const [items,setItems]=useState<Contact[]>([]),[query,setQuery]=useState(''),[stage,setStage]=useState(''),[error,setError]=useState<string|null>(null),[open,setOpen]=useState(false),[loading,setLoading]=useState(true);
-  const [draft,setDraft]=useState({first_name:'',last_name:'',email:'',phone:''});
-  const load=async()=>{setLoading(true);try{const pageSize=100;const all:Contact[]=[];for(let offset=0;;offset+=pageSize){const page=await commandApi.contacts(pageSize,offset,{query,stage});all.push(...page);if(page.length<pageSize)break}setItems(all);setError(null)}catch(e){setError(e instanceof Error?e.message:'Unable to load contacts')}finally{setLoading(false)}}; useEffect(()=>{const timeout=window.setTimeout(()=>void load(),200);return()=>window.clearTimeout(timeout)},[query,stage]);
-  async function add(){try{const created=await commandApi.createContact(draft);setItems(x=>[created,...x]);setOpen(false);setDraft({first_name:'',last_name:'',email:'',phone:''})}catch(e){setError(e instanceof Error?e.message:'Unable to create contact')}}
-  return <div className="min-h-[100dvh] bg-[#080807] p-6 text-white"><div className="mx-auto max-w-6xl"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.25em] text-[#eac469]">Internal CRM</p><h1 className="mt-1 text-3xl font-black">Contacts</h1></div><button onClick={()=>setOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#eac469] px-4 py-2 font-bold text-black"><Plus size={17}/>Add contact</button></header><div className="mt-6 grid gap-3 sm:grid-cols-[1fr_180px]"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search name, email, or phone" className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 outline-none focus:border-[#eac469]"/><select aria-label="Filter by stage" value={stage} onChange={e=>setStage(e.target.value)} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-[#eac469]"><option value="">All stages</option>{['lead','nurture','appointment','client','past_client','lost'].map(value=><option key={value} value={value}>{value.replace('_',' ')}</option>)}</select></div>{error&&<p className="mt-4 flex gap-2 text-red-300"><WarningCircle size={18}/>{error}</p>}<div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-white/[.035]"><table className="w-full text-left text-sm"><thead className="bg-white/5 text-xs uppercase tracking-widest text-white/45"><tr><th className="p-4">Contact</th><th className="p-4">Email</th><th className="p-4">Phone</th><th className="p-4">Stage</th></tr></thead><tbody>{items.map(c=><tr key={c.id} className="border-t border-white/10"><td className="p-4 font-semibold"><Link className="hover:text-[#eac469]" href={`/admin/command/contacts/${c.id}`}>{c.first_name} {c.last_name}</Link></td><td className="p-4 text-white/60">{c.email??'—'}</td><td className="p-4 text-white/60">{c.phone??'—'}</td><td className="p-4"><span className="rounded-full bg-[#eac469]/15 px-2 py-1 text-xs text-[#eac469]">{c.stage}</span></td></tr>)}{!loading&&!items.length&&<tr><td className="p-12 text-center text-white/40" colSpan={4}><Users size={28} className="mx-auto mb-3"/>No contacts found</td></tr>}{loading&&<tr><td className="p-12 text-center text-white/40" colSpan={4}>Loading contacts…</td></tr>}</tbody></table></div>{open&&<div className="fixed inset-0 grid place-items-center bg-black/70 p-4"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#12110f] p-6"><h2 className="text-xl font-bold">New contact</h2>{(['first_name','last_name','email','phone'] as const).map(k=><input key={k} value={draft[k]} placeholder={k.replace('_',' ')} onChange={e=>setDraft({...draft,[k]:e.target.value})} className="mt-3 w-full rounded-lg border border-white/10 bg-black/30 p-3 capitalize"/>)}<div className="mt-5 flex justify-end gap-3"><button onClick={()=>setOpen(false)} className="text-white/60">Cancel</button><button onClick={add} disabled={!draft.first_name} className="rounded-lg bg-[#eac469] px-4 py-2 font-bold text-black disabled:opacity-40">Save</button></div></div></div>}</div></div>
+import { Plus, WarningCircle } from '@phosphor-icons/react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import type {
+  ContactBulkInput,
+  ContactDirectoryPage,
+  ContactDirectoryRequest,
+  ContactSmartView,
+  ContactsApi,
+} from '@/lib/command/contacts';
+import { contactsApi } from '@/lib/command/contacts';
+import { CommandModuleHeader } from './ui/CommandModuleHeader';
+import { CommandStatePanel } from './ui/CommandStatePanel';
+import { CommandTabs } from './ui/CommandTabs';
+import { useCommandToast } from './ui/CommandToastProvider';
+import { ContactCreateDrawer } from './contacts/ContactCreateDrawer';
+import {
+  CONTACT_COLUMNS,
+  ContactsTable,
+  type ContactColumnKey,
+} from './contacts/ContactsTable';
+import { ContactsToolbar } from './contacts/ContactsToolbar';
+import {
+  contactDetailLocationParams,
+  contactDetailHref,
+  useContactDirectoryQuery,
+} from './contacts/useContactDirectoryQuery';
+
+const SMART_VIEWS: readonly Readonly<{ value: ContactSmartView; label: string }>[] = [
+  { value: 'all', label: 'All contacts' },
+  { value: 'never_contacted', label: 'Never contacted' },
+  { value: 'recently_active', label: 'Recently active' },
+  { value: 'birthdays_this_month', label: 'Birthdays' },
+  { value: 'anniversaries_this_month', label: 'Anniversaries' },
+];
+
+const STAGE_SUGGESTIONS = ['lead', 'nurture', 'appointment', 'client', 'past_client', 'lost'] as const;
+type ContactViewport = 'desktop' | 'tablet' | 'mobile';
+
+function contactViewport(): ContactViewport {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'desktop';
+  if (window.matchMedia('(max-width: 767px)').matches) return 'mobile';
+  return window.matchMedia('(max-width: 1100px)').matches ? 'tablet' : 'desktop';
+}
+
+function subscribeContactViewport(notify: () => void): () => void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => undefined;
+  const queries = [window.matchMedia('(max-width: 767px)'), window.matchMedia('(max-width: 1100px)')];
+  queries.forEach((query) => query.addEventListener('change', notify));
+  return () => queries.forEach((query) => query.removeEventListener('change', notify));
+}
+
+function defaultColumnVisible(key: ContactColumnKey, viewport: ContactViewport): boolean {
+  if (viewport === 'desktop') return true;
+  if (key === 'owner' || key === 'evidence') return false;
+  return viewport !== 'mobile' || (key !== 'tags' && key !== 'health' && key !== 'activity');
+}
+
+function useContactColumns(): Readonly<{
+  visible: ReadonlySet<ContactColumnKey>;
+  update: (next: ReadonlySet<ContactColumnKey>) => void;
+}> {
+  const viewport = useSyncExternalStore<ContactViewport>(
+    subscribeContactViewport,
+    contactViewport,
+    () => 'desktop',
+  );
+  const [preferences, setPreferences] = useState<ReadonlyMap<ContactColumnKey, boolean>>(
+    new Map(),
+  );
+  const visible = useMemo(() => new Set(
+    CONTACT_COLUMNS
+      .map((column) => column.key)
+      .filter((key) => preferences.get(key) ?? defaultColumnVisible(key, viewport)),
+  ), [preferences, viewport]);
+  const update = useCallback((next: ReadonlySet<ContactColumnKey>) => {
+    setPreferences((current) => {
+      const updated = new Map(current);
+      CONTACT_COLUMNS.forEach(({ key }) => {
+        if (next.has(key) !== visible.has(key)) updated.set(key, next.has(key));
+      });
+      return updated;
+    });
+  }, [visible]);
+  return useMemo(() => ({ visible, update }), [update, visible]);
+}
+
+type FetchRecord = {
+  key: string;
+  controller: AbortController;
+  active: number;
+};
+
+type SuccessfulDirectoryPage = Readonly<{
+  key: string;
+  universe: string;
+  page: ContactDirectoryPage;
+}>;
+
+function requestKey(request: ContactDirectoryRequest): string {
+  return JSON.stringify([
+    request.query,
+    request.stage,
+    request.owner_actor_id,
+    request.assignee_actor_id,
+    request.tag,
+    request.source,
+    request.origin,
+    request.health_min,
+    request.health_max,
+    request.birthday_month,
+    request.anniversary_month,
+    request.smart_view,
+    request.sort,
+    request.direction,
+    request.page,
+    request.page_size,
+  ]);
+}
+
+function universeKey(request: ContactDirectoryRequest): string {
+  return JSON.stringify([
+    request.query,
+    request.stage,
+    request.owner_actor_id,
+    request.assignee_actor_id,
+    request.tag,
+    request.source,
+    request.origin,
+    request.health_min,
+    request.health_max,
+    request.birthday_month,
+    request.anniversary_month,
+    request.smart_view,
+  ]);
+}
+
+function hasActiveFilters(request: ContactDirectoryRequest): boolean {
+  return Boolean(
+    request.query
+      || request.stage
+      || request.owner_actor_id
+      || request.assignee_actor_id
+      || request.tag?.length
+      || request.source?.length
+      || request.origin?.length
+      || request.health_min !== undefined
+      || request.health_max !== undefined
+      || request.birthday_month !== undefined
+      || request.anniversary_month !== undefined
+      || (request.smart_view && request.smart_view !== 'all'),
+  );
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && error.name === 'AbortError';
+}
+
+export type ContactsWorkspaceProps = Readonly<{
+  initialView?: ContactSmartView;
+  api?: ContactsApi;
+}>;
+
+export function ContactsWorkspace({
+  initialView = 'all',
+  api = contactsApi,
+}: ContactsWorkspaceProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { pushToast } = useCommandToast();
+  const query = useContactDirectoryQuery(initialView);
+  const request = query.request;
+  const key = requestKey(request);
+  const currentUniverse = universeKey(request);
+  const [success, setSuccess] = useState<SuccessfulDirectoryPage | null>(null);
+  const [failureKey, setFailureKey] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const fetchKey = `${key}:${attempt}`;
+  const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
+  const columns = useContactColumns();
+  const visibleColumns = columns.visible;
+  const [searchDraft, setSearchDraft] = useState(request.query ?? '');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [bulkAction, setBulkAction] = useState<ContactBulkInput['action']['action']>('set_stage');
+  const [bulkStage, setBulkStage] = useState('lead');
+  const [bulkTagId, setBulkTagId] = useState('');
+  const [bulkPending, setBulkPending] = useState(false);
+  const addTriggerRef = useRef<HTMLButtonElement>(null);
+  const drawerTriggerRef = useRef<HTMLElement | null>(null);
+  const fetchRef = useRef<FetchRecord | null>(null);
+  const bulkControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const requestRef = useRef(request);
+  const replaceRef = useRef(query.replace);
+
+  useEffect(() => {
+    requestRef.current = request;
+    replaceRef.current = query.replace;
+  }, [query.replace, request]);
+
+  useEffect(() => {
+    setSearchDraft(request.query ?? '');
+  }, [request.query]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const committed = searchDraft.trim();
+      if (Array.from(committed).length > 200) return;
+      if (committed !== (requestRef.current.query ?? '')) {
+        replaceRef.current({ query: committed || undefined });
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchDraft]);
+
+  useEffect(() => {
+    setSelected(new Set());
+
+    let record = fetchRef.current;
+    if (!record || record.key !== fetchKey || record.controller.signal.aborted) {
+      if (record && record.key !== fetchKey) record.controller.abort();
+      record = {
+        key: fetchKey,
+        controller: new AbortController(),
+        active: 0,
+      };
+      fetchRef.current = record;
+      const activeRecord = record;
+      void api.directory(requestRef.current, { signal: activeRecord.controller.signal }).then(
+        (page) => {
+          if (
+            activeRecord.active > 0
+            && !activeRecord.controller.signal.aborted
+            && fetchRef.current === activeRecord
+          ) {
+            setSuccess({ key: fetchKey, universe: currentUniverse, page });
+            setFailureKey(null);
+          }
+        },
+        (caught: unknown) => {
+          if (
+            activeRecord.active > 0
+            && !activeRecord.controller.signal.aborted
+            && fetchRef.current === activeRecord
+            && !isAbortError(caught)
+          ) {
+            setFailureKey(fetchKey);
+          }
+        },
+      );
+    }
+    record.active += 1;
+
+    return () => {
+      record.active -= 1;
+      queueMicrotask(() => {
+        if (record.active === 0) record.controller.abort();
+      });
+    };
+  }, [api, currentUniverse, fetchKey]);
+
+  const data = success?.universe === currentUniverse ? success.page : null;
+  const error = failureKey === fetchKey ? 'Unable to load contacts.' : null;
+  const loading = success?.key !== fetchKey && error === null;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      bulkControllerRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !loading
+      && error === null
+      && data !== null
+      && data.total > 0
+      && data.rows.length === 0
+      && data.page_count > 0
+      && (request.page ?? 1) > data.page_count
+    ) {
+      query.replace({ page: data.page_count });
+    }
+  }, [data, error, loading, query, request.page]);
+
+  const selectedIds = useMemo(
+    () => [...selected].filter((id) => data?.rows.some((row) => row.id === id)).sort((left, right) => left - right),
+    [data?.rows, selected],
+  );
+  const refreshing = data !== null && loading;
+  const pageCount = data === null
+    ? 0
+    : Math.ceil(data.total / (request.page_size ?? 50));
+
+  async function applyBulk() {
+    if (selectedIds.length === 0 || bulkPending) return;
+    const tagId = Number(bulkTagId);
+    const normalizedStage = bulkStage.trim();
+    const action: ContactBulkInput['action'] = bulkAction === 'set_stage'
+      ? { action: 'set_stage', stage: normalizedStage }
+      : bulkAction === 'add_tag'
+        ? { action: 'add_tag', tag_id: tagId }
+        : { action: 'remove_tag', tag_id: tagId };
+    if (bulkAction !== 'set_stage' && (!Number.isSafeInteger(tagId) || tagId < 1)) {
+      pushToast({ tone: 'error', message: 'Enter a valid tag ID.' });
+      return;
+    }
+    if (bulkAction === 'set_stage' && (normalizedStage.length < 1 || Array.from(normalizedStage).length > 50)) {
+      pushToast({ tone: 'error', message: 'Enter a valid stage.' });
+      return;
+    }
+
+    const controller = new AbortController();
+    bulkControllerRef.current?.abort();
+    bulkControllerRef.current = controller;
+    setBulkPending(true);
+    try {
+      const result = await api.bulk({ contact_ids: selectedIds, action }, { signal: controller.signal });
+      if (!mountedRef.current || controller.signal.aborted || bulkControllerRef.current !== controller) return;
+      setSelected(new Set());
+      pushToast({ tone: 'success', message: `${result.actioned_contact_ids.length} contacts updated` });
+      setAttempt((current) => current + 1);
+    } catch (caught) {
+      if (mountedRef.current && bulkControllerRef.current === controller && !controller.signal.aborted && !isAbortError(caught)) {
+        pushToast({ tone: 'error', message: 'Contacts were not updated. Review the selection and try again.' });
+      }
+    } finally {
+      if (mountedRef.current && bulkControllerRef.current === controller) {
+        bulkControllerRef.current = null;
+        setBulkPending(false);
+      }
+    }
+  }
+
+  const emptyState = error ? (
+      <CommandStatePanel
+      kind="error"
+      title="Unable to load contacts"
+      message="The directory request did not complete. No contact data was changed."
+      actionLabel="Retry"
+      onAction={() => setAttempt((current) => current + 1)}
+    />
+  ) : data !== null && data.total > 0 ? (
+    <CommandStatePanel
+      kind="loading"
+      title="Loading an available contact page"
+      message="The requested page is outside the current directory. Returning to the last available page."
+    />
+  ) : hasActiveFilters(request) ? (
+    <CommandStatePanel
+      kind="empty"
+      title="No contacts match these filters"
+      message="Clear the current directory filters to return to all contacts."
+      actionLabel="Clear filters"
+      onAction={query.reset}
+    />
+  ) : (
+    <CommandStatePanel
+      kind="first_run"
+      title="No contacts yet"
+      message="Add the first writable SWS contact to begin the directory."
+      actionLabel="Add your first contact"
+      onAction={() => {
+        drawerTriggerRef.current = document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : addTriggerRef.current;
+        setCreateOpen(true);
+      }}
+    />
+  );
+
+  const bulkControls = selectedIds.length > 0 ? (
+    <div role="region" aria-label="Bulk contact actions" className="command-contacts-bulk command-print-hidden">
+      <strong>{selectedIds.length} selected</strong>
+      <label>
+        <span className="command-visually-hidden">Bulk action</span>
+        <select aria-label="Bulk action" value={bulkAction} onChange={(event) => setBulkAction(event.target.value as ContactBulkInput['action']['action'])}>
+          <option value="set_stage">Set stage</option>
+          <option value="add_tag">Add tag</option>
+          <option value="remove_tag">Remove tag</option>
+        </select>
+      </label>
+      {bulkAction === 'set_stage' ? (
+        <label>
+          <span className="command-visually-hidden">Bulk stage</span>
+          <input
+            aria-label="Bulk stage"
+            list="command-contact-bulk-stages"
+            value={bulkStage}
+            onChange={(event) => setBulkStage(event.target.value)}
+          />
+          <datalist id="command-contact-bulk-stages">
+            {STAGE_SUGGESTIONS.map((stage) => <option key={stage} value={stage} />)}
+          </datalist>
+        </label>
+      ) : (
+        <label>
+          <span className="command-visually-hidden">Tag ID</span>
+          <input aria-label="Tag ID" type="number" min={1} value={bulkTagId} onChange={(event) => setBulkTagId(event.target.value)} />
+        </label>
+      )}
+      <button type="button" className="command-primary-button command-touch-target" disabled={bulkPending} onClick={() => void applyBulk()}>
+        {bulkPending ? 'Applying…' : 'Apply bulk action'}
+      </button>
+    </div>
+  ) : null;
+
+  return (
+    <section className="command-contacts-workspace">
+      <CommandModuleHeader
+        breadcrumbs={[{ label: 'Command', href: '/admin/command' }, { label: 'Contacts' }]}
+        title="Contacts"
+        description={data ? `${data.total} contacts` : 'Loading contact count…'}
+        actions={(
+          <button
+            ref={addTriggerRef}
+            type="button"
+            className="command-primary-button command-touch-target command-print-hidden"
+            onClick={(event) => {
+              drawerTriggerRef.current = event.currentTarget;
+              setCreateOpen(true);
+            }}
+          >
+            <Plus aria-hidden="true" size={16} />
+            Add Contact
+          </button>
+        )}
+        tabs={(
+          <CommandTabs
+            idBase="contact-smart-view"
+            ariaLabel="Contact SmartViews"
+            tabs={SMART_VIEWS}
+            value={request.smart_view ?? 'all'}
+            onValueChange={(smart_view) => query.replace({ smart_view })}
+          />
+        )}
+        toolbar={(
+          <ContactsToolbar
+            searchDraft={searchDraft}
+            request={request}
+            visibleColumns={visibleColumns}
+            onSearchDraftChange={setSearchDraft}
+            onReplace={query.replace}
+            onVisibleColumnsChange={columns.update}
+          />
+        )}
+      />
+
+      <div
+        id={`contact-smart-view-panel-${request.smart_view ?? 'all'}`}
+        role="tabpanel"
+        aria-labelledby={`contact-smart-view-tab-${request.smart_view ?? 'all'}`}
+        className="command-contacts-body command-content-gutters"
+      >
+        {bulkControls}
+        {error && data !== null ? (
+          <div role="alert" className="command-contacts-inline-error">
+            <WarningCircle aria-hidden="true" size={17} />
+            Refresh failed. The prior page remains visible.
+            <button type="button" className="command-inline-button command-touch-target" onClick={() => setAttempt((current) => current + 1)}>Retry</button>
+          </div>
+        ) : null}
+        <ContactsTable
+          data={data}
+          loading={loading}
+          refreshing={refreshing}
+          selected={selected}
+          visibleColumns={visibleColumns}
+          activeSort={request.sort ?? 'name'}
+          direction={request.direction ?? 'asc'}
+          onSelectionChange={setSelected}
+          onActivate={(row) => router.push(contactDetailHref(
+            row.id,
+            contactDetailLocationParams(
+              request,
+              new URLSearchParams(searchParams.toString()),
+            ),
+          ))}
+          onSort={(sort, direction) => query.replace({ sort, direction })}
+          emptyState={emptyState}
+        />
+        <nav aria-label="Contact pages" className="command-contacts-pagination command-print-hidden">
+          <span>Page {request.page ?? 1} of {pageCount}</span>
+          <label>
+            Rows per page
+            <select value={request.page_size ?? 50} onChange={(event) => query.replace({ page_size: Number(event.target.value) })}>
+              {[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <button type="button" className="command-secondary-button command-touch-target" aria-label="Previous page" disabled={(request.page ?? 1) <= 1} onClick={() => query.replace({ page: Math.max(1, (request.page ?? 1) - 1) })}>Previous</button>
+          <button
+            type="button"
+            className="command-secondary-button command-touch-target"
+            aria-label="Next page"
+            disabled={data === null || (request.page ?? 1) >= pageCount}
+            onClick={() => query.replace({ page: (request.page ?? 1) + 1 })}
+          >
+            Next
+          </button>
+        </nav>
+      </div>
+
+      {SMART_VIEWS.filter((view) => view.value !== (request.smart_view ?? 'all')).map((view) => (
+        <div
+          key={view.value}
+          id={`contact-smart-view-panel-${view.value}`}
+          role="tabpanel"
+          aria-labelledby={`contact-smart-view-tab-${view.value}`}
+          hidden
+        />
+      ))}
+
+      <ContactCreateDrawer
+        open={createOpen}
+        api={api}
+        triggerRef={drawerTriggerRef}
+        onOpenChange={setCreateOpen}
+        onCreated={(contact, displayName) => {
+          pushToast({ tone: 'success', message: `${displayName} created` });
+          router.push(`/admin/command/contacts/${contact.id}`);
+        }}
+      />
+    </section>
+  );
 }

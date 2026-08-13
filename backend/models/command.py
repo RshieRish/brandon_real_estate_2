@@ -2,10 +2,24 @@
 from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
-
 from database import Base
+from services.command_contact_identity import canonical_email
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, validates
+
+from models._utc import normalize_database_datetime
 
 
 class AgreementStatus(str, Enum):
@@ -26,29 +40,82 @@ class Timestamped:
 
 class CRMContact(Timestamped, Base):
     __tablename__ = "crm_contacts"
+    __table_args__ = (
+        Index(
+            "ix_crm_contacts_normalized_email_id", "normalized_email", "id"
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True, unique=True)
     first_name: Mapped[str] = mapped_column(String(120))
     last_name: Mapped[str] = mapped_column(String(120), default="")
     email: Mapped[str | None] = mapped_column(String(255))
+    normalized_email: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     phone: Mapped[str | None] = mapped_column(String(50))
     stage: Mapped[str] = mapped_column(String(50), default="lead")
     birthday: Mapped[date | None] = mapped_column(Date, nullable=True)
     anniversary: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    @validates("email")
+    def _sync_normalized_email(
+        self, _key: str, value: str | None
+    ) -> str | None:
+        self.normalized_email = canonical_email(value)
+        return value
+
+
+@event.listens_for(CRMContact, "before_insert")
+@event.listens_for(CRMContact, "before_update")
+def _recompute_contact_normalized_email(
+    _mapper, _connection, target: CRMContact
+) -> None:
+    target.normalized_email = canonical_email(target.email)
+
 
 class CRMActivity(Base):
     __tablename__ = "crm_activities"
+    __table_args__ = (
+        Index(
+            "uq_crm_activities_source_record_id",
+            "source_record_id",
+            unique=True,
+        ),
+        Index(
+            "ix_crm_activities_timeline_order",
+            "contact_id",
+            "created_at",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
+    source_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crm_source_records.id", ondelete="RESTRICT"), nullable=True
+    )
     kind: Mapped[str] = mapped_column(String(50))
     summary: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column("metadata", Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    @validates("created_at")
+    def _normalize_created_at(self, _key: str, value: datetime) -> datetime:
+        normalized = normalize_database_datetime(value)
+        assert normalized is not None
+        return normalized
+
 
 class CRMTask(Timestamped, Base):
     __tablename__ = "crm_tasks"
+    __table_args__ = (
+        Index(
+            "ix_crm_tasks_contact_status_id",
+            "contact_id",
+            "status",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
     title: Mapped[str] = mapped_column(String(255))
@@ -76,6 +143,9 @@ class CRMTaskLink(Base):
 
 class CRMNote(Timestamped, Base):
     __tablename__ = "crm_notes"
+    __table_args__ = (
+        Index("ix_crm_notes_contact_id", "contact_id", "id"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
     body: Mapped[str] = mapped_column(Text)
@@ -87,12 +157,24 @@ class CRMTag(Base):
 
 class CRMContactTag(Base):
     __tablename__ = "crm_contact_tags"
+    __table_args__ = (
+        UniqueConstraint(
+            "contact_id", "tag_id", name="uq_crm_contact_tag"
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
     tag_id: Mapped[int] = mapped_column(ForeignKey("crm_tags.id"))
 
 class CRMSavedSearch(Timestamped, Base):
     __tablename__ = "crm_saved_searches"
+    __table_args__ = (
+        Index(
+            "ix_crm_saved_searches_contact_id",
+            "contact_id",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
     name: Mapped[str] = mapped_column(String(255))
@@ -120,6 +202,12 @@ class CRMSmartPlanEnrollment(Timestamped, Base):
     __tablename__ = "crm_smart_plan_enrollments"
     __table_args__ = (
         UniqueConstraint("smart_plan_id", "contact_id", name="uq_crm_smart_plan_enrollment"),
+        Index(
+            "ix_crm_smart_plan_enrollments_contact_status_id",
+            "contact_id",
+            "status",
+            "id",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     smart_plan_id: Mapped[int] = mapped_column(ForeignKey("crm_smart_plans.id"))
@@ -136,7 +224,19 @@ class CRMOpportunity(Timestamped, Base):
 
 class CRMOpportunityContact(Base):
     __tablename__ = "crm_opportunity_contacts"
-    __table_args__ = (UniqueConstraint("opportunity_id", "contact_id", "role", name="uq_crm_opportunity_contact_role"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_id",
+            "contact_id",
+            "role",
+            name="uq_crm_opportunity_contact_role",
+        ),
+        Index(
+            "ix_crm_opportunity_contacts_contact_opportunity",
+            "contact_id",
+            "opportunity_id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))

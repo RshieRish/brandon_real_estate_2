@@ -215,7 +215,7 @@ export default function MarketingSphere() {
       canvas.width = 512;
       canvas.height = 128;
       const ctx = canvas.getContext('2d')!;
-      ctx.font = '800 42px "Montserrat", sans-serif';
+      ctx.font = '800 42px "Montserrat Variable", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff';

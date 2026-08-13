@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
-from middleware.auth import require_admin
+from middleware.auth import (
+    ADMIN_SESSION_SCOPE,
+    ADMIN_SESSION_TOKEN_TYPE,
+    require_admin,
+)
 from models.admin_user import AdminUser
 from schemas.auth import LoginRequest, TokenResponse
 
@@ -24,7 +28,12 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
     token = jwt.encode(
-        {"sub": str(user.id), "exp": expire},
+        {
+            "sub": str(user.id),
+            "token_type": ADMIN_SESSION_TOKEN_TYPE,
+            "scope": ADMIN_SESSION_SCOPE,
+            "exp": expire,
+        },
         settings.JWT_SECRET,
         algorithm=settings.JWT_ALGORITHM,
     )

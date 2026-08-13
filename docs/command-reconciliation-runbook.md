@@ -1,0 +1,705 @@
+# Command Archive Reconciliation Runbook
+
+This runbook is the production operating contract for the recovered Command and
+DocuSign archive. It protects the immutable `crm_archive_artifacts` baseline,
+records audit-only reconciliation runs, and controls semantic source-record
+writes.
+
+The verified archive target is **12,580 artifacts** and **745,060,261 bytes**.
+The bundle fingerprint is intentionally not hard-coded: it must be recomputed
+from the database that will receive the reconciliation and passed back to apply
+mode exactly.
+
+## Current executable safety state
+
+- `--verify-only` validates every stored byte, declared length, and SHA-256. It
+  writes only a reconciliation run and one `archive_integrity` result.
+- `--dry-run` parses selected modules and writes reconciliation audit rows. It
+  does not create or update semantic source records.
+- The current default parser registry contains `archive_integrity` and
+  `contacts`. `--verify-only` still selects only `archive_integrity`; an
+  unbounded `--dry-run` selects both registered modules.
+- The current CLI implements `--contact-overlap-manifest`, an exact-two-row
+  private loader/validator, reviewed-link staging, the Contacts materializer,
+  bounded apply, and manifest-bound resume. Source availability is not live
+  execution authority.
+- No Contacts apply is authorized until the exact reviewed revision is deployed,
+  the target database is at the sole required head, that database's archive is
+  freshly verified, the approved private manifest passes a reviewed
+  manifest-aware dry run, a provider snapshot is recorded, and the deployment
+  change has explicit approval. The commands below define that conditional
+  procedure; they do not grant approval by appearing here.
+- Production Contacts apply must name `--module contacts`. Unbounded apply is
+  policy-prohibited even though the CLI can select all registered modules.
+- No other module apply is authorized until its parser, materializer,
+  reconciliation expectation, and reviewed dry run are complete for the exact
+  deployed revision.
+- Never edit `crm_archive_artifacts` to make a reconciliation pass. Repair the
+  ingestion source or parser under a new reviewed change instead.
+
+## Runtime setup
+
+Run from the deployed revision that contains the reconciliation code. Use the
+same secret-managed `DATABASE_URL` as the target service; never paste that URL
+into tickets, logs, or shell history.
+
+```bash
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+export PYTHON="${PYTHON:-python}"
+export COMMAND_PARSER_VERSION="command-v1"
+export CONTACTS_PARSER_VERSION="contacts-v1"
+cd "$REPO_ROOT/backend"
+```
+
+Confirm the intended commit and database target through the deployment system
+before continuing. Only one reconciliation process may operate on a run at a
+time.
+
+## 1. Schema and archive preflight
+
+The reconciliation/contact schema is additive. The implemented single Alembic
+head is `7d1f3a5b6c8e`. The relevant linear chain is
+`f0c8a6d9e431 -> 1d6e7f8a9b10 -> 2e7f9a0b1c2d -> 4a8c0d1e2f3b ->
+5b9d1e2f3a4c -> 6c0e2f4a5b7d -> 7d1f3a5b6c8e`; operators must upgrade through
+the chain to the sole head and must not stop at an intermediate revision.
+
+Revision `6c0e2f4a5b7d` performs an online, batched canonical-email backfill and
+verification before it creates timeline query indexes. Its upgrade deliberately
+refuses Alembic offline `--sql` mode before emitting any DDL. Never request or
+approve one monolithic offline `f0c8a6d9e431:7d1f3a5b6c8e` script.
+
+```bash
+"$PYTHON" -m alembic heads
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic history --indicate-current
+```
+
+`alembic heads` must print exactly:
+
+```text
+7d1f3a5b6c8e (head)
+```
+
+Before a production migration, take a provider-level database snapshot and
+review the upgrade in three stages. The path through `5b9d1e2f3a4c` and the
+index-only path from `6c0e2f4a5b7d` to the head can be rendered offline:
+
+```bash
+"$PYTHON" -m alembic upgrade f0c8a6d9e431:5b9d1e2f3a4c --sql \
+  > /tmp/command-contact-parity-upgrade.sql
+"$PYTHON" -m alembic upgrade 6c0e2f4a5b7d:7d1f3a5b6c8e --sql \
+  > /tmp/command-contact-summary-index-upgrade.sql
+```
+
+Review both scripts plus the source and migration-test evidence for the
+online-only `6c0e2f4a5b7d` backfill. Under the approved deployment change,
+upgrade sequentially and inspect the current revision after every boundary:
+
+```bash
+"$PYTHON" -m alembic upgrade 5b9d1e2f3a4c
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 6c0e2f4a5b7d
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 7d1f3a5b6c8e
+"$PYTHON" -m alembic current
+```
+
+The final `alembic current` must report `7d1f3a5b6c8e`. Do not run the reconciliation
+CLI if the database is below that sole deployed head or if required provenance,
+reconciliation, or contact-parity tables are absent. All CLI modes create audit
+rows, so a database at an intermediate revision is not an approved operating
+state.
+
+Use these read-only preflight queries in the database console:
+
+```sql
+SELECT version_num FROM alembic_version ORDER BY version_num;
+
+SELECT
+  count(*) AS artifact_count,
+  coalesce(sum(size_bytes), 0) AS byte_count,
+  count(*) FILTER (WHERE content_bytes IS NULL) AS missing_byte_rows
+FROM crm_archive_artifacts;
+
+SELECT
+  to_regclass('public.crm_source_records') AS source_records,
+  to_regclass('public.crm_source_record_artifacts') AS source_artifacts,
+  to_regclass('public.crm_entity_sources') AS entity_sources,
+  to_regclass('public.crm_reconciliation_runs') AS reconciliation_runs,
+  to_regclass('public.crm_reconciliation_results') AS reconciliation_results,
+  to_regclass('public.crm_contact_capture_positions') AS contact_positions,
+  to_regclass('public.crm_contact_section_captures') AS contact_sections;
+```
+
+The archive catalog query must return `12580`, `745060261`, and `0`. Catalog
+totals alone are not a byte/hash verification; the next step performs that
+verification.
+
+## 2. Verify the immutable archive and capture its fingerprint
+
+Record the semantic source-record count before verify-only:
+
+```sql
+SELECT count(*) AS source_records_before_verify FROM crm_source_records;
+```
+
+Run verify-only and retain its single JSON result as deployment evidence:
+
+```bash
+VERIFY_JSON="$(
+  "$PYTHON" -m scripts.reconcile_command_archive \
+    --verify-only \
+    --parser-version "$COMMAND_PARSER_VERSION"
+)"
+printf '%s\n' "$VERIFY_JSON" | "$PYTHON" -m json.tool
+```
+
+Enforce the archive contract and extract the fingerprint:
+
+```bash
+printf '%s' "$VERIFY_JSON" | "$PYTHON" -c '
+import json, re, sys
+p = json.load(sys.stdin)
+assert p["status"] == "completed", p
+assert re.fullmatch(r"[0-9a-f]{64}", p["bundle_fingerprint"]), p
+m = next(x for x in p["modules"] if x["module"] == "archive_integrity")
+assert m["details"]["artifacts"] == 12580, m
+assert m["details"]["bytes"] == 745060261, m
+assert m["error_count"] == 0, m
+print("COMMAND_ARCHIVE_VERIFY_OK")
+'
+
+export VERIFIED_COMMAND_ARCHIVE_FINGERPRINT="$(
+  printf '%s' "$VERIFY_JSON" | "$PYTHON" -c \
+    'import json,sys; print(json.load(sys.stdin)["bundle_fingerprint"])'
+)"
+```
+
+Store the verify-only JSON, run ID, deployed commit, database identifier,
+operator, and approval record together. Do not store database credentials.
+
+Verify that no semantic source records were added:
+
+```sql
+SELECT count(*) AS source_records_after_verify FROM crm_source_records;
+```
+
+The before and after counts must match. One new `verify_only` run and one
+`archive_integrity` result are expected.
+
+### Contacts private-overlap preflight
+
+The manifest flag, loader, validator, reviewed-link staging, and materializer are
+implemented in the current source. Confirm the deployed CLI exposes the flag;
+this capability check does not authorize an apply:
+
+```bash
+"$PYTHON" -m scripts.reconcile_command_archive --help | "$PYTHON" -c '
+import sys
+assert "--contact-overlap-manifest" in sys.stdin.read()
+print("COMMAND_CONTACT_MANIFEST_FLAG_OK")
+'
+```
+
+Provision the approved manifest for a manifest-aware Contacts dry run, apply,
+or resume as a regular access-controlled file outside the repository,
+deployment bundle, frontend/static paths, and acceptance-artifact directory.
+Never paste its contents into a command, environment variable, ticket, or log.
+The path may be an environment variable, but CLI output and errors must never
+echo it.
+
+```bash
+export CONTACT_OVERLAP_MANIFEST="<absolute-private-path-outside-repository>"
+test -n "$CONTACT_OVERLAP_MANIFEST"
+test -f "$CONTACT_OVERLAP_MANIFEST"
+test ! -L "$CONTACT_OVERLAP_MANIFEST"
+case "$CONTACT_OVERLAP_MANIFEST" in
+  "$REPO_ROOT"/*) echo "manifest must be outside the repository" >&2; exit 1 ;;
+esac
+```
+
+The loader requires schema `command-contact-overlaps-v1`, the exact verified
+bundle fingerprint, the selected parser version, and exactly two unique rows.
+Each row contains only a hashed strong source-provider identity, one positive
+existing `CRMContact.id`, a non-PII target-row fingerprint, and a
+strong-evidence hash. V1 has no alternate target key. It rejects raw name,
+email, phone, provider ID, address, payload, and unknown fields. Validation
+resolves each hash to one parsed source identity, requires each target ID to be
+an existing `lead_id IS NOT NULL` contact, checks the target-row fingerprint
+again immediately before staging, and independently recomputes the approved
+strong-email evidence. Record only the canonical manifest digest, row count
+`2`, validation state, and audit/run IDs.
+
+## 3. Dry-run domain parsers
+
+Use explicit module selection for bounded review. The current default registry
+contains exactly `archive_integrity` and `contacts`.
+
+Run one parser when reviewing it in isolation:
+
+```bash
+DRY_JSON="$(
+  "$PYTHON" -m scripts.reconcile_command_archive \
+    --dry-run \
+    --parser-version "$CONTACTS_PARSER_VERSION" \
+    --module contacts
+)"
+printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
+```
+
+Run an explicitly reviewed group by repeating `--module`:
+
+```bash
+DRY_JSON="$(
+  "$PYTHON" -m scripts.reconcile_command_archive \
+    --dry-run \
+    --parser-version "$COMMAND_PARSER_VERSION" \
+    --module archive_integrity \
+    --module contacts
+)"
+printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
+```
+
+Omitting `--module` selects every parser registered in that deployed revision:
+
+```bash
+DRY_JSON="$(
+  "$PYTHON" -m scripts.reconcile_command_archive \
+    --dry-run \
+    --parser-version "$COMMAND_PARSER_VERSION"
+)"
+printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
+```
+
+The unbounded form currently selects `archive_integrity` and `contacts`. Without
+`--contact-overlap-manifest`, it is parser-only and cannot authorize Contacts
+apply. Do not use it unless both registered parsers are in the same approved
+dry-run review. Each selected module needs a signed reconciliation expectation
+containing:
+
+- source system and module name;
+- expected observed, rendered, normalized, evidence-only, unmatched, duplicate
+  content, and error totals;
+- fixture and parser test evidence;
+- dry-run ID, bundle fingerprint, parser version, and exact module set;
+- disposition for every nonzero unmatched or error total; and
+- reviewer and approval timestamp.
+
+A Contacts dry run without the private manifest validates parser/archive truth
+only and is useful for parser diagnosis, but it is not an apply precursor. The
+fingerprint must equal `$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT`, `status` must be
+`completed`, and every metric must match its reviewed expectation.
+
+The required apply precursor is the implemented bounded manifest-aware dry run:
+
+```bash
+"$PYTHON" -m scripts.reconcile_command_archive \
+  --dry-run \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
+  --module contacts \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"
+```
+
+It must validate the same approved manifest, bundle fingerprint, parser version,
+and exact Contacts module later used by apply. Both dry-run forms create
+reconciliation audit rows but zero semantic source records, entity links,
+contact audit events, or materialized contacts.
+
+## 4. Bounded Contacts apply — implemented, conditionally authorized
+
+The exact command path is implemented, but **do not execute it merely because it
+is documented here**. Operational authorization requires all prerequisites in
+the current executable safety state: the exact reviewed deployment, sole
+`7d1f3a5b6c8e` database head, accepted target-database verification, reviewed
+manifest-aware dry run, approved private manifest, provider snapshot, and
+explicit change approval. Always select only `--module contacts`; unbounded
+apply remains policy-prohibited.
+
+Before apply, rerun verify-only if the deployment, database, archive artifact
+count, byte count, or parser revision changed. Apply must use the fingerprint
+from that database's most recent accepted verification.
+
+Once those gates are signed, capture the bounded result:
+
+```bash
+APPLY_JSON="$(
+  "$PYTHON" -m scripts.reconcile_command_archive \
+    --apply \
+    --parser-version "$CONTACTS_PARSER_VERSION" \
+    --module contacts \
+    --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
+    --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
+)"
+printf '%s\n' "$APPLY_JSON" | "$PYTHON" -m json.tool
+```
+
+If the expected fingerprint differs by even one character, the CLI refuses
+before it creates a reconciliation run or writes a semantic source record. Do
+not replace the expected value with the newly reported value without a fresh
+verify-only review.
+
+Each successful module is committed as a transaction boundary. For Contacts,
+the transaction order is: persist and flush exact source records; revalidate
+the manifest against those records, existing lead-backed contacts, and strong
+evidence; create two reviewed `crm_entity_sources` links and append-only contact
+audit events; run the materializer, which creates the other 315 mappings and
+four missing recovered contacts; write the result; commit. Any failure rolls
+back every Contacts module write. Stop on the first error; preserve the run ID
+and use the resume procedure after fixing the cause under a reviewed code or
+data change.
+
+## 5. Resume a failed or abandoned run
+
+A run can be resumed only while its status is `failed` or `running`, and only
+with the identical database bundle fingerprint, parser version, mode, and
+module set. Completed runs cannot be resumed. A live worker owns a 30-minute
+claim lease; do not start a second worker or manually clear its claim.
+
+Inspect the run before resuming:
+
+```sql
+SELECT
+  id,
+  mode,
+  status,
+  parser_version,
+  bundle_fingerprint,
+  requested_modules_json,
+  error_text,
+  claimed_at,
+  started_at,
+  completed_at
+FROM crm_reconciliation_runs
+WHERE id = 42;
+```
+
+Resume a current parser-only Contacts dry run:
+
+```bash
+"$PYTHON" -m scripts.reconcile_command_archive \
+  --dry-run \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
+  --module contacts \
+  --resume 42
+```
+
+The CLI implements both manifest-aware dry-run resume and Contacts apply resume:
+
+```bash
+"$PYTHON" -m scripts.reconcile_command_archive \
+  --dry-run \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
+  --module contacts \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
+  --resume 42
+
+"$PYTHON" -m scripts.reconcile_command_archive \
+  --apply \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
+  --module contacts \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
+  --resume 42 \
+  --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
+```
+
+Replace `42` with the recorded failed run ID. A parser-only Contacts dry run may
+be resumed without a manifest only when the original run was also parser-only.
+A manifest-aware dry-run or apply resume must use the same approved private
+manifest and identical mode, explicit module set, parser version, bundle
+fingerprint, and canonical manifest digest. Validation repeats against the exact
+source/target/evidence set; never substitute a newly reviewed mapping into an
+existing run. The apply resume also repeats `--expect-fingerprint`. Already
+committed successful module results are skipped; the remaining selected modules
+continue. These commands remain subject to the same live operational approval
+as the original run. If a `running` run has no live worker, wait for the claim
+lease to expire and record the incident before resuming. Never modify claim
+columns directly.
+
+## 6. Post-run reconciliation queries
+
+Run these queries after verify-only and dry-run operations, and after an
+explicitly authorized apply. Archive and run totals are exact; module-specific
+totals must match the approved expectation for that parser version.
+
+Latest run and module results:
+
+```sql
+WITH latest AS (
+  SELECT id
+  FROM crm_reconciliation_runs
+  ORDER BY id DESC
+  LIMIT 1
+)
+SELECT
+  r.id,
+  r.mode,
+  r.status,
+  r.parser_version,
+  r.bundle_fingerprint,
+  r.requested_modules_json,
+  r.error_text,
+  r.started_at,
+  r.completed_at
+FROM crm_reconciliation_runs r
+JOIN latest ON latest.id = r.id;
+
+WITH latest AS (
+  SELECT id
+  FROM crm_reconciliation_runs
+  ORDER BY id DESC
+  LIMIT 1
+)
+SELECT
+  rr.source_system,
+  rr.module,
+  rr.expected_count,
+  rr.observed_count,
+  rr.rendered_count,
+  rr.normalized_count,
+  rr.evidence_only_count,
+  rr.unmatched_count,
+  rr.duplicate_content_count,
+  rr.error_count,
+  rr.details_json::jsonb AS details
+FROM crm_reconciliation_results rr
+JOIN latest ON latest.id = rr.run_id
+ORDER BY rr.source_system, rr.module;
+```
+
+Archive-integrity evidence for the latest verify-only run:
+
+```sql
+SELECT
+  r.id AS run_id,
+  r.status,
+  r.bundle_fingerprint,
+  rr.details_json::jsonb ->> 'artifacts' AS artifacts,
+  rr.details_json::jsonb ->> 'bytes' AS bytes,
+  rr.details_json::jsonb -> 'domains' AS domains,
+  rr.duplicate_content_count,
+  rr.error_count
+FROM crm_reconciliation_runs r
+JOIN crm_reconciliation_results rr ON rr.run_id = r.id
+WHERE r.mode = 'verify_only'
+  AND rr.module = 'archive_integrity'
+ORDER BY r.id DESC
+LIMIT 1;
+```
+
+Semantic source-record totals by evidence class:
+
+```sql
+SELECT
+  source_system,
+  module,
+  record_kind,
+  evidence_level,
+  capture_quality,
+  parser_version,
+  count(*) AS records
+FROM crm_source_records
+GROUP BY
+  source_system,
+  module,
+  record_kind,
+  evidence_level,
+  capture_quality,
+  parser_version
+ORDER BY source_system, module, record_kind, evidence_level, capture_quality;
+```
+
+Identity and evidence-link integrity checks:
+
+```sql
+SELECT
+  source_system,
+  module,
+  record_kind,
+  source_key,
+  parser_version,
+  count(*) AS duplicate_rows
+FROM crm_source_records
+GROUP BY source_system, module, record_kind, source_key, parser_version
+HAVING count(*) > 1;
+
+SELECT
+  sr.id,
+  sr.source_system,
+  sr.module,
+  sr.record_kind,
+  sr.source_key,
+  sr.evidence_level
+FROM crm_source_records sr
+LEFT JOIN crm_source_record_artifacts sra ON sra.source_record_id = sr.id
+WHERE sr.evidence_level <> 'displayed_aggregate'
+GROUP BY sr.id
+HAVING count(sra.id) = 0
+ORDER BY sr.source_system, sr.module, sr.source_key;
+
+SELECT
+  sr.source_system,
+  sr.module,
+  count(DISTINCT sr.id) AS source_records,
+  count(DISTINCT sra.id) AS artifact_links,
+  count(DISTINCT es.id) AS entity_links
+FROM crm_source_records sr
+LEFT JOIN crm_source_record_artifacts sra ON sra.source_record_id = sr.id
+LEFT JOIN crm_entity_sources es ON es.source_record_id = sr.id
+GROUP BY sr.source_system, sr.module
+ORDER BY sr.source_system, sr.module;
+```
+
+The duplicate query and non-aggregate missing-link query must return zero rows.
+Entity-link counts and displayed-aggregate artifact links may legitimately be
+zero when the reviewed parser expectation says the evidence was not
+materialized as a business entity.
+
+After an authorized Contacts apply, the result details and database must agree
+on these non-private totals:
+
+```text
+preexisting contacts                         362
+reviewed overlap links staged                  2
+source/entity links created by materializer  315
+final recovered contact mappings             317
+recovered contacts newly created               4
+final contacts                               366
+lead-backed contacts                          51
+lead-backed legacy-only contacts              49
+```
+
+```sql
+SELECT count(*) FROM crm_contacts; -- 366
+SELECT count(*), count(DISTINCT lead_id)
+FROM crm_contacts WHERE lead_id IS NOT NULL; -- 51, 51
+SELECT count(*) FROM crm_entity_sources WHERE entity_type = 'contact'; -- 317
+SELECT count(*) FROM crm_contact_capture_positions; -- 317
+SELECT count(*) FROM crm_contact_section_captures; -- 2536
+```
+
+The Contacts result must report only the canonical manifest digest, manifest
+row count `2`, validation state, `reviewed_overlap_links_staged=2`,
+`source_entity_links_created_by_materializer=315`,
+`source_entity_links_final=317`, and `expected_combined_contact_total=366`.
+Never include the private manifest path, its selectors, raw identity evidence,
+or source payloads. Repeat the same apply once and prove it creates zero
+contacts, source/entity links, audit events, source artifacts, and contact
+extension rows.
+
+Confirm no failed or actively claimed run was overlooked:
+
+```sql
+SELECT
+  id,
+  mode,
+  status,
+  requested_modules_json,
+  error_text,
+  claimed_at,
+  started_at,
+  completed_at
+FROM crm_reconciliation_runs
+WHERE status <> 'completed' OR claim_token <> ''
+ORDER BY id DESC;
+```
+
+## 7. Rollback and recovery
+
+An application rollback does not require a database downgrade because the
+foundation migrations are additive. Prefer this order:
+
+1. stop all reconciliation workers;
+2. record the last run ID and preserve its JSON output;
+3. deploy the previous application revision;
+4. leave the additive provenance and audit tables intact; and
+5. diagnose from the immutable archive and reconciliation ledger.
+
+Do not manually delete source records, artifact links, entity links, run rows,
+or result rows. The implemented importer has no general semantic undo command;
+after an apply, data rollback requires an approved provider snapshot restore or
+a separately reviewed compensating migration.
+
+If no apply has occurred and an explicitly approved schema-only rollback from
+the current sole head is required, take a fresh snapshot and cross each safety
+boundary separately. The `7d1f3a5b6c8e -> 6c0e2f4a5b7d` step drops only the
+five workspace-summary indexes, and the `6c0e2f4a5b7d -> 5b9d1e2f3a4c` step
+drops only its four query indexes and two recomputable `normalized_email`
+columns. Both downgrades are offline-renderable:
+
+```bash
+"$PYTHON" -m alembic downgrade 7d1f3a5b6c8e:6c0e2f4a5b7d --sql \
+  > /tmp/command-contact-summary-index-downgrade.sql
+"$PYTHON" -m alembic downgrade 6c0e2f4a5b7d:5b9d1e2f3a4c --sql \
+  > /tmp/command-contact-timeline-query-downgrade.sql
+
+"$PYTHON" -m alembic downgrade 6c0e2f4a5b7d
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic downgrade 5b9d1e2f3a4c
+"$PYTHON" -m alembic current
+```
+
+The next `5b9d1e2f3a4c -> 4a8c0d1e2f3b` downgrade is online-only. It refuses
+offline mode and refuses to restore `crm_contact_timeline_events.occurred_at`
+to non-null while any null recovered timestamp exists. Perform and record this
+losslessness preflight; a nonzero result blocks downgrade:
+
+```sql
+SELECT count(*) AS null_recovered_timestamps
+FROM crm_contact_timeline_events
+WHERE occurred_at IS NULL;
+```
+
+Only after the count is zero and the staged downgrade has separate data-loss
+approval may the operator continue:
+
+```bash
+"$PYTHON" -m alembic downgrade 4a8c0d1e2f3b
+"$PYTHON" -m alembic current
+```
+
+Never request one monolithic offline downgrade across `5b9d1e2f3a4c`; it cannot
+perform the required online losslessness check. From the now-current
+`4a8c0d1e2f3b`, a further approved rollback can remove the contact-parity schema
+and worker-claim revision, ending at `1d6e7f8a9b10`:
+
+```bash
+"$PYTHON" -m alembic downgrade 4a8c0d1e2f3b:1d6e7f8a9b10 --sql \
+  > /tmp/command-contact-and-claim-downgrade.sql
+"$PYTHON" -m alembic downgrade 1d6e7f8a9b10
+```
+
+Do not treat the intermediate `2e7f9a0b1c2d` revision as a supported stopping
+point. From `4a8c0d1e2f3b`, a full pre-foundation downgrade is destructive to
+the contact-parity schema and all semantic provenance/reconciliation audit rows:
+
+```bash
+"$PYTHON" -m alembic downgrade 4a8c0d1e2f3b:f0c8a6d9e431 --sql \
+  > /tmp/command-provenance-full-downgrade.sql
+"$PYTHON" -m alembic downgrade f0c8a6d9e431
+```
+
+Run any schema-removing downgrade only with explicit data-loss approval and a
+verified snapshot. The full downgrade drops the contact-parity and
+provenance/reconciliation tables but does not drop or rewrite
+`crm_archive_artifacts`. After any rollback, rerun the schema and archive
+preflight queries and compare them with the stored deployment evidence.
+
+## Historical compatibility observation — 2026-08-12
+
+On 2026-08-12, a read-only transaction against the then-configured database
+found:
+
+- current revision: `f0c8a6d9e431`;
+- `crm_archive_artifacts`: 12,580 rows, 745,060,261 declared bytes, zero rows
+  missing `content_bytes`; and
+- the three provenance/link tables and two reconciliation tables introduced by
+  this foundation were not present.
+
+Therefore verify-only was deliberately not executed during that audit. This is
+a dated observation, not evidence of the database's current revision; this
+documentation correction performed no new live audit. Under the current source
+contract, any target still at that observed revision must follow the staged
+upgrade through the sole head `7d1f3a5b6c8e` before running the reconciliation
+CLI. Running verify-only before the full approved migration would attempt to
+write audit rows into an unsupported schema state. No migration or semantic
+reconciliation write was performed by the historical audit.

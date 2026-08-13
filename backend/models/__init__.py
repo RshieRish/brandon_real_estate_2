@@ -1,4 +1,50 @@
 from models.agent_action_audit import AgentActionAudit
 from models.command import CRMContact, CRMTask
+from models.command_contacts import (
+    CRMContactAddress,
+    CRMContactAuditEvent,
+    CRMContactCapturePosition,
+    CRMContactMethod,
+    CRMContactNeighborhood,
+    CRMContactOwnership,
+    CRMContactPreference,
+    CRMContactProfile,
+    CRMContactRelationship,
+    CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
+    CRMContactTimelineEvent,
+)
+from models.command_provenance import (
+    CaptureQuality,
+    CRMEntitySource,
+    CRMReconciliationResult,
+    CRMReconciliationRun,
+    CRMSourceRecord,
+    CRMSourceRecordArtifact,
+    EvidenceLevel,
+)
 
-__all__ = ["AgentActionAudit", "CRMContact", "CRMTask"]
+__all__ = [
+    "AgentActionAudit",
+    "CRMContact",
+    "CRMContactAddress",
+    "CRMContactAuditEvent",
+    "CRMContactCapturePosition",
+    "CRMContactMethod",
+    "CRMContactNeighborhood",
+    "CRMContactOwnership",
+    "CRMContactPreference",
+    "CRMContactProfile",
+    "CRMContactRelationship",
+    "CRMContactSectionCapture",
+    "CRMContactSourceOccurrence",
+    "CRMContactTimelineEvent",
+    "CRMEntitySource",
+    "CRMReconciliationResult",
+    "CRMReconciliationRun",
+    "CRMSourceRecord",
+    "CRMSourceRecordArtifact",
+    "CRMTask",
+    "CaptureQuality",
+    "EvidenceLevel",
+]

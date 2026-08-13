@@ -1,0 +1,3028 @@
+.command-root {
+  --command-rail: 80px;
+  --command-rail-expanded: 248px;
+  --command-header: 64px;
+  --command-mobile-header: 56px;
+  --command-black: #0a0a0a;
+  --command-graphite: #24262b;
+  --command-ink: #292b31;
+  --command-muted: #6f737b;
+  --command-gold: #eac469;
+  --command-gold-strong: #c08235;
+  --command-canvas: #f6f5f2;
+  --command-surface: #ffffff;
+  --command-border: #dedfdc;
+  --command-border-strong: #b9bbb7;
+  --command-gold-soft: #fbf3df;
+  --command-surface-subtle: #faf9f6;
+  --command-shadow-raised: 0 12px 32px rgb(10 10 10 / 14%);
+  --command-danger: #b42318;
+  --command-success: #26724a;
+  min-height: 100dvh;
+  background: var(--command-canvas);
+  color: var(--command-ink);
+}
+
+.command-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.command-root .command-rail {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: flex;
+  width: var(--command-rail);
+  min-height: 100dvh;
+  flex-direction: column;
+  background: var(--command-black);
+  color: var(--command-surface);
+  border-right: 1px solid rgb(255 255 255 / 10%);
+}
+
+.command-root .command-rail-brand,
+.command-root .command-mobile-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.command-root .command-rail-brand {
+  height: 64px;
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+}
+
+.command-root .command-rail-brand img,
+.command-root .command-mobile-brand img {
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.command-root .command-rail-primary,
+.command-root .command-rail-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.command-root .command-rail-primary {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.command-root .command-rail-primary::-webkit-scrollbar {
+  display: none;
+}
+
+.command-root .command-rail-tools {
+  border-top: 1px solid rgb(255 255 255 / 10%);
+}
+
+.command-root .command-rail-link {
+  position: relative;
+  display: flex;
+  width: 56px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: rgb(255 255 255 / 67%);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.command-root .command-rail-link:hover,
+.command-root .command-rail-link:focus-visible {
+  background: rgb(255 255 255 / 9%);
+  color: var(--command-surface);
+}
+
+.command-root .command-rail-link.is-active {
+  background: var(--command-gold);
+  color: var(--command-black);
+}
+
+.command-root .command-rail-link.is-active::before {
+  content: '';
+  position: absolute;
+  inset: 7px auto 7px -12px;
+  width: 4px;
+  background: var(--command-surface);
+}
+
+.command-root .command-rail-tooltip {
+  position: absolute;
+  left: 66px;
+  z-index: 75;
+  width: max-content;
+  max-width: 190px;
+  padding: 7px 9px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 4px;
+  background: var(--command-graphite);
+  color: var(--command-surface);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  box-shadow: 0 5px 18px rgb(0 0 0 / 28%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.command-root .command-rail-link:hover .command-rail-tooltip,
+.command-root .command-rail-link:focus-visible .command-rail-tooltip {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.command-root .command-rail-overlay {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  width: var(--command-rail-expanded);
+  min-height: 100dvh;
+  background: var(--command-black);
+  color: var(--command-surface);
+  box-shadow: 12px 0 32px rgb(0 0 0 / 24%);
+  overflow-y: auto;
+}
+
+.command-root .command-expanded-heading,
+.command-root .command-mobile-drawer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-root .command-expanded-heading {
+  min-height: 72px;
+  padding: 10px 12px 10px 20px;
+  border-bottom: 1px solid rgb(255 255 255 / 11%);
+}
+
+.command-root .command-expanded-heading a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.command-root .command-brand-kicker {
+  display: block;
+  color: var(--command-gold);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.command-root .command-brand-title {
+  display: block;
+  margin-top: 2px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.command-root .command-expanded-navigation,
+.command-root .command-mobile-links {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+}
+
+.command-root .command-expanded-link,
+.command-root .command-mobile-link {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: rgb(255 255 255 / 72%);
+  font-size: 13px;
+  font-weight: 580;
+  text-decoration: none;
+}
+
+.command-root .command-expanded-link:hover,
+.command-root .command-mobile-link:hover {
+  background: rgb(255 255 255 / 8%);
+  color: var(--command-surface);
+}
+
+.command-root .command-expanded-link.is-active,
+.command-root .command-mobile-link.is-active {
+  border-left: 4px solid var(--command-black);
+  background: var(--command-gold);
+  color: var(--command-black);
+  font-weight: 750;
+}
+
+.command-root .command-utility-header {
+  position: fixed;
+  inset: 0 0 auto var(--command-rail);
+  z-index: 40;
+  min-height: var(--command-header);
+  background: var(--command-graphite);
+  color: var(--command-surface);
+  display: flex;
+  height: var(--command-header);
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 20px 0 24px;
+  border-bottom: 1px solid rgb(255 255 255 / 9%);
+}
+
+.command-root .command-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 94px;
+  z-index: 120;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: var(--command-gold);
+  color: var(--command-black);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  transform: translateY(-160%);
+}
+
+.command-root .command-skip-link:focus {
+  transform: translateY(0);
+}
+
+.command-root .command-utility-context {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 11px;
+}
+
+.command-root .command-utility-context strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-context-kicker {
+  color: var(--command-gold);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.command-root .command-utility-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.command-root .command-icon-button,
+.command-root .command-account-button,
+.command-root .command-search-trigger,
+.command-root .command-create-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.command-root .command-icon-button {
+  background: transparent;
+  color: inherit;
+}
+
+.command-root .command-icon-button:hover,
+.command-root .command-account-button:hover {
+  border-color: rgb(255 255 255 / 16%);
+  background: rgb(255 255 255 / 7%);
+}
+
+.command-root .command-account-button {
+  gap: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--command-surface);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.command-root .command-search-trigger {
+  min-height: 40px;
+  gap: 9px;
+  padding: 0 8px 0 11px;
+  border-color: rgb(255 255 255 / 15%);
+  background: rgb(255 255 255 / 6%);
+  color: rgb(255 255 255 / 78%);
+  font-size: 12px;
+}
+
+.command-root .command-search-trigger kbd {
+  padding: 3px 5px;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 3px;
+  background: rgb(0 0 0 / 18%);
+  color: rgb(255 255 255 / 62%);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.command-root .command-create-action {
+  min-height: 40px;
+  gap: 7px;
+  padding: 0 13px;
+  border-color: var(--command-gold);
+  background: var(--command-gold);
+  color: var(--command-black);
+  font-size: 12px;
+  font-weight: 780;
+  text-decoration: none;
+}
+
+.command-root .command-modal-layer,
+.command-root .command-mobile-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.command-root .command-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: rgb(0 0 0 / 58%);
+  cursor: default;
+}
+
+.command-root .command-search-dialog {
+  position: relative;
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(680px, calc(100dvh - 80px));
+  margin: 80px auto 0;
+  overflow: hidden auto;
+  border: 1px solid var(--command-border);
+  border-radius: 8px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 32%);
+}
+
+.command-root .command-search-input-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--command-border);
+  background: var(--command-surface);
+}
+
+.command-root .command-search-input-row input {
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.command-root .command-search-input:focus-visible {
+  outline: 3px solid var(--command-gold);
+  outline-offset: -3px;
+}
+
+.command-root .command-search-option {
+  display: grid;
+  width: 100%;
+  min-height: 52px;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border: 0;
+  border-bottom: 1px solid #efefec;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-root .command-search-option.is-active {
+  border-left: 4px solid var(--command-black);
+  background: #f5ead0;
+}
+
+.command-root .command-search-option span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.command-root .command-search-option small {
+  color: var(--command-muted);
+  font-size: 11px;
+}
+
+.command-root .command-search-option.is-active small {
+  color: #4f535a;
+}
+
+.command-root .command-search-empty {
+  margin: 0;
+  padding: 28px 20px;
+  color: var(--command-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.command-root .command-mobile-header {
+  display: none;
+}
+
+.command-root .command-mobile-drawer {
+  position: relative;
+  width: min(88vw, 320px);
+  height: 100dvh;
+  overflow-y: auto;
+  background: var(--command-black);
+  color: var(--command-surface);
+  box-shadow: 14px 0 36px rgb(0 0 0 / 32%);
+}
+
+.command-root .command-mobile-drawer-heading {
+  min-height: 64px;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid rgb(255 255 255 / 11%);
+}
+
+.command-root .command-mobile-drawer-heading strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.command-root .command-content-gutters {
+  padding-inline: 24px;
+}
+
+.command-root .command-touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.command-root :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--command-gold);
+  outline-offset: 2px;
+}
+
+.command-root .command-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.command-root .command-canvas {
+  min-width: 0;
+  min-height: calc(100dvh - var(--command-header));
+  margin-left: var(--command-rail);
+  padding-top: var(--command-header);
+  background: var(--command-canvas);
+}
+
+.command-root .command-main {
+  min-width: 0;
+  min-height: calc(100dvh - var(--command-header));
+  overflow-x: clip;
+}
+
+.command-root .command-module-header {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  padding-block: 20px 0;
+  border-bottom: 1px solid var(--command-border);
+  background: var(--command-surface);
+}
+
+.command-root .command-module-title-row,
+.command-root .command-module-tabs,
+.command-root .command-module-toolbar {
+  grid-column: 1 / -1;
+}
+
+.command-root .command-module-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 16px;
+}
+
+.command-root .command-module-title-row h1 {
+  margin: 5px 0 0;
+  color: var(--command-ink);
+  font-size: clamp(22px, 2vw, 29px);
+  font-weight: 720;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.command-root .command-module-title-row p {
+  max-width: 760px;
+  margin: 7px 0 0;
+  color: var(--command-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.command-root .command-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  color: var(--command-muted);
+  font-size: 11px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.command-root .command-breadcrumbs li:not(:last-child)::after {
+  content: '/';
+  margin-left: 5px;
+  color: #a1a39f;
+}
+
+.command-root .command-breadcrumbs a {
+  color: var(--command-ink);
+  text-decoration: none;
+}
+
+.command-root .command-breadcrumbs a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.command-root .command-module-actions,
+.command-root .command-module-toolbar,
+.command-root .command-table-toolbar,
+.command-root .command-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-root .command-module-actions {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.command-root .command-module-tabs {
+  min-width: 0;
+}
+
+.command-root .command-module-toolbar {
+  min-height: 52px;
+  flex-wrap: wrap;
+  padding-block: 8px;
+  border-top: 1px solid #efefec;
+}
+
+.command-root .command-tabs {
+  display: flex;
+  max-width: 100%;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.command-root .command-tab {
+  position: relative;
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--command-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.command-root .command-tab:hover:not(:disabled) {
+  background: #f8f3e7;
+  color: var(--command-ink);
+}
+
+.command-root .command-tab.is-selected {
+  border-bottom-color: var(--command-gold-strong);
+  color: var(--command-ink);
+  font-weight: 800;
+}
+
+.command-root .command-contact-detail-main .command-tab:not([aria-selected='true']),
+.command-root .command-contact-detail-main .command-contact-region-heading > span {
+  color: #555960;
+}
+
+.command-root .command-tab.is-selected::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: 4px;
+  left: 10px;
+  height: 1px;
+  background: var(--command-black);
+}
+
+.command-root .command-tab:disabled {
+  color: #acaeaa;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.command-root .command-table-frame {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--command-border);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-table-toolbar,
+.command-root .command-bulk-actions {
+  min-height: 48px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--command-border);
+  font-size: 12px;
+}
+
+.command-root .command-bulk-actions {
+  justify-content: flex-start;
+  border-left: 4px solid var(--command-gold-strong);
+  background: #fbf5e6;
+}
+
+.command-root .command-bulk-actions strong {
+  margin-right: 8px;
+  color: var(--command-ink);
+  font-size: 12px;
+}
+
+.command-root .command-data-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  color: var(--command-ink);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.command-root .command-data-table th {
+  height: 40px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--command-border);
+  background: #efefed;
+  color: #555960;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.command-root .command-data-table td {
+  height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e8e9e6;
+  background: var(--command-surface);
+  vertical-align: middle;
+}
+
+.command-root .command-data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.command-root .command-data-table tbody tr.is-activatable {
+  cursor: pointer;
+}
+
+.command-root .command-data-table tbody tr.is-activatable:hover td,
+.command-root .command-data-table tbody tr.is-activatable:focus-visible td {
+  background: #faf6ed;
+}
+
+.command-root .command-data-table input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--command-gold-strong);
+}
+
+.command-root .command-checkbox-target {
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.command-root .command-selection-column {
+  width: 44px;
+  min-width: 44px;
+  text-align: center !important;
+}
+
+.command-root .command-sort-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.command-root .command-row-action-column {
+  width: 76px;
+  min-width: 76px;
+  text-align: right !important;
+}
+
+.command-root .command-row-action {
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.command-root .command-table-empty {
+  min-width: min(520px, calc(100vw - 56px));
+  height: auto !important;
+  padding: 32px !important;
+  color: var(--command-muted);
+  text-align: center;
+}
+
+.command-root .command-overlay-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+}
+
+.command-root .command-overlay {
+  position: absolute;
+  z-index: 1;
+  overflow: hidden auto;
+  border: 1px solid var(--command-border);
+  background: var(--command-surface);
+  color: var(--command-ink);
+  box-shadow: 0 22px 64px rgb(0 0 0 / 30%);
+}
+
+.command-root .command-overlay-dialog {
+  top: 50%;
+  left: 50%;
+  width: min(640px, calc(100vw - 48px));
+  max-height: min(760px, calc(100dvh - 64px));
+  border-radius: 8px;
+  transform: translate(-50%, -50%);
+}
+
+.command-root .command-overlay-drawer {
+  inset: 0 0 0 auto;
+  width: min(480px, 100vw);
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+}
+
+.command-root .command-overlay-close {
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+  float: right;
+  width: 44px;
+  min-height: 44px;
+  margin: 8px 8px -48px 0;
+  border-color: var(--command-border);
+  background: var(--command-surface);
+  color: var(--command-ink);
+}
+
+.command-root .command-overlay-content {
+  min-height: 120px;
+  padding: 24px;
+}
+
+.command-root .command-overlay-content h2 {
+  margin: 0 48px 18px 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.command-root .command-state-panel {
+  display: grid;
+  min-height: 136px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 15px;
+  padding: 22px;
+  border: 1px solid var(--command-border);
+  border-left: 4px solid #989b96;
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-state-panel.is-error {
+  border-left-color: var(--command-danger);
+  color: var(--command-danger);
+}
+
+.command-root .command-state-panel.is-partial_capture,
+.command-root .command-state-panel.is-evidence_only {
+  border-left-color: var(--command-gold-strong);
+}
+
+.command-root .command-state-panel h3 {
+  margin: 0;
+  color: var(--command-ink);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.command-root .command-state-panel p {
+  margin: 5px 0 0;
+  color: var(--command-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.command-root .command-state-spinner {
+  animation: command-spin 800ms linear infinite;
+}
+
+.command-root .command-state-skeleton {
+  display: grid;
+  max-width: 420px;
+  gap: 6px;
+  margin-top: 13px;
+}
+
+.command-root .command-state-skeleton-line {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: #e5e5e1;
+  animation: command-skeleton-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.command-root .command-state-skeleton-line:nth-child(2) { width: 82%; }
+.command-root .command-state-skeleton-line:nth-child(3) { width: 58%; }
+
+@keyframes command-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes command-skeleton-pulse {
+  to { background: #f1f1ee; }
+}
+
+.command-root .command-secondary-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--command-graphite);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.command-root .command-evidence-panel {
+  padding: 18px;
+  border: 1px solid var(--command-border);
+  border-left: 4px solid var(--command-gold-strong);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-evidence-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.command-root .command-eyebrow {
+  color: #76521c;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+}
+
+.command-root .command-home-readiness .command-eyebrow {
+  color: var(--command-gold);
+}
+
+.command-root .command-evidence-heading h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.command-root .command-evidence-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.command-root .command-evidence-badges span {
+  padding: 4px 7px;
+  border: 1px solid var(--command-border);
+  border-radius: 4px;
+  background: #f4f4f1;
+  color: #555960;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.command-root .command-evidence-badges [data-level='displayed_aggregate'],
+.command-root .command-evidence-badges [data-quality='partial'],
+.command-root .command-evidence-badges [data-quality='shell'],
+.command-root .command-evidence-badges [data-quality='error'],
+.command-root .command-evidence-badges [data-quality='limitation'] {
+  border-color: #d5b060;
+  background: #fbf5e6;
+  color: #654619;
+}
+
+.command-root .command-evidence-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 1px;
+  margin: 15px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--command-border);
+  border-radius: 4px;
+  background: var(--command-border);
+}
+
+.command-root .command-evidence-counts > div {
+  min-width: 0;
+  padding: 10px;
+  background: var(--command-surface);
+}
+
+.command-root .command-evidence-counts dt {
+  color: var(--command-muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.command-root .command-evidence-counts dd {
+  margin: 5px 0 0;
+  color: var(--command-ink);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.command-root .command-evidence-explanation {
+  margin: 12px 0 0;
+  color: var(--command-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.command-root .command-evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 16px;
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--command-border);
+  font-size: 11px;
+  list-style: none;
+}
+
+.command-root .command-evidence-links a,
+.command-root .command-evidence-links button {
+  color: #76521c;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.command-root .command-evidence-links button {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.command-root .command-toast-viewport {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 130;
+  display: grid;
+  width: min(380px, calc(100vw - 32px));
+  gap: 8px;
+  pointer-events: none;
+}
+
+.command-root .command-toast-list {
+  display: grid;
+  gap: 8px;
+}
+
+.command-root .command-toast {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 9px 9px 13px;
+  border: 1px solid var(--command-border);
+  border-left: 4px solid var(--command-graphite);
+  border-radius: 5px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 18%);
+  pointer-events: auto;
+}
+
+.command-root .command-toast.is-success { border-left-color: var(--command-success); }
+.command-root .command-toast.is-warning,
+.command-root .command-toast.is-error { border-left-color: var(--command-danger); }
+
+.command-root .command-toast button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.command-root .command-toast button:focus-visible {
+  outline: 3px solid var(--command-gold-strong);
+  outline-offset: 2px;
+}
+
+.command-root .command-kpi-scroll {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.command-root .command-primary-button,
+.command-root .command-inline-button,
+.command-root .command-home-view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 780;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.command-root .command-primary-button {
+  padding: 0 14px;
+  border: 1px solid var(--command-gold-strong);
+  background: var(--command-gold);
+  color: var(--command-black);
+}
+
+.command-root .command-primary-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.command-root .command-inline-button,
+.command-root .command-home-view-all {
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #76521c;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.command-root .command-home {
+  min-height: 100%;
+  color: var(--command-ink);
+}
+
+.command-root .command-home-body {
+  display: grid;
+  gap: 14px;
+  padding-block: 16px 32px;
+}
+
+.command-root .command-home-customize {
+  position: relative;
+}
+
+.command-root .command-home-customize-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  width: 220px;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.command-root .command-home-customize-menu label {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.command-root .command-home-shortcuts,
+.command-root .command-home-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.command-root .command-home-shortcut,
+.command-root .command-home-kpi {
+  min-width: 0;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  text-decoration: none;
+}
+
+.command-root .command-home-shortcut {
+  display: grid;
+  min-height: 74px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 3px 10px;
+  padding: 10px 12px;
+}
+
+.command-root .command-home-shortcut > span,
+.command-root .command-home-kpi > span {
+  color: var(--command-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-shortcut strong {
+  color: #76521c;
+  font-size: 13px;
+}
+
+.command-root .command-home-shortcut small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--command-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-readiness {
+  overflow: hidden;
+  border: 1px solid #282a2f;
+  border-radius: 7px;
+  background: linear-gradient(125deg, #1c1e22 0%, #292b31 64%, #3a3020 100%);
+  color: var(--command-surface);
+  box-shadow: 0 10px 28px rgb(24 24 22 / 14%);
+}
+
+.command-root .command-home-readiness-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: 28px;
+  padding: 24px;
+}
+
+.command-root .command-home-readiness h2 {
+  margin: 5px 0 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.command-root .command-home-readiness-score {
+  margin: 10px 0 0;
+  color: var(--command-gold);
+  font-size: clamp(38px, 5vw, 58px);
+  font-weight: 820;
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+}
+
+.command-root .command-home-readiness-coverage {
+  margin: 9px 0 0;
+  color: rgb(255 255 255 / 68%);
+  font-size: 11px;
+}
+
+.command-root .command-home-primary-action {
+  align-self: end;
+  padding-left: 20px;
+  border-left: 1px solid rgb(255 255 255 / 14%);
+}
+
+.command-root .command-home-primary-action p {
+  margin: 0 0 13px;
+  font-size: 16px;
+  font-weight: 680;
+  line-height: 1.45;
+}
+
+.command-root .command-readiness-rail {
+  display: flex;
+  min-height: 66px;
+  border-block: 1px solid rgb(255 255 255 / 12%);
+  background: rgb(0 0 0 / 18%);
+}
+
+.command-root .command-readiness-segment {
+  display: flex;
+  min-width: 92px;
+  flex-basis: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 14px;
+  border-right: 1px solid rgb(255 255 255 / 12%);
+}
+
+.command-root .command-readiness-segment:last-child {
+  border-right: 0;
+}
+
+.command-root .command-readiness-segment span {
+  color: rgb(255 255 255 / 62%);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.command-root .command-readiness-segment strong {
+  color: var(--command-gold);
+  font-size: 15px;
+}
+
+.command-root .command-readiness-segment.is-unavailable strong {
+  color: #f2dca9;
+  font-size: 11px;
+}
+
+.command-root .command-readiness-score-progress,
+.command-root .command-readiness-score-unavailable {
+  width: 100%;
+  height: 5px;
+  margin-top: 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 13%);
+}
+
+.command-root .command-readiness-score-progress {
+  color: var(--command-gold);
+  accent-color: var(--command-gold);
+}
+
+.command-root .command-readiness-score-progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: rgb(255 255 255 / 13%);
+}
+
+.command-root .command-readiness-score-progress::-webkit-progress-value,
+.command-root .command-readiness-score-progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--command-gold);
+}
+
+.command-root .command-readiness-score-unavailable {
+  display: block;
+  background: repeating-linear-gradient(135deg, rgb(255 255 255 / 16%) 0 4px, transparent 4px 8px);
+}
+
+.command-root .command-home-readiness-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(240px, 0.75fr);
+  gap: 24px;
+  padding: 18px 24px 22px;
+}
+
+.command-root .command-home-readiness-lower h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-action-queue {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-root .command-home-action-queue a {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  color: var(--command-surface);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.command-root .command-home-action-queue a:hover {
+  background: rgb(255 255 255 / 7%);
+}
+
+.command-root .command-home-action-queue strong {
+  color: var(--command-gold);
+  font-size: 10px;
+}
+
+.command-root .command-home-source-disclosure {
+  padding: 11px 13px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 4px;
+  color: rgb(255 255 255 / 68%);
+  font-size: 11px;
+}
+
+.command-root .command-home-source-disclosure summary,
+.command-root .command-home-recovered-evidence summary {
+  min-height: 32px;
+  color: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.command-root .command-home-source-disclosure ul,
+.command-root .command-home-source-disclosure p {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+
+.command-root .command-home-kpi {
+  display: grid;
+  min-height: 112px;
+  align-content: start;
+  gap: 5px;
+  padding: 15px;
+  border-top: 3px solid var(--command-gold-strong);
+}
+
+.command-root .command-home-kpi strong {
+  margin-top: 4px;
+  font-size: 25px;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+.command-root .command-home-kpi p {
+  margin: 3px 0 0;
+  color: var(--command-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.command-root .command-home-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.command-root .command-home-primary-column,
+.command-root .command-home-context-stack {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.command-root .command-home-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--command-border);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-home-panel-heading,
+.command-root .command-home-goal-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-root .command-home-panel-heading h2 {
+  margin: 4px 0 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.command-root .command-home-panel-heading > a {
+  color: #76521c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.command-root .command-home-task-queue .command-tabs {
+  margin-top: 15px;
+  border-bottom: 1px solid var(--command-border);
+}
+
+.command-root .command-home-task-filters,
+.command-root .command-home-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.command-root .command-home-task-filters {
+  margin: 12px 0;
+}
+
+.command-root .command-home-task-filters label,
+.command-root .command-home-task-form label,
+.command-root .command-home-goal-editor label {
+  display: grid;
+  gap: 5px;
+  color: var(--command-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-task-filters select,
+.command-root .command-home-task-form input,
+.command-root .command-home-task-form textarea,
+.command-root .command-home-task-form select,
+.command-root .command-home-goal-editor input {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--command-border);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.command-root .command-home-task-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.command-root .command-home-task-list,
+.command-root .command-home-goals,
+.command-root .command-home-contact-list,
+.command-root .command-home-celebrations {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-root .command-home-task-list li {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #ecece8;
+}
+
+.command-root .command-home-task-list li div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.command-root .command-home-task-list strong,
+.command-root .command-home-contact-list strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-task-list span,
+.command-root .command-home-task-list small,
+.command-root .command-home-contact-list span {
+  color: var(--command-muted);
+  font-size: 10px;
+}
+
+.command-root .command-home-view-all {
+  margin-top: 9px;
+}
+
+.command-root .command-home-positive-copy,
+.command-root .command-home-neutral-copy,
+.command-root .command-home-error-copy {
+  margin: 12px 0 0;
+  padding: 12px;
+  border-radius: 4px;
+  background: #f3f3f0;
+  color: var(--command-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.command-root .command-home-positive-copy {
+  border-left: 4px solid var(--command-success);
+  color: #255d42;
+}
+
+.command-root .command-home-error-copy {
+  border-left: 4px solid var(--command-danger);
+  color: var(--command-danger);
+}
+
+.command-root .command-home-goals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.command-root .command-home-goals li {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e6e6e2;
+  border-radius: 4px;
+}
+
+.command-root .command-home-goal-heading strong {
+  font-size: 12px;
+}
+
+.command-root .command-home-goal-heading span {
+  color: #76521c;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.command-root .command-home-goal-track {
+  height: 5px;
+  margin-top: 11px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e7e7e3;
+}
+
+.command-root .command-home-goal-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--command-gold-strong);
+}
+
+.command-root .command-home-goal-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.command-root .command-home-contact-list,
+.command-root .command-home-celebrations {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.command-root .command-home-contact-list a,
+.command-root .command-home-celebrations li {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border: 1px solid #ecece8;
+  border-radius: 4px;
+  color: var(--command-ink);
+  text-decoration: none;
+}
+
+.command-root .command-home-contact-list a > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-subheading {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--command-border);
+  font-size: 12px;
+}
+
+.command-root .command-home-celebrations li {
+  font-size: 11px;
+}
+
+.command-root .command-home-celebrations strong,
+.command-root .command-review-badge {
+  padding: 3px 6px;
+  border: 1px solid #d5b060;
+  border-radius: 3px;
+  background: #fbf5e6;
+  color: #654619;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-panel .command-state-panel {
+  min-height: 108px;
+  margin-top: 12px;
+  padding: 14px;
+}
+
+.command-root .command-home-briefing {
+  margin: 14px 0 5px;
+  color: var(--command-ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.command-root .command-home-panel > small {
+  color: var(--command-muted);
+  font-size: 9px;
+}
+
+.command-root .command-home-recovered-evidence {
+  padding: 13px 15px;
+  border: 1px dashed #b9bab5;
+  border-radius: 5px;
+  background: #eeeee9;
+  color: #555960;
+  font-size: 11px;
+}
+
+.command-root .command-home-recovered-evidence p,
+.command-root .command-home-recovered-evidence ul {
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+
+.command-root .command-home-loading {
+  display: grid;
+  gap: 14px;
+}
+
+.command-root .command-home-loading-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.command-root .command-home-loading-grid span {
+  height: 110px;
+  border-radius: 5px;
+  background: #e5e5e1;
+  animation: command-skeleton-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.command-root .command-home-task-form {
+  display: grid;
+  gap: 14px;
+}
+
+/* Dense Contacts directory ------------------------------------------------ */
+
+.command-root .command-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.command-root .command-contacts-workspace {
+  min-height: calc(100dvh - var(--command-header));
+  background: var(--command-canvas);
+}
+
+.command-root .command-contacts-body {
+  display: grid;
+  gap: 10px;
+  padding-block: 14px 28px;
+}
+
+.command-root .command-contacts-toolbar {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-root .command-contacts-search {
+  display: grid;
+  min-width: 220px;
+  max-width: 520px;
+  min-height: 44px;
+  flex: 1 1 360px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding-inline: 11px;
+  border: 1px solid #bfc1bc;
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-muted);
+}
+
+.command-root .command-contacts-search input {
+  min-width: 0;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.command-root .command-contacts-column-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.command-root .command-contacts-column-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 32;
+  display: grid;
+  width: 232px;
+  padding: 7px;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.command-root .command-contacts-column-menu label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  color: var(--command-ink);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.command-root .command-contacts-filter-form,
+.command-root .command-contacts-create-form {
+  display: grid;
+  gap: 17px;
+}
+
+.command-root .command-contacts-filter-form label,
+.command-root .command-contacts-create-form label {
+  display: grid;
+  gap: 6px;
+  color: #555960;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.command-root .command-contacts-filter-form :where(input, select),
+.command-root .command-contacts-create-form :where(input, select),
+.command-root .command-contacts-bulk :where(input, select),
+.command-root .command-contacts-pagination select {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid #bfc1bc;
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.command-root .command-contacts-filter-pair,
+.command-root .command-contacts-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.command-root .command-contacts-filter-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--command-border);
+  border-radius: 4px;
+}
+
+.command-root .command-contacts-filter-options legend {
+  padding-inline: 4px;
+  color: #555960;
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.command-root .command-contacts-filter-options label {
+  display: flex;
+  min-height: 36px;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.command-root .command-contacts-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.command-root .command-contacts-kicker {
+  margin: 0 0 4px;
+  color: #76521c;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.command-root .command-contacts-form-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 4px solid var(--command-danger);
+  background: #fff2f0;
+  color: var(--command-danger);
+  font-size: 12px;
+}
+
+.command-root .command-contacts-table-region {
+  width: 100%;
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  overscroll-behavior-inline: contain;
+}
+
+.command-root .command-contacts-table {
+  width: 100%;
+  min-width: 1500px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--command-ink);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.command-root .command-contacts-table-head th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  height: 44px;
+  padding: 0 10px;
+  border-bottom: 1px solid #cfd0cc;
+  background: #efefed;
+  color: #555960;
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0.055em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.command-root .command-contacts-row td {
+  height: 52px;
+  padding: 4px 10px;
+  border-bottom: 1px solid #e8e9e6;
+  background: var(--command-surface);
+  vertical-align: middle;
+}
+
+.command-root .command-contacts-row:last-child td {
+  border-bottom: 0;
+}
+
+.command-root .command-contacts-row {
+  cursor: pointer;
+}
+
+.command-root .command-contacts-row:hover td,
+.command-root .command-contacts-row:focus-visible td {
+  background: #faf6ed;
+}
+
+.command-root .command-contacts-select-column {
+  width: 44px;
+  min-width: 44px;
+  text-align: center !important;
+}
+
+.command-root .command-contacts-checkbox {
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.command-root .command-contacts-checkbox input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--command-gold-strong);
+}
+
+.command-root .command-contacts-name-column {
+  position: sticky !important;
+  left: 44px;
+  z-index: 2;
+  width: 218px;
+  min-width: 218px;
+  box-shadow: 1px 0 #e0e1dd;
+}
+
+.command-root .command-contacts-table-head .command-contacts-name-column {
+  z-index: 6;
+  background: #efefed;
+}
+
+.command-root .command-contacts-name-column strong,
+.command-root .command-contacts-name-column span,
+.command-root .command-contacts-primary-column span,
+.command-root .command-contacts-primary-column small,
+.command-root .command-contacts-owner-column span,
+.command-root .command-contacts-owner-column small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-contacts-name-column strong {
+  font-size: 12px;
+  font-weight: 790;
+}
+
+.command-root .command-contacts-name-column span,
+.command-root .command-contacts-primary-column small,
+.command-root .command-contacts-owner-column small {
+  margin-top: 2px;
+  color: var(--command-muted);
+  font-size: 10px;
+}
+
+.command-root .command-contacts-table-head .command-contacts-name-column span {
+  color: inherit;
+}
+
+.command-root .command-contacts-primary-column { width: 230px; min-width: 230px; }
+.command-root .command-contacts-owner-column { width: 180px; min-width: 180px; }
+.command-root .command-contacts-tags-column {
+  width: 150px;
+  min-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-root .command-contacts-stage-column { width: 112px; min-width: 112px; }
+.command-root .command-contacts-health-column { width: 84px; min-width: 84px; }
+.command-root .command-contacts-activity-column { width: 130px; min-width: 130px; }
+.command-root .command-contacts-evidence-column { width: 440px; min-width: 440px; }
+.command-root .command-contacts-action-column { width: 58px; min-width: 58px; text-align: right !important; }
+
+.command-root .command-contacts-sort {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.command-root .command-contacts-tag,
+.command-root .command-contacts-stage,
+.command-root .command-contacts-origin,
+.command-root .command-contacts-source {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px solid #d5d6d1;
+  border-radius: 3px;
+  background: #f5f5f1;
+  color: #4f535a;
+  font-size: 9px;
+  font-weight: 780;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.command-root .command-contacts-tag + .command-contacts-tag {
+  margin-left: 4px;
+}
+
+.command-root .command-contacts-origin.is-recovered,
+.command-root .command-contacts-stage {
+  border-color: #d5b060;
+  background: #fbf5e6;
+  color: #654619;
+}
+
+.command-root .command-contacts-origin.is-lead_backed {
+  border-color: #a8cdb7;
+  background: #edf7f1;
+  color: #1e603d;
+}
+
+.command-root .command-contacts-origin.is-legacy_only {
+  border-color: #bbc3cc;
+  background: #f0f3f5;
+  color: #475463;
+}
+
+.command-root .command-contacts-origin.is-internal_only {
+  border-color: #bdbdb8;
+  background: #f7f7f4;
+  color: #454741;
+}
+
+.command-root .command-contacts-source.is-kw_command {
+  border-color: #d5b060;
+  background: #fffaf0;
+  color: #654619;
+}
+
+.command-root .command-contacts-source.is-legacy_lead {
+  border-color: #b8c6d5;
+  background: #f1f5f9;
+  color: #43566c;
+}
+
+.command-root .command-contacts-source.is-internal_crm {
+  border-color: #c3c3bd;
+  background: #f7f7f4;
+  color: #454741;
+}
+
+.command-root .command-contacts-evidence-stack {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.command-root .command-contacts-evidence-note,
+.command-root .command-contacts-evidence-warning {
+  color: var(--command-muted);
+  font-size: 10px;
+}
+
+.command-root .command-contacts-evidence-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #76521c;
+  font-weight: 720;
+}
+
+.command-root .command-contacts-state-cell {
+  padding: 16px !important;
+  background: var(--command-canvas) !important;
+}
+
+.command-root .command-contacts-table-state .command-state-panel {
+  min-height: 150px;
+}
+
+.command-root .command-contacts-skeleton {
+  display: block;
+  height: 14px;
+  margin: 10px;
+  border-radius: 3px;
+  background: #e5e5e1;
+  animation: command-skeleton-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.command-root .command-contacts-bulk,
+.command-root .command-contacts-inline-error,
+.command-root .command-contacts-pagination {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  font-size: 11px;
+}
+
+.command-root .command-contacts-bulk {
+  border-left: 4px solid var(--command-gold-strong);
+  background: #fbf5e6;
+}
+
+.command-root .command-contacts-bulk strong {
+  margin-right: auto;
+  color: var(--command-ink);
+}
+
+.command-root .command-contacts-bulk input {
+  width: 96px;
+}
+
+.command-root .command-contacts-inline-error {
+  border-left: 4px solid var(--command-danger);
+  color: var(--command-danger);
+}
+
+.command-root .command-contacts-pagination {
+  justify-content: flex-end;
+}
+
+.command-root .command-contacts-pagination > span {
+  margin-right: auto;
+  color: var(--command-muted);
+  font-weight: 680;
+}
+
+.command-root .command-contacts-pagination label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--command-muted);
+}
+
+.command-root .command-home-task-form h2 {
+  margin-bottom: 2px;
+}
+
+.command-root .command-home-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+@media (max-width: 1023px) {
+  .command-root .command-rail,
+  .command-root .command-utility-header {
+    display: none;
+  }
+
+  .command-root .command-mobile-header {
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 40;
+    min-height: var(--command-mobile-header);
+    background: var(--command-black);
+    color: var(--command-surface);
+    display: flex;
+    height: var(--command-mobile-header);
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid rgb(255 255 255 / 10%);
+  }
+
+  .command-root .command-mobile-brand {
+    gap: 9px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+  }
+
+  .command-root .command-content-gutters {
+    padding-inline: 16px;
+  }
+
+  .command-root .command-canvas {
+    min-height: calc(100dvh - var(--command-mobile-header));
+    margin-left: 0;
+    padding-top: var(--command-mobile-header);
+  }
+
+  .command-root .command-main {
+    min-height: calc(100dvh - var(--command-mobile-header));
+  }
+
+  .command-root .command-home-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.command-root .command-contact-detail-workspace {
+  min-width: 0;
+  color: var(--command-ink);
+}
+
+.command-root .command-contact-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 352px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  padding-block: 22px 30px;
+}
+
+.command-root .command-contact-detail-grid > div:nth-of-type(2) {
+  position: sticky;
+  top: calc(var(--command-header) + 18px);
+  align-self: start;
+  max-height: calc(100dvh - var(--command-header) - 36px);
+  overflow-y: auto;
+}
+
+.command-root .command-contact-profile-column,
+.command-root .command-contact-detail-main,
+.command-root .command-contact-detail-panel,
+.command-root .command-contact-task-panel {
+  min-width: 0;
+}
+
+.command-root .command-contact-profile-column,
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region,
+.command-root .command-contact-bookings,
+.command-root .command-contact-timeline,
+.command-root .command-contact-capture-evidence > section {
+  border: 1px solid var(--command-border);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-identity-card,
+.command-root .command-contact-profile-section,
+.command-root .command-contact-map,
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region,
+.command-root .command-contact-bookings,
+.command-root .command-contact-capture-evidence > section {
+  padding: 18px;
+}
+
+.command-root .command-contact-profile-section,
+.command-root .command-contact-map {
+  border-top: 1px solid var(--command-border);
+}
+
+.command-root .command-contact-profile-name {
+  margin: 4px 0 14px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.command-root .command-contact-avatar,
+.command-root .command-contact-health,
+.command-root .command-contact-region-heading,
+.command-root .command-contact-record-heading,
+.command-root .command-contact-detail-tools,
+.command-root .command-contact-action-buttons,
+.command-root .command-contact-editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.command-root .command-contact-health {
+  width: fit-content;
+  margin-bottom: 14px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--command-gold);
+  background: var(--command-gold-soft);
+}
+
+.command-root .command-contact-methods,
+.command-root .command-contact-profile-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.command-root .command-contact-methods > div,
+.command-root .command-contact-profile-list > div {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.command-root .command-contact-methods dt,
+.command-root .command-contact-profile-list dt {
+  color: var(--command-muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: capitalize;
+}
+
+.command-root .command-contact-methods dd,
+.command-root .command-contact-profile-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.command-root .command-contact-tags,
+.command-root .command-contact-global-counts,
+.command-root .command-contact-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-root .command-contact-tags > span,
+.command-root .command-contact-global-counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--command-border);
+  border-radius: 999px;
+  background: var(--command-gold-soft);
+  font-size: 12px;
+}
+
+.command-root .command-contact-tags button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.command-root .command-contact-profile-disclosure {
+  display: none;
+}
+
+.command-root .command-contact-detail-main {
+  overflow: hidden;
+}
+
+.command-root .command-contact-detail-main > .command-tabs,
+.command-root .command-contact-task-panel + .command-tabs {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.command-root .command-contact-detail-panel {
+  padding-top: 18px;
+}
+
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region {
+  margin-bottom: 16px;
+}
+
+.command-root .command-contact-region-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.command-root .command-contact-region-heading > span {
+  color: var(--command-gold-strong);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.command-root .command-contact-region-heading h3,
+.command-root .command-contact-record-card h4 {
+  margin: 0;
+}
+
+.command-root .command-contact-cards,
+.command-root .command-contact-timeline,
+.command-root .command-contact-bookings,
+.command-root .command-contact-capture-evidence {
+  display: grid;
+  gap: 12px;
+}
+
+.command-root .command-contact-record-card,
+.command-root .command-contact-bookings article,
+.command-root .command-contact-timeline article {
+  padding: 14px;
+  border: 1px solid var(--command-border);
+  border-left: 3px solid var(--command-gold);
+  border-radius: 4px;
+  background: var(--command-surface-subtle);
+}
+
+.command-root .command-contact-record-card code {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.command-root .command-contact-detail-workspace .command-touch-target,
+.command-root .command-contact-detail-workspace .command-primary-button,
+.command-root .command-contact-detail-workspace .command-inline-button {
+  min-height: 44px;
+}
+
+.command-root .command-contact-jump input,
+.command-root .command-contact-jump-results button,
+.command-root .command-contact-action-form input,
+.command-root .command-contact-action-form textarea,
+.command-root .command-contact-editor input {
+  min-height: 44px;
+}
+
+.command-root .command-contact-record-heading {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.command-root .command-contact-record-heading span,
+.command-root .command-contact-timeline article > div > span {
+  color: var(--command-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.command-root .command-contact-record-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--command-border);
+}
+
+.command-root .command-contact-timeline strong + time {
+  margin-left: 8px;
+}
+
+.command-root .command-contact-detail-tools {
+  justify-content: space-between;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.command-root .command-contact-jump {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: min(100%, 280px);
+}
+
+.command-root .command-contact-jump input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px 8px 34px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-jump > svg {
+  position: absolute;
+  left: 10px;
+  z-index: 1;
+}
+
+.command-root .command-contact-jump-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: grid;
+  padding: 5px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  box-shadow: var(--command-shadow-raised);
+}
+
+.command-root .command-contact-jump-results button {
+  min-height: 44px;
+  padding: 9px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.command-root .command-contact-action-form,
+.command-root .command-contact-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-action-form > div,
+.command-root .command-contact-editor-heading {
+  justify-content: space-between;
+}
+
+.command-root .command-contact-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.command-root .command-contact-editor-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--command-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.command-root .command-contact-editor-fields input,
+.command-root .command-contact-action-form input,
+.command-root .command-contact-action-form textarea {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+}
+
+.command-root .command-contact-record-card,
+.command-root .command-contact-record-card > *,
+.command-root .command-contact-record-heading,
+.command-root .command-contact-record-heading > *,
+.command-root .command-contact-timeline,
+.command-root .command-contact-timeline article,
+.command-root .command-contact-timeline article > *,
+.command-root .command-contact-bookings,
+.command-root .command-contact-bookings article,
+.command-root .command-contact-bookings article > * {
+  min-width: 0;
+}
+
+.command-root .command-contact-record-card h4,
+.command-root .command-contact-record-card p,
+.command-root .command-contact-timeline h3,
+.command-root .command-contact-timeline p,
+.command-root .command-contact-timeline strong,
+.command-root .command-contact-bookings h4,
+.command-root .command-contact-bookings p {
+  overflow-wrap: anywhere;
+}
+
+.command-root .command-contact-summary-strip {
+  padding: 14px 24px 24px;
+}
+
+.command-root .command-contact-summary-strip span {
+  display: grid;
+  min-width: 106px;
+  padding: 10px;
+  border-top: 3px solid var(--command-gold);
+  background: var(--command-surface-subtle);
+  color: var(--command-muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.command-root .command-contact-summary-strip strong {
+  color: var(--command-ink);
+  font-size: 20px;
+}
+
+.command-root .command-contact-universe-state {
+  margin: 0 24px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--command-gold);
+  background: var(--command-gold-soft);
+  font-weight: 700;
+}
+
+@media (max-width: 1100px) {
+  .command-root .command-contacts-table {
+    min-width: 930px;
+  }
+}
+
+@media (max-width: 767px) {
+  .command-root .command-breadcrumbs a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .command-root .command-contact-detail-grid {
+    display: block;
+    padding-top: 14px;
+  }
+
+  .command-root .command-contact-profile-disclosure {
+    display: block;
+    margin-bottom: 12px;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2) {
+    position: static;
+    display: none;
+    max-height: none;
+    margin-bottom: 16px;
+    overflow: visible;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2).is-mobile-open {
+    display: block;
+  }
+
+  .command-root .command-contact-detail-main > .command-tabs,
+  .command-root .command-contact-task-panel + .command-tabs {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+
+  .command-root .command-contact-detail-tools,
+  .command-root .command-contact-action-buttons,
+  .command-root .command-contact-record-status,
+  .command-root .command-contact-region-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-root .command-contact-jump {
+    width: 100%;
+  }
+
+  .command-root .command-contact-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-module-title-row,
+  .command-root .command-evidence-heading,
+  .command-root .command-state-panel {
+    align-items: stretch;
+  }
+
+  .command-root .command-module-title-row,
+  .command-root .command-evidence-heading {
+    flex-direction: column;
+  }
+
+  .command-root .command-module-actions,
+  .command-root .command-evidence-badges {
+    justify-content: flex-start;
+  }
+
+  .command-root .command-state-panel {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .command-root .command-state-panel .command-secondary-button {
+    grid-column: 1 / -1;
+  }
+
+  .command-root .command-evidence-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .command-root .command-overlay-dialog,
+  .command-root .command-overlay-drawer {
+    inset: auto 0 0;
+    width: 100%;
+    max-height: 90dvh;
+    border-width: 1px 0 0;
+    border-radius: 8px 8px 0 0;
+    transform: none;
+  }
+
+  .command-root .command-kpi-scroll {
+    display: flex;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    overflow-x: auto;
+    scroll-padding-inline: 16px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .command-root .command-kpi-scroll > * {
+    min-width: min(78vw, 280px);
+    scroll-snap-align: start;
+  }
+
+  .command-root .command-home-shortcuts,
+  .command-root .command-home-kpis {
+    display: flex;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    overflow-x: auto;
+    scroll-padding-inline: 16px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .command-root .command-home-shortcut,
+  .command-root .command-home-kpi {
+    min-width: min(78vw, 270px);
+    scroll-snap-align: start;
+  }
+
+  .command-root .command-home-readiness-summary,
+  .command-root .command-home-readiness-lower {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-home-primary-action {
+    padding: 14px 0 0;
+    border-top: 1px solid rgb(255 255 255 / 14%);
+    border-left: 0;
+  }
+
+  .command-root .command-readiness-rail {
+    overflow-x: auto;
+  }
+
+  .command-root .command-readiness-segment {
+    min-width: 148px;
+  }
+
+  .command-root .command-home-goals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-contacts-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .command-root .command-contacts-search {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .command-root .command-contacts-search input {
+    min-height: 44px;
+  }
+
+  .command-root .command-contacts-table {
+    min-width: 720px;
+  }
+
+  .command-root .command-contacts-form-grid,
+  .command-root .command-contacts-filter-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-contacts-bulk,
+  .command-root .command-contacts-pagination {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .command-root .command-contacts-bulk strong,
+  .command-root .command-contacts-pagination > span {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .command-root .command-search-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 28px);
+    margin-top: 14px;
+  }
+
+  .command-root .command-search-option {
+    grid-template-columns: 24px 1fr;
+  }
+
+  .command-root .command-search-option small {
+    display: none;
+  }
+
+  .command-root .command-home-readiness-summary,
+  .command-root .command-home-readiness-lower,
+  .command-root .command-home-panel {
+    padding: 15px;
+  }
+
+  .command-root .command-home-task-filters,
+  .command-root .command-home-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-home-panel-heading {
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-root *,
+  .command-root *::before,
+  .command-root *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  .command-root .command-rail,
+  .command-root .command-rail-overlay,
+  .command-root .command-utility-header,
+  .command-root .command-mobile-header,
+  .command-root .command-print-hidden,
+  .command-root .command-contact-profile-disclosure,
+  .command-root .command-contact-editor,
+  .command-root .command-contact-actions,
+  .command-root .command-contact-detail-workspace .command-module-actions,
+  .command-root .command-contact-detail-workspace .command-module-toolbar,
+  .command-root .command-contact-detail-workspace .command-tabs,
+  .command-root .command-contact-profile-column > section button,
+  .command-root .command-evidence-links,
+  .command-root .command-inline-button,
+  .command-root .command-contact-tags button,
+  .command-root .command-contact-detail-panel > button {
+    display: none !important;
+  }
+
+  .command-root .command-contact-detail-grid {
+    display: grid;
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2) {
+    position: static;
+    display: block !important;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .command-root .command-contact-detail-panel[hidden],
+  .command-root .command-contact-task-panel[hidden] {
+    display: none !important;
+  }
+
+  .command-root .command-canvas {
+    min-height: auto;
+    margin-left: 0;
+    padding-top: 0;
+  }
+
+  .command-root .command-contacts-table {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+    font-size: 9px;
+  }
+
+  .command-root .command-contacts-table-region {
+    overflow: visible;
+    border: 0;
+  }
+
+  .command-root .command-contacts-table th,
+  .command-root .command-contacts-table td,
+  .command-root .command-contacts-name-column,
+  .command-root .command-contacts-primary-column,
+  .command-root .command-contacts-owner-column,
+  .command-root .command-contacts-tags-column,
+  .command-root .command-contacts-stage-column,
+  .command-root .command-contacts-health-column,
+  .command-root .command-contacts-activity-column,
+  .command-root .command-contacts-evidence-column {
+    position: static !important;
+    display: table-cell !important;
+    width: auto;
+    min-width: 0;
+    padding-inline: 4px;
+    box-shadow: none;
+    overflow: hidden;
+  }
+
+  .command-root .command-contacts-table-head th {
+    white-space: normal;
+  }
+
+  .command-root .command-contacts-table .command-print-hidden {
+    display: none !important;
+  }
+}

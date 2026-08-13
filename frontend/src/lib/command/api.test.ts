@@ -1,8 +1,211 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { commandApi } from './api';
+import {
+  commandApi,
+  contactsApi,
+} from './api';
+import { CommandDecodeError } from './http';
+
+const legacyContact = {
+  id: 7,
+  first_name: 'Avery',
+  last_name: 'Stone',
+  email: null,
+  phone: '+1 555 0107',
+  lead_id: null,
+  birthday: null,
+  anniversary: '2020-02-29',
+  stage: 'lead',
+};
+
+const directoryPage = {
+  rows: [],
+  total: 0,
+  page: 1,
+  page_size: 25,
+  page_count: 0,
+  sort: 'name',
+  direction: 'asc',
+};
 
 describe('commandApi', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps the complete compatibility method inventory alongside the decoded contact adapters', () => {
+    expect(Object.keys(commandApi)).toEqual([
+      'overview',
+      'contacts',
+      'contactDirectory',
+      'tasks',
+      'celebrations',
+      'createContactNote',
+      'createContactSavedSearch',
+      'savedSearches',
+      'deleteSavedSearch',
+      'createTag',
+      'assignContactTag',
+      'removeContactTag',
+      'deleteContactNote',
+      'goals',
+      'createGoal',
+      'updateGoalProgress',
+      'aiBriefing',
+      'generateAiBriefing',
+      'createContact',
+      'importContacts',
+      'importArchiveBundle',
+      'updateContactStage',
+      'updateContact',
+      'smartPlans',
+      'createSmartPlan',
+      'updateSmartPlanStatus',
+      'smartPlanWorkspace',
+      'addSmartPlanStep',
+      'updateSmartPlanStep',
+      'enrollSmartPlanContact',
+      'updateSmartPlanEnrollment',
+      'opportunities',
+      'createOpportunity',
+      'updateOpportunity',
+      'opportunityWorkspace',
+      'addOpportunityContact',
+      'addOpportunityVendor',
+      'addOpportunityOffer',
+      'agreements',
+      'createAgreement',
+      'agreementWorkspace',
+      'updateAgreementStatus',
+      'addAgreementRecipient',
+      'agreementTemplates',
+      'createAgreementTemplate',
+      'updateAgreementTemplate',
+      'listings',
+      'createListing',
+      'updateListingStatus',
+      'geocodeListing',
+      'referrals',
+      'createReferral',
+      'updateReferralStatus',
+      'marketingRecords',
+      'websiteRecords',
+      'eventBreakdown',
+      'reportsSummary',
+      'archiveArtifacts',
+      'archiveArtifactBlob',
+      'reportDetails',
+      'createTask',
+      'addTaskLink',
+      'taskLinks',
+      'updateTask',
+    ]);
+  });
+
+  it('retains unchecked request transport and exact URLs for every unrelated read adapter', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-retained-reads' });
+    const payload = { private_payload: 'retained-unchecked-result' };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => payload });
+    vi.stubGlobal('fetch', fetchMock);
+    const cases: readonly Readonly<{
+      name: string;
+      invoke: () => Promise<unknown>;
+      path: string;
+    }>[] = [
+      { name: 'overview', invoke: () => commandApi.overview(), path: '/overview' },
+      { name: 'tasks', invoke: () => commandApi.tasks({ status: 'open' }), path: '/tasks?status=open' },
+      { name: 'savedSearches', invoke: () => commandApi.savedSearches(), path: '/saved-searches' },
+      { name: 'goals', invoke: () => commandApi.goals(), path: '/goals' },
+      { name: 'aiBriefing', invoke: () => commandApi.aiBriefing(), path: '/ai/briefing' },
+      { name: 'smartPlans', invoke: () => commandApi.smartPlans(), path: '/smart-plans' },
+      { name: 'smartPlanWorkspace', invoke: () => commandApi.smartPlanWorkspace(7), path: '/smart-plans/7/workspace' },
+      { name: 'opportunities', invoke: () => commandApi.opportunities(), path: '/opportunities' },
+      { name: 'opportunityWorkspace', invoke: () => commandApi.opportunityWorkspace(7), path: '/opportunities/7/workspace' },
+      { name: 'agreements', invoke: () => commandApi.agreements(), path: '/agreements' },
+      { name: 'agreementWorkspace', invoke: () => commandApi.agreementWorkspace(7), path: '/agreements/7/workspace' },
+      { name: 'agreementTemplates', invoke: () => commandApi.agreementTemplates(), path: '/agreement-templates' },
+      { name: 'listings', invoke: () => commandApi.listings({ query: 'Main', status: 'active' }), path: '/listings?query=Main&status=active' },
+      { name: 'referrals', invoke: () => commandApi.referrals(), path: '/referrals' },
+      { name: 'marketingRecords', invoke: () => commandApi.marketingRecords(), path: '/marketing/records' },
+      { name: 'websiteRecords', invoke: () => commandApi.websiteRecords(), path: '/websites/records' },
+      { name: 'eventBreakdown', invoke: () => commandApi.eventBreakdown(), path: '/reports/event-breakdown' },
+      { name: 'reportsSummary', invoke: () => commandApi.reportsSummary(), path: '/reports/summary' },
+      { name: 'archiveArtifacts', invoke: () => commandApi.archiveArtifacts('contacts', 3), path: '/archive/artifacts?limit=100&offset=3&domain=contacts' },
+      { name: 'reportDetails', invoke: () => commandApi.reportDetails('contact health'), path: '/reports/details/contact%20health' },
+      { name: 'taskLinks', invoke: () => commandApi.taskLinks(7), path: '/tasks/7/links' },
+    ];
+
+    for (const item of cases) {
+      fetchMock.mockClear();
+      await expect(item.invoke()).resolves.toBe(payload);
+      expect(fetchMock.mock.calls[0]?.[0], item.name).toBe(
+        `http://localhost:8000/api/v1/command${item.path}`,
+      );
+    }
+  });
+
+  it('retains unchecked request transport and exact requests for every unrelated mutation adapter', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-retained-mutations' });
+    const payload = { private_payload: 'retained-unchecked-result' };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => payload });
+    vi.stubGlobal('fetch', fetchMock);
+    const cases: readonly Readonly<{
+      name: string;
+      invoke: () => Promise<unknown>;
+      path: string;
+      method: 'POST' | 'PATCH' | 'DELETE';
+      body?: string;
+    }>[] = [
+      { name: 'createContactNote', invoke: () => commandApi.createContactNote(7, 'Note'), path: '/contacts/7/notes', method: 'POST', body: JSON.stringify({ body: 'Note' }) },
+      { name: 'createContactSavedSearch', invoke: () => commandApi.createContactSavedSearch(7, 'Search', { stage: 'lead' }), path: '/contacts/7/saved-searches', method: 'POST', body: JSON.stringify({ name: 'Search', criteria: { stage: 'lead' } }) },
+      { name: 'deleteSavedSearch', invoke: () => commandApi.deleteSavedSearch(7), path: '/saved-searches/7', method: 'DELETE' },
+      { name: 'createTag', invoke: () => commandApi.createTag('Buyer'), path: '/tags', method: 'POST', body: JSON.stringify({ name: 'Buyer' }) },
+      { name: 'assignContactTag', invoke: () => commandApi.assignContactTag(7, 8), path: '/contacts/7/tags/8', method: 'POST' },
+      { name: 'removeContactTag', invoke: () => commandApi.removeContactTag(7, 8), path: '/contacts/7/tags/8', method: 'DELETE' },
+      { name: 'deleteContactNote', invoke: () => commandApi.deleteContactNote(7, 8), path: '/contacts/7/notes/8', method: 'DELETE' },
+      { name: 'createGoal', invoke: () => commandApi.createGoal({ name: 'Closings', target_value: 2, current_value: 0, period: 'monthly' }), path: '/goals', method: 'POST', body: JSON.stringify({ name: 'Closings', target_value: 2, current_value: 0, period: 'monthly' }) },
+      { name: 'updateGoalProgress', invoke: () => commandApi.updateGoalProgress(7, 2), path: '/goals/7', method: 'PATCH', body: JSON.stringify({ current_value: 2 }) },
+      { name: 'generateAiBriefing', invoke: () => commandApi.generateAiBriefing(), path: '/ai/briefing/generate', method: 'POST' },
+      { name: 'createContact', invoke: () => commandApi.createContact({ first_name: 'Avery', last_name: '', email: null, phone: null }), path: '/contacts', method: 'POST', body: JSON.stringify({ first_name: 'Avery', last_name: '', email: null, phone: null }) },
+      { name: 'importContacts', invoke: () => commandApi.importContacts([{ first_name: 'Avery', last_name: '', email: null, phone: null }]), path: '/contacts/import', method: 'POST', body: JSON.stringify({ contacts: [{ first_name: 'Avery', last_name: '', email: null, phone: null }] }) },
+      { name: 'importArchiveBundle', invoke: () => commandApi.importArchiveBundle({ contacts: [] }), path: '/archive/import', method: 'POST', body: JSON.stringify({ contacts: [] }) },
+      { name: 'updateContactStage', invoke: () => commandApi.updateContactStage(7, 'client'), path: '/contacts/7', method: 'PATCH', body: JSON.stringify({ stage: 'client' }) },
+      { name: 'updateContact', invoke: () => commandApi.updateContact(7, { phone: null }), path: '/contacts/7', method: 'PATCH', body: JSON.stringify({ phone: null }) },
+      { name: 'createSmartPlan', invoke: () => commandApi.createSmartPlan({ name: 'Plan', description: '' }), path: '/smart-plans', method: 'POST', body: JSON.stringify({ name: 'Plan', description: '' }) },
+      { name: 'updateSmartPlanStatus', invoke: () => commandApi.updateSmartPlanStatus(7, 'paused'), path: '/smart-plans/7', method: 'PATCH', body: JSON.stringify({ status: 'paused' }) },
+      { name: 'addSmartPlanStep', invoke: () => commandApi.addSmartPlanStep(7, 1, 'call', { title: 'Call' }), path: '/smart-plans/7/steps', method: 'POST', body: JSON.stringify({ position: 1, action_type: 'call', payload: { title: 'Call' } }) },
+      { name: 'updateSmartPlanStep', invoke: () => commandApi.updateSmartPlanStep(7, 8, 2, 'email', { subject: 'Hi' }), path: '/smart-plans/7/steps/8', method: 'PATCH', body: JSON.stringify({ position: 2, action_type: 'email', payload: { subject: 'Hi' } }) },
+      { name: 'enrollSmartPlanContact', invoke: () => commandApi.enrollSmartPlanContact(7, 9), path: '/smart-plans/7/enrollments', method: 'POST', body: JSON.stringify({ contact_id: 9 }) },
+      { name: 'updateSmartPlanEnrollment', invoke: () => commandApi.updateSmartPlanEnrollment(7, 8, 'paused'), path: '/smart-plans/7/enrollments/8', method: 'PATCH', body: JSON.stringify({ status: 'paused' }) },
+      { name: 'createOpportunity', invoke: () => commandApi.createOpportunity({ name: 'Listing', stage: 'active', value_cents: null }), path: '/opportunities', method: 'POST', body: JSON.stringify({ name: 'Listing', stage: 'active', value_cents: null }) },
+      { name: 'updateOpportunity', invoke: () => commandApi.updateOpportunity(7, 'offer'), path: '/opportunities/7', method: 'PATCH', body: JSON.stringify({ stage: 'offer' }) },
+      { name: 'addOpportunityContact', invoke: () => commandApi.addOpportunityContact(7, 8, 'buyer'), path: '/opportunities/7/contacts', method: 'POST', body: JSON.stringify({ contact_id: 8, role: 'buyer' }) },
+      { name: 'addOpportunityVendor', invoke: () => commandApi.addOpportunityVendor(7, 'Vendor', 'inspector'), path: '/opportunities/7/vendors', method: 'POST', body: JSON.stringify({ name: 'Vendor', role: 'inspector' }) },
+      { name: 'addOpportunityOffer', invoke: () => commandApi.addOpportunityOffer(7, 100_000, 'draft'), path: '/opportunities/7/offers', method: 'POST', body: JSON.stringify({ amount_cents: 100_000, status: 'draft' }) },
+      { name: 'createAgreement', invoke: () => commandApi.createAgreement({ title: 'Agreement', contact_id: null }), path: '/agreements', method: 'POST', body: JSON.stringify({ title: 'Agreement', contact_id: null }) },
+      { name: 'updateAgreementStatus', invoke: () => commandApi.updateAgreementStatus(7, 'ready'), path: '/agreements/7/status', method: 'PATCH', body: JSON.stringify({ status: 'ready' }) },
+      { name: 'addAgreementRecipient', invoke: () => commandApi.addAgreementRecipient(7, 'Avery', 'avery@example.test', 'signer'), path: '/agreements/7/recipients', method: 'POST', body: JSON.stringify({ name: 'Avery', email: 'avery@example.test', role: 'signer' }) },
+      { name: 'createAgreementTemplate', invoke: () => commandApi.createAgreementTemplate('Buyer', 'Body'), path: '/agreement-templates', method: 'POST', body: JSON.stringify({ name: 'Buyer', body: 'Body' }) },
+      { name: 'updateAgreementTemplate', invoke: () => commandApi.updateAgreementTemplate(7, 'Body'), path: '/agreement-templates/7', method: 'PATCH', body: JSON.stringify({ body: 'Body' }) },
+      { name: 'createListing', invoke: () => commandApi.createListing({ address: '10 Main St', latitude: null, longitude: null }), path: '/listings', method: 'POST', body: JSON.stringify({ address: '10 Main St', latitude: null, longitude: null }) },
+      { name: 'updateListingStatus', invoke: () => commandApi.updateListingStatus(7, 'pending'), path: '/listings/7', method: 'PATCH', body: JSON.stringify({ status: 'pending' }) },
+      { name: 'geocodeListing', invoke: () => commandApi.geocodeListing(7), path: '/listings/7/geocode', method: 'POST' },
+      { name: 'createReferral', invoke: () => commandApi.createReferral({ name: 'Referral', source: 'Partner', contact_id: null }), path: '/referrals', method: 'POST', body: JSON.stringify({ name: 'Referral', source: 'Partner', contact_id: null }) },
+      { name: 'updateReferralStatus', invoke: () => commandApi.updateReferralStatus(7, 'contacted'), path: '/referrals/7', method: 'PATCH', body: JSON.stringify({ status: 'contacted' }) },
+      { name: 'createTask', invoke: () => commandApi.createTask({ title: 'Call', description: '', priority: 'normal', contact_id: null, due_at: null }), path: '/tasks', method: 'POST', body: JSON.stringify({ title: 'Call', description: '', priority: 'normal', contact_id: null, due_at: null }) },
+      { name: 'addTaskLink', invoke: () => commandApi.addTaskLink(7, 'agreement', 8), path: '/tasks/7/links', method: 'POST', body: JSON.stringify({ entity_type: 'agreement', entity_id: 8 }) },
+      { name: 'updateTask', invoke: () => commandApi.updateTask(7, { status: 'completed' }), path: '/tasks/7', method: 'PATCH', body: JSON.stringify({ status: 'completed' }) },
+    ];
+
+    for (const item of cases) {
+      fetchMock.mockClear();
+      await expect(item.invoke()).resolves.toBe(payload);
+      const call = fetchMock.mock.calls[0];
+      expect(call?.[0], item.name).toBe(
+        `http://localhost:8000/api/v1/command${item.path}`,
+      );
+      expect(call?.[1], item.name).toEqual(expect.objectContaining({ method: item.method }));
+      if (item.body === undefined) expect(call?.[1], item.name).not.toHaveProperty('body');
+      else expect(call?.[1]?.body, item.name).toBe(item.body);
+    }
+  });
 
   it('sends the admin bearer token when loading the internal overview', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-123' });
@@ -70,6 +273,149 @@ describe('commandApi', () => {
 
     await commandApi.contacts(50, 100);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=50&offset=100'), expect.anything());
+  });
+
+  it('keeps the legacy contacts URL and decodes the exact raw array shape', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-legacy-contacts' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [legacyContact],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts(100, 100, {
+      query: '  Avery & Stone  ',
+      stage: ' Client / Lead ',
+    })).resolves.toEqual([legacyContact]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '/contacts?limit=100&offset=100&query=Avery+%26+Stone&stage=+Client+%2F+Lead+',
+      ),
+      expect.anything(),
+    );
+  });
+
+  it('fails closed on malformed legacy contact rows', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-malformed-contact' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{
+        id: 7,
+        first_name: 'Avery',
+        last_name: 'Stone',
+        email: null,
+        phone: null,
+        birthday: null,
+        anniversary: null,
+        stage: 'lead',
+      }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts()).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it('fails closed on a sparse legacy contact array instead of skipping its hole', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-sparse-contact' });
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => sparse });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts()).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it.each([
+    [0, 0],
+    [101, 0],
+    [1.5, 0],
+    [Number.MAX_SAFE_INTEGER + 1, 0],
+    [50, -1],
+    [50, 1.5],
+    [50, Number.MAX_SAFE_INTEGER + 1],
+  ])('rejects invalid legacy paging (%s, %s) before fetch', async (limit, offset) => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-invalid-paging' });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts(limit, offset)).rejects.toBeInstanceOf(CommandDecodeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('delegates directory and celebrations to strict contact decoders with signal identity', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-delegates' });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => directoryPage })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ birthdays: [], anniversaries: [] }),
+      });
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contactDirectory(
+      { query: 'A & B', tag: [9, 3], page_size: 25 },
+      { signal: controller.signal },
+    )).resolves.toEqual(directoryPage);
+    await expect(commandApi.celebrations(8, { signal: controller.signal })).resolves.toEqual({
+      birthdays: [],
+      anniversaries: [],
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      '/contacts/directory?query=A+%26+B&tag=3&tag=9&page_size=25',
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('/celebrations?month=8');
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ signal: controller.signal }));
+    }
+  });
+
+  it('fails closed on a malformed snake-case celebration response before Home adaptation', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-malformed-celebrations' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        birthdays: [{
+          contact_id: 7,
+          display_name: 'Private',
+          kind: 'birthday',
+          month: 8,
+          day: 13,
+          year: null,
+          year_quality: 'yearless',
+          origin: 'recovered',
+          unexpected: true,
+        }],
+        anniversaries: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.celebrations(8)).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it('pins decoded create and update results to required nullable legacy keys', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-mutations' });
+    const missingLeadId = {
+      id: 7,
+      first_name: 'Avery',
+      last_name: 'Stone',
+      email: null,
+      phone: null,
+      birthday: null,
+      anniversary: null,
+      stage: 'lead',
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => missingLeadId })
+      .mockResolvedValueOnce({ ok: true, json: async () => missingLeadId });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.create({ first_name: 'Avery' }))
+      .rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.update(7, { email: null }))
+      .rejects.toBeInstanceOf(CommandDecodeError);
   });
 
   it('updates a Smart Plan enrollment state through the authenticated API', async () => {
@@ -141,6 +487,35 @@ describe('commandApi', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks?status=open&due_before=2026-08-31T23%3A59%3A59Z'), expect.anything());
   });
 
+  it('forwards Home read signals without serializing the task signal as a filter', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-home-signals' });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ contacts: 0 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ summary: 'Brief' }) });
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await commandApi.overview({ signal: controller.signal });
+    await commandApi.tasks(
+      { status: 'open', due_after: '2026-08-01T00:00:00Z' },
+      { signal: controller.signal },
+    );
+    await commandApi.opportunities({ signal: controller.signal });
+    await commandApi.goals({ signal: controller.signal });
+    await commandApi.aiBriefing({ signal: controller.signal });
+
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(
+      '/tasks?status=open&due_after=2026-08-01T00%3A00%3A00Z',
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).not.toContain('signal');
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({ signal: controller.signal }));
+    }
+  });
+
   it('updates a listing lifecycle status through the internal API', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-listing' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, address: '10 Main St', latitude: null, longitude: null, status: 'pending' }) });
@@ -187,10 +562,18 @@ describe('commandApi', () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-artifact-download' });
     const payload = new Blob(['recovered source']);
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => payload });
+    const controller = new AbortController();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(commandApi.archiveArtifactBlob(42)).resolves.toBe(payload);
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/archive/artifacts/42/content'), expect.objectContaining({ headers: { Authorization: 'Bearer token-artifact-download' } }));
+    await expect(commandApi.archiveArtifactBlob(42, { signal: controller.signal })).resolves.toBe(payload);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/archive/artifacts/42/content'),
+      expect.objectContaining({
+        signal: controller.signal,
+        headers: { Authorization: 'Bearer token-artifact-download' },
+      }),
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('Content-Type');
   });
 
   it('requests contacts with server-side search and stage filters', async () => {
@@ -226,15 +609,6 @@ describe('commandApi', () => {
     vi.stubGlobal('fetch', fetchMock);
     await commandApi.updateTask(9, { contact_id: 14 });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ contact_id: 14 }) }));
-  });
-
-  it('loads the complete contact workspace including internal booking history', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-workspace' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ contact: {}, bookings: [] }) });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(commandApi.contactWorkspace(14)).resolves.toMatchObject({ bookings: [] });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/workspace'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-contact-workspace' }) }));
   });
 
   it('loads a report-card drilldown through the authenticated Command API', async () => {
@@ -318,5 +692,48 @@ describe('commandApi', () => {
 
     await commandApi.createAgreement({ title: 'Seller agreement', contact_id: 11, template_id: null });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/agreements'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Seller agreement', contact_id: 11, template_id: null }) }));
+  });
+
+  it('rejects directory-only readiness fields on legacy contacts while unrelated reads stay unchecked', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-home-readiness' });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          id: 4,
+          first_name: 'Avery',
+          last_name: 'Lake',
+          email: null,
+          phone: '+1 555 0104',
+          stage: 'lead',
+          birthday: null,
+          anniversary: null,
+          last_contacted_at: '2026-08-10T15:00:00.000Z',
+          recently_active_at: '2026-08-11T12:00:00.000Z',
+          health_score: 84,
+        }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          id: 8,
+          name: 'Lake purchase',
+          stage: 'active',
+          value_cents: 52_500_000,
+          updated_at: '2026-08-11T14:00:00.000Z',
+        }],
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.contacts(100, 0)).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(commandApi.opportunities()).resolves.toEqual([
+      expect.objectContaining({ updated_at: '2026-08-11T14:00:00.000Z' }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toEqual(expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer token-home-readiness' }),
+      }));
+    }
   });
 });

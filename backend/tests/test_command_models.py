@@ -1,13 +1,107 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ArchiveBundleImportRequest, ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
-from services.command_tasks import task_activity_summary
+from models.booking import Booking
+from models.command import (
+    AgreementStatus,
+    CRMActivity,
+    CRMAgreement,
+    CRMAgreementEvent,
+    CRMContact,
+    CRMContactTag,
+    CRMFileAsset,
+    CRMGoal,
+    CRMListingRecord,
+    CRMNote,
+    CRMOpportunity,
+    CRMOpportunityContact,
+    CRMReferral,
+    CRMSavedSearch,
+    CRMSmartPlanEnrollment,
+    CRMTask,
+    CRMTaskLink,
+)
+from schemas.command import (
+    ArchiveBundleImportRequest,
+    ContactCreate,
+    ContactImportResult,
+    ContactImportRow,
+    ContactUpdate,
+    ContactWorkspaceOpportunityOut,
+    OpportunityUpdate,
+    TaskUpdate,
+)
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
+from services.command_tasks import task_activity_summary
+
+
+def test_all_focused_contact_boundary_models_share_strict_extra_policy():
+    from pydantic import BaseModel
+
+    from schemas import command_contacts
+
+    model_types = [
+        value
+        for value in vars(command_contacts).values()
+        if isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == command_contacts.__name__
+    ]
+    assert model_types
+    assert all(model.model_config.get("extra") == "forbid" for model in model_types)
+    assert all(
+        model.model_config.get("from_attributes") is True for model in model_types
+    )
+
+
+def test_focused_contact_compatibility_field_contracts_are_exact():
+    from schemas.command_contacts import (
+        ContactDeletedOut,
+        ContactImportResultOut,
+        ContactLegacySyncResultOut,
+        ContactNoteCreatedOut,
+        ContactSavedSearchCreatedOut,
+        ContactTagAssignmentOut,
+        ContactTagRemovalOut,
+        ContactWorkspaceSummaryOut,
+        LegacyContactOut,
+        LegacyContactWorkspaceOut,
+        SavedSearchOut,
+    )
+
+    assert tuple(LegacyContactOut.model_fields) == (
+        "id", "first_name", "last_name", "email", "phone", "lead_id",
+        "birthday", "anniversary", "stage",
+    )
+    assert tuple(LegacyContactWorkspaceOut.model_fields) == (
+        "contact", "timeline", "tasks", "notes", "smart_plans",
+        "opportunities", "saved_searches", "bookings", "tags",
+    )
+    assert tuple(ContactWorkspaceSummaryOut.model_fields) == (
+        "open_tasks", "completed_tasks", "archived_tasks", "active_smart_plans",
+        "opportunities", "notes", "saved_searches", "bookings",
+    )
+    assert tuple(ContactTagAssignmentOut.model_fields) == ("contact_id", "tag_id")
+    assert tuple(ContactTagRemovalOut.model_fields) == (
+        "contact_id", "tag_id", "removed",
+    )
+    assert tuple(ContactNoteCreatedOut.model_fields) == ("id", "body")
+    assert tuple(ContactDeletedOut.model_fields) == ("deleted", "id")
+    assert tuple(ContactSavedSearchCreatedOut.model_fields) == (
+        "id", "name", "criteria",
+    )
+    assert tuple(ContactLegacySyncResultOut.model_fields) == (
+        "created", "timeline_backfilled", "total_legacy_leads",
+    )
+    assert tuple(ContactImportResultOut.model_fields) == (
+        "created", "skipped_duplicates",
+    )
+    assert tuple(SavedSearchOut.model_fields) == (
+        "id", "name", "criteria", "contact_id", "contact_name", "updated_at",
+    )
 
 
 def test_archive_contact_parser_extracts_identity_and_profile_fields():
@@ -69,6 +163,73 @@ def test_command_models_expose_safe_defaults_and_links():
     assert contact.lead_id is None
     assert task.status == "open"
     assert activity.kind == "note"
+
+
+def test_timeline_linkage_models_sync_exact_normalized_primary_email():
+    contact = CRMContact(
+        first_name="Avery", email="  ＡＶＥＲＹ＠Ｅｘａｍｐｌｅ．ＣＯＭ  "
+    )
+    booking = Booking(
+        name="Avery",
+        email="  ＡＶＥＲＹ＠Ｅｘａｍｐｌｅ．ＣＯＭ  ",
+        scheduled_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+    assert contact.normalized_email == "avery@example.com"
+    assert booking.normalized_email == "avery@example.com"
+
+    contact.email = "invalid"
+    booking.email = "invalid"
+    assert contact.normalized_email is None
+    assert booking.normalized_email is None
+
+    overridden_contact = CRMContact(
+        first_name="Avery",
+        email="owner@example.test",
+        normalized_email="tampered@example.test",
+    )
+    overridden_booking = Booking(
+        name="Avery",
+        email="owner@example.test",
+        normalized_email="tampered@example.test",
+        scheduled_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+    assert overridden_contact.normalized_email == "tampered@example.test"
+    assert overridden_booking.normalized_email == "tampered@example.test"
+
+
+def test_timeline_linkage_models_have_exact_query_indexes():
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in CRMContact.__table__.indexes
+    } == {
+        "ix_crm_contacts_normalized_email_id": ("normalized_email", "id"),
+    }
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in CRMActivity.__table__.indexes
+    }.items() >= {
+        "ix_crm_activities_timeline_order": (
+            "contact_id",
+            "created_at",
+            "id",
+        ),
+    }.items()
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in Booking.__table__.indexes
+    } == {
+        "ix_bookings_timeline_lead_order": (
+            "lead_id",
+            "scheduled_at",
+            "id",
+        ),
+        "ix_bookings_timeline_email_order": (
+            "normalized_email",
+            "lead_id",
+            "scheduled_at",
+            "id",
+        ),
+    }
 
 
 def test_agreement_statuses_only_include_internal_lifecycle():

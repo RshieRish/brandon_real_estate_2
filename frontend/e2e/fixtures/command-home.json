@@ -1,0 +1,93 @@
+{
+  "authMe": {
+    "id": 1,
+    "email": "brandon@example.test",
+    "is_admin": true
+  },
+  "overview": {
+    "contacts": 366,
+    "open_tasks": 4,
+    "opportunities": 3,
+    "active_smart_plans": 2
+  },
+  "contacts": [
+    {
+      "id": 1,
+      "first_name": "Avery",
+      "last_name": "Lake",
+      "email": "avery@example.test",
+      "phone": null,
+      "stage": "lead",
+      "birthday": "1990-08-18",
+      "anniversary": null,
+      "last_contacted_at": null,
+      "recently_active_at": null
+    },
+    {
+      "id": 2,
+      "first_name": "Morgan",
+      "last_name": "Hill",
+      "email": null,
+      "phone": null,
+      "stage": "lead",
+      "birthday": null,
+      "anniversary": "2018-08-20",
+      "last_contacted_at": null,
+      "recently_active_at": null
+    },
+    {
+      "id": 3,
+      "first_name": "Casey",
+      "last_name": "Pine",
+      "email": null,
+      "phone": "+1 555 0103",
+      "stage": "lead",
+      "birthday": null,
+      "anniversary": null,
+      "last_contacted_at": "2026-08-10T15:00:00.000Z",
+      "recently_active_at": "2026-08-11T12:00:00.000Z"
+    },
+    {
+      "id": 4,
+      "first_name": "Riley",
+      "last_name": "Stone",
+      "email": "riley@example.test",
+      "phone": "+1 555 0104",
+      "stage": "client",
+      "birthday": null,
+      "anniversary": null,
+      "last_contacted_at": "2026-08-09T15:00:00.000Z",
+      "recently_active_at": "2026-08-10T12:00:00.000Z"
+    }
+  ],
+  "tasks": [
+    { "id": 1, "title": "Call Avery", "contact_id": 1, "description": "Confirm search criteria", "priority": "high", "due_at": "2026-08-09T13:00:00.000Z", "status": "open" },
+    { "id": 2, "title": "Review offer", "contact_id": 4, "description": "Review updated terms", "priority": "high", "due_at": "2026-08-10T13:00:00.000Z", "status": "open" },
+    { "id": 3, "title": "Send market update", "contact_id": 3, "description": "Share new listings", "priority": "normal", "due_at": "2026-08-11T13:00:00.000Z", "status": "in_progress" },
+    { "id": 4, "title": "Plan next touch", "contact_id": 2, "description": "Choose follow-up channel", "priority": "normal", "due_at": null, "status": "open" },
+    { "id": 5, "title": "Completed consult", "contact_id": 4, "description": "Consult complete", "priority": "normal", "due_at": "2026-08-08T13:00:00.000Z", "status": "completed" },
+    { "id": 6, "title": "Archived reminder", "contact_id": 1, "description": "No longer needed", "priority": "low", "due_at": null, "status": "archived" }
+  ],
+  "opportunities": [
+    { "id": 1, "name": "Lake purchase", "stage": "active", "value_cents": 52500000, "updated_at": "2026-08-11T12:00:00.000Z" },
+    { "id": 2, "name": "Stone listing", "stage": "under_contract", "value_cents": 71000000, "updated_at": "2026-08-10T12:00:00.000Z" },
+    { "id": 3, "name": "Pine search", "stage": "cultivate", "value_cents": null, "updated_at": "2026-08-09T12:00:00.000Z" }
+  ],
+  "celebrations": {
+    "birthdays": [
+      { "id": 1, "first_name": "Avery", "last_name": "Lake", "email": "avery@example.test", "phone": null, "stage": "lead", "birthday": "1990-08-18" }
+    ],
+    "anniversaries": [
+      { "id": 2, "first_name": "Morgan", "last_name": "Hill", "email": null, "phone": null, "stage": "lead", "anniversary": "2018-08-20" }
+    ]
+  },
+  "goals": [
+    { "id": 1, "name": "Appointments", "target_value": 12, "current_value": 5, "period": "monthly" },
+    { "id": 2, "name": "Closings", "target_value": 4, "current_value": 1, "period": "quarterly" }
+  ],
+  "briefing": {
+    "summary": "Clear overdue tasks, then contact new leads.",
+    "source": "internal-crm",
+    "requires_review": true
+  }
+}
