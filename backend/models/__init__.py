@@ -11,21 +11,21 @@ from models.command_contacts import (
     CRMContactProfile,
     CRMContactRelationship,
     CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
 )
 from models.command_provenance import (
+    CaptureQuality,
     CRMEntitySource,
     CRMReconciliationResult,
     CRMReconciliationRun,
     CRMSourceRecord,
     CRMSourceRecordArtifact,
-    CaptureQuality,
     EvidenceLevel,
 )
 
 __all__ = [
     "AgentActionAudit",
-    "CaptureQuality",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",
@@ -37,6 +37,7 @@ __all__ = [
     "CRMContactProfile",
     "CRMContactRelationship",
     "CRMContactSectionCapture",
+    "CRMContactSourceOccurrence",
     "CRMContactTimelineEvent",
     "CRMEntitySource",
     "CRMReconciliationResult",
@@ -44,5 +45,6 @@ __all__ = [
     "CRMSourceRecord",
     "CRMSourceRecordArtifact",
     "CRMTask",
+    "CaptureQuality",
     "EvidenceLevel",
 ]

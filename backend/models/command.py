@@ -2,7 +2,18 @@
 from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -39,8 +50,18 @@ class CRMContact(Timestamped, Base):
 
 class CRMActivity(Base):
     __tablename__ = "crm_activities"
+    __table_args__ = (
+        Index(
+            "uq_crm_activities_source_record_id",
+            "source_record_id",
+            unique=True,
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
+    source_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crm_source_records.id", ondelete="RESTRICT"), nullable=True
+    )
     kind: Mapped[str] = mapped_column(String(50))
     summary: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column("metadata", Text, default="{}")

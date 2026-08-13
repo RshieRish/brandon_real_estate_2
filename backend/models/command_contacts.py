@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
-import json
 
 from sqlalchemy import (
     Boolean,
@@ -23,7 +23,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
 from models.command import Timestamped
-
 
 CONTACT_SECTIONS = (
     "timeline",
@@ -390,6 +389,43 @@ class CRMContactSectionCapture(Timestamped, Base):
     limitations_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
+class CRMContactSourceOccurrence(Timestamped, Base):
+    __tablename__ = "crm_contact_source_occurrences"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_record_id",
+            name="uq_crm_contact_source_occurrence_source",
+        ),
+        UniqueConstraint(
+            "section_capture_id",
+            "occurrence_ordinal",
+            name="uq_crm_contact_source_occurrence_section_ordinal",
+        ),
+        CheckConstraint(
+            "occurrence_ordinal > 0",
+            name="ck_crm_contact_source_occurrence_ordinal",
+        ),
+        Index(
+            "ix_crm_contact_source_occurrence_contact_section",
+            "contact_id",
+            "section_capture_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("crm_contacts.id", ondelete="CASCADE")
+    )
+    section_capture_id: Mapped[int] = mapped_column(
+        ForeignKey("crm_contact_section_captures.id", ondelete="CASCADE")
+    )
+    source_record_id: Mapped[int] = mapped_column(
+        ForeignKey("crm_source_records.id", ondelete="RESTRICT")
+    )
+    occurrence_ordinal: Mapped[int] = mapped_column(Integer)
+
+
 class CRMContactTimelineEvent(Timestamped, Base):
     __tablename__ = "crm_contact_timeline_events"
     __table_args__ = (
@@ -421,7 +457,9 @@ class CRMContactTimelineEvent(Timestamped, Base):
     body: Mapped[str | None] = mapped_column(Text)
     actor_label: Mapped[str | None] = mapped_column(String(255))
     channel: Mapped[str | None] = mapped_column(String(64))
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    occurred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attributes_json: Mapped[str] = mapped_column(Text, default="{}")
 
 

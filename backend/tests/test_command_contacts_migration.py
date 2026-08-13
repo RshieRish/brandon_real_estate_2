@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from io import StringIO
 import importlib.util
+from io import StringIO
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-
 
 CONTACT_TABLES = {
     "crm_contact_profiles",
@@ -28,6 +28,7 @@ PREREQUISITE_TABLES = {
     "leads",
     "crm_contacts",
     "crm_source_records",
+    "crm_activities",
 }
 
 
@@ -40,6 +41,23 @@ def load_revision():
     )
     spec = importlib.util.spec_from_file_location(
         "command_contact_parity_revision_4a8c0d1e2f3b",
+        revision_path,
+    )
+    assert spec is not None and spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+    return revision
+
+
+def load_occurrence_revision():
+    revision_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "5b9d1e2f3a4c_add_contact_occurrence_context.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "command_contact_occurrence_revision_5b9d1e2f3a4c",
         revision_path,
     )
     assert spec is not None and spec.loader is not None
@@ -72,6 +90,16 @@ def create_2e7f9a0b1c2d_prerequisites(connection):
         "crm_source_records",
         metadata,
         sa.Column("id", sa.Integer(), primary_key=True),
+    )
+    sa.Table(
+        "crm_activities",
+        metadata,
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("contact_id", sa.Integer(), sa.ForeignKey("crm_contacts.id")),
+        sa.Column("kind", sa.String(50), nullable=False),
+        sa.Column("summary", sa.Text(), nullable=False),
+        sa.Column("metadata", sa.Text(), nullable=False, server_default="{}"),
+        sa.Column("created_at", sa.DateTime(timezone=True)),
     )
     metadata.create_all(connection)
     connection.execute(
@@ -292,3 +320,122 @@ def test_contact_parity_revision_compiles_postgresql_restrict_and_owned_cascades
     assert (
         "FOREIGN KEY(CONTACT_ID) REFERENCES CRM_CONTACTS (ID) ON DELETE CASCADE"
     ) in sql
+
+
+def test_occurrence_revision_upgrades_and_losslessly_downgrades_sqlite():
+    engine = sa.create_engine("sqlite://")
+    contact_revision = load_revision()
+    occurrence_revision = load_occurrence_revision()
+    assert occurrence_revision.revision == "5b9d1e2f3a4c"
+    assert occurrence_revision.down_revision == "4a8c0d1e2f3b"
+
+    with engine.connect() as connection:
+        connection.execute(sa.text("PRAGMA foreign_keys = ON"))
+        connection.commit()
+        create_2e7f9a0b1c2d_prerequisites(connection)
+        contact_revision.op = Operations(MigrationContext.configure(connection))
+        contact_revision.upgrade()
+        connection.execute(
+            sa.text(
+                "INSERT INTO crm_activities (id, kind, summary, metadata) "
+                "VALUES (1, 'legacy', 'kept', '{}'), (2, 'legacy', 'kept', '{}')"
+            )
+        )
+        occurrence_revision.op = Operations(MigrationContext.configure(connection))
+        occurrence_revision.upgrade()
+        connection.commit()
+
+        inspector = sa.inspect(connection)
+        assert "crm_contact_source_occurrences" in inspector.get_table_names()
+        assert next(
+            column for column in inspector.get_columns("crm_contact_timeline_events")
+            if column["name"] == "occurred_at"
+        )["nullable"] is True
+        assert _index_columns(inspector, "crm_activities")[
+            "uq_crm_activities_source_record_id"
+        ] == ("source_record_id",)
+        assert _foreign_key_deletes(inspector, "crm_contact_source_occurrences") == {
+            ("contact_id",): ("crm_contacts", "CASCADE"),
+            ("section_capture_id",): ("crm_contact_section_captures", "CASCADE"),
+            ("source_record_id",): ("crm_source_records", "RESTRICT"),
+        }
+        assert connection.execute(
+            sa.text("SELECT source_record_id FROM crm_activities ORDER BY id")
+        ).scalars().all() == [None, None]
+
+        occurrence_revision.downgrade()
+        connection.commit()
+        inspector = sa.inspect(connection)
+        assert "crm_contact_source_occurrences" not in inspector.get_table_names()
+        assert "source_record_id" not in {
+            column["name"] for column in inspector.get_columns("crm_activities")
+        }
+        assert next(
+            column for column in inspector.get_columns("crm_contact_timeline_events")
+            if column["name"] == "occurred_at"
+        )["nullable"] is False
+
+
+def test_occurrence_revision_refuses_lossy_downgrade_and_compiles_postgresql():
+    occurrence_revision = load_occurrence_revision()
+    contact_revision = load_revision()
+    engine = sa.create_engine("sqlite://")
+    with engine.connect() as connection:
+        connection.execute(sa.text("PRAGMA foreign_keys = ON"))
+        connection.commit()
+        create_2e7f9a0b1c2d_prerequisites(connection)
+        contact_revision.op = Operations(MigrationContext.configure(connection))
+        contact_revision.upgrade()
+        occurrence_revision.op = Operations(MigrationContext.configure(connection))
+        occurrence_revision.upgrade()
+        connection.execute(
+            sa.text(
+                "INSERT INTO crm_contacts (id, first_name, last_name) "
+                "VALUES (1, 'Synthetic', 'Contact')"
+            )
+        )
+        connection.execute(sa.text("INSERT INTO crm_source_records (id) VALUES (1)"))
+        connection.execute(
+            sa.text(
+                "INSERT INTO crm_contact_timeline_events "
+                "(contact_id, source_record_id, source_system, source_event_key, "
+                "kind, title, occurred_at) VALUES "
+                "(1, 1, 'kw_command', 'synthetic:null-time', 'contact', "
+                "'No source timestamp', NULL)"
+            )
+        )
+        connection.commit()
+        with pytest.raises(RuntimeError, match="cannot restore"):
+            occurrence_revision.downgrade()
+        inspector = sa.inspect(connection)
+        assert "crm_contact_source_occurrences" in inspector.get_table_names()
+        assert "source_record_id" in {
+            column["name"] for column in inspector.get_columns("crm_activities")
+        }
+        assert next(
+            column for column in inspector.get_columns("crm_contact_timeline_events")
+            if column["name"] == "occurred_at"
+        )["nullable"] is True
+
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    occurrence_revision.op = Operations(context)
+    occurrence_revision.upgrade()
+    sql = output.getvalue().upper()
+    assert "CREATE TABLE CRM_CONTACT_SOURCE_OCCURRENCES" in sql
+    assert "ALTER TABLE CRM_ACTIVITIES ADD COLUMN SOURCE_RECORD_ID" in sql
+    assert "CREATE UNIQUE INDEX UQ_CRM_ACTIVITIES_SOURCE_RECORD_ID" in sql
+    assert "ALTER COLUMN OCCURRED_AT DROP NOT NULL" in sql
+
+    downgrade_output = StringIO()
+    downgrade_context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": downgrade_output},
+    )
+    occurrence_revision.op = Operations(downgrade_context)
+    with pytest.raises(RuntimeError, match="online losslessness preflight"):
+        occurrence_revision.downgrade()
+    assert downgrade_output.getvalue() == ""

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -26,15 +26,16 @@ from models.command_contacts import (
     CRMContactProfile,
     CRMContactRelationship,
     CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
 )
 from models.command_provenance import (
+    CaptureQuality,
     CRMEntitySource,
     CRMReconciliationResult,
     CRMReconciliationRun,
     CRMSourceRecord,
     CRMSourceRecordArtifact,
-    CaptureQuality,
     EvidenceLevel,
 )
 from models.lead import Lead
@@ -59,7 +60,6 @@ from services.command_parsers import ModuleMetrics, ModuleParseResult, ParserReg
 from services.command_provenance import ArchiveArtifactInput, SourceRecordDraft
 from services.command_reconciliation import RunRequest, execute_reconciliation
 
-
 ARTIFACT_PATH = "synthetic/contacts/source.json"
 CAPTURED_AT = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 CONTACT_TABLES = (
@@ -82,6 +82,7 @@ CONTACT_TABLES = (
     CRMContactPreference.__table__,
     CRMContactCapturePosition.__table__,
     CRMContactSectionCapture.__table__,
+    CRMContactSourceOccurrence.__table__,
     CRMContactTimelineEvent.__table__,
     CRMContactAuditEvent.__table__,
 )
@@ -1184,7 +1185,14 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
     base_records = _drafts(1)
 
     def occurrence(
-        *, record_kind: str, source_key: str, display_label: str, values: dict
+        *,
+        record_kind: str,
+        source_key: str,
+        display_label: str,
+        values: dict,
+        section_name: str,
+        occurrence_ordinal: int = 1,
+        state: str | None = None,
     ) -> SourceRecordDraft:
         return SourceRecordDraft(
             source_system="kw_command",
@@ -1196,7 +1204,9 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
             payload={
                 "capture_ordinal": "0000001",
                 "source_contact_id": _source_id(1),
-                "occurrence_ordinal": 1,
+                "section_name": section_name,
+                "occurrence_ordinal": occurrence_ordinal,
+                "state": state,
                 "values": values,
             },
             artifact_paths=(ARTIFACT_PATH,),
@@ -1211,6 +1221,7 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
             record_kind="contact_timeline_event",
             source_key=f"contact:{_source_id(1)}:timeline:event-1",
             display_label="Synthetic event",
+            section_name="timeline",
             values={
                 "kind": "EMAIL",
                 "occurred_at": "2026-08-11T14:30:00Z",
@@ -1218,19 +1229,74 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
             },
         ),
         occurrence(
+            record_kind="contact_timeline_event",
+            source_key=f"contact:{_source_id(1)}:timeline:event-2",
+            display_label="Synthetic event without exposed time",
+            section_name="timeline",
+            occurrence_ordinal=2,
+            values={
+                "kind": "CONTACT",
+                "raw_lines": ["CONTACT", "No exposed time"],
+            },
+        ),
+        occurrence(
             record_kind="contact_note",
             source_key=f"contact:{_source_id(1)}:note:note-1",
             display_label="Synthetic note",
+            section_name="notes",
             values={"body": "Synthetic note body"},
         ),
         occurrence(
             record_kind="contact_saved_search",
             source_key=f"contact:{_source_id(1)}:saved-search:search-1",
             display_label="Synthetic saved search",
+            section_name="saved_searches",
             values={"name": "Synthetic saved search", "beds": "3"},
+        ),
+        occurrence(
+            record_kind="contact_task",
+            source_key=f"contact:{_source_id(1)}:task:to_do:task-1",
+            display_label="Synthetic task",
+            section_name="tasks_to_do",
+            state="to_do",
+            values={"title": "Synthetic task"},
+        ),
+        occurrence(
+            record_kind="contact_smart_plan",
+            source_key=f"contact:{_source_id(1)}:smart-plan:plan-1",
+            display_label="Synthetic plan",
+            section_name="smart_plans",
+            values={"title": "Synthetic plan"},
+        ),
+        occurrence(
+            record_kind="contact_opportunity",
+            source_key=f"contact:{_source_id(1)}:opportunity:opportunity-1",
+            display_label="Synthetic opportunity",
+            section_name="opportunities",
+            values={"title": "Synthetic opportunity"},
         ),
     )
     await persist_source_records(contact_db, records)
+    historical = SourceRecordDraft(
+        source_system="kw_command",
+        module="contacts",
+        record_kind="contact_note",
+        source_key="contact:historical:note:outside-current-bundle",
+        evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
+        display_label="Historical row outside current materialization",
+        payload={
+            "source_contact_id": "f" * 24,
+            "capture_ordinal": "9999999",
+            "section_name": "notes",
+            "occurrence_ordinal": 1,
+            "values": {"body": "Historical"},
+        },
+        artifact_paths=(ARTIFACT_PATH,),
+        parser_version="contacts-v1",
+        capture_quality=CaptureQuality.COMPLETE,
+        captured_at=CAPTURED_AT,
+    )
+    await persist_source_records(contact_db, (historical,))
     materializer = ContactMaterializer()
 
     first = await materializer.materialize(
@@ -1244,14 +1310,25 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
         bundle_fingerprint="f" * 64,
     )
 
-    assert first.details["child_entity_links_created"] == 3
+    assert first.details["child_entity_links_created"] == 4
     assert second.details["child_entity_links_created"] == 0
+    assert first.details["child_occurrences_observed"] == 7
+    assert first.details["child_occurrences_created"] == 7
+    assert second.details["child_occurrences_unchanged"] == 7
+    assert await contact_db.scalar(
+        select(func.count()).select_from(CRMContactSourceOccurrence)
+    ) == 7
     assert (
         await contact_db.scalar(
             select(func.count()).select_from(CRMContactTimelineEvent)
         )
-        == 1
+        == 2
     )
+    assert await contact_db.scalar(
+        select(func.count())
+        .select_from(CRMContactTimelineEvent)
+        .where(CRMContactTimelineEvent.occurred_at.is_(None))
+    ) == 1
     assert await contact_db.scalar(select(func.count()).select_from(CRMNote)) == 1
     assert (
         await contact_db.scalar(select(func.count()).select_from(CRMSavedSearch))
@@ -1267,7 +1344,7 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
                 )
             )
         )
-        == 3
+        == 4
     )
     contact = await contact_db.scalar(select(CRMContact))
     assert contact is not None
@@ -1297,6 +1374,7 @@ async def test_materializer_rejects_stale_or_conflicting_existing_child_link(
         payload={
             "capture_ordinal": "0000001",
             "source_contact_id": _source_id(1),
+            "section_name": "notes",
             "occurrence_ordinal": 1,
             "values": {"body": "Synthetic note body"},
         },
@@ -1374,6 +1452,7 @@ async def test_materializer_rejects_timeline_link_with_wrong_source_record(
         payload={
             "capture_ordinal": "0000001",
             "source_contact_id": _source_id(1),
+            "section_name": "timeline",
             "occurrence_ordinal": 1,
             "values": {
                 "kind": "EMAIL",

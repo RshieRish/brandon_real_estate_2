@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 import json
 import re
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,9 +33,12 @@ from services.command_contact_identity import (
     canonical_phone,
     resolve_identity_clusters,
 )
+from services.command_contact_occurrences import (
+    ContactOccurrenceOwnershipError,
+    sync_contact_occurrence_ownership,
+)
 from services.command_materializers.base import ModuleMaterializationResult
 from services.command_provenance import SourceRecordDraft
-
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -254,6 +257,22 @@ class ContactMaterializer:
             persisted_by_identity,
             positions_by_ordinal,
         )
+        await db.flush()
+        parser_versions = {record.parser_version for record in materialized}
+        if len(parser_versions) != 1:
+            raise ContactMaterializationError(
+                "contact materializer received an inconsistent parser version"
+            )
+        try:
+            occurrence_sync = await sync_contact_occurrence_ownership(
+                db,
+                records=materialized,
+                persisted_by_identity=persisted_by_identity,
+                bundle_fingerprint=bundle_fingerprint,
+                parser_version=next(iter(parser_versions)),
+            )
+        except ContactOccurrenceOwnershipError as exc:
+            raise ContactMaterializationError(str(exc)) from exc
         child_links_created = await _materialize_occurrences(
             db,
             materialized,
@@ -286,6 +305,9 @@ class ContactMaterializer:
             details={
                 "adopted_leadless_contacts": adopted_count,
                 "child_entity_links_created": child_links_created,
+                "child_occurrences_observed": occurrence_sync.observed,
+                "child_occurrences_created": occurrence_sync.created,
+                "child_occurrences_unchanged": occurrence_sync.unchanged,
                 "preexisting_contact_rows": preexisting_contact_rows,
                 "stale_source_normalized_rows": stale_source_normalized_rows,
                 "stale_source_normalized_leadless_rows": (
@@ -311,11 +333,15 @@ async def _persisted_records(
 ) -> dict[tuple[str, str, str, str, str], CRMSourceRecord]:
     if not records:
         return {}
+    requested = {record.identity for record in records}
     source_rows = (
         await db.scalars(
             select(CRMSourceRecord).where(
                 CRMSourceRecord.source_system == "kw_command",
                 CRMSourceRecord.module == "contacts",
+                CRMSourceRecord.source_key.in_(
+                    {record.source_key for record in records}
+                ),
                 CRMSourceRecord.parser_version.in_(
                     {record.parser_version for record in records}
                 ),
@@ -323,14 +349,17 @@ async def _persisted_records(
         )
     ).all()
     return {
-        (
+        identity: row
+        for row in source_rows
+        if (
+            identity := (
             row.source_system,
             row.module,
             row.record_kind,
             row.source_key,
             row.parser_version,
-        ): row
-        for row in source_rows
+            )
+        ) in requested
     }
 
 
@@ -748,9 +777,7 @@ async def _materialize_occurrences(
                 criteria_json=canonical_json_text(_json_value(values)),
             )
         else:
-            occurred_at = _event_datetime(values, draft.captured_at)
-            if occurred_at is None:
-                continue
+            occurred_at = _event_datetime(values)
             raw_lines = _string_sequence(values.get("raw_lines"))
             kind = _string(values.get("kind")) or "CONTACT"
             entity = CRMContactTimelineEvent(
@@ -823,12 +850,11 @@ async def _validate_existing_child_link(
         link.entity_id,
         populate_existing=True,
     )
-    occurred_at = _event_datetime(values, draft.captured_at)
+    occurred_at = _event_datetime(values)
     raw_lines = _string_sequence(values.get("raw_lines"))
     expected_kind = (_string(values.get("kind")) or "CONTACT").casefold()
     if (
         entity is None
-        or occurred_at is None
         or entity.contact_id != contact.id
         or entity.source_record_id != source_record.id
         or entity.source_system != "kw_command"
@@ -875,7 +901,6 @@ async def _has_reviewed_overlap(
 
 def _event_datetime(
     values: Mapping[str, object],
-    captured_at: datetime | None,
 ) -> datetime | None:
     explicit = values.get("occurred_at")
     if isinstance(explicit, str):
@@ -884,7 +909,7 @@ def _event_datetime(
         except ValueError:
             return None
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
-    return captured_at
+    return None
 
 
 def _same_datetime(first: datetime | None, second: datetime | None) -> bool:

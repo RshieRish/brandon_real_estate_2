@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from database import Base
-from models.command import CRMContact
+from models.command import CRMActivity, CRMContact
 from models.command_contacts import (
     CRMContactAddress,
     CRMContactAuditEvent,
@@ -27,12 +27,12 @@ from models.command_contacts import (
     CRMContactProfile,
     CRMContactRelationship,
     CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
     canonical_json_text,
 )
 from models.command_provenance import CRMSourceRecord
 from models.lead import Lead
-
 
 CONTACT_TABLES = {
     "crm_contact_profiles",
@@ -46,6 +46,7 @@ CONTACT_TABLES = {
     "crm_contact_section_captures",
     "crm_contact_timeline_events",
     "crm_contact_audit_events",
+    "crm_contact_source_occurrences",
 }
 
 CONTACT_MODELS = (
@@ -60,7 +61,49 @@ CONTACT_MODELS = (
     CRMContactSectionCapture,
     CRMContactTimelineEvent,
     CRMContactAuditEvent,
+    CRMContactSourceOccurrence,
 )
+
+
+def test_occurrence_context_and_activity_provenance_schema_are_exact():
+    assert _unique_constraints(CRMContactSourceOccurrence) == {
+        "uq_crm_contact_source_occurrence_source": ("source_record_id",),
+        "uq_crm_contact_source_occurrence_section_ordinal": (
+            "section_capture_id",
+            "occurrence_ordinal",
+        ),
+    }
+    assert _checks(CRMContactSourceOccurrence) == {
+        "ck_crm_contact_source_occurrence_ordinal": "occurrence_ordinal > 0",
+    }
+    assert _foreign_keys(CRMContactSourceOccurrence) == {
+        "contact_id": ("crm_contacts.id", "CASCADE"),
+        "section_capture_id": ("crm_contact_section_captures.id", "CASCADE"),
+        "source_record_id": ("crm_source_records.id", "RESTRICT"),
+    }
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in CRMContactSourceOccurrence.__table__.indexes
+    } == {
+        "ix_crm_contact_source_occurrence_contact_section": (
+            "contact_id",
+            "section_capture_id",
+            "id",
+        )
+    }
+    activity_source = CRMActivity.__table__.c.source_record_id
+    assert activity_source.nullable is True
+    assert tuple(
+        (fk.column.table.name, fk.ondelete) for fk in activity_source.foreign_keys
+    ) == (("crm_source_records", "RESTRICT"),)
+    assert {
+        index.name: (index.unique, tuple(column.name for column in index.columns))
+        for index in CRMActivity.__table__.indexes
+    }["uq_crm_activities_source_record_id"] == (
+        True,
+        ("source_record_id",),
+    )
+    assert CRMContactTimelineEvent.__table__.c.occurred_at.nullable is True
 
 
 def _unique_constraints(model) -> dict[str, tuple[str, ...]]:
@@ -218,6 +261,10 @@ def test_contact_models_have_the_exact_owned_field_contracts():
             "id", "contact_id", "actor_subject", "action", "before_json",
             "after_json", "created_at",
         },
+        CRMContactSourceOccurrence: {
+            "id", "contact_id", "section_capture_id", "source_record_id",
+            "occurrence_ordinal", "created_at", "updated_at",
+        },
     }
 
     for model, columns in expected_columns.items():
@@ -284,6 +331,9 @@ def test_contact_models_have_exact_lookup_indexes():
         "ix_crm_contact_section_lookup": ("capture_position_id", "section_name"),
         "ix_crm_contact_timeline_order": ("contact_id", "occurred_at", "id"),
         "ix_crm_contact_audit_order": ("contact_id", "created_at", "id"),
+        "ix_crm_contact_source_occurrence_contact_section": (
+            "contact_id", "section_capture_id", "id",
+        ),
     }
 
 
@@ -409,7 +459,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
                 "limitations_json": "[]",
             },
         ).scalar_one()
-        connection.execute(
+        section_id = connection.execute(
             CRMContactSectionCapture.__table__.insert(),
             {
                 "capture_position_id": capture_id, "source_record_id": 8,
@@ -417,7 +467,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
                 "capture_quality": "complete", "is_empty": False, "row_count": 1,
                 "limitations_json": "[]",
             },
-        )
+        ).inserted_primary_key[0]
         connection.execute(
             CRMContactTimelineEvent.__table__.insert(),
             {
@@ -432,6 +482,15 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "actor_subject": "admin:test", "action": "import",
                 "before_json": "{}", "after_json": canonical,
+            },
+        )
+        connection.execute(
+            CRMContactSourceOccurrence.__table__.insert(),
+            {
+                "contact_id": 1,
+                "section_capture_id": section_id,
+                "source_record_id": 10,
+                "occurrence_ordinal": 1,
             },
         )
 
@@ -520,9 +579,8 @@ def test_contact_database_rejects_invalid_constrained_values(
     message,
 ):
     del message
-    with pytest.raises(IntegrityError):
-        with seeded_contact_engine.begin() as connection:
-            connection.execute(table.__table__.insert(), values)
+    with pytest.raises(IntegrityError), seeded_contact_engine.begin() as connection:
+        connection.execute(table.__table__.insert(), values)
 
 
 @pytest.mark.parametrize(
@@ -563,9 +621,8 @@ def test_contact_database_rejects_invalid_section_capture_values(
         "row_count": 0,
         **overrides,
     }
-    with pytest.raises(IntegrityError):
-        with seeded_contact_engine.begin() as connection:
-            connection.execute(CRMContactSectionCapture.__table__.insert(), values)
+    with pytest.raises(IntegrityError), seeded_contact_engine.begin() as connection:
+        connection.execute(CRMContactSectionCapture.__table__.insert(), values)
 
 
 def test_contact_database_enforces_uniqueness_and_evidence_restriction(
@@ -580,21 +637,19 @@ def test_contact_database_enforces_uniqueness_and_evidence_restriction(
             },
         )
 
-    with pytest.raises(IntegrityError):
-        with seeded_contact_engine.begin() as connection:
-            connection.execute(
-                CRMContactMethod.__table__.insert(),
-                {
-                    "contact_id": 1, "source_record_id": 2,
-                    "source_key": "email:1", "kind": "email",
-                },
-            )
+    with pytest.raises(IntegrityError), seeded_contact_engine.begin() as connection:
+        connection.execute(
+            CRMContactMethod.__table__.insert(),
+            {
+                "contact_id": 1, "source_record_id": 2,
+                "source_key": "email:1", "kind": "email",
+            },
+        )
 
-    with pytest.raises(IntegrityError):
-        with seeded_contact_engine.begin() as connection:
-            connection.execute(
-                CRMSourceRecord.__table__.delete().where(CRMSourceRecord.id == 1)
-            )
+    with pytest.raises(IntegrityError), seeded_contact_engine.begin() as connection:
+        connection.execute(
+            CRMSourceRecord.__table__.delete().where(CRMSourceRecord.id == 1)
+        )
 
 
 @pytest.mark.parametrize(
@@ -613,9 +668,8 @@ def test_contact_database_rejects_orphaned_owned_or_evidence_links(
     seeded_contact_engine,
     values,
 ):
-    with pytest.raises(IntegrityError):
-        with seeded_contact_engine.begin() as connection:
-            connection.execute(CRMContactMethod.__table__.insert(), values)
+    with pytest.raises(IntegrityError), seeded_contact_engine.begin() as connection:
+        connection.execute(CRMContactMethod.__table__.insert(), values)
 
 
 def test_deleting_owned_contact_cascades_children_but_related_party_sets_null(
