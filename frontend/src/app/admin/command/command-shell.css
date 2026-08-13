@@ -1087,6 +1087,634 @@
   gap: 10px;
 }
 
+.command-root .command-primary-button,
+.command-root .command-inline-button,
+.command-root .command-home-view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 780;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.command-root .command-primary-button {
+  padding: 0 14px;
+  border: 1px solid var(--command-gold-strong);
+  background: var(--command-gold);
+  color: var(--command-black);
+}
+
+.command-root .command-primary-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.command-root .command-inline-button,
+.command-root .command-home-view-all {
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #76521c;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.command-root .command-home {
+  min-height: 100%;
+  color: var(--command-ink);
+}
+
+.command-root .command-home-body {
+  display: grid;
+  gap: 14px;
+  padding-block: 16px 32px;
+}
+
+.command-root .command-home-customize {
+  position: relative;
+}
+
+.command-root .command-home-customize-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  width: 220px;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.command-root .command-home-customize-menu label {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.command-root .command-home-shortcuts,
+.command-root .command-home-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.command-root .command-home-shortcut,
+.command-root .command-home-kpi {
+  min-width: 0;
+  border: 1px solid var(--command-border);
+  border-radius: 5px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  text-decoration: none;
+}
+
+.command-root .command-home-shortcut {
+  display: grid;
+  min-height: 74px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 3px 10px;
+  padding: 10px 12px;
+}
+
+.command-root .command-home-shortcut > span,
+.command-root .command-home-kpi > span {
+  color: var(--command-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-shortcut strong {
+  color: #76521c;
+  font-size: 13px;
+}
+
+.command-root .command-home-shortcut small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--command-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-readiness {
+  overflow: hidden;
+  border: 1px solid #282a2f;
+  border-radius: 7px;
+  background: linear-gradient(125deg, #1c1e22 0%, #292b31 64%, #3a3020 100%);
+  color: var(--command-surface);
+  box-shadow: 0 10px 28px rgb(24 24 22 / 14%);
+}
+
+.command-root .command-home-readiness-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: 28px;
+  padding: 24px;
+}
+
+.command-root .command-home-readiness h2 {
+  margin: 5px 0 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.command-root .command-home-readiness-score {
+  margin: 10px 0 0;
+  color: var(--command-gold);
+  font-size: clamp(38px, 5vw, 58px);
+  font-weight: 820;
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+}
+
+.command-root .command-home-readiness-coverage {
+  margin: 9px 0 0;
+  color: rgb(255 255 255 / 68%);
+  font-size: 11px;
+}
+
+.command-root .command-home-primary-action {
+  align-self: end;
+  padding-left: 20px;
+  border-left: 1px solid rgb(255 255 255 / 14%);
+}
+
+.command-root .command-home-primary-action p {
+  margin: 0 0 13px;
+  font-size: 16px;
+  font-weight: 680;
+  line-height: 1.45;
+}
+
+.command-root .command-readiness-rail {
+  display: flex;
+  min-height: 66px;
+  border-block: 1px solid rgb(255 255 255 / 12%);
+  background: rgb(0 0 0 / 18%);
+}
+
+.command-root .command-readiness-segment {
+  display: flex;
+  min-width: 92px;
+  flex-basis: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 14px;
+  border-right: 1px solid rgb(255 255 255 / 12%);
+}
+
+.command-root .command-readiness-segment:last-child {
+  border-right: 0;
+}
+
+.command-root .command-readiness-segment span {
+  color: rgb(255 255 255 / 62%);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.command-root .command-readiness-segment strong {
+  color: var(--command-gold);
+  font-size: 15px;
+}
+
+.command-root .command-readiness-segment.is-unavailable strong {
+  color: #f2dca9;
+  font-size: 11px;
+}
+
+.command-root .command-home-readiness-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(240px, 0.75fr);
+  gap: 24px;
+  padding: 18px 24px 22px;
+}
+
+.command-root .command-home-readiness-lower h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-action-queue {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-root .command-home-action-queue a {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  color: var(--command-surface);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.command-root .command-home-action-queue a:hover {
+  background: rgb(255 255 255 / 7%);
+}
+
+.command-root .command-home-action-queue strong {
+  color: var(--command-gold);
+  font-size: 10px;
+}
+
+.command-root .command-home-source-disclosure {
+  padding: 11px 13px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 4px;
+  color: rgb(255 255 255 / 68%);
+  font-size: 11px;
+}
+
+.command-root .command-home-source-disclosure summary,
+.command-root .command-home-recovered-evidence summary {
+  min-height: 32px;
+  color: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.command-root .command-home-source-disclosure ul,
+.command-root .command-home-source-disclosure p {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+
+.command-root .command-home-kpi {
+  display: grid;
+  min-height: 112px;
+  align-content: start;
+  gap: 5px;
+  padding: 15px;
+  border-top: 3px solid var(--command-gold-strong);
+}
+
+.command-root .command-home-kpi strong {
+  margin-top: 4px;
+  font-size: 25px;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+.command-root .command-home-kpi p {
+  margin: 3px 0 0;
+  color: var(--command-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.command-root .command-home-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.command-root .command-home-primary-column,
+.command-root .command-home-context-stack {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.command-root .command-home-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--command-border);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-home-panel-heading,
+.command-root .command-home-goal-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-root .command-home-panel-heading h2 {
+  margin: 4px 0 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.command-root .command-home-panel-heading > a {
+  color: #76521c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.command-root .command-home-task-queue .command-tabs {
+  margin-top: 15px;
+  border-bottom: 1px solid var(--command-border);
+}
+
+.command-root .command-home-task-filters,
+.command-root .command-home-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.command-root .command-home-task-filters {
+  margin: 12px 0;
+}
+
+.command-root .command-home-task-filters label,
+.command-root .command-home-task-form label,
+.command-root .command-home-goal-editor label {
+  display: grid;
+  gap: 5px;
+  color: var(--command-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-task-filters select,
+.command-root .command-home-task-form input,
+.command-root .command-home-task-form textarea,
+.command-root .command-home-task-form select,
+.command-root .command-home-goal-editor input {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--command-border);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+  font: inherit;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.command-root .command-home-task-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.command-root .command-home-task-list,
+.command-root .command-home-goals,
+.command-root .command-home-contact-list,
+.command-root .command-home-celebrations {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-root .command-home-task-list li {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #ecece8;
+}
+
+.command-root .command-home-task-list li div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.command-root .command-home-task-list strong,
+.command-root .command-home-contact-list strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-task-list span,
+.command-root .command-home-task-list small,
+.command-root .command-home-contact-list span {
+  color: var(--command-muted);
+  font-size: 10px;
+}
+
+.command-root .command-home-view-all {
+  margin-top: 9px;
+}
+
+.command-root .command-home-positive-copy,
+.command-root .command-home-neutral-copy,
+.command-root .command-home-error-copy {
+  margin: 12px 0 0;
+  padding: 12px;
+  border-radius: 4px;
+  background: #f3f3f0;
+  color: var(--command-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.command-root .command-home-positive-copy {
+  border-left: 4px solid var(--command-success);
+  color: #255d42;
+}
+
+.command-root .command-home-error-copy {
+  border-left: 4px solid var(--command-danger);
+  color: var(--command-danger);
+}
+
+.command-root .command-home-goals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.command-root .command-home-goals li {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e6e6e2;
+  border-radius: 4px;
+}
+
+.command-root .command-home-goal-heading strong {
+  font-size: 12px;
+}
+
+.command-root .command-home-goal-heading span {
+  color: #76521c;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.command-root .command-home-goal-track {
+  height: 5px;
+  margin-top: 11px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e7e7e3;
+}
+
+.command-root .command-home-goal-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--command-gold-strong);
+}
+
+.command-root .command-home-goal-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.command-root .command-home-contact-list,
+.command-root .command-home-celebrations {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.command-root .command-home-contact-list a,
+.command-root .command-home-celebrations li {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border: 1px solid #ecece8;
+  border-radius: 4px;
+  color: var(--command-ink);
+  text-decoration: none;
+}
+
+.command-root .command-home-contact-list a > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-root .command-home-subheading {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--command-border);
+  font-size: 12px;
+}
+
+.command-root .command-home-celebrations li {
+  font-size: 11px;
+}
+
+.command-root .command-home-celebrations strong,
+.command-root .command-review-badge {
+  padding: 3px 6px;
+  border: 1px solid #d5b060;
+  border-radius: 3px;
+  background: #fbf5e6;
+  color: #654619;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.command-root .command-home-panel .command-state-panel {
+  min-height: 108px;
+  margin-top: 12px;
+  padding: 14px;
+}
+
+.command-root .command-home-briefing {
+  margin: 14px 0 5px;
+  color: var(--command-ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.command-root .command-home-panel > small {
+  color: var(--command-muted);
+  font-size: 9px;
+}
+
+.command-root .command-home-recovered-evidence {
+  padding: 13px 15px;
+  border: 1px dashed #b9bab5;
+  border-radius: 5px;
+  background: #eeeee9;
+  color: #555960;
+  font-size: 11px;
+}
+
+.command-root .command-home-recovered-evidence p,
+.command-root .command-home-recovered-evidence ul {
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+
+.command-root .command-home-loading {
+  display: grid;
+  gap: 14px;
+}
+
+.command-root .command-home-loading-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.command-root .command-home-loading-grid span {
+  height: 110px;
+  border-radius: 5px;
+  background: #e5e5e1;
+  animation: command-skeleton-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.command-root .command-home-task-form {
+  display: grid;
+  gap: 14px;
+}
+
+.command-root .command-home-task-form h2 {
+  margin-bottom: 2px;
+}
+
+.command-root .command-home-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
 @media (max-width: 1023px) {
   .command-root .command-rail,
   .command-root .command-utility-header {
@@ -1127,6 +1755,10 @@
 
   .command-root .command-main {
     min-height: calc(100dvh - var(--command-mobile-header));
+  }
+
+  .command-root .command-home-columns {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1182,6 +1814,45 @@
     min-width: min(78vw, 280px);
     scroll-snap-align: start;
   }
+
+  .command-root .command-home-shortcuts,
+  .command-root .command-home-kpis {
+    display: flex;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    overflow-x: auto;
+    scroll-padding-inline: 16px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .command-root .command-home-shortcut,
+  .command-root .command-home-kpi {
+    min-width: min(78vw, 270px);
+    scroll-snap-align: start;
+  }
+
+  .command-root .command-home-readiness-summary,
+  .command-root .command-home-readiness-lower {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-home-primary-action {
+    padding: 14px 0 0;
+    border-top: 1px solid rgb(255 255 255 / 14%);
+    border-left: 0;
+  }
+
+  .command-root .command-readiness-rail {
+    overflow-x: auto;
+  }
+
+  .command-root .command-readiness-segment {
+    min-width: 148px;
+  }
+
+  .command-root .command-home-goals {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 520px) {
@@ -1197,6 +1868,21 @@
 
   .command-root .command-search-option small {
     display: none;
+  }
+
+  .command-root .command-home-readiness-summary,
+  .command-root .command-home-readiness-lower,
+  .command-root .command-home-panel {
+    padding: 15px;
+  }
+
+  .command-root .command-home-task-filters,
+  .command-root .command-home-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-root .command-home-panel-heading {
+    align-items: flex-start;
   }
 }
 
