@@ -296,7 +296,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       <CommandOverlay
         open={taskOpen}
         labelledBy="command-home-create-task-heading"
-        triggerRef={createTriggerRef}
+        triggerRef={createToken === 'task' ? undefined : createTriggerRef}
         onOpenChange={changeTaskOpen}
       >
         <form

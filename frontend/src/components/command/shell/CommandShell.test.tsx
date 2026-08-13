@@ -46,6 +46,19 @@ describe('CommandShell', () => {
     );
   });
 
+  it('places the skip link first in the keyboard focus order', async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandShell>
+        <p>Body</p>
+      </CommandShell>,
+    );
+
+    await user.tab();
+
+    expect(screen.getByRole('link', { name: 'Skip to workspace content' })).toHaveFocus();
+  });
+
   it('matches nested module routes without leaving Home active', () => {
     mockPathname = '/admin/command/contacts/42';
     render(

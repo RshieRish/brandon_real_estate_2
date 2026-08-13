@@ -12,9 +12,6 @@ export function CommandUtilityHeader() {
 
   return (
     <header className="command-utility-header command-print-hidden">
-      <a className="command-skip-link" href="#command-main">
-        Skip to workspace content
-      </a>
       <div className="command-utility-context">
         <span className="command-context-kicker">SWS COMMAND</span>
         <strong>{destination?.shortLabel ?? 'Workspace'}</strong>

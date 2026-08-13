@@ -11,6 +11,9 @@ export function CommandShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="command-root">
+      <a className="command-skip-link command-print-hidden" href="#command-main">
+        Skip to workspace content
+      </a>
       <CommandRail key={`rail-${pathname}`} />
       <CommandUtilityHeader key={`header-${pathname}`} />
       <CommandMobileNavigation key={`mobile-${pathname}`} />

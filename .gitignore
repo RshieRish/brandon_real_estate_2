@@ -34,3 +34,7 @@ build/
 # frontend/public/frames/house-blast/*.jpg
 # frontend/public/frames/house-blast/*.webp
 # frontend/public/frames/house-blast/*.png
+frontend/playwright-report/
+frontend/test-results/
+frontend/.auth/
+frontend/artifacts/command-qa/current/

@@ -65,7 +65,14 @@ export function HomeGoals({
                   <strong>{goal.name}</strong>
                   <span>{goal.current_value} / {goal.target_value}</span>
                 </div>
-                <div className="command-home-goal-track" aria-label={`${goal.name} ${percent}% complete`}>
+                <div
+                  className="command-home-goal-track"
+                  role="progressbar"
+                  aria-label={`${goal.name} progress`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                >
                   <span style={{ width: `${percent}%` }} />
                 </div>
                 {editingId === goal.id ? (

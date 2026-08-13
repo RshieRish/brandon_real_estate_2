@@ -48,6 +48,8 @@
 
 .command-root .command-rail-brand img,
 .command-root .command-mobile-brand img {
+  width: auto;
+  height: auto;
   object-fit: contain;
 }
 
@@ -431,6 +433,10 @@
 .command-root .command-search-option small {
   color: var(--command-muted);
   font-size: 11px;
+}
+
+.command-root .command-search-option.is-active small {
+  color: #4f535a;
 }
 
 .command-root .command-search-empty {
@@ -937,10 +943,14 @@
 }
 
 .command-root .command-eyebrow {
-  color: var(--command-gold-strong);
+  color: #76521c;
   font-size: 9px;
   font-weight: 850;
   letter-spacing: 0.14em;
+}
+
+.command-root .command-home-readiness .command-eyebrow {
+  color: var(--command-gold);
 }
 
 .command-root .command-evidence-heading h3 {

@@ -55,7 +55,7 @@ export function FollowUpReadinessHero({
         </div>
       </div>
 
-      <div className="command-readiness-rail" aria-label="Readiness factors">
+      <div className="command-readiness-rail" role="region" aria-label="Readiness factors" tabIndex={0}>
         {readiness.factors.map((factor) => (
           <div
             key={factor.key}
