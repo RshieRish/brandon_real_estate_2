@@ -1298,6 +1298,16 @@ class ContactLegacySyncResult:
     timeline_backfilled: int
     total_legacy_leads: int
 
+    def __post_init__(self) -> None:
+        for field_name in (
+            "created",
+            "timeline_backfilled",
+            "total_legacy_leads",
+        ):
+            _exact_int(getattr(self, field_name), field_name, minimum=0)
+        if self.created + self.timeline_backfilled > self.total_legacy_leads:
+            raise ValueError("legacy sync counts are contradictory")
+
 
 @dataclass(frozen=True, slots=True)
 class ContactImportResult:

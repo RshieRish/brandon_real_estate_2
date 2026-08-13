@@ -58,6 +58,7 @@ from models.command_provenance import (
     CRMSourceRecord,
     CRMSourceRecordArtifact,
 )
+from models.lead import Lead
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     UNSET,
@@ -80,6 +81,7 @@ from services.command_contact_contracts import (
     ContactDirectoryPage,
     ContactDirectoryRow,
     ContactEvidence,
+    ContactLegacySyncResult,
     ContactMaterialized,
     ContactMutationResult,
     ContactNeighbors,
@@ -3122,6 +3124,182 @@ async def apply_contact_bulk_action(
         ) from None
 
 
+async def sync_legacy_leads(
+    db: AsyncSession,
+    *,
+    actor_subject: str,
+) -> ContactLegacySyncResult:
+    """Project legacy leads into contacts without mutating linked rows."""
+    actor = _validated_actor_subject(actor_subject)
+    created_count = 0
+    backfilled_count = 0
+    scanned_count = 0
+    last_lead_id = 0
+    try:
+        async with db.begin_nested():
+            while True:
+                leads = (
+                    await db.scalars(
+                        select(Lead)
+                        .where(Lead.id > last_lead_id)
+                        .order_by(Lead.id)
+                        .limit(500)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).all()
+                if not leads:
+                    break
+                last_lead_id = leads[-1].id
+                scanned_count += len(leads)
+                lead_ids = tuple(lead.id for lead in leads)
+                linked_contacts = (
+                    await db.scalars(
+                        select(CRMContact)
+                        .where(CRMContact.lead_id.in_(lead_ids))
+                        .order_by(CRMContact.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).all()
+                contacts_by_lead_id = {
+                    contact.lead_id: contact for contact in linked_contacts
+                }
+                linked_contact_ids = tuple(contact.id for contact in linked_contacts)
+                exact_markers = (
+                    await db.scalars(
+                        select(CRMActivity)
+                        .where(
+                            CRMActivity.contact_id.in_(linked_contact_ids),
+                            CRMActivity.kind == "lead_imported",
+                            CRMActivity.summary == "Imported from internal lead source",
+                            CRMActivity.source_record_id.is_(None),
+                            CRMActivity.metadata_json == "{}",
+                        )
+                        .order_by(CRMActivity.contact_id, CRMActivity.id)
+                        .with_for_update()
+                    )
+                ).all()
+                marker_contact_ids = {marker.contact_id for marker in exact_markers}
+
+                pending_new: list[tuple[Lead, ContactCreateCommand, CRMContact]] = []
+                for lead in leads:
+                    if lead.id in contacts_by_lead_id:
+                        continue
+                    parts = (lead.name or "Unnamed contact").strip().split(maxsplit=1)
+                    if not parts:
+                        raise ContactDataIntegrityError(
+                            "legacy lead cannot be synchronized"
+                        )
+                    try:
+                        command = ContactCreateCommand(
+                            first_name=parts[0],
+                            last_name=parts[1] if len(parts) > 1 else "",
+                            email=lead.email,
+                            phone=lead.phone,
+                            stage=lead.routing_status or "lead",
+                        )
+                    except (TypeError, ValueError):
+                        raise ContactDataIntegrityError(
+                            "legacy lead cannot be synchronized"
+                        ) from None
+                    contact = CRMContact(
+                        lead_id=lead.id,
+                        first_name=command.first_name,
+                        last_name=command.last_name,
+                        email=command.email,
+                        phone=command.phone,
+                        stage=command.stage,
+                        birthday=None,
+                        anniversary=None,
+                    )
+                    pending_new.append((lead, command, contact))
+                    contacts_by_lead_id[lead.id] = contact
+                db.add_all([row[2] for row in pending_new])
+                await db.flush()
+
+                pending_markers: list[tuple[Lead, CRMContact, CRMActivity, bool]] = []
+                new_lead_ids = {lead.id for lead, _command, _contact in pending_new}
+                for lead in leads:
+                    contact = contacts_by_lead_id[lead.id]
+                    is_new = lead.id in new_lead_ids
+                    if not is_new and contact.id in marker_contact_ids:
+                        continue
+                    marker = _compatibility_activity(
+                        contact_id=contact.id,
+                        kind="lead_imported",
+                        summary="Imported from internal lead source",
+                    )
+                    pending_markers.append((lead, contact, marker, is_new))
+                db.add_all([row[2] for row in pending_markers])
+                await db.flush()
+
+                audits: list[CRMContactAuditEvent] = []
+                for lead, contact, marker, is_new in pending_markers:
+                    if is_new:
+                        before_json = canonical_contact_audit_json(
+                            action="contact.legacy_sync_applied",
+                            phase="before",
+                            payload={},
+                        )
+                        after_json = canonical_contact_audit_json(
+                            action="contact.legacy_sync_applied",
+                            phase="after",
+                            payload={
+                                "email": contact.email,
+                                "first_name": contact.first_name,
+                                "last_name": contact.last_name,
+                                "phone": contact.phone,
+                                "stage": contact.stage,
+                                "lead_id": lead.id,
+                            },
+                        )
+                        created_count += 1
+                    else:
+                        before_json = canonical_contact_audit_json(
+                            action="contact.legacy_sync_applied",
+                            phase="before",
+                            payload={
+                                "activity_present": False,
+                                "lead_id": lead.id,
+                            },
+                        )
+                        after_json = canonical_contact_audit_json(
+                            action="contact.legacy_sync_applied",
+                            phase="after",
+                            payload={
+                                "activity_present": True,
+                                "activity_id": marker.id,
+                                "lead_id": lead.id,
+                            },
+                        )
+                        backfilled_count += 1
+                    audits.append(
+                        _contact_audit_event(
+                            contact_id=contact.id,
+                            actor_subject=actor,
+                            action="contact.legacy_sync_applied",
+                            before_json=before_json,
+                            after_json=after_json,
+                        )
+                    )
+                db.add_all(audits)
+                await db.flush()
+        return ContactLegacySyncResult(
+            created=created_count,
+            timeline_backfilled=backfilled_count,
+            total_legacy_leads=scanned_count,
+        )
+    except ContactDirectoryError:
+        raise
+    except (TypeError, ValueError):
+        raise ContactDataIntegrityError("legacy lead cannot be synchronized") from None
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
 async def assign_contact_tag(
     db: AsyncSession,
     contact_id: int,
@@ -3751,5 +3929,6 @@ __all__ = [
     "list_contacts",
     "list_saved_searches",
     "remove_contact_tag",
+    "sync_legacy_leads",
     "update_contact",
 ]
