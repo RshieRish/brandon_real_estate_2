@@ -261,21 +261,32 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 
 ### Backend query/API boundary
 
-- Modify `backend/models/command.py`: add nullable, uniquely indexed provenance from `CRMActivity` to a recovered source record.
+- Create `backend/email_normalization.py`: one application-level canonical email function shared by ORM write synchronization, identity resolution, and timeline linkage.
+- Modify `backend/models/command.py`: add nullable, uniquely indexed provenance from `CRMActivity` to a recovered source record; add derived `CRMContact.normalized_email`, write synchronization, and timeline query indexes.
+- Modify `backend/models/booking.py`: add derived `Booking.normalized_email`, write synchronization, and lead/email timeline indexes.
 - Modify `backend/models/command_contacts.py`: add contact/source-occurrence ownership and permit recovered timeline rows with no exposed timestamp.
 - Create `backend/alembic/versions/5b9d1e2f3a4c_add_contact_occurrence_context.py`: additive occurrence/activity/timeline migration whose parent is `4a8c0d1e2f3b`.
+- Create `backend/alembic/versions/6c0e2f4a5b7d_add_timeline_query_support.py`: online canonical-email backfill plus additive timeline query indexes whose parent is `5b9d1e2f3a4c`.
 - Create `backend/services/command_contact_contracts.py`: framework-neutral directory, detail, section, evidence, timeline, celebration, bulk, audit, filter, and sort contracts shared by query services.
 - Create `backend/services/command_contact_occurrences.py`: validate and idempotently persist child-occurrence ownership from parser payload context.
 - Create `backend/services/command_contact_timeline.py`: typed merge of recovered timeline events, `CRMActivity`, leads, and bookings with source-key dedupe.
+- Modify `backend/services/command_contact_identity.py`: consume and re-export the shared canonical email function without changing its public identity API.
+- Modify `backend/services/command_contact_materializer.py`: use synchronized contact email writes and persist explicit recovered timeline timestamps in UTC.
 - Create `backend/services/command_contacts.py`: directory/detail/tab queries, stable pagination, mutations, and audits.
 - Create `backend/schemas/command_contacts.py`: request/response/page/evidence contracts.
 - Create `backend/routers/command_contacts.py`: admin-only focused contact routes.
-- Modify `backend/routers/command.py`: remove moved contact, contact-note, tag-assignment, contact-saved-search, and celebration handlers; retain unrelated routes.
+- Modify `backend/routers/command.py`: first make every legacy contact create/update/sync/import/archive write and duplicate check honor canonical normalized email; later remove moved contact, contact-note, tag-assignment, contact-saved-search, and celebration handlers while retaining unrelated routes.
+- Modify `backend/routers/booking.py`: persist the synchronized booking email and convert the database `scheduled_at` value to UTC while retaining Eastern calendar behavior.
 - Modify `backend/routers/command_provenance.py`: allow contact extension entity types.
 - Modify `backend/main.py`: mount `command_contacts.router` under `/api/v1/command`.
 - Create `backend/tests/test_command_contact_contracts.py`: exact filters, sorts, SmartViews, cursors, bulk variants, and redaction contracts.
 - Create `backend/tests/test_command_contact_occurrences.py`: occurrence ownership, backfill, idempotency, and ambiguity gates.
-- Create `backend/tests/test_command_contact_timeline.py`: deterministic aggregation and non-duplication.
+- Create `backend/tests/test_command_email_normalization.py`: canonicalization, ORM synchronization, raw/derived drift, and primary-email ownership boundaries.
+- Create `backend/tests/test_command_contact_email_writes.py`: all current Command contact write and canonical duplicate-detection paths.
+- Create `backend/tests/test_command_contact_timeline.py`: deterministic bounded aggregation, integrity preflight, non-duplication, exact ordering, and positional cursor behavior.
+- Create `backend/tests/test_command_contact_timeline_migration.py`: online-only bounded canonical backfill, exact indexes, helper parity, and safe downgrade coverage for revision `6c0e2f4a5b7d`.
+- Modify `backend/tests/test_booking_calendar.py`: synchronized booking email and UTC database timestamp regressions.
+- Modify `backend/tests/test_command_contact_materializer.py`: normalized contact email and UTC recovered-event persistence regressions.
 - Create `backend/tests/test_command_contacts_service.py`: directory/detail/section/evidence/celebration/mutation query tests.
 - Create `backend/tests/test_command_contacts_router.py`: authenticated page/detail/tab/mutation/evidence integration tests.
 - Modify `backend/tests/test_command_models.py`: retain compatibility coverage for legacy Command entities.
@@ -337,8 +348,8 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 2. Pure parser/extractors.
 3. Identity resolver and materializer protocol.
 4. Contact materializer and reconciliation integration.
-5. Additive query schema plus framework-neutral Contacts contracts.
-6. Timeline aggregation.
+5. Additive occurrence/provenance schema plus framework-neutral Contacts contracts.
+6. Persisted canonical email linkage, timeline query indexes, and timeline aggregation.
 7. Directory/detail/section/evidence query services.
 8. Focused Contacts router with an explicit legacy-route inventory.
 9. Shared typed frontend transport, Contacts client, and Home compatibility adapter.
@@ -979,10 +990,88 @@ git commit -m "feat: retain Command contact occurrence ownership"
 ### Task 5B: Build the non-duplicating timeline
 
 **Files:**
+- Create: `backend/email_normalization.py`
+- Modify: `backend/models/command.py`
+- Modify: `backend/models/booking.py`
+- Create: `backend/alembic/versions/6c0e2f4a5b7d_add_timeline_query_support.py`
+- Modify: `backend/services/command_contact_identity.py`
+- Modify: `backend/services/command_contact_materializer.py`
 - Create: `backend/services/command_contact_timeline.py`
+- Modify: `backend/routers/command.py`
+- Modify: `backend/routers/booking.py`
+- Create: `backend/tests/test_command_email_normalization.py`
+- Create: `backend/tests/test_command_contact_email_writes.py`
 - Create: `backend/tests/test_command_contact_timeline.py`
+- Modify: `backend/tests/test_command_models.py`
+- Create: `backend/tests/test_command_contact_timeline_migration.py`
+- Modify: `backend/tests/test_command_contact_materializer.py`
+- Modify: `backend/tests/test_booking_calendar.py`
 
-- [ ] **Step 1: Write failing aggregation and cursor tests**
+- [ ] **Step 1: Write failing canonical-email, schema, migration, and write-path tests**
+
+Create `backend/email_normalization.py` as the only application implementation of:
+
+```python
+def canonical_email(value: str | None) -> str | None:
+    """Return a canonical explicit email or None for invalid/placeholders."""
+```
+
+The function accepts only `str | None`, applies Unicode NFKC, strips outer whitespace, case-folds, treats `""`, `"--"`, `"—"`, `"n/a"`, `"none"`, and `"null"` as missing, requires exactly one `@`, rejects all remaining whitespace, and requires non-empty local/domain parts with a domain that neither begins nor ends with `.`. `command_contact_identity.py` imports and re-exports this function so its existing public import path remains valid; it does not keep a second email implementation.
+
+Add these exact derived columns and indexes:
+
+```text
+CRMContact.normalized_email: String(255), nullable
+Booking.normalized_email: String(255), nullable
+
+ix_crm_contacts_normalized_email_id
+    (crm_contacts.normalized_email, crm_contacts.id)
+ix_crm_activities_timeline_order
+    (crm_activities.contact_id, crm_activities.created_at, crm_activities.id)
+ix_bookings_timeline_lead_order
+    (bookings.lead_id, bookings.scheduled_at, bookings.id)
+ix_bookings_timeline_email_order
+    (bookings.normalized_email, bookings.lead_id,
+     bookings.scheduled_at, bookings.id)
+```
+
+`normalized_email` is deliberately non-unique because ambiguity is evidence, not a migration failure. SQLAlchemy `before_insert` and `before_update` listeners on both models overwrite the derived column with `canonical_email(target.email)` on every ORM write, even when a caller supplied a conflicting derived value. The request schemas never expose `normalized_email`. Bulk SQL writers are outside the accepted application write contract and must populate both values explicitly.
+
+Migration `6c0e2f4a5b7d` has parent `5b9d1e2f3a4c`. Its local canonicalizer is self-contained and byte-for-byte equivalent to the application helper; importing application code into the revision is forbidden. Upgrade performs this exact transaction sequence:
+
+1. If `op.get_context().as_sql` is true, raise `RuntimeError("contact timeline query support requires an online canonical-email backfill")` before the first `op.*` call; the revision emits no partial offline SQL.
+2. Add nullable `normalized_email` to `crm_contacts` and `bookings`.
+3. Read `(id, email)` from each table in ascending-ID batches of at most `1_000`, compute the migration-local canonical value, and update by primary key. Do not load either table unboundedly and do not log raw emails.
+4. Re-read in the same bounded order and refuse if any stored derived value differs from the local canonicalizer. The migration transaction/DDL lock prevents concurrent application drift; any error rolls back columns, backfill, and indexes together.
+5. Create the four named indexes above and advance the version to `6c0e2f4a5b7d`.
+
+Downgrade drops only those four indexes and two derived columns and returns to `5b9d1e2f3a4c`; losing recomputable derived values is safe. Migration tests run real SQLite upgrade/backfill/downgrade, compare the migration helper to the application helper across ASCII, NFKC, placeholder, whitespace, and invalid inputs, assert every exact index/column, and assert PostgreSQL offline upgrade refuses with an empty revision output buffer. After the implementation lands, `alembic heads` must print only `6c0e2f4a5b7d (head)`; until then, the committed source-tree head remains `5b9d1e2f3a4c`.
+
+All current ORM write paths must preserve the invariant in the same commit:
+
+- `POST /contacts`, `POST /contacts/sync-leads`, `POST /contacts/import`, `POST /archive/import`, and `PATCH /contacts/{contact_id}` in `command.py` rely on the model listener for every create/change. Import/archive duplicate maps and queries use the canonical non-null `CRMContact.normalized_email`; they never use `lower(email)`, raw equality, name, phone, or `CRMContactMethod`.
+- `_new_contact()` in `command_contact_materializer.py` writes the primary `CRMContact.email` through the same model invariant. `CRMContactMethod.normalized_value` remains recovered evidence and is explicitly excluded from timeline booking ownership and ambiguity counts.
+- `create_booking()` in `booking.py` writes the raw booking email through the Booking listener and stores `Booking.scheduled_at=slot_start.astimezone(UTC)`. Google Calendar creation, office-hour validation, and notification payloads continue using the Eastern `slot_start`; only the database instant is normalized.
+- `_event_datetime()` in `command_contact_materializer.py` converts every valid explicit recovered timestamp with `.astimezone(UTC)` and continues to preserve `None` when the source exposed no time.
+
+`test_command_email_normalization.py` proves helper behavior, constructor/assignment synchronization, a deliberately conflicting caller-supplied derived value being overwritten at flush, and nullable invalid inputs. `test_command_contact_email_writes.py` exercises all five Command write endpoints above against real async SQLite, including update drift, NFKC-equivalent duplicate detection, invalid email non-linkage, and no `CRMContactMethod` participation. `test_booking_calendar.py` proves the booking row stores the canonical email and UTC instant while the calendar call still receives Eastern time. Materializer tests prove normalized contact email and UTC/nullable recovered events. No failure or exception includes a raw email.
+
+- [ ] **Step 2: Run the normalization/schema tests and confirm RED**
+
+```bash
+cd backend
+"$PROJECT_PYTHON" -m pytest -q \
+  tests/test_command_email_normalization.py \
+  tests/test_command_contact_email_writes.py \
+  tests/test_command_models.py \
+  tests/test_command_contact_timeline_migration.py \
+  tests/test_command_contact_materializer.py \
+  tests/test_booking_calendar.py
+```
+
+Expected: FAIL because the shared helper, derived columns, revision, listeners, canonical duplicate queries, and UTC write normalization do not exist.
+
+- [ ] **Step 3: Write failing aggregation, integrity, ordering, and cursor tests**
 
 Pin the output contract:
 
@@ -1009,21 +1098,80 @@ class ContactTimelinePage:
 
 Expose `list_contact_timeline(db, contact_id: int, *, cursor: str | None, page_size: int) -> ContactTimelinePage`, with `page_size` restricted to `1..100` and 404 expressed as `ContactNotFound`, not an HTTP exception.
 
-Recovered rows come from `CRMContactTimelineEvent`, internal rows from `CRMActivity`, the single legacy-lead row from the exact `CRMContact.lead_id`, and booking rows from the linkage rule below. Keys are `recovered:<id>`, `activity:<id>`, `lead:<id>`, and `booking:<id>`; text/time similarity is never a dedupe key. When a recovered event and `CRMActivity` share the same non-null `source_record_id`, return only the recovered entry. A `CRMActivity.source_record_id` that points to a different contact or to a non-timeline source is an integrity error, not a silent drop.
+Recovered rows come from `CRMContactTimelineEvent`, internal rows from `CRMActivity`, the single legacy-lead row from the exact `CRMContact.lead_id`, and booking rows from the exact linkage rule below. Keys are `recovered:<id>`, `activity:<id>`, `lead:<id>`, and `booking:<id>`; text/time similarity is never a dedupe key.
 
-Booking linkage uses `Booking.lead_id == contact.lead_id` exclusively whenever the contact has a lead. Email fallback is allowed only when the contact has no lead, its normalized email is nonblank and belongs to exactly one `CRMContact`, and the booking has `lead_id IS NULL` plus the exact same normalized email. Ambiguous/shared email, a booking tied to another lead, or a name/phone match never links. The legacy-lead entry uses the persisted lead creation timestamp and ID; no synthetic history rows are derived from current status.
+Before applying a cursor or returning any row, run a fixed-number, aggregate/`EXISTS` integrity preflight for the requested contact. It loads no unbounded row set and enforces all of these invariants:
 
-Tests cover mirrored-source dedupe, same-text/same-time distinctness, all booking branches, nullable recovered times, exact ordering/cursors across page boundaries, cursor tampering, deleted cursor-bound entities, empty pages, `page_size` bounds, timezone normalization, and deterministic results after reversing fixture insertion order.
+1. Every recovered event for the contact resolves to a `CRMSourceRecord` with `source_system="kw_command"`, `module="contacts"`, and `record_kind="contact_timeline_event"`, and its event `source_system` agrees.
+2. Every `CRMActivity` with non-null `source_record_id` whose `contact_id` is the requested contact, or whose source points to a recovered event owned by the requested contact, is one deliberate mirror: the activity contact is non-null and equals the requested contact, its source has the exact domain above, and exactly one same-contact recovered event owns that source. A missing counterpart, null activity owner, different contact, or wrong source system/module/kind is `ContactTimelineIntegrityError`.
+3. If `CRMContact.lead_id` is non-null, exactly that `Lead` exists. A missing lead is an integrity error even when its creation row would fall before the cursor.
+4. The requested contact's `normalized_email` equals `canonical_email(contact.email)`. Every contact/booking row observed by an email-ownership or booking query satisfies the same raw/derived equality. Reads never repair drift; any observed mismatch is `ContactTimelineIntegrityError`.
 
-- [ ] **Step 2: Implement, run, and commit**
+These checks cover corruption before the cursor and beyond the requested page. Integrity errors contain only a stable generic reason code/message—never contact values, email values, source keys, payloads, or cursor contents—and the function returns no partial page.
 
-Make the internal-activity SQL query exclude a mirrored row whenever a same-contact `CRMContactTimelineEvent` has the same non-null `source_record_id`; the merge layer repeats this integrity-safe dedupe defensively. Then fetch at most `page_size + 1` already-eligible rows per origin after the decoded cursor, merge by the exact Task 5A key, and return a cursor for the last emitted row only when another eligible row exists. This prevents mirror-heavy pages from underfilling while later unique activities exist. Do not load an unbounded timeline into memory.
+After preflight, the internal activity query selects only `contact_id=<requested>` and `source_record_id IS NULL`; exact mirrors exist only as recovered entries. The merge layer defensively rejects any non-null activity source that reaches it and dedupes only the exact shared source identity. Same text and same timestamp without a shared non-null source remain distinct.
+
+Booking ownership is exact:
+
+- When `contact.lead_id` is non-null, query only `Booking.lead_id == contact.lead_id`. Email, name, and phone cannot add another booking.
+- When the contact has no lead, fallback is allowed only if its non-null persisted `normalized_email` belongs to exactly one primary `CRMContact.email`. Query at most two owners through `ix_crm_contacts_normalized_email_id`; `CRMContactMethod` is never consulted.
+- Email-linked bookings must have `Booking.lead_id IS NULL` and the same persisted `Booking.normalized_email`. A shared contact email, blank/invalid canonical email, booking bound to any lead, raw/derived drift, name-only match, or phone-only match never links.
+
+Map every origin exactly:
+
+| Origin | `kind` | `title` | `body` | `outcome` | `occurred_at` | `source_record_id` | `entity_type` |
+|---|---|---|---|---|---|---|---|
+| recovered | stored `kind` | stored `title` | stored `body` | stored `outcome` | stored event time | stored source ID | `contact_timeline_event` |
+| internal CRM | stored activity `kind` | stored `summary` | `None` | `None` | `CRMActivity.created_at` | `None` | `activity` |
+| legacy lead | `lead_created` | `Lead created` | `None` | `None` | `Lead.created_at` | `None` | `lead` |
+| booking | `booking` | stored `meeting_type` | `notes or None` | `context or None` | `Booking.scheduled_at` | `None` | `booking` |
+
+Lead `updated_at`, current routing status, source, type, name, and notes never synthesize timeline history. Booking `created_at` never replaces the scheduled instant.
+
+The UTC invariant is exact. Application writers touched by this task persist explicit timestamps in UTC. PostgreSQL `timestamptz` values are treated as instants; SQLite/test values reloaded without `tzinfo` are interpreted as already-UTC compatibility values. Every non-null returned timestamp is converted to aware UTC before entry/cursor construction. Aware non-UTC values supplied directly to the conversion helper normalize to UTC. Tests must not treat SQLite storage of a non-UTC wall time as instant-preserving.
+
+Order remains the Task 5A order `(occurred_at IS NULL) ASC, occurred_at DESC NULLS LAST, origin_rank ASC, entity_id DESC`. SQL uses native timestamp ordering. In-memory merge computes an exact signed integer microsecond offset from `datetime(1970, 1, 1, tzinfo=UTC)` using `timedelta.days`, `.seconds`, and `.microseconds`; it never calls `datetime.timestamp()` or converts time to `float`. Tests use year-2500 values one microsecond apart with opposing IDs to prove the timestamp wins without precision loss.
+
+Cursors are positional, not entity handles. Continuation applies the decoded tuple directly to every origin query; it never fetches or validates that the entity encoded in the cursor still exists. Deleting the cursor-producing row, or supplying a canonical cursor for a never-existing bound, returns the same strictly later set with no 404, duplicate, or unrelated skip. Tests exhaust same-time transitions across all four origin ranks, descending IDs within an origin, timed-to-null transition, and the final null row. Cursor tampering remains a generic validation error.
+
+- [ ] **Step 4: Implement bounded keyset queries and exact merge semantics**
+
+Run the integrity preflight first. Then fetch at most `page_size + 1` already-eligible rows per origin after the decoded positional cursor:
+
+- recovered uses `ix_crm_contact_timeline_order` and the exact contact/time/ID predicate;
+- internal uses `ix_crm_activities_timeline_order`, exact contact, and `source_record_id IS NULL`;
+- lead uses the exact primary key and returns zero or one eligible creation entry;
+- lead-backed booking uses `ix_bookings_timeline_lead_order`;
+- email-backed booking uses `ix_bookings_timeline_email_order` with exact normalized email and `lead_id IS NULL`.
+
+The ownership query loads at most two contact IDs. No query scans all contacts or all leadless bookings in Python. Every origin statement includes its linkage predicate, cursor predicate when present, exact ordering, and SQL `LIMIT page_size + 1`. Merge at most four bounded tuples using the exact integer-microsecond key, emit the first `page_size`, and set `has_more` only when a further unique eligible row exists. `next_cursor` is the canonical cursor for the last emitted row only when `has_more` is true; an empty or terminal page has `next_cursor=None`.
+
+`test_command_contact_timeline.py` must assert full dataclass equality for one row of each origin; all mirror-integrity branches including off-page and before-cursor corruption; same-source dedupe; same-text/same-time distinctness; missing lead; every booking branch; NFKC/ambiguity/`CRMContactMethod` exclusion; raw/derived drift; nullable recovered time; exact year-2500 microsecond order; reversed fixture insertion order; canonical/tampered/deleted/nonexistent cursors; empty/terminal pages; bool and numeric page-size boundaries; and returned UTC values. SQL-capture tests assert the exact per-origin predicates, order clauses, and bound limits—not merely the presence of the word `LIMIT`—and prove a mirror-heavy history cannot underfill while later unique activity exists.
+
+- [ ] **Step 5: Run focused timeline/schema/write gates and commit**
 
 ```bash
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
-  tests/test_command_contact_contracts.py tests/test_command_contact_timeline.py
-git add services/command_contact_timeline.py tests/test_command_contact_timeline.py
+  tests/test_command_contact_contracts.py \
+  tests/test_command_email_normalization.py \
+  tests/test_command_contact_email_writes.py \
+  tests/test_command_contact_timeline.py \
+  tests/test_command_models.py \
+  tests/test_command_contact_timeline_migration.py \
+  tests/test_command_contact_materializer.py \
+  tests/test_booking_calendar.py
+"$PROJECT_PYTHON" -m alembic heads
+git add email_normalization.py models/command.py models/booking.py \
+  alembic/versions/6c0e2f4a5b7d_add_timeline_query_support.py \
+  services/command_contact_identity.py services/command_contact_materializer.py \
+  services/command_contact_timeline.py routers/command.py routers/booking.py \
+  tests/test_command_email_normalization.py \
+  tests/test_command_contact_email_writes.py \
+  tests/test_command_contact_timeline.py tests/test_command_models.py \
+  tests/test_command_contact_timeline_migration.py \
+  tests/test_command_contact_materializer.py \
+  tests/test_booking_calendar.py
 git commit -m "feat: aggregate Command contact timelines"
 ```
 

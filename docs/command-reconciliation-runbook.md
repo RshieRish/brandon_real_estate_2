@@ -54,10 +54,18 @@ time.
 ## 1. Schema and archive preflight
 
 The reconciliation/contact schema is additive. The expected and currently
-verified single Alembic head is `4a8c0d1e2f3b`. The relevant linear chain is
-`f0c8a6d9e431 -> 1d6e7f8a9b10 -> 2e7f9a0b1c2d -> 4a8c0d1e2f3b`; operators must
-upgrade through the chain to the sole head and must not stop at the
-intermediate reconciliation-claims revision.
+implemented single Alembic head is `5b9d1e2f3a4c`. The relevant linear chain is
+`f0c8a6d9e431 -> 1d6e7f8a9b10 -> 2e7f9a0b1c2d -> 4a8c0d1e2f3b ->
+5b9d1e2f3a4c`; operators must upgrade through the chain to the sole head and
+must not stop at the intermediate reconciliation-claims or base contact-parity
+revision.
+
+Revision `6c0e2f4a5b7d` is reserved in the approved Contacts Task 5B plan for an
+online canonical-email backfill and timeline query indexes, but it is not yet
+implemented in the committed source state covered by this runbook. Do not
+report it as the current head or try to migrate to it until that implementation
+commit lands and this runbook is advanced under the same reviewed deployment
+change.
 
 ```bash
 "$PYTHON" -m alembic heads
@@ -68,25 +76,25 @@ intermediate reconciliation-claims revision.
 `alembic heads` must print exactly:
 
 ```text
-4a8c0d1e2f3b (head)
+5b9d1e2f3a4c (head)
 ```
 
 Before a production migration, take a provider-level database snapshot and
 render the exact SQL for review:
 
 ```bash
-"$PYTHON" -m alembic upgrade f0c8a6d9e431:4a8c0d1e2f3b --sql \
+"$PYTHON" -m alembic upgrade f0c8a6d9e431:5b9d1e2f3a4c --sql \
   > /tmp/command-contact-parity-upgrade.sql
 ```
 
 Review the SQL and then, under the approved deployment change, migrate:
 
 ```bash
-"$PYTHON" -m alembic upgrade 4a8c0d1e2f3b
+"$PYTHON" -m alembic upgrade 5b9d1e2f3a4c
 "$PYTHON" -m alembic current
 ```
 
-`alembic current` must also report `4a8c0d1e2f3b`. Do not run the reconciliation
+`alembic current` must also report `5b9d1e2f3a4c`. Do not run the reconciliation
 CLI if the database is below that sole deployed head or if required provenance,
 reconciliation, or contact-parity tables are absent. All CLI modes create audit
 rows, so a database at an intermediate revision is not an approved operating
