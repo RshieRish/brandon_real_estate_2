@@ -1,13 +1,41 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from schemas.command import ArchiveBundleImportRequest, ContactCreate, ContactImportResult, ContactImportRow, ContactUpdate, ContactWorkspaceOpportunityOut, OpportunityUpdate, TaskUpdate
-from models.command import AgreementStatus, CRMActivity, CRMAgreement, CRMAgreementEvent, CRMContact, CRMContactTag, CRMFileAsset, CRMGoal, CRMListingRecord, CRMNote, CRMOpportunity, CRMOpportunityContact, CRMReferral, CRMSavedSearch, CRMSmartPlanEnrollment, CRMTask, CRMTaskLink
-from services.command_tasks import task_activity_summary
+from models.booking import Booking
+from models.command import (
+    AgreementStatus,
+    CRMActivity,
+    CRMAgreement,
+    CRMAgreementEvent,
+    CRMContact,
+    CRMContactTag,
+    CRMFileAsset,
+    CRMGoal,
+    CRMListingRecord,
+    CRMNote,
+    CRMOpportunity,
+    CRMOpportunityContact,
+    CRMReferral,
+    CRMSavedSearch,
+    CRMSmartPlanEnrollment,
+    CRMTask,
+    CRMTaskLink,
+)
+from schemas.command import (
+    ArchiveBundleImportRequest,
+    ContactCreate,
+    ContactImportResult,
+    ContactImportRow,
+    ContactUpdate,
+    ContactWorkspaceOpportunityOut,
+    OpportunityUpdate,
+    TaskUpdate,
+)
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
+from services.command_tasks import task_activity_summary
 
 
 def test_archive_contact_parser_extracts_identity_and_profile_fields():
@@ -69,6 +97,73 @@ def test_command_models_expose_safe_defaults_and_links():
     assert contact.lead_id is None
     assert task.status == "open"
     assert activity.kind == "note"
+
+
+def test_timeline_linkage_models_sync_exact_normalized_primary_email():
+    contact = CRMContact(
+        first_name="Avery", email="  ＡＶＥＲＹ＠Ｅｘａｍｐｌｅ．ＣＯＭ  "
+    )
+    booking = Booking(
+        name="Avery",
+        email="  ＡＶＥＲＹ＠Ｅｘａｍｐｌｅ．ＣＯＭ  ",
+        scheduled_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+    assert contact.normalized_email == "avery@example.com"
+    assert booking.normalized_email == "avery@example.com"
+
+    contact.email = "invalid"
+    booking.email = "invalid"
+    assert contact.normalized_email is None
+    assert booking.normalized_email is None
+
+    overridden_contact = CRMContact(
+        first_name="Avery",
+        email="owner@example.test",
+        normalized_email="tampered@example.test",
+    )
+    overridden_booking = Booking(
+        name="Avery",
+        email="owner@example.test",
+        normalized_email="tampered@example.test",
+        scheduled_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+    assert overridden_contact.normalized_email == "tampered@example.test"
+    assert overridden_booking.normalized_email == "tampered@example.test"
+
+
+def test_timeline_linkage_models_have_exact_query_indexes():
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in CRMContact.__table__.indexes
+    } == {
+        "ix_crm_contacts_normalized_email_id": ("normalized_email", "id"),
+    }
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in CRMActivity.__table__.indexes
+    }.items() >= {
+        "ix_crm_activities_timeline_order": (
+            "contact_id",
+            "created_at",
+            "id",
+        ),
+    }.items()
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for index in Booking.__table__.indexes
+    } == {
+        "ix_bookings_timeline_lead_order": (
+            "lead_id",
+            "scheduled_at",
+            "id",
+        ),
+        "ix_bookings_timeline_email_order": (
+            "normalized_email",
+            "lead_id",
+            "scheduled_at",
+            "id",
+        ),
+    }
 
 
 def test_agreement_statuses_only_include_internal_lifecycle():

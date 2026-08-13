@@ -19,9 +19,10 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from database import Base
+from models._utc import normalize_database_datetime
 from models.command import Timestamped
 
 CONTACT_SECTIONS = (
@@ -461,6 +462,12 @@ class CRMContactTimelineEvent(Timestamped, Base):
         DateTime(timezone=True), nullable=True
     )
     attributes_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    @validates("occurred_at")
+    def _normalize_occurred_at(
+        self, _key: str, value: datetime | None
+    ) -> datetime | None:
+        return normalize_database_datetime(value)
 
 
 class CRMContactAuditEvent(Base):

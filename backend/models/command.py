@@ -12,11 +12,14 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from database import Base
+from models._utc import normalize_database_datetime
+from services.command_contact_identity import canonical_email
 
 
 class AgreementStatus(str, Enum):
@@ -37,15 +40,38 @@ class Timestamped:
 
 class CRMContact(Timestamped, Base):
     __tablename__ = "crm_contacts"
+    __table_args__ = (
+        Index(
+            "ix_crm_contacts_normalized_email_id", "normalized_email", "id"
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True, unique=True)
     first_name: Mapped[str] = mapped_column(String(120))
     last_name: Mapped[str] = mapped_column(String(120), default="")
     email: Mapped[str | None] = mapped_column(String(255))
+    normalized_email: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     phone: Mapped[str | None] = mapped_column(String(50))
     stage: Mapped[str] = mapped_column(String(50), default="lead")
     birthday: Mapped[date | None] = mapped_column(Date, nullable=True)
     anniversary: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    @validates("email")
+    def _sync_normalized_email(
+        self, _key: str, value: str | None
+    ) -> str | None:
+        self.normalized_email = canonical_email(value)
+        return value
+
+
+@event.listens_for(CRMContact, "before_insert")
+@event.listens_for(CRMContact, "before_update")
+def _recompute_contact_normalized_email(
+    _mapper, _connection, target: CRMContact
+) -> None:
+    target.normalized_email = canonical_email(target.email)
 
 
 class CRMActivity(Base):
@@ -55,6 +81,12 @@ class CRMActivity(Base):
             "uq_crm_activities_source_record_id",
             "source_record_id",
             unique=True,
+        ),
+        Index(
+            "ix_crm_activities_timeline_order",
+            "contact_id",
+            "created_at",
+            "id",
         ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -66,6 +98,12 @@ class CRMActivity(Base):
     summary: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column("metadata", Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    @validates("created_at")
+    def _normalize_created_at(self, _key: str, value: datetime) -> datetime:
+        normalized = normalize_database_datetime(value)
+        assert normalized is not None
+        return normalized
 
 
 class CRMTask(Timestamped, Base):
