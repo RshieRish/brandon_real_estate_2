@@ -501,18 +501,29 @@ def test_default_registry_returns_fresh_independent_registry_instances():
     assert first is not second
     assert tuple(parser.module for parser in first.select(None)) == (
         "archive_integrity",
-    )
-    assert tuple(parser.module for parser in second.select(None)) == (
-        "archive_integrity",
-    )
-    assert first.select(None)[0] is not second.select(None)[0]
-
-    first.register(FakeParser("contacts"))
-
-    assert tuple(parser.module for parser in first.select(None)) == (
-        "archive_integrity",
         "contacts",
     )
     assert tuple(parser.module for parser in second.select(None)) == (
         "archive_integrity",
+        "contacts",
+    )
+    assert all(
+        first_parser is not second_parser
+        for first_parser, second_parser in zip(
+            first.select(None), second.select(None), strict=True
+        )
+    )
+
+    first.register(FakeParser("tasks"))
+
+    assert tuple(parser.module for parser in first.select(None)) == (
+        "archive_integrity",
+        "contacts",
+        "tasks",
+    )
+    # The production Contacts parser is already present; use another module to
+    # prove the two registry instances remain independent.
+    assert tuple(parser.module for parser in second.select(None)) == (
+        "archive_integrity",
+        "contacts",
     )
