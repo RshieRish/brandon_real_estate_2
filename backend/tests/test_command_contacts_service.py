@@ -19,10 +19,12 @@ from models.command_contacts import (
     CRMContactOwnership,
     CRMContactProfile,
     CRMContactSectionCapture,
+    CRMContactTimelineEvent,
 )
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
 from models.lead import Lead  # noqa: F401 - registers the FK target in metadata
 from services.command_contact_contracts import (
+    CONTACT_TOUCH_ACTIVITY_KINDS,
     ContactDirectoryFilters,
     ContactOriginFilter,
     ContactSmartView,
@@ -716,6 +718,333 @@ async def test_smart_views_use_authoritative_contact_evidence_and_injected_now(
         now=NOW + timedelta(days=31),
     )
     assert moved_now.rows == ()
+
+
+@pytest.mark.asyncio
+async def test_never_contacted_distinguishes_no_capture_missing_cell_and_contradiction(
+    service_db: AsyncSession,
+):
+    contacts = [
+        CRMContact(first_name=label, last_name="Evidence", stage="lead")
+        for label in ("No capture", "Missing cell", "Contradiction", "Complete")
+    ]
+    service_db.add_all(contacts)
+    await service_db.flush()
+    service_db.add_all(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+        for contact in contacts
+    )
+    await service_db.flush()
+    _position, missing_cell = await _add_timeline_capture(
+        service_db, contacts[1], 20
+    )
+    await service_db.delete(missing_cell)
+    await _add_timeline_capture(
+        service_db,
+        contacts[2],
+        21,
+        is_empty=False,
+        row_count=0,
+    )
+    await _add_timeline_capture(service_db, contacts[3], 22)
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(
+            smart_view=ContactSmartView.NEVER_CONTACTED,
+            page_size=100,
+        ),
+        now=NOW,
+    )
+    assert tuple(row.id for row in page.rows) == (contacts[3].id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quality", ("shell", "error"))
+async def test_never_contacted_rejects_shell_and_error_timeline_cells(
+    service_db: AsyncSession,
+    quality: str,
+):
+    contact = CRMContact(first_name=quality, last_name="Quality", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    service_db.add(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+    )
+    await _add_timeline_capture(service_db, contact, 30, quality=quality)
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(smart_view=ContactSmartView.NEVER_CONTACTED),
+        now=NOW,
+    )
+    assert page.rows == ()
+
+
+@pytest.mark.asyncio
+async def test_complete_null_timestamp_uses_deterministic_latest_id_tie_break(
+    service_db: AsyncSession,
+):
+    sole = CRMContact(first_name="Sole null", last_name="Capture", stage="lead")
+    latest = CRMContact(first_name="Latest null", last_name="Capture", stage="lead")
+    service_db.add_all([sole, latest])
+    await service_db.flush()
+    service_db.add_all(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+        for contact in (sole, latest)
+    )
+    await _add_timeline_capture(service_db, sole, 40, captured_at=None)
+    await _add_timeline_capture(
+        service_db,
+        latest,
+        41,
+        is_empty=False,
+        row_count=1,
+        captured_at=None,
+    )
+    await _add_timeline_capture(
+        service_db,
+        latest,
+        42,
+        captured_at=None,
+    )
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(
+            smart_view=ContactSmartView.NEVER_CONTACTED,
+            page_size=100,
+        ),
+        now=NOW,
+    )
+    assert {row.id for row in page.rows} == {sole.id, latest.id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_insertion", (False, True))
+async def test_authoritative_capture_is_independent_of_insertion_order(
+    service_db: AsyncSession,
+    reverse_insertion: bool,
+):
+    contact = CRMContact(first_name="Order", last_name="Independent", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    service_db.add(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+    )
+    captures: tuple[tuple[int, bool, int, datetime], ...] = (
+        (50, False, 1, NOW - timedelta(days=1)),
+        (51, True, 0, NOW),
+    )
+    ordered = tuple(reversed(captures)) if reverse_insertion else captures
+    for index, is_empty, row_count, captured_at in ordered:
+        await _add_timeline_capture(
+            service_db,
+            contact,
+            index,
+            is_empty=is_empty,
+            row_count=row_count,
+            captured_at=captured_at,
+        )
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(smart_view=ContactSmartView.NEVER_CONTACTED),
+        now=NOW,
+    )
+    assert tuple(row.id for row in page.rows) == (contact.id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("touch_kind", tuple(sorted(CONTACT_TOUCH_ACTIVITY_KINDS)))
+async def test_every_exact_touch_kind_excludes_never_contacted(
+    service_db: AsyncSession,
+    touch_kind: str,
+):
+    contact = CRMContact(first_name=touch_kind, last_name="Touch", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    service_db.add(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+    )
+    await _add_timeline_capture(service_db, contact, 60)
+    service_db.add(
+        CRMActivity(
+            contact_id=contact.id,
+            kind=touch_kind,
+            summary="Synthetic exact touch",
+        )
+    )
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(smart_view=ContactSmartView.NEVER_CONTACTED),
+        now=NOW,
+    )
+    assert page.rows == ()
+
+
+async def _add_recovered_timeline_event(
+    db: AsyncSession,
+    contact: CRMContact,
+    index: int,
+) -> CRMContactTimelineEvent:
+    source = _source_record(1_000 + index)
+    source.record_kind = "contact_timeline_event"
+    source.source_key = f"synthetic:timeline-event:{index:04d}"
+    db.add(source)
+    await db.flush()
+    event = CRMContactTimelineEvent(
+        contact_id=contact.id,
+        source_record_id=source.id,
+        source_system="kw_command",
+        source_event_key=f"synthetic-event-{index:04d}",
+        kind="call",
+        title="Synthetic recovered event",
+        occurred_at=NOW,
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
+@pytest.mark.asyncio
+async def test_recovered_events_and_their_mirrored_activities_preserve_exclusion(
+    service_db: AsyncSession,
+):
+    event_only = CRMContact(first_name="Event", last_name="Only", stage="lead")
+    mirrored = CRMContact(first_name="Mirrored", last_name="Event", stage="lead")
+    non_mirrored = CRMContact(first_name="Broken", last_name="Mirror", stage="lead")
+    service_db.add_all([event_only, mirrored, non_mirrored])
+    await service_db.flush()
+    service_db.add_all(
+        CRMContactProfile(
+            contact_id=contact.id,
+            birth_year_quality="unknown",
+            anniversary_year_quality="unknown",
+        )
+        for contact in (event_only, mirrored, non_mirrored)
+    )
+    for index, contact in enumerate((event_only, mirrored, non_mirrored), start=70):
+        await _add_timeline_capture(service_db, contact, index)
+    event_without_mirror = await _add_recovered_timeline_event(
+        service_db, event_only, 1
+    )
+    mirrored_event = await _add_recovered_timeline_event(service_db, mirrored, 2)
+    source_without_event = _source_record(1_003)
+    source_without_event.record_kind = "contact_timeline_event"
+    source_without_event.source_key = "synthetic:timeline-event:0003"
+    service_db.add(source_without_event)
+    await service_db.flush()
+    service_db.add_all(
+        [
+            CRMActivity(
+                contact_id=mirrored.id,
+                source_record_id=mirrored_event.source_record_id,
+                kind="call",
+                summary="Mirrored recovered touch",
+            ),
+            CRMActivity(
+                contact_id=non_mirrored.id,
+                source_record_id=source_without_event.id,
+                kind="call",
+                summary="Missing recovered counterpart",
+            ),
+        ]
+    )
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(
+            smart_view=ContactSmartView.NEVER_CONTACTED,
+            page_size=100,
+        ),
+        now=NOW,
+    )
+    assert page.rows == ()
+    assert event_without_mirror.source_record_id != mirrored_event.source_record_id
+
+
+@pytest.mark.asyncio
+async def test_leap_day_eligibility_accepts_verified_leap_and_yearless_only(
+    service_db: AsyncSession,
+):
+    contacts = [
+        CRMContact(first_name=label, last_name="Leap", stage="lead")
+        for label in ("Verified leap", "Verified common", "Yearless")
+    ]
+    service_db.add_all(contacts)
+    await service_db.flush()
+    service_db.add_all(
+        [
+            CRMContactProfile(
+                contact_id=contacts[0].id,
+                birth_month=2,
+                birth_day=29,
+                birth_year=2000,
+                birth_year_quality="verified",
+                anniversary_year_quality="unknown",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[1].id,
+                birth_month=2,
+                birth_day=29,
+                birth_year=1900,
+                birth_year_quality="verified",
+                anniversary_year_quality="unknown",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[2].id,
+                birth_month=2,
+                birth_day=29,
+                birth_year=None,
+                birth_year_quality="yearless",
+                anniversary_year_quality="unknown",
+            ),
+        ]
+    )
+    await service_db.flush()
+
+    page = await list_contacts(
+        service_db,
+        ContactDirectoryFilters(birthday_month=2, page_size=100),
+        now=NOW,
+    )
+    assert tuple(row.id for row in page.rows) == (
+        contacts[0].id,
+        contacts[2].id,
+    )
+    by_id = {row.id: row.birthday for row in page.rows}
+    assert by_id[contacts[0].id] is not None
+    assert by_id[contacts[0].id].year == 2000
+    assert by_id[contacts[2].id] is not None
+    assert by_id[contacts[2].id].year is None
 
 
 @pytest.mark.asyncio
