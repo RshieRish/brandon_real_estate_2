@@ -1181,8 +1181,20 @@ git commit -m "feat: aggregate Command contact timelines"
 ### Task 5C: Build deterministic Contacts query and mutation services
 
 **Files:**
+- Modify: `backend/models/command.py`
+- Modify: `backend/services/command_contact_contracts.py`
+- Modify: `backend/services/command_contact_timeline.py`
 - Create: `backend/services/command_contacts.py`
+- Modify: `backend/tests/test_command_contacts_models.py`
+- Modify: `backend/tests/test_command_contact_timeline.py`
 - Create: `backend/tests/test_command_contacts_service.py`
+
+Task 5C adds no Alembic revision. It adds the already-deployed
+`UniqueConstraint("contact_id", "tag_id", name="uq_crm_contact_tag")` to
+`CRMContactTag.__table_args__` so ORM metadata exactly matches revision
+`fa4c19d2e3b7`; it must not attempt to create, rename, or replace that database
+constraint. Model tests assert the exact metadata name/columns and SQLite
+duplicate rejection with foreign keys enabled.
 
 - [ ] **Step 1: Complete the framework-neutral query contracts**
 
@@ -1612,6 +1624,45 @@ class ContactSavedSearchValue:
 
 `JsonValue` floats must be finite. Constructor validation pins first name `1..120`, last name `0..120`, email `<=255`, phone `<=50`, stage `1..50`, note body `1..20_000`, search name `1..255`, canonical criteria `<=64 KiB`, import rows `1..1,000`, contact IDs positive/unique with bulk size `1..200`, and tag IDs positive. `ContactUpdateCommand` rejects an all-`UNSET` command and `None` for required first/last/stage values. No command exposes `lead_id`, recovered observations, provenance IDs, or audit fields.
 
+The source-occurrence projection is deliberately narrower than the parser
+payload. Parse `CRMSourceRecord.payload_json` as an object and require its
+`values` member to be an object; malformed JSON or a non-object envelope is a
+`ContactDataIntegrityError`, never a best-effort string conversion. A projected
+text value is accepted only when it is already a string, trims non-empty, and
+fits the destination bound (`title <=500`, `stage/status <=120`,
+`description/body <=20_000`); an absent or wrong-typed optional field becomes
+`None`, while an over-bound value is an integrity error. Titles use, in order,
+the section-specific whitelisted key (`title` for opportunity/task/note,
+`name` for smart plan/saved search) and then the source record's bounded,
+non-empty `display_label`; no title means integrity error. The exact remaining
+projection rules are:
+
+- opportunity `stage` reads only string `values.stage`; `value_cents` reads
+  only an explicit JSON integer for which `type(value) is int` and `value >= 0`
+  (therefore excluding booleans). Currency strings, budget/commission text,
+  floats, negatives, and inferred values yield `None`;
+- smart-plan `status` reads only string `values.status`;
+- task state comes only from the owning section
+  (`tasks_to_do -> to_do`, `tasks_completed -> completed`,
+  `tasks_archived -> archived`), description reads only
+  `values.description`, and `due_at` reads only string `values.due_at` when it
+  is a complete RFC3339 timestamp with `Z` or an explicit numeric UTC offset.
+  It is normalized to UTC; missing, date-only, naive, human `due_date`, or
+  invalid text yields `None`;
+- note body reads only string `values.body`; parser `raw_lines`, HTML, and all
+  other keys are not projected;
+- saved-search criteria inspect only `price`, `beds`, and `baths`, in that
+  fixed order. A value is included only when it is a trimmed string of
+  `1..120` characters or an exact nonnegative JSON integer (boolean and float
+  excluded), producing exactly `Price: {value}`, `Beds: {value}`, or
+  `Baths: {value}`. Nested values, unknown keys, `created_by`, and unsafe or
+  empty scalars are omitted.
+
+Every `source_key_hash` is exactly
+`sha256(b"command-contact-source-key-v1\0" + source_key.encode("utf-8")).hexdigest()`.
+Tests pin the byte domain and lowercase 64-hex output and prove neither the raw
+key nor any unlisted payload field reaches a DTO, error, audit row, or log.
+
 Source filter predicates are exact and may overlap: `kw_command` means a `contact_profile` source link from `source_system="kw_command"`; `legacy_lead` means `CRMContact.lead_id IS NOT NULL`; `internal_crm` means the row exists in `crm_contacts` and has neither of those two predicates. Repeated source values are ORed within the source group; repeated origin values are ORed within the origin group; the source and origin groups are ANDed with every other filter. Origins use the definitions in the enum comments, with `recovered` allowed to overlap `lead_backed`; `legacy_only` and `internal_only` are mutually exclusive terminal classifications.
 
 SmartView semantics are fixed. `never_contacted` is the conjunction of all of these executable predicates:
@@ -1651,15 +1702,208 @@ async list_saved_searches(db) -> tuple[ContactSavedSearchValue, ...]
 async delete_saved_search(db, search_id: int, *, actor_subject: str) -> SavedSearchDeletionResult
 ```
 
-`list_contact_section` accepts page `>=1` and page size `1..100`. It queries `CRMContactSourceOccurrence`, not text. Each row is a discriminated union: `source_only` includes `source_record_id`, the domain-separated SHA-256 `source_key_hash`, section, occurrence ordinal, capture quality, captured time, and the exact whitelisted typed value above; `materialized` additionally includes the one `CRMEntitySource` target. Raw source keys, provider IDs, parser payloads, and archive paths are not response fields. Allowed target types are timeline event, note, saved search, task, smart plan, or opportunity according to source record kind. Zero targets is source-only, one compatible target is materialized, and multiple/incompatible/cross-contact targets are integrity errors. All rows order by section capture time descending nulls last, capture ordinal ascending, occurrence ordinal ascending, then ownership ID ascending. Timeline uses Task 5B rather than this page API.
+Task 5C also exposes exactly
+`async count_contact_bookings(db, contact_id: int) -> int` from
+`command_contact_timeline.py`; it is the shared, framework-neutral Task 5B
+booking ownership/count helper used by `get_contact_workspace_summary`.
 
-`get_contact_evidence` returns all provider rows/positions separately, eight section cells per position, source/artifact metadata only, the 317/317/zero-alias identity summary and redacted 51/2/49 overlap summary. `ContactSourceMetadata` exposes only internal `source_record_id`, `record_kind`, `evidence_level`, `capture_quality`, nullable `captured_at`, and safe artifact entries. Each artifact entry exposes only `artifact_id`, `artifact_type`, SHA-256, byte count, and the canonical authenticated link `/api/v1/command/archive/artifacts/{artifact_id}/content`; it excludes filename as well as source key, provider identifier, source/archive path, preview, payload, and artifact bytes. The service constructs the link from the positive artifact ID rather than accepting a stored URL. It never loads artifact bytes or emits raw overlap evidence. Aggregate quality is complete only when all required cells are complete, partial when no cell is shell/error and at least one is partial, otherwise limitation.
+`list_contact_section` accepts page `>=1` and page size `1..100`. It rejects
+`ContactSection.TIMELINE` with `ContactSectionUnsupported` before issuing a
+query because Task 5B is the sole timeline API. Every other section queries
+`CRMContactSourceOccurrence`, never text, and first proves that occurrence,
+section capture, capture position, and requested contact all share the same
+contact ID and that the section name matches the occurrence record kind.
+Each row is a discriminated union: `source_only` includes `source_record_id`,
+the exact source-key hash above, section, occurrence ordinal, capture quality,
+captured time, and the whitelisted typed value; `materialized` additionally
+includes one validated `CRMEntitySource` target. The compatibility/ownership
+matrix is exact: opportunity -> an opportunity joined to this contact by
+`CRMOpportunityContact`; smart plan -> this contact's
+`CRMSmartPlanEnrollment`; note -> this contact's `CRMNote`; saved search ->
+this contact's `CRMSavedSearch`; every task section -> this contact's
+`CRMTask`. Timeline-event links are not accepted by this function. Zero
+compatible targets is source-only; exactly one is materialized. A missing
+target row, incompatible entity type, target owned by another contact, or
+multiple targets is `ContactDataIntegrityError`, not source-only. Raw source
+keys, provider IDs, parser payloads, and archive paths are never response
+fields. Rows order by section capture time descending nulls last, capture
+ordinal ascending, occurrence ordinal ascending, then ownership ID ascending.
 
-Celebrations merge internal and recovered observations per `(contact_id, kind)`: an internal date wins; otherwise an explicitly exposed recovered month/day is returned with its year-quality, including `yearless` when no source year was exposed. Rows order by day, case-folded name, and ID. Missing month/day, sentinel year, tags, or task text never create a date.
+`get_contact_workspace_summary` uses the same ownership validator rather than
+adding persisted and recovered counts blindly. For each non-timeline section,
+it counts the union of all contact-owned internal rows plus only source-only
+occurrences; a compatible materialized occurrence contributes its internal
+row once, and an invalid link fails closed. Task states map exactly from
+`CRMTask.status`: `open` to `open_tasks`, `completed` to `completed_tasks`, and
+`archived` to `archived_tasks`; an unknown status is integrity error. Active
+Smart Plans are internal enrollments with case-folded status `active` plus
+source-only occurrences whose projected status case-folds to `active` (null or
+another status is not active). Opportunities, notes, and saved searches count
+all contact-owned internal rows plus their source-only occurrences. Bookings
+must call the shared Task 5B `count_contact_bookings(db, contact_id)` helper,
+which applies the same lead-linked ownership, canonical-email fallback,
+ambiguity/drift preflight, and missing-lead integrity rules as timeline
+collection; this service must not repeat a raw/lower-email lookup. Tests cover
+zero/one/many source-only rows, materialized de-duplication, cross-contact and
+dangling links, unknown task state, inactive/null Smart Plans, and both Task
+5B booking linkage paths.
 
-Every mutation receives the exact validated admin subject. `CRMContactAuditEvent.before_json` and `after_json` use a strict allowlist: raw values are allowed only for record IDs, tag IDs, stage, action, changed-field names, booleans, and ISO calendar dates. Names, email, phone, note bodies, saved-search names/criteria, and import values are represented as `{"present": bool, "length": int, "sha256": "<domain-separated-lowercase-hex>"}`; raw values, bearer tokens, provider IDs, source keys/payloads, artifact paths/bytes, manifest data, and timeline text are forbidden. Canonical JSON sorts keys, uses compact separators, and rejects nonfinite numbers. The actor is stored once in `actor_subject`, not copied into JSON.
+`get_contact_evidence` computes every aggregate from live normalized rows; the
+historical `317/317/0` and `51/2/49` values are acceptance expectations, never
+constants. `provider_contact_rows` is the number of distinct capture-position
+source records. `resolved_provider_identities` is the number of distinct
+contacts reached by those positions after validating that each position's
+profile source has exactly one `CRMEntitySource(entity_type="contact")` to the
+same contact. `coalesced_aliases` is
+`provider_contact_rows - resolved_provider_identities`; any negative or
+nonzero result is integrity error because the DTO permits only literal zero.
+`lead_backed_contacts` is the distinct set of contacts with non-null `lead_id`.
+A `reviewed_overlap` is a distinct lead-backed contact with both (a) that exact
+validated profile-source mapping and (b) a same-contact
+`CRMContactAuditEvent(action="command_contact_overlap_reviewed")`; neither an
+audit without the mapping nor a mapping without the audit counts.
+`legacy_only_contacts` is the lead-backed set minus the reviewed-overlap set,
+after proving the overlap set is a subset. Tests remove/add mappings and audit
+rows to prove the aggregates change or fail integrity; no fixture can pass by
+returning literals.
 
-`delete_saved_search()` loads the target before deletion. A contact-owned search writes `CRMContactAuditEvent(action="contact.saved_search_deleted")` for that exact contact and returns `ContactMutationResult`; a legacy global search with `contact_id IS NULL` preserves the existing delete behavior, writes `CRMActivity(contact_id=NULL, kind="workspace.saved_search_deleted", source_record_id=NULL)`, and returns `WorkspaceMutationResult` with no contact field. Its metadata contains only the admin subject, action, search ID, and the redacted saved-search fingerprint. Both audit variants are inserted in the same transaction as deletion; an audit failure rolls deletion back. Mutation tests assert the concrete result variant and exact fields for both ownership branches, cover all service signatures above, snapshot the canonical redacted JSON/metadata, prove no forbidden value appears in rows or exceptions, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
+The evidence detail returns every requested contact capture position and
+exactly eight uniquely named section cells per position. It verifies all
+position/profile/section/source IDs and contacts agree, every section source is
+the declared Contacts record kind, `row_count >= 0`, `is_empty=true` implies
+`row_count == 0`, `row_count > 0` implies `is_empty=false`, a complete cell
+with zero rows must be explicitly empty, and the count of owned occurrences equals `row_count` for
+the same section capture. `limitations_json` must be a canonical JSON array of
+unique strings. Missing/duplicate cells, malformed limitations, cross-contact
+links, dangling artifacts, duplicate artifact links, nonpositive IDs,
+non-lowercase/non-64-hex SHA-256, or negative/mismatched byte counts are
+integrity errors. `ContactSourceMetadata` exposes only internal
+`source_record_id`, `record_kind`, `evidence_level`, `capture_quality`, nullable
+`captured_at`, and safe artifact entries. Each artifact exposes only positive
+`artifact_id`, `artifact_type`, lowercase SHA-256, nonnegative byte count, and
+the service-constructed authenticated link
+`/api/v1/command/archive/artifacts/{artifact_id}/content`; filename, source
+key, provider identifier, source/archive path, preview, payload, stored URL,
+and bytes are excluded and bytes are never loaded. Aggregate quality is
+`complete` only when every required cell is complete, `partial` when there is
+at least one partial and no shell/error cell, otherwise `limitation`.
+
+Celebrations merge internal and recovered observations per
+`(contact_id, kind)`. A non-null internal `CRMContact.birthday` or
+`anniversary` wins and returns its real year with `year_quality="verified"` and
+`origin="internal_crm"`. Otherwise an explicitly exposed recovered month/day
+returns `origin="recovered"`; a verified recovered year may be returned, a
+yearless observation returns `year=None,year_quality="yearless"`, and the
+source sentinel `1900` returns `year=None,year_quality="sentinel"`. The service
+never constructs or persists `date(1900, ...)`, never copies a recovered date
+into either CRMContact date column, and does not substitute the current year.
+Missing/invalid month/day, `unknown`, tags, or task text create no row. Rows
+order by day, case-folded display name, and contact ID. Tests prove internal
+precedence, leap-day behavior, sentinel/yearless rendering, unchanged null CRM
+date columns, and no flush or mutation during this read.
+
+Every mutation receives the exact validated admin subject. It executes the
+business write and its audit inside one service-owned nested transaction,
+calls `flush()` but never `commit()`, and rolls the savepoint back before
+re-raising any domain, constraint, or audit failure. The router owns the outer
+transaction. A missing contact/tag/child record raises the corresponding typed
+not-found error with no write; a child owned by another contact is reported as
+not found. `update_contact` with equal effective values, assigning an existing
+tag, removing an absent tag, and a bulk per-contact row already in the target
+state are no-ops and produce no audit. For a no-op assignment, `record_id` is
+the existing link ID; for absent removal it is `None`; both return
+`changed=False,audit_entity_type=None,audit_event_id=None`. Bulk first locks
+all unique positive contact IDs in sorted order, verifies every contact and
+referenced tag before changing anything, changes/audits only actioned contacts,
+and returns requested/actioned IDs sorted. Any missing member or audit failure
+rolls back the whole bulk. `sync_legacy_leads` preserves existing `lead_id`,
+creates only unlinked leads, and counts an existing missing legacy timeline
+activity as `timeline_backfilled`; a fully synchronized lead is a no-op.
+`import_contacts` compares only persisted canonical primary
+`CRMContact.normalized_email`, skips a row when that key already has exactly
+one owner, skips all rows for an ambiguous key without linking them, treats
+null canonical email as non-deduplicating, and never consults
+`CRMContactMethod`.
+
+Audit fingerprints use one exact helper `F(domain, value)`. For `None`, its
+UTF-8 byte string is empty and `present=false`; otherwise the input must be a
+string and `present=true`. `F` returns exactly
+`{"present":present,"length":len(raw_utf8),"sha256":sha256(domain.encode("ascii") + b"\0" + raw_utf8).hexdigest()}`.
+The immutable domains are `command-contact-audit-v1:first_name`,
+`:last_name`, `:email`, `:phone`, `:note_body`, `:saved_search_name`, and
+`:saved_search_criteria`. Saved-search criteria are passed to `F` only after
+canonical compact JSON serialization; no audit helper accepts `repr`, bytes,
+or an arbitrary object. The exact contact-field encoder maps first/last/email/
+phone to their corresponding `F`, stage to the raw validated string,
+birthday/anniversary to ISO date or null, and `lead_id`/activity/record/tag IDs
+to positive integers. Raw values are otherwise allowed only for action,
+sorted changed-field names, and booleans. Canonical JSON sorts keys, uses
+compact separators, and rejects nonfinite numbers. Names, email, phone, note
+bodies, search names/criteria, import values, tokens, provider IDs, source
+keys/payload, artifact data, manifest data, and timeline text are forbidden
+from audit JSON, exceptions, and logs. The actor appears only in the audit
+row's `actor_subject`, never its JSON.
+
+Define `S(action, fields, row)` as the exact canonical object containing
+`action`, `changed_fields` as the lexically sorted JSON list of `fields`, and
+one same-named key per field encoded by the contact-field encoder. No other
+key is permitted. The action/payload contracts are:
+
+- `contact.created`: `{}` -> `S` over exactly `anniversary,birthday,email,
+  first_name,last_name,phone,stage`;
+- `contact.updated`: `S("contact.updated", changed_fields, old_row)` -> the
+  same `S` over `new_row`; only effective changed fields are included;
+- `contact.legacy_sync_applied` for a newly linked contact: `{}` -> `S` over
+  exactly `email,first_name,last_name,phone,stage,lead_id`;
+- `contact.legacy_sync_applied` for timeline backfill:
+  `{"action":"contact.legacy_sync_applied","activity_present":false,
+  "lead_id":lead_id}` -> the same object with
+  `activity_present=true` and positive `activity_id` added;
+- `contact.legacy_import_applied`: `{}` -> `S` over exactly
+  `anniversary,birthday,email,first_name,last_name,phone,stage`;
+- `contact.bulk_stage_set`:
+  `{"action":"contact.bulk_stage_set","stage":old}` -> the same keys with
+  the new stage;
+- `contact.bulk_tag_added`, `contact.bulk_tag_removed`, `contact.tag_added`,
+  and `contact.tag_removed`:
+  `{"action":exact_action,"present":old_bool,"tag_id":tag_id}` -> the same
+  keys with `present=new_bool`;
+- `contact.note_created` and `contact.note_deleted` use exactly
+  `{"action":exact_action,"body":F("command-contact-audit-v1:note_body",body),
+  "note_id":note_id,"present":old_bool}` before and the same keys with
+  `present=new_bool` after;
+- `contact.saved_search_created` and `contact.saved_search_deleted` use exactly
+  `{"action":exact_action,
+  "criteria":F("command-contact-audit-v1:saved_search_criteria",canonical_criteria),
+  "name":F("command-contact-audit-v1:saved_search_name",name),
+  "present":old_bool,"search_id":search_id}` before and the same keys with
+  `present=new_bool` after.
+
+Create/import/sync write exactly one event for each created or backfilled
+contact; bulk writes one event for each actioned contact; every other changed
+mutation writes one event. The result's audit type is `contact_audit` and its
+ID is the flushed row ID. No-op results have no audit ID. Tests snapshot every
+exact canonical before/after string and verify action counts, IDs, actor
+attribution, no-op behavior, and rollback.
+
+`delete_saved_search()` loads the target before deletion. A contact-owned
+search follows the table above for that exact owner and returns
+`ContactMutationResult`. The sole global-search exception is a legacy row with
+`contact_id IS NULL`: preserve global deletion, create no contact audit, and
+write exactly one
+`CRMActivity(contact_id=NULL,kind="workspace.saved_search_deleted",source_record_id=NULL,summary="Saved search deleted")`.
+Its pre-serialization metadata mapping has exactly
+`{"action":"workspace.saved_search_deleted", "actor_subject": actor_subject,
+"saved_search": F("command-contact-audit-v1:saved_search_name", name), "search_id": id}`
+and is then serialized with the canonical JSON encoder;
+this is the only audit payload that repeats the unchanged actor because
+CRMActivity has no actor column. It returns
+`WorkspaceMutationResult(record_id=id,changed=True,audit_entity_type="workspace_activity",audit_event_id=activity.id)`.
+A missing global or contact-owned search raises not found; deletion is never a
+no-op. Tests assert both result variants, prove the global exception contains
+no contact field or criteria/raw name, prove all other actors occur only in
+`actor_subject`, preserve `lead_id`, reject recovered-field overwrite, and
+prove every audit failure rolls back its business row.
 
 - [ ] **Step 3: Implement source/materialized joins, exact pagination, and commits**
 
@@ -1669,11 +1913,14 @@ Use count and page queries with the same predicates. Return page count `ceil(tot
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_contracts.py \
+  tests/test_command_contacts_models.py \
   tests/test_command_contacts_service.py \
   tests/test_command_contact_timeline.py \
   tests/test_command_contact_occurrences.py
-git add services/command_contact_contracts.py services/command_contacts.py \
-  tests/test_command_contact_contracts.py tests/test_command_contacts_service.py
+git add models/command.py services/command_contact_contracts.py \
+  services/command_contact_timeline.py services/command_contacts.py \
+  tests/test_command_contact_contracts.py tests/test_command_contacts_models.py \
+  tests/test_command_contact_timeline.py tests/test_command_contacts_service.py
 git commit -m "feat: query Command contact workspaces"
 ```
 
