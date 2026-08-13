@@ -286,8 +286,10 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `frontend/src/lib/command/http.test.ts`: authentication, error, malformed-response, blob, and abort tests.
 - Create `frontend/src/lib/command/contacts.ts`: contact types, page/filter/sort state, route builders, and contact API methods.
 - Create `frontend/src/lib/command/contacts.test.ts`: encoding and response-contract tests.
-- Modify `frontend/src/lib/command/api.ts`: re-export contact types and keep the `commandApi.contacts(limit, offset, filters)` array contract for Home/Tasks while exposing `contactDirectory()` for full metadata.
+- Modify `frontend/src/lib/command/api.ts`: re-export contact types, keep the `commandApi.contacts(limit, offset, filters)` array contract for Tasks/legacy consumers, and expose `contactDirectory()` for Home/full metadata.
 - Modify `frontend/src/lib/command/api.test.ts`: compatibility adapter and new endpoint assertions.
+- Modify `frontend/src/lib/command/home.ts`: consume complete directory pages and emit canonical SmartView links.
+- Modify `frontend/src/lib/command/home.test.ts`: 366-row pagination, drift, abort, and canonical-link coverage.
 - Replace `frontend/src/components/command/ContactsWorkspace.tsx`: dense directory composition using shared module/table/state/evidence primitives.
 - Create `frontend/src/components/command/contacts/ContactsToolbar.tsx`: search, SmartViews, filters, column controls, and add/bulk actions.
 - Create `frontend/src/components/command/contacts/ContactsTable.tsx`: stable columns, evidence badges, selection, activation, and pagination.
@@ -295,8 +297,10 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`: component states, filters, keyboard, and bulk behavior.
 - Modify `frontend/src/components/command/shell/CommandShell.tsx`: mount the shared toast provider around every Command route.
 - Modify `frontend/src/components/command/shell/CommandShell.test.tsx`: prove workspace toasts render without a missing-provider error.
+- Modify `frontend/src/components/command/workspaceFilters.ts`: translate legacy contact shortcut parameters to canonical SmartViews without filtering client-side.
+- Modify `frontend/src/components/command/CommandWorkspaceDeepLinks.test.tsx`: legacy alias precedence, canonicalization, and server-filter tests.
 - Modify `frontend/src/app/admin/command/command-shell.css`: add scoped directory/toolbar/table/drawer/responsive styles.
-- Modify `frontend/src/app/admin/command/contacts/page.tsx`: route-only wrapper.
+- Modify `frontend/src/app/admin/command/contacts/page.tsx`: compatibility-only query adapter and route wrapper.
 
 ### Frontend contact detail
 
@@ -360,7 +364,7 @@ The Tasks, SmartPlans, and Opportunities domain imports depend on tasks 1–5 be
 
 Define tests that assert the exact public tables and constraints:
 
-```python
+```text
 CONTACT_TABLES = {
     "crm_contact_profiles",
     "crm_contact_methods",
@@ -926,24 +930,31 @@ Migration `5b9d1e2f3a4c` has parent `4a8c0d1e2f3b`. It adds the activity FK/inde
 
 Expose:
 
-```python
+```text
 @dataclass(frozen=True, slots=True)
 class ContactOccurrenceSyncResult:
     observed: int
     created: int
     unchanged: int
 
-async def sync_contact_occurrence_ownership(
+async sync_contact_occurrence_ownership(
     db: AsyncSession,
     *,
+    records: Sequence[SourceRecordDraft],
+    persisted_by_identity: Mapping[
+        tuple[str, str, str, str, str],
+        CRMSourceRecord,
+    ],
     bundle_fingerprint: str,
     parser_version: str,
-) -> ContactOccurrenceSyncResult: ...
+) -> ContactOccurrenceSyncResult
 ```
 
-The service selects persisted Contacts source records whose `record_kind` is exactly `contact_timeline_event`, `contact_note`, `contact_saved_search`, `contact_task`, `contact_smart_plan`, or `contact_opportunity`. It reads only the typed payload context emitted by the parser: `source_contact_id`, `capture_ordinal`, `section_name`, and positive `occurrence_ordinal`. It resolves the contact through the exact `contact_profile` source record's `CRMEntitySource(entity_type="contact")`, then resolves the position by `(bundle_fingerprint, source_contact_id, capture_ordinal)` and the section capture by `(position_id, section_name)`. All three contact IDs must agree. Missing, duplicate, malformed, cross-contact, cross-section, or parser-version-mismatched context raises `ContactOccurrenceOwnershipError` and rolls back; display label, text, name, timestamp, and row position are never fallback keys.
+The service filters only the immutable `records` supplied to the current `ContactMaterializer.materialize()` call whose `record_kind` is exactly `contact_timeline_event`, `contact_note`, `contact_saved_search`, `contact_task`, `contact_smart_plan`, or `contact_opportunity`. For each filtered draft, it requires one exact entry in the caller's current `persisted_by_identity` snapshot and rejects a persisted row whose parser version differs from the explicit `parser_version`. It never scans every historical Contacts row sharing that parser version, so an older or different bundle cannot create a false missing-position conflict in the current run.
 
-One ownership row is written for every child occurrence, including timeline rows with no timestamp and Tasks/SmartPlans/Opportunities that remain source-only. Re-running returns all rows as unchanged. An existing row is accepted only when all owner fields and ordinal match byte-for-byte; otherwise it is a conflict. Call the sync from `ContactMaterializer` after positions/sections exist and before selective note/search/timeline materialization so the same transaction owns both provenance and normalized writes. Existing internal `CRMActivity` rows retain `source_record_id=NULL`; only deliberate mirrors set it.
+For each current child draft, the service reads only the typed payload context emitted by the parser: `source_contact_id`, `capture_ordinal`, `section_name`, and positive `occurrence_ordinal`. It resolves the contact through the exact current `contact_profile` draft and its `CRMEntitySource(entity_type="contact")`, then resolves the position by `(bundle_fingerprint, source_contact_id, capture_ordinal)` and the section capture by `(position_id, section_name)`. All three contact IDs must agree. A child draft outside the current profile-draft set, a missing/extra current persisted identity, duplicate source record, malformed context, cross-contact/cross-section context, or parser-version mismatch raises `ContactOccurrenceOwnershipError` and rolls back; display label, text, name, timestamp, historical row, and row position are never fallback keys.
+
+One ownership row is written for every current child occurrence, including timeline rows with no timestamp and Tasks/SmartPlans/Opportunities that remain source-only. Re-running the same current record set returns all rows as unchanged. An existing row is accepted only when all owner fields and ordinal match byte-for-byte; otherwise it is a conflict. Call the sync with the materializer's exact `records` and `persisted_by_identity` values after positions/sections exist and before selective note/search/timeline materialization so the same transaction owns both provenance and normalized writes. Change `_event_datetime()` to return only a valid explicitly exposed timestamp, never `captured_at`; create `CRMContactTimelineEvent` even when that result is `None`. Existing internal `CRMActivity` rows retain `source_record_id=NULL`; only deliberate mirrors set it.
 
 - [ ] **Step 3: Run focused schema/ownership gates and commit**
 
@@ -1006,7 +1017,7 @@ Tests cover mirrored-source dedupe, same-text/same-time distinctness, all bookin
 
 - [ ] **Step 2: Implement, run, and commit**
 
-Fetch at most `page_size + 1` eligible rows per origin after the decoded cursor, merge by the exact Task 5A key, and return a cursor for the last emitted row only when another eligible row exists. Do not load an unbounded timeline into memory.
+Make the internal-activity SQL query exclude a mirrored row whenever a same-contact `CRMContactTimelineEvent` has the same non-null `source_record_id`; the merge layer repeats this integrity-safe dedupe defensively. Then fetch at most `page_size + 1` already-eligible rows per origin after the decoded cursor, merge by the exact Task 5A key, and return a cursor for the last emitted row only when another eligible row exists. This prevents mirror-heavy pages from underfilling while later unique activities exist. Do not load an unbounded timeline into memory.
 
 ```bash
 cd backend
@@ -1061,6 +1072,388 @@ class SortDirection(StrEnum):
 
 `ContactDirectoryFilters` is frozen/slotted and contains `page: int=1`, `page_size: int=50`, trimmed literal `query`, exact `stage`, `owner_actor_id`, `assignee_actor_id`, unique sorted `tag_ids`, unique sorted `sources`, unique sorted `origins`, `health_min`, `health_max`, `birthday_month`, `anniversary_month`, `smart_view`, `sort`, and `direction`. Validate page `>=1`, page size `1..100`, query `<=200`, actor IDs `<=255`, tag IDs positive, health `0..100` with min `<=` max, and months `1..12`. Repeated tag filters mean “has every requested tag.” All filters are ANDed after SmartView expansion.
 
+Define every service DTO in this task before any query implementation. These are the exact framework-neutral contracts consumed by Tasks 5B, 6, and 7; Pydantic models adapt them but never replace them:
+
+```python
+ContactEvidenceQuality = Literal["complete", "partial", "limitation"]
+CelebrationYearQuality = Literal["verified", "yearless", "sentinel", "unknown"]
+ContactAuditScalar = str | int | bool | None
+type JsonValue = (
+    None | bool | int | float | str
+    | tuple["JsonValue", ...]
+    | Mapping[str, "JsonValue"]
+)
+
+@dataclass(frozen=True, slots=True)
+class ContactDirectoryFilters:
+    page: int = 1
+    page_size: int = 50
+    query: str | None = None
+    stage: str | None = None
+    owner_actor_id: str | None = None
+    assignee_actor_id: str | None = None
+    tag_ids: tuple[int, ...] = ()
+    sources: tuple[ContactSourceFilter, ...] = ()
+    origins: tuple[ContactOriginFilter, ...] = ()
+    health_min: int | None = None
+    health_max: int | None = None
+    birthday_month: int | None = None
+    anniversary_month: int | None = None
+    smart_view: ContactSmartView = ContactSmartView.ALL
+    sort: ContactSortKey = ContactSortKey.NAME
+    direction: SortDirection = SortDirection.ASC
+
+@dataclass(frozen=True, slots=True)
+class ContactTagValue:
+    id: int
+    name: str
+
+@dataclass(frozen=True, slots=True)
+class ContactActorValue:
+    role: Literal["owner", "assignee", "collaborator"]
+    provider_actor_id: str | None
+    display_name: str | None
+
+@dataclass(frozen=True, slots=True)
+class ContactCelebrationValue:
+    month: int
+    day: int
+    year: int | None
+    year_quality: CelebrationYearQuality
+    origin: Literal["internal_crm", "recovered"]
+
+@dataclass(frozen=True, slots=True)
+class ContactAddressValue:
+    id: int
+    address_type: str | None
+    formatted: str | None
+    latitude: Decimal | None
+    longitude: Decimal | None
+    source_record_id: int | None
+
+@dataclass(frozen=True, slots=True)
+class ContactDirectoryRow:
+    id: int
+    first_name: str
+    last_name: str
+    display_name: str
+    primary_email: str | None
+    primary_phone: str | None
+    stage: str
+    lead_backed: bool
+    origins: tuple[ContactOriginFilter, ...]
+    sources: tuple[ContactSourceFilter, ...]
+    health_score: int | None
+    last_contacted_at: datetime | None
+    last_interaction_at: datetime | None
+    owner: ContactActorValue | None
+    assignee: ContactActorValue | None
+    tags: tuple[ContactTagValue, ...]
+    birthday: ContactCelebrationValue | None
+    anniversary: ContactCelebrationValue | None
+    evidence_quality: ContactEvidenceQuality | None
+
+@dataclass(frozen=True, slots=True)
+class ContactDirectoryPage:
+    rows: tuple[ContactDirectoryRow, ...]
+    total: int
+    page: int
+    page_size: int
+    page_count: int
+    sort: ContactSortKey
+    direction: SortDirection
+
+@dataclass(frozen=True, slots=True)
+class ContactRecoveredProfile:
+    legal_name: str | None
+    preferred_name: str | None
+    description: str | None
+    company: str | None
+    title: str | None
+    lead_source: str | None
+    account_name: str | None
+    birthday: ContactCelebrationValue | None
+    anniversary: ContactCelebrationValue | None
+
+@dataclass(frozen=True, slots=True)
+class ContactDetail:
+    contact: ContactDirectoryRow
+    lead_id: int | None
+    recovered_profile: ContactRecoveredProfile | None
+    addresses: tuple[ContactAddressValue, ...]
+    ownership: tuple[ContactActorValue, ...]
+    tags: tuple[ContactTagValue, ...]
+
+@dataclass(frozen=True, slots=True)
+class ContactNeighbors:
+    previous_contact_id: int | None
+    next_contact_id: int | None
+
+@dataclass(frozen=True, slots=True)
+class ContactWorkspaceSummary:
+    open_tasks: int
+    completed_tasks: int
+    archived_tasks: int
+    active_smart_plans: int
+    opportunities: int
+    notes: int
+    saved_searches: int
+    bookings: int
+
+@dataclass(frozen=True, slots=True)
+class ContactOpportunityOccurrence:
+    kind: Literal["opportunity"]
+    title: str
+    stage: str | None
+    value_cents: int | None
+
+@dataclass(frozen=True, slots=True)
+class ContactSmartPlanOccurrence:
+    kind: Literal["smart_plan"]
+    title: str
+    status: str | None
+
+@dataclass(frozen=True, slots=True)
+class ContactTaskOccurrence:
+    kind: Literal["task"]
+    title: str
+    description: str | None
+    state: Literal["to_do", "completed", "archived"]
+    due_at: datetime | None
+
+@dataclass(frozen=True, slots=True)
+class ContactNoteOccurrence:
+    kind: Literal["note"]
+    title: str
+    body: str | None
+
+@dataclass(frozen=True, slots=True)
+class ContactSavedSearchOccurrence:
+    kind: Literal["saved_search"]
+    title: str
+    criteria_summary: tuple[str, ...]
+
+ContactOccurrenceValue = (
+    ContactOpportunityOccurrence
+    | ContactSmartPlanOccurrence
+    | ContactTaskOccurrence
+    | ContactNoteOccurrence
+    | ContactSavedSearchOccurrence
+)
+
+@dataclass(frozen=True, slots=True)
+class ContactSourceOnly:
+    status: Literal["source_only"]
+    source_record_id: int
+    source_key_hash: str
+    section: ContactSection
+    occurrence_ordinal: int
+    capture_quality: CaptureQualityValue
+    captured_at: datetime | None
+    value: ContactOccurrenceValue
+
+@dataclass(frozen=True, slots=True)
+class ContactMaterialized:
+    status: Literal["materialized"]
+    source_record_id: int
+    source_key_hash: str
+    section: ContactSection
+    occurrence_ordinal: int
+    capture_quality: CaptureQualityValue
+    captured_at: datetime | None
+    value: ContactOccurrenceValue
+    entity_type: Literal[
+        "contact_timeline_event", "note", "saved_search",
+        "task", "smart_plan", "opportunity",
+    ]
+    entity_id: int
+
+ContactSectionRow = ContactSourceOnly | ContactMaterialized
+
+@dataclass(frozen=True, slots=True)
+class ContactSectionPage:
+    rows: tuple[ContactSectionRow, ...]
+    total: int
+    page: int
+    page_size: int
+    page_count: int
+
+@dataclass(frozen=True, slots=True)
+class ContactArtifactMetadata:
+    id: int
+    filename: str
+    artifact_type: str
+    sha256: str
+    size_bytes: int
+
+@dataclass(frozen=True, slots=True)
+class ContactSourceMetadata:
+    source_record_id: int
+    record_kind: str
+    evidence_level: Literal[
+        "observed_record", "rendered_occurrence", "displayed_aggregate",
+    ]
+    capture_quality: CaptureQualityValue
+    captured_at: datetime | None
+    artifacts: tuple[ContactArtifactMetadata, ...]
+
+@dataclass(frozen=True, slots=True)
+class ContactSectionEvidence:
+    capture_position_id: int
+    section: ContactSection
+    source_record_id: int
+    capture_quality: CaptureQualityValue
+    row_count: int
+    is_empty: bool
+    limitation_codes: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class ContactCaptureEvidence:
+    capture_position_id: int
+    capture_ordinal: int
+    source_record_id: int
+    capture_quality: CaptureQualityValue
+    sections: tuple[ContactSectionEvidence, ...]
+
+@dataclass(frozen=True, slots=True)
+class ContactEvidence:
+    contact_id: int
+    provider_contact_rows: int
+    resolved_provider_identities: int
+    coalesced_aliases: Literal[0]
+    lead_backed_contacts: int
+    reviewed_overlaps: int
+    legacy_only_contacts: int
+    capture_positions: tuple[ContactCaptureEvidence, ...]
+    section_matrix: tuple[ContactSectionEvidence, ...]
+    sources: tuple[ContactSourceMetadata, ...]
+    capture_quality: ContactEvidenceQuality
+
+@dataclass(frozen=True, slots=True)
+class ContactCelebrationRow:
+    contact_id: int
+    display_name: str
+    kind: Literal["birthday", "anniversary"]
+    month: int
+    day: int
+    year: int | None
+    year_quality: CelebrationYearQuality
+    origin: Literal["internal_crm", "recovered"]
+
+@dataclass(frozen=True, slots=True)
+class ContactCelebrations:
+    birthdays: tuple[ContactCelebrationRow, ...]
+    anniversaries: tuple[ContactCelebrationRow, ...]
+
+class UnsetType(Enum):
+    TOKEN = "unset"
+
+UNSET = UnsetType.TOKEN
+
+@dataclass(frozen=True, slots=True)
+class ContactCreateCommand:
+    first_name: str
+    last_name: str = ""
+    email: str | None = None
+    phone: str | None = None
+    stage: str = "lead"
+    birthday: date | None = None
+    anniversary: date | None = None
+
+@dataclass(frozen=True, slots=True)
+class ContactUpdateCommand:
+    first_name: str | UnsetType = UNSET
+    last_name: str | UnsetType = UNSET
+    email: str | None | UnsetType = UNSET
+    phone: str | None | UnsetType = UNSET
+    stage: str | UnsetType = UNSET
+    birthday: date | None | UnsetType = UNSET
+    anniversary: date | None | UnsetType = UNSET
+
+@dataclass(frozen=True, slots=True)
+class ContactBulkSetStage:
+    action: Literal["set_stage"]
+    stage: str
+
+@dataclass(frozen=True, slots=True)
+class ContactBulkAddTag:
+    action: Literal["add_tag"]
+    tag_id: int
+
+@dataclass(frozen=True, slots=True)
+class ContactBulkRemoveTag:
+    action: Literal["remove_tag"]
+    tag_id: int
+
+ContactBulkAction = ContactBulkSetStage | ContactBulkAddTag | ContactBulkRemoveTag
+
+@dataclass(frozen=True, slots=True)
+class ContactBulkCommand:
+    contact_ids: tuple[int, ...]
+    action: ContactBulkAction
+
+@dataclass(frozen=True, slots=True)
+class ContactBulkResult:
+    requested_contact_ids: tuple[int, ...]
+    actioned_contact_ids: tuple[int, ...]
+    action: Literal["set_stage", "add_tag", "remove_tag"]
+
+@dataclass(frozen=True, slots=True)
+class ContactNoteCreateCommand:
+    body: str
+
+@dataclass(frozen=True, slots=True)
+class ContactSavedSearchCreateCommand:
+    name: str
+    criteria: Mapping[str, JsonValue]
+
+@dataclass(frozen=True, slots=True)
+class ContactImportRowCommand:
+    first_name: str
+    last_name: str
+    email: str | None
+    phone: str | None
+    stage: str
+    birthday: date | None
+    anniversary: date | None
+
+@dataclass(frozen=True, slots=True)
+class ContactImportCommand:
+    contacts: tuple[ContactImportRowCommand, ...]
+
+@dataclass(frozen=True, slots=True)
+class ContactMutationResult:
+    contact_id: int
+    record_id: int | None
+    changed: bool
+    audit_entity_type: Literal["contact_audit", "workspace_activity"] | None
+    audit_event_id: int | None
+
+@dataclass(frozen=True, slots=True)
+class ContactLegacySyncResult:
+    created: int
+    timeline_backfilled: int
+    total_legacy_leads: int
+
+@dataclass(frozen=True, slots=True)
+class ContactImportResult:
+    created: int
+    skipped_duplicates: int
+
+@dataclass(frozen=True, slots=True)
+class ContactSavedSearchValue:
+    id: int
+    contact_id: int | None
+    contact_name: str | None
+    name: str
+    criteria: Mapping[str, JsonValue]
+    updated_at: datetime
+```
+
+`JsonValue` floats must be finite. Constructor validation pins first name `1..120`, last name `0..120`, email `<=255`, phone `<=50`, stage `1..50`, note body `1..20_000`, search name `1..255`, canonical criteria `<=64 KiB`, import rows `1..1,000`, contact IDs positive/unique with bulk size `1..200`, and tag IDs positive. `ContactUpdateCommand` rejects an all-`UNSET` command and `None` for required first/last/stage values. No command exposes `lead_id`, recovered observations, provenance IDs, or audit fields.
+
+Source filter predicates are exact and may overlap: `kw_command` means a `contact_profile` source link from `source_system="kw_command"`; `legacy_lead` means `CRMContact.lead_id IS NOT NULL`; `internal_crm` means the row exists in `crm_contacts` and has neither of those two predicates. Repeated source values are ORed within the source group; repeated origin values are ORed within the origin group; the source and origin groups are ANDed with every other filter. Origins use the definitions in the enum comments, with `recovered` allowed to overlap `lead_backed`; `legacy_only` and `internal_only` are mutually exclusive terminal classifications.
+
 SmartView semantics are fixed: `never_contacted` requires lead stage plus no explicit recovered/internal last-contact observation; unknown capture is excluded rather than called never contacted. `recently_active` means an explicit last-interaction timestamp in `[now-30 days, now]`. Birthday/anniversary views use explicit month/day from the internal date first, otherwise an exposed recovered profile month/day; sentinel/yearless years remain null. The two month views use the injected `now` month. No tag, task title, name, or current date supplies a missing celebration/contact timestamp.
 
 Sort uses the requested primary expression, then case-folded last name, case-folded first name, then contact ID. Null values are always last in either direction; contact ID follows the requested direction. `name` sorts by case-folded last name, first name, then ID. Literal search escapes `%`, `_`, and `\\` and searches first name, last name, legal/preferred name, normalized methods, company, and title; it never interpolates SQL.
@@ -1069,24 +1462,37 @@ Sort uses the requested primary expression, then case-folded last name, case-fol
 
 Expose these exact async functions; service exceptions are typed domain errors and contain no HTTP concerns:
 
-```python
-async def list_contacts(db, filters: ContactDirectoryFilters, *, now: datetime) -> ContactDirectoryPage: ...
-async def get_contact_detail(db, contact_id: int) -> ContactDetail: ...
-async def get_contact_neighbors(db, contact_id: int, filters: ContactDirectoryFilters, *, now: datetime) -> ContactNeighbors: ...
-async def get_contact_workspace_summary(db, contact_id: int) -> ContactWorkspaceSummary: ...
-async def list_contact_section(db, contact_id: int, section: ContactSection, *, page: int, page_size: int) -> ContactSectionPage: ...
-async def get_contact_evidence(db, contact_id: int) -> ContactEvidence: ...
-async def list_contact_celebrations(db, *, month: int) -> ContactCelebrations: ...
-async def create_contact(db, payload: ContactCreateCommand, *, actor_subject: str) -> ContactDetail: ...
-async def update_contact(db, contact_id: int, payload: ContactUpdateCommand, *, actor_subject: str) -> ContactDetail: ...
-async def apply_contact_bulk_action(db, payload: ContactBulkCommand, *, actor_subject: str) -> ContactBulkResult: ...
+```text
+async list_contacts(db, filters: ContactDirectoryFilters, *, now: datetime) -> ContactDirectoryPage
+async get_contact_detail(db, contact_id: int) -> ContactDetail
+async get_contact_neighbors(db, contact_id: int, filters: ContactDirectoryFilters, *, now: datetime) -> ContactNeighbors
+async get_contact_workspace_summary(db, contact_id: int) -> ContactWorkspaceSummary
+async list_contact_section(db, contact_id: int, section: ContactSection, *, page: int, page_size: int) -> ContactSectionPage
+async get_contact_evidence(db, contact_id: int) -> ContactEvidence
+async list_contact_celebrations(db, *, month: int) -> ContactCelebrations
+async create_contact(db, payload: ContactCreateCommand, *, actor_subject: str) -> ContactDetail
+async update_contact(db, contact_id: int, payload: ContactUpdateCommand, *, actor_subject: str) -> ContactDetail
+async apply_contact_bulk_action(db, payload: ContactBulkCommand, *, actor_subject: str) -> ContactBulkResult
+async sync_legacy_leads(db, *, actor_subject: str) -> ContactLegacySyncResult
+async import_contacts(db, payload: ContactImportCommand, *, actor_subject: str) -> ContactImportResult
+async assign_contact_tag(db, contact_id: int, tag_id: int, *, actor_subject: str) -> ContactMutationResult
+async remove_contact_tag(db, contact_id: int, tag_id: int, *, actor_subject: str) -> ContactMutationResult
+async create_contact_note(db, contact_id: int, payload: ContactNoteCreateCommand, *, actor_subject: str) -> ContactMutationResult
+async delete_contact_note(db, contact_id: int, note_id: int, *, actor_subject: str) -> ContactMutationResult
+async create_contact_saved_search(db, contact_id: int, payload: ContactSavedSearchCreateCommand, *, actor_subject: str) -> ContactMutationResult
+async list_saved_searches(db) -> tuple[ContactSavedSearchValue, ...]
+async delete_saved_search(db, search_id: int, *, actor_subject: str) -> ContactMutationResult
 ```
 
-`list_contact_section` accepts page `>=1` and page size `1..100`. It queries `CRMContactSourceOccurrence`, not text. Each row is a discriminated union: `source_only` includes `source_record_id`, source key, section, occurrence ordinal, capture quality, captured time, and redacted typed values; `materialized` additionally includes the one `CRMEntitySource` target. Allowed target types are timeline event, note, saved search, task, smart plan, or opportunity according to source record kind. Zero targets is source-only, one compatible target is materialized, and multiple/incompatible/cross-contact targets are integrity errors. All rows order by section capture time descending nulls last, capture ordinal ascending, occurrence ordinal ascending, then ownership ID ascending. Timeline uses Task 5B rather than this page API.
+`list_contact_section` accepts page `>=1` and page size `1..100`. It queries `CRMContactSourceOccurrence`, not text. Each row is a discriminated union: `source_only` includes `source_record_id`, the domain-separated SHA-256 `source_key_hash`, section, occurrence ordinal, capture quality, captured time, and the exact whitelisted typed value above; `materialized` additionally includes the one `CRMEntitySource` target. Raw source keys, provider IDs, parser payloads, and archive paths are not response fields. Allowed target types are timeline event, note, saved search, task, smart plan, or opportunity according to source record kind. Zero targets is source-only, one compatible target is materialized, and multiple/incompatible/cross-contact targets are integrity errors. All rows order by section capture time descending nulls last, capture ordinal ascending, occurrence ordinal ascending, then ownership ID ascending. Timeline uses Task 5B rather than this page API.
 
 `get_contact_evidence` returns all provider rows/positions separately, eight section cells per position, source/artifact metadata only, the 317/317/zero-alias identity summary and redacted 51/2/49 overlap summary. It never loads artifact bytes or emits raw overlap evidence. Aggregate quality is complete only when all required cells are complete, partial when no cell is shell/error and at least one is partial, otherwise limitation.
 
-Celebrations merge internal and recovered observations per `(contact_id, kind)`: an internal date wins; otherwise an explicitly exposed recovered month/day is returned with its year-quality. Rows order by day, case-folded name, and ID. Missing month/day, sentinel year, tags, or task text never create a date. Mutation tests snapshot canonical before/after JSON, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
+Celebrations merge internal and recovered observations per `(contact_id, kind)`: an internal date wins; otherwise an explicitly exposed recovered month/day is returned with its year-quality, including `yearless` when no source year was exposed. Rows order by day, case-folded name, and ID. Missing month/day, sentinel year, tags, or task text never create a date.
+
+Every mutation receives the exact validated admin subject. `CRMContactAuditEvent.before_json` and `after_json` use a strict allowlist: raw values are allowed only for record IDs, tag IDs, stage, action, changed-field names, booleans, and ISO calendar dates. Names, email, phone, note bodies, saved-search names/criteria, and import values are represented as `{"present": bool, "length": int, "sha256": "<domain-separated-lowercase-hex>"}`; raw values, bearer tokens, provider IDs, source keys/payloads, artifact paths/bytes, manifest data, and timeline text are forbidden. Canonical JSON sorts keys, uses compact separators, and rejects nonfinite numbers. The actor is stored once in `actor_subject`, not copied into JSON.
+
+`delete_saved_search()` loads the target before deletion. A contact-owned search writes `CRMContactAuditEvent(action="contact.saved_search_deleted")` for that exact contact. A legacy global search with `contact_id IS NULL` preserves the existing delete behavior and writes `CRMActivity(contact_id=NULL, kind="workspace.saved_search_deleted", source_record_id=NULL)` with metadata containing only the admin subject, action, search ID, and the redacted saved-search fingerprint. Both audit variants are inserted in the same transaction as deletion; an audit failure rolls deletion back. Mutation tests cover all service signatures above, snapshot the canonical redacted JSON/metadata, prove no forbidden value appears in rows or exceptions, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
 
 - [ ] **Step 3: Implement source/materialized joins, exact pagination, and commits**
 
@@ -1117,7 +1523,7 @@ git commit -m "feat: query Command contact workspaces"
 
 - [ ] **Step 1: Freeze route ownership, declaration order, and administrator identity tests**
 
-`command_contacts.py` owns every contact-scoped URL below. `command.py` must delete the moved handlers rather than retaining aliases. It keeps the unrelated global `POST /tags`, `GET /saved-searches`, and `DELETE /saved-searches/{search_id}` URLs; those two global saved-search handlers delegate to the same Task 5C service and audit helper. `main.py` includes each router once under `/api/v1/command`.
+`command_contacts.py` owns every contact-scoped URL below. `command.py` must delete the moved handlers rather than retaining aliases. It keeps the unrelated global `POST /tags`, `GET /saved-searches`, `DELETE /saved-searches/{search_id}`, and `POST /archive/import` URLs. The two global saved-search handlers delegate to the exact Task 5C `list_saved_searches()`/`delete_saved_search()` contracts; deletion receives `AdminSubject` and follows the contact-owned/global audit split defined there. `/archive/import` remains in the monolithic router with its existing request/response contract and must neither be shadowed nor duplicated by the focused router. `main.py` includes each router once under `/api/v1/command`.
 
 Declare focused routes in this exact order so no string is ever offered to `{contact_id}`:
 
@@ -1147,7 +1553,7 @@ POST   /contacts/{contact_id}/tags/{tag_id}
 DELETE /contacts/{contact_id}/tags/{tag_id}
 ```
 
-The legacy `GET /contacts?limit=&offset=&query=&stage=` remains an array with `limit=1..100` and `offset>=0`; it delegates to the service but does not masquerade as the directory page. The task route requires exactly one `state=to_do|completed|archived`. Static-route tests specifically call `/contacts/directory`, `/contacts/import`, `/contacts/bulk`, and `/contacts/sync-leads` and prove none returns an integer-path 422.
+The legacy `GET /contacts?limit=&offset=&query=&stage=` remains an array with `limit=1..100` and `offset>=0`; it delegates to the service but does not masquerade as the directory page. The task route requires exactly one `state=to_do|completed|archived`. Static-route tests specifically call `/contacts/directory`, `/contacts/import`, `/contacts/bulk`, and `/contacts/sync-leads` and prove none returns an integer-path 422. A compatibility inventory test enumerates every method/path above plus `POST /tags`, `GET /saved-searches`, `DELETE /saved-searches/{search_id}`, and `POST /archive/import`; it asserts one registered route per method/path, the existing `/archive/import` response model, and no behavior-changing redirect or 404/405/422 collision.
 
 Replace dependency-only authentication with a subject-bearing dependency:
 
@@ -1163,7 +1569,7 @@ async def require_admin_subject(
 AdminSubject = Annotated[str, Depends(require_admin_subject)]
 ```
 
-Every focused route receives `actor_subject: AdminSubject`; read handlers assign it to `_actor_subject`, while mutations pass the unchanged string to Task 5C. Tests exercise missing token `401`, a non-admin token `403`, malformed/missing `sub` `401`, and a valid admin subject. Do not derive an actor from email, display name, request IP, or a constant service value.
+Every focused route receives `actor_subject: AdminSubject`; read handlers assign it to `_actor_subject`, while mutations pass the unchanged string to Task 5C. The retained global `DELETE /saved-searches/{search_id}` handler also receives `actor_subject: AdminSubject` and passes it unchanged to `delete_saved_search()`. Tests exercise missing token `401`, a non-admin token `403`, malformed/missing `sub` `401`, and a valid admin subject on focused mutations and global saved-search deletion. Do not derive an actor from email, display name, request IP, or a constant service value.
 
 - [ ] **Step 2: Define the complete Pydantic boundary and RED tests**
 
@@ -1198,6 +1604,9 @@ class ContactEvidenceOut(BaseModel):
     provider_contact_rows: int
     resolved_provider_identities: int
     coalesced_aliases: Literal[0]
+    lead_backed_contacts: int = Field(ge=0)
+    reviewed_overlaps: int = Field(ge=0)
+    legacy_only_contacts: int = Field(ge=0)
     capture_positions: list[ContactCapturePositionOut]
     section_matrix: list[ContactSectionEvidenceOut]
     sources: list[SourceRecordDetailOut]
@@ -1205,7 +1614,7 @@ class ContactEvidenceOut(BaseModel):
 
 class ContactBulkSetStage(BaseModel):
     action: Literal["set_stage"]
-    stage: str = Field(min_length=1, max_length=64)
+    stage: str = Field(min_length=1, max_length=50)
 
 class ContactBulkAddTag(BaseModel):
     action: Literal["add_tag"]
@@ -1225,7 +1634,9 @@ class ContactBulkRequest(BaseModel):
     action: ContactBulkActionIn
 ```
 
-Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models with bounded strings and `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. Evidence source rows exclude `payload_json` and artifact bytes.
+Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models as one-to-one adapters over the Task 5C DTOs, with `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. All stage inputs use `min_length=1,max_length=50`, matching `CRMContact.stage VARCHAR(50)`; there is no 51–64-character acceptance path. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. Evidence source rows exclude `payload_json`, raw source keys/paths, and artifact bytes.
+
+Preserve existing mutation response shapes while delegating writes to Task 5C: `POST /contacts` and `PATCH /contacts/{contact_id}` return legacy `ContactOut`; sync/import retain `ContactLegacySyncResult`/`ContactImportResult`; tag assignment/removal, note creation/deletion, and saved-search creation retain their current public JSON keys. The router maps service DTOs to those explicit compatibility models. The new `contactsApi.create()`/`update()` clients therefore decode a `ContactCreated` basic-contact result containing the positive `id` and editable internal fields, then detail consumers call `detail(id)` when the expanded DTO is needed. No endpoint silently changes a legacy response from a contact row into `ContactDetailOut`.
 
 Router tests cover every URL/method in Step 1, all filters and repeated values, exact response models, stable sort ties, `page>=1`, `page_size=1..100`, timeline cursor forwarding, task-state validation, 404 domain mapping, 409 integrity/conflict mapping, and 422 boundary errors. Evidence fixtures assert 317 upstream provider IDs, 317 resolved identities, zero aliases, 317 positions, 2,536 sections, plus aggregate-only 51 lead-backed/2 reviewed-overlap/49 legacy-only counts without private values.
 
@@ -1258,11 +1669,12 @@ contact.saved_search_created
 contact.saved_search_deleted
 contact.legacy_sync_applied
 contact.legacy_import_applied
+workspace.saved_search_deleted
 ```
 
-`before_json` and `after_json` are canonical JSON with sorted keys and compact separators. They include record IDs and changed business fields, never bearer tokens, overlap-manifest values, raw provenance payloads, or archive bytes. Create, edit, tag, note, search, sync/import, and each affected bulk contact write its audit inside the same database transaction as the business change. A bulk request locks contacts in sorted ID order, requires all requested contacts and the referenced tag to exist, applies all-or-nothing, writes one audit per contact with the same `actor_subject`, and returns requested/actioned IDs sorted ascending. An audit failure rolls back the business rows. Replays are ordinary explicit admin actions, not reconciliation idempotency.
+Apply the Task 5C audit allowlist and hashing rules exactly; the router never constructs ad hoc audit JSON. Contact-owned create, edit, tag, note, search, sync/import, and each affected bulk contact write `CRMContactAuditEvent` inside the same database transaction as the business change. Global saved-search deletion writes the exact actor-attributed `workspace.saved_search_deleted` activity specified in Task 5C. A bulk request locks contacts in sorted ID order, requires all requested contacts and the referenced tag to exist, applies all-or-nothing, writes one audit per contact with the same `actor_subject`, and returns requested/actioned IDs sorted ascending. An audit failure rolls back the business rows. Replays are ordinary explicit admin actions, not reconciliation idempotency.
 
-`GET /celebrations` requires `month=1..12` and returns separate `birthdays` and `anniversaries` rows with `contact_id`, display name, `month`, `day`, nullable verified year, `year_quality=verified|sentinel|unknown`, and `origin=internal_crm|recovered`. It follows Task 5C precedence and never infers a celebration.
+`GET /celebrations` requires `month=1..12` and returns separate `birthdays` and `anniversaries` rows with `contact_id`, display name, `month`, `day`, nullable verified year, `year_quality=verified|yearless|sentinel|unknown`, and `origin=internal_crm|recovered`. It follows Task 5C precedence and never infers a celebration. A recovered month/day with no exposed year returns `year=None,year_quality="yearless"`; sentinel `1900` returns `year=None,year_quality="sentinel"`.
 
 Add all contact provenance entity types to the allowlist: `contact_profile`, `contact_method`, `contact_address`, `contact_neighborhood`, `contact_ownership`, `contact_relationship`, `contact_preference`, `contact_capture_position`, `contact_section_capture`, `contact_timeline_event`, `contact_note`, and `contact_saved_search`. Artifact detail remains behind the existing authenticated provenance endpoint.
 
@@ -1320,11 +1732,18 @@ export type CommandJsonRequest<T> = Readonly<{
 }>;
 
 export async function commandJson<T>(request: CommandJsonRequest<T>): Promise<T>;
+
+export type CommandBlobRequest = Readonly<{
+  path: string;
+  signal?: AbortSignal;
+}>;
+
+export async function commandBlob(request: CommandBlobRequest): Promise<Blob>;
 ```
 
-`commandJson` reads `admin_token`, sends `Authorization: Bearer <token>` and `Content-Type: application/json`, serializes `body` exactly once, and forwards the identical `AbortSignal`. A missing/blank token throws `CommandHttpError(401, "Administrator session required")` before fetch. A non-2xx response reads only a string `detail` from a bounded JSON error body and otherwise uses `Command request failed (<status>)`; it does not decode the success schema. A 204 passes `null` to the decoder. A successful response parses JSON as `unknown`, then requires the supplied decoder. JSON parse/schema failures throw `CommandDecodeError`; they may identify a field path and expected type but never include response values. Native abort rejection is rethrown unchanged so callers can recognize `AbortError`.
+Both functions use one private `authenticatedFetch(path, init)` that validates `admin_token`, prepends the Command API base, supplies the bearer header, forwards the identical signal, and applies the same bounded non-2xx detail parsing. `commandJson` additionally sends `Content-Type: application/json`, serializes `body` exactly once, passes `null` to the decoder for 204, parses success JSON as `unknown`, and requires the supplied decoder. `commandBlob` sends no JSON content-type/body and returns `response.blob()` only after the shared status gate. A missing/blank token throws `CommandHttpError(401, "Administrator session required")` before fetch. A non-2xx response uses only a bounded string `detail` or `Command request failed (<status>)`; success schema/blob parsing never runs. JSON parse/schema failures throw `CommandDecodeError`; they may identify a field path and expected type but never include response values. Native abort rejection is rethrown unchanged so callers can recognize `AbortError`.
 
-Tests assert bearer/header/body behavior, missing token, 204, 401/404/409/422/500 messages, invalid JSON, nested decoder paths, signal identity, and an aborted fetch. Run:
+Tests assert JSON and blob bearer behavior, JSON-only content type/body, exact blob bytes/type, missing token for both paths, 204, 401/404/409/422/500 messages for JSON and blob, invalid JSON, nested decoder paths, signal identity, and aborted JSON/blob fetches. Run:
 
 ```bash
 cd frontend
@@ -1360,6 +1779,17 @@ export type ContactDirectoryPage = Readonly<{
   sort: ContactSortKey;
   direction: 'asc' | 'desc';
 }>;
+
+export type ContactCreated = Readonly<{
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  phone: string | null;
+  stage: string;
+  birthday: string | null;
+  anniversary: string | null;
+}>;
 ```
 
 Define named readonly types/decoders for directory rows/pages, detail, neighbors, workspace summary, timeline entry/page, each section union/page, evidence matrix, celebrations, create/update requests, and bulk action/result. The section decoder dispatches on `status` and rejects unknown discriminants. The evidence decoder requires `coalesced_aliases === 0`; it never accepts raw source payloads as an alternative schema. Nullable recovered timeline timestamps remain nullable. Datetimes are validated RFC3339 strings, positive IDs are integral, and `health_score` is nullable `0..100`.
@@ -1384,8 +1814,8 @@ export type ContactsApi = Readonly<{
   section: (id: number, section: Exclude<ContactSectionName, 'timeline'>, page: number, pageSize: number, options?: { signal?: AbortSignal }) => Promise<ContactSectionPage>;
   evidence: (id: number, options?: { signal?: AbortSignal }) => Promise<ContactEvidence>;
   celebrations: (month: number, options?: { signal?: AbortSignal }) => Promise<ContactCelebrations>;
-  create: (input: ContactCreateInput, options?: { signal?: AbortSignal }) => Promise<ContactDetail>;
-  update: (id: number, input: ContactUpdateInput, options?: { signal?: AbortSignal }) => Promise<ContactDetail>;
+  create: (input: ContactCreateInput, options?: { signal?: AbortSignal }) => Promise<ContactCreated>;
+  update: (id: number, input: ContactUpdateInput, options?: { signal?: AbortSignal }) => Promise<ContactCreated>;
   bulk: (input: ContactBulkInput, options?: { signal?: AbortSignal }) => Promise<ContactBulkResult>;
 }>;
 ```
@@ -1396,7 +1826,7 @@ Tests pin the full canonical URL, repeated filters, reserved characters, stable 
 
 - [ ] **Step 3: Preserve legacy consumers through a decoded adapter**
 
-`api.ts` imports `commandJson` and named decoders. Replace its private unchecked JSON cast without changing unrelated public method signatures. `commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page.
+`api.ts` imports `commandJson`, `commandBlob`, and named decoders. Delete both private `request<T>` and `requestBlob`; every existing JSON method delegates to `commandJson`, while `archiveArtifactBlob(id, options?)` delegates to `commandBlob({path,signal:options?.signal})` without changing its default call shape. `commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page.
 
 Add a separate `commandApi.contactDirectory(request, options)` delegate to `contactsApi.directory` for gradual compatibility. Tests assert:
 
@@ -1427,6 +1857,8 @@ It requests pages `1..page_count` at `page_size=100`, with `smart_view='all'`, `
 
 Home maps the decoded directory row into its existing `Contact` view explicitly and retains region-isolated error handling: a Contacts failure marks only `errors.contacts`; it does not erase tasks, opportunities, celebrations, goals, or briefing.
 
+Replace the four Home contact shortcut URLs with canonical server-view links in this task: `?smart_view=never_contacted`, `?smart_view=recently_active`, `?smart_view=birthdays_this_month`, and `?smart_view=anniversaries_this_month`. Remove the Home-emitted `filter=never_contacted|birthdays|anniversaries` and `sort=recent_activity` forms; Task 8 retains those forms only as inbound compatibility aliases. `home.test.ts` asserts all four exact canonical URLs.
+
 - [ ] **Step 5: Run frontend contracts and commit**
 
 ```bash
@@ -1456,12 +1888,14 @@ git commit -m "feat: add typed Command contacts client"
 - Create: `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`
 - Modify: `frontend/src/components/command/shell/CommandShell.tsx`
 - Modify: `frontend/src/components/command/shell/CommandShell.test.tsx`
-- Modify: `frontend/src/components/command/command-shell.css`
+- Modify: `frontend/src/components/command/workspaceFilters.ts`
+- Modify: `frontend/src/components/command/CommandWorkspaceDeepLinks.test.tsx`
+- Modify: `frontend/src/app/admin/command/command-shell.css`
 - Modify: `frontend/src/app/admin/command/contacts/page.tsx`
 
 - [ ] **Step 1: Mount the existing toast system once at the authenticated shell**
 
-Wrap the complete shell, including rail/header/mobile navigation/canvas, in `CommandToastProvider`; do not mount another provider inside Contacts. `CommandShell.test.tsx` renders a child that calls `useCommandToast`, clicks a trigger, and asserts one live-region toast, one dismiss action, and no provider error. It also proves route changes do not duplicate the viewport. Add `.command-toast-viewport` positioning above overlays, 16px edge spacing, pointer-event isolation, stacked 8px gaps, and the existing SWS tone variables to `command-shell.css`; toast buttons remain at least 44×44px and focus-visible.
+Wrap the complete shell, including rail/header/mobile navigation/canvas, in `CommandToastProvider`; do not mount another provider inside Contacts. `CommandShell.test.tsx` renders a child that calls `useCommandToast`, clicks a trigger, and asserts one live-region toast, one dismiss action, and no provider error. It also proves route changes do not duplicate the viewport. Add `.command-toast-viewport` positioning above overlays, 16px edge spacing, pointer-event isolation, stacked 8px gaps, and the existing SWS tone variables to `frontend/src/app/admin/command/command-shell.css`; toast buttons remain at least 44×44px and focus-visible.
 
 Run:
 
@@ -1490,9 +1924,31 @@ export type ContactDirectoryQueryController = Readonly<{
 }>;
 ```
 
-The parser accepts only Task 5C enums and bounded integers. Invalid owned values resolve to defaults (`page=1`, `page_size=50`, `smart_view=all`, `sort=name`, `direction=asc`) and the next canonical replace removes them; repeated `tag/source/origin` values are parsed, deduplicated, and sorted. The serializer preserves unrelated query parameters, deletes all owned keys before writing canonical values in `CONTACT_QUERY_KEYS` order, and omits default/empty values except `page` and `page_size`. `replace()` resets page to 1 whenever any filter, SmartView, sort, direction, or page-size value changes; an explicit page-only patch preserves filters. It calls `router.replace(pathname + '?' + params, {scroll:false})` and never writes browser history per keystroke. `initialView` is used only when `smart_view` is absent, supporting the existing Home deep links; canonical Home links use `smart_view=never_contacted|recently_active|birthdays_this_month|anniversaries_this_month`.
+The parser accepts only Task 5C enums and bounded integers. Invalid owned values resolve to defaults (`page=1`, `page_size=50`, `smart_view=all`, `sort=name`, `direction=asc`) and the next canonical replace removes them; repeated `tag/source/origin` values are parsed, deduplicated, and sorted. The serializer preserves unrelated query parameters, deletes all owned keys before writing canonical values in `CONTACT_QUERY_KEYS` order, and omits default/empty values except `page` and `page_size`. `replace()` resets page to 1 whenever any filter, SmartView, sort, direction, or page-size value changes; an explicit page-only patch preserves filters. It calls `router.replace(pathname + '?' + params, {scroll:false})` and never writes browser history per keystroke.
 
-Tests cover round trip, invalid enum/range cleanup, repeated-value ordering, reserved characters, unrelated-param preservation, initial-view precedence, reset-to-page-one, explicit pagination, and deterministic output after reordered input parameters.
+Replace the client-filtering `ContactWorkspaceView` in `workspaceFilters.ts` with this one-way compatibility adapter; Tasks helpers in that file remain unchanged:
+
+```ts
+export type LegacyContactWorkspaceView = Readonly<{
+  smart_view: ContactSmartView;
+}>;
+
+export function parseLegacyContactWorkspaceQuery(
+  query: Readonly<Record<string, string | readonly string[] | undefined>>,
+): LegacyContactWorkspaceView {
+  const smartView = first(query.smart_view);
+  if (isContactSmartView(smartView)) return { smart_view: smartView };
+  if (first(query.filter) === 'never_contacted') return { smart_view: 'never_contacted' };
+  if (first(query.filter) === 'birthdays') return { smart_view: 'birthdays_this_month' };
+  if (first(query.filter) === 'anniversaries') return { smart_view: 'anniversaries_this_month' };
+  if (first(query.sort) === 'recent_activity') return { smart_view: 'recently_active' };
+  return { smart_view: 'all' };
+}
+```
+
+Precedence is canonical `smart_view`, then exactly one recognized legacy alias, then `all`; unknown legacy values never become filters. Delete `applyContactWorkspaceView()` and its client-side date/activity filtering. `page.tsx` awaits `searchParams`, calls `parseLegacyContactWorkspaceQuery()`, and renders `<ContactsWorkspace initialView={view.smart_view} />`. `useContactDirectoryQuery` uses `initialView` only when canonical `smart_view` is absent. On the first canonical `router.replace`, it deletes owned legacy `filter` and `sort=recent_activity` aliases so URLs converge without double semantics. The canonical Home links were already changed and tested in Task 7; Task 8 only preserves old inbound bookmarks.
+
+Tests cover round trip, invalid enum/range cleanup, repeated-value ordering, reserved characters, unrelated-param preservation, canonical-over-legacy precedence, all four exact legacy aliases, unknown aliases, initial-view precedence, alias cleanup, reset-to-page-one, explicit pagination, and deterministic output after reordered input parameters. `CommandWorkspaceDeepLinks.test.tsx` asserts that each legacy URL produces the correct server `smart_view` request and then canonicalizes; it no longer expects client-side filtered rows.
 
 - [ ] **Step 3: Write the full directory interaction contract and confirm RED**
 
@@ -1550,19 +2006,20 @@ The table renders only server rows, supplies an accessible caption, uses `aria-s
 
 - [ ] **Step 5: Apply Command geometry and responsive behavior in shared CSS**
 
-Use existing SWS color/type/spacing tokens in `command-shell.css`; introduce only `command-contacts-*` structural classes. At the 1800×982 reference viewport the content fills the Command canvas, toolbar controls remain on one line, the table uses a 44px header and 52px rows, Name is sticky after selection, and page controls remain below the table. Do not reproduce source-brand colors or add another rail/header.
+Use existing SWS color/type/spacing tokens in `frontend/src/app/admin/command/command-shell.css`; introduce only `command-contacts-*` structural classes. At the 1800×982 reference viewport the content fills the Command canvas, toolbar controls remain on one line, the table uses a 44px header and 52px rows, Name is sticky after selection, and page controls remain below the table. Do not reproduce source-brand colors or add another rail/header.
 
 At `max-width: 1100px`, hide Owner/Assignee and evidence columns behind the column menu. At `max-width: 760px`, keep Name, Primary contact, Stage, and action visible, move filters into the shared overlay, and retain horizontal scroll rather than changing rows into cards. Print hides selection, actions, toolbar, bulk controls, pagination, and toast viewport. Icons are Phosphor with `aria-hidden`; icon-only buttons have explicit labels. Text and focus contrast use the existing accessible tokens.
 
 - [ ] **Step 6: Wire the route, run focused/full checks, and commit**
 
-`page.tsx` renders `<ContactsWorkspace />` without fetching or duplicating state. Home shortcut links use the canonical `smart_view` values. Preserve the current `/admin/command/contacts/[contactId]` navigation contract for Task 9.
+`page.tsx` performs only the compatibility parse above and renders `<ContactsWorkspace initialView={view.smart_view} />`; it does not fetch or duplicate directory state. Home shortcut links use the canonical `smart_view` values. Preserve the current `/admin/command/contacts/[contactId]` navigation contract for Task 9.
 
 ```bash
 cd frontend
 npm test -- \
   src/components/command/contacts/useContactDirectoryQuery.test.tsx \
   src/components/command/contacts/ContactsWorkspace.test.tsx \
+  src/components/command/CommandWorkspaceDeepLinks.test.tsx \
   src/components/command/ui/CommandUi.test.tsx \
   src/components/command/shell/CommandShell.test.tsx \
   src/lib/command/contacts.test.ts \
@@ -1577,7 +2034,9 @@ git add src/components/command/ContactsWorkspace.tsx \
   src/components/command/contacts/ContactsWorkspace.test.tsx \
   src/components/command/shell/CommandShell.tsx \
   src/components/command/shell/CommandShell.test.tsx \
-  src/components/command/command-shell.css \
+  src/components/command/workspaceFilters.ts \
+  src/components/command/CommandWorkspaceDeepLinks.test.tsx \
+  src/app/admin/command/command-shell.css \
   src/app/admin/command/contacts/page.tsx
 git commit -m "feat: rebuild Command contacts directory"
 ```
