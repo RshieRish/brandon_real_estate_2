@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -60,13 +62,22 @@ from services.command_contact_contracts import (
     ContactDirectoryFilters,
     ContactDirectoryPage,
     ContactDirectoryRow,
+    ContactMaterialized,
     ContactNeighbors,
+    ContactNoteOccurrence,
+    ContactOpportunityOccurrence,
     ContactOriginFilter,
     ContactRecoveredProfile,
+    ContactSavedSearchOccurrence,
+    ContactSection,
+    ContactSectionPage,
+    ContactSmartPlanOccurrence,
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
+    ContactSourceOnly,
     ContactTagValue,
+    ContactTaskOccurrence,
     ContactWorkspaceSummary,
     SortDirection,
 )
@@ -878,6 +889,16 @@ _SECTION_ENTITY_TYPES = {
     "tasks_completed": "task",
     "tasks_archived": "task",
 }
+_SECTION_SOURCE_KEY_DOMAIN = b"command.contact.section-source-key.v1\0"
+_RFC3339_DATETIME = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
+)
+_TASK_SECTION_STATES = {
+    ContactSection.TASKS_TO_DO: "to_do",
+    ContactSection.TASKS_COMPLETED: "completed",
+    ContactSection.TASKS_ARCHIVED: "archived",
+}
 
 
 async def _contact_occurrence_rows(
@@ -1075,6 +1096,505 @@ def _bounded_occurrence_text(
     if len(normalized) > max_length:
         raise ContactDataIntegrityError("contact occurrence payload is invalid")
     return normalized
+
+
+def _required_occurrence_title(
+    source: CRMSourceRecord,
+    values: dict[str, object],
+    key: str,
+) -> str:
+    raw = values.get(key)
+    if isinstance(raw, str):
+        normalized = raw.strip()
+        if len(normalized) > 500:
+            raise ContactDataIntegrityError("contact occurrence payload is invalid")
+        if normalized:
+            return normalized
+    fallback = source.display_label
+    if isinstance(fallback, str):
+        normalized = fallback.strip()
+        if len(normalized) > 500:
+            raise ContactDataIntegrityError("contact occurrence payload is invalid")
+        if normalized:
+            return normalized
+    raise ContactDataIntegrityError("contact occurrence payload is invalid")
+
+
+def _explicit_due_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or _RFC3339_DATETIME.fullmatch(value) is None:
+        return None
+    normalized = value[:-1] + "+00:00" if value[-1] in "Zz" else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _saved_search_criterion(value: object) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized if 1 <= len(normalized) <= 120 else None
+    if type(value) is int and value >= 0:
+        return str(value)
+    return None
+
+
+def _project_section_occurrence(
+    source: CRMSourceRecord,
+    section: ContactSection,
+):
+    values = _occurrence_values(source)
+    if section is ContactSection.OPPORTUNITIES:
+        value_cents = values.get("value_cents")
+        return ContactOpportunityOccurrence(
+            kind="opportunity",
+            title=_required_occurrence_title(source, values, "title"),
+            stage=_bounded_occurrence_text(values, "stage", max_length=120),
+            value_cents=(
+                value_cents if type(value_cents) is int and value_cents >= 0 else None
+            ),
+        )
+    if section is ContactSection.SMART_PLANS:
+        return ContactSmartPlanOccurrence(
+            kind="smart_plan",
+            title=_required_occurrence_title(source, values, "name"),
+            status=_bounded_occurrence_text(values, "status", max_length=120),
+        )
+    if section is ContactSection.NOTES:
+        return ContactNoteOccurrence(
+            kind="note",
+            title=_required_occurrence_title(source, values, "title"),
+            body=_bounded_occurrence_text(values, "body", max_length=20_000),
+        )
+    if section is ContactSection.SAVED_SEARCHES:
+        criteria: list[str] = []
+        for key, label in (
+            ("price", "Price"),
+            ("beds", "Beds"),
+            ("baths", "Baths"),
+        ):
+            projected = _saved_search_criterion(values.get(key))
+            if projected is not None:
+                criteria.append(f"{label}: {projected}")
+        return ContactSavedSearchOccurrence(
+            kind="saved_search",
+            title=_required_occurrence_title(source, values, "name"),
+            criteria_summary=tuple(criteria),
+        )
+    state = _TASK_SECTION_STATES.get(section)
+    if state is None:
+        raise ContactDataIntegrityError("contact occurrence payload is invalid")
+    return ContactTaskOccurrence(
+        kind="task",
+        title=_required_occurrence_title(source, values, "title"),
+        description=_bounded_occurrence_text(values, "description", max_length=20_000),
+        state=state,  # type: ignore[arg-type]
+        due_at=_explicit_due_at(values.get("due_at")),
+    )
+
+
+def _section_source_key_hash(source_key: str) -> str:
+    return hashlib.sha256(
+        _SECTION_SOURCE_KEY_DOMAIN + source_key.encode("utf-8")
+    ).hexdigest()
+
+
+def _section_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _section_target_owned_predicate(
+    entity_id,
+    *,
+    contact_id: int,
+    section: ContactSection,
+) -> ColumnElement[bool]:
+    if section in _TASK_SECTION_STATES:
+        target = exists(
+            select(literal(1))
+            .select_from(CRMTask)
+            .where(
+                CRMTask.id == entity_id,
+                CRMTask.contact_id == contact_id,
+            )
+        )
+    elif section is ContactSection.NOTES:
+        target = exists(
+            select(literal(1))
+            .select_from(CRMNote)
+            .where(
+                CRMNote.id == entity_id,
+                CRMNote.contact_id == contact_id,
+            )
+        )
+    elif section is ContactSection.SAVED_SEARCHES:
+        target = exists(
+            select(literal(1))
+            .select_from(CRMSavedSearch)
+            .where(
+                CRMSavedSearch.id == entity_id,
+                CRMSavedSearch.contact_id == contact_id,
+            )
+        )
+    elif section is ContactSection.SMART_PLANS:
+        target = exists(
+            select(literal(1))
+            .select_from(CRMSmartPlanEnrollment)
+            .where(
+                CRMSmartPlanEnrollment.id == entity_id,
+                CRMSmartPlanEnrollment.contact_id == contact_id,
+            )
+        )
+    elif section is ContactSection.OPPORTUNITIES:
+        target = exists(
+            select(literal(1))
+            .select_from(CRMOpportunity)
+            .join(
+                CRMOpportunityContact,
+                CRMOpportunityContact.opportunity_id == CRMOpportunity.id,
+            )
+            .where(
+                CRMOpportunity.id == entity_id,
+                CRMOpportunityContact.contact_id == contact_id,
+            )
+        )
+    else:
+        raise ContactSectionUnsupported("timeline uses a dedicated service")
+    return target
+
+
+def _section_owned_target_statement(
+    *,
+    contact_id: int,
+    section: ContactSection,
+    entity_ids: Sequence[int],
+) -> Select[tuple[int]]:
+    if section in _TASK_SECTION_STATES:
+        return select(CRMTask.id).where(
+            CRMTask.id.in_(entity_ids),
+            CRMTask.contact_id == contact_id,
+        )
+    if section is ContactSection.NOTES:
+        return select(CRMNote.id).where(
+            CRMNote.id.in_(entity_ids),
+            CRMNote.contact_id == contact_id,
+        )
+    if section is ContactSection.SAVED_SEARCHES:
+        return select(CRMSavedSearch.id).where(
+            CRMSavedSearch.id.in_(entity_ids),
+            CRMSavedSearch.contact_id == contact_id,
+        )
+    if section is ContactSection.SMART_PLANS:
+        return select(CRMSmartPlanEnrollment.id).where(
+            CRMSmartPlanEnrollment.id.in_(entity_ids),
+            CRMSmartPlanEnrollment.contact_id == contact_id,
+        )
+    if section is ContactSection.OPPORTUNITIES:
+        return (
+            select(CRMOpportunity.id)
+            .join(
+                CRMOpportunityContact,
+                CRMOpportunityContact.opportunity_id == CRMOpportunity.id,
+            )
+            .where(
+                CRMOpportunity.id.in_(entity_ids),
+                CRMOpportunityContact.contact_id == contact_id,
+            )
+            .distinct()
+        )
+    raise ContactSectionUnsupported("timeline uses a dedicated service")
+
+
+async def list_contact_section(
+    db: AsyncSession,
+    contact_id: int,
+    section: ContactSection,
+    *,
+    page: int,
+    page_size: int,
+) -> ContactSectionPage:
+    """Return one validated, deterministic non-timeline contact section page."""
+    if not isinstance(section, ContactSection):
+        raise TypeError("section must be ContactSection")
+    if section is ContactSection.TIMELINE:
+        raise ContactSectionUnsupported("timeline uses a dedicated service")
+    if type(page) is not int or page < 1:
+        raise ValueError("page must be an integer >= 1")
+    if type(page_size) is not int or not 1 <= page_size <= 100:
+        raise ValueError("page_size must be an integer between 1 and 100")
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+
+    with db.no_autoflush:
+        existing_contact_id = await db.scalar(
+            select(CRMContact.id).where(CRMContact.id == contact_id).limit(1)
+        )
+        if existing_contact_id is None:
+            _safe_not_found()
+
+        expected_entity_type = _SECTION_ENTITY_TYPES[section.value]
+        expected_record_kind = _SECTION_RECORD_KINDS[section.value]
+        candidate_link = aliased(CRMEntitySource)
+        candidate_target_owned = _section_target_owned_predicate(
+            candidate_link.entity_id,
+            contact_id=contact_id,
+            section=section,
+        )
+        compatible_link_exists = exists(
+            select(literal(1))
+            .select_from(candidate_link)
+            .where(
+                candidate_link.source_record_id
+                == CRMContactSourceOccurrence.source_record_id,
+                candidate_link.entity_type == expected_entity_type,
+                candidate_target_owned,
+            )
+            .correlate(CRMContactSourceOccurrence)
+        )
+        link_count = (
+            select(func.count(CRMEntitySource.id))
+            .where(
+                CRMEntitySource.source_record_id
+                == CRMContactSourceOccurrence.source_record_id
+            )
+            .correlate(CRMContactSourceOccurrence)
+            .scalar_subquery()
+        )
+        kind_identifies_requested_section = and_(
+            CRMSourceRecord.record_kind == expected_record_kind,
+            (
+                CRMContactSectionCapture.id.is_(None)
+                if expected_record_kind == "contact_task"
+                else literal(True)
+            ),
+        )
+        link_identifies_requested_section = and_(
+            compatible_link_exists,
+            (
+                or_(
+                    CRMContactSectionCapture.section_name.is_(None),
+                    CRMContactSectionCapture.section_name.not_in(
+                        tuple(value.value for value in _TASK_SECTION_STATES)
+                    ),
+                )
+                if expected_record_kind == "contact_task"
+                else literal(True)
+            ),
+        )
+        candidate_section = or_(
+            CRMContactSectionCapture.section_name == section.value,
+            kind_identifies_requested_section,
+            link_identifies_requested_section,
+        )
+        candidate_owner = or_(
+            CRMContactSourceOccurrence.contact_id == contact_id,
+            CRMContactCapturePosition.contact_id == contact_id,
+            compatible_link_exists,
+        )
+        invalid_context = or_(
+            CRMContactSourceOccurrence.id <= 0,
+            CRMContactSourceOccurrence.contact_id != contact_id,
+            CRMContactSourceOccurrence.occurrence_ordinal <= 0,
+            CRMContactSectionCapture.id.is_(None),
+            CRMContactSectionCapture.section_name != section.value,
+            or_(
+                CRMContactSectionCapture.capture_quality.is_(None),
+                CRMContactSectionCapture.capture_quality.not_in(
+                    tuple(value.value for value in CaptureQualityValue)
+                ),
+            ),
+            CRMContactCapturePosition.id.is_(None),
+            CRMContactCapturePosition.contact_id != contact_id,
+            CRMContactCapturePosition.capture_ordinal <= 0,
+            CRMSourceRecord.id.is_(None),
+            CRMSourceRecord.source_system != "kw_command",
+            CRMSourceRecord.module != "contacts",
+            CRMSourceRecord.record_kind != expected_record_kind,
+            link_count > 1,
+            and_(link_count == 1, not_(compatible_link_exists)),
+        )
+        context_from = (
+            CRMContactSourceOccurrence.__table__.outerjoin(
+                CRMContactSectionCapture,
+                CRMContactSectionCapture.id
+                == CRMContactSourceOccurrence.section_capture_id,
+            )
+            .outerjoin(
+                CRMContactCapturePosition,
+                CRMContactCapturePosition.id
+                == CRMContactSectionCapture.capture_position_id,
+            )
+            .outerjoin(
+                CRMSourceRecord,
+                CRMSourceRecord.id == CRMContactSourceOccurrence.source_record_id,
+            )
+        )
+        invalid_occurrence_id = await db.scalar(
+            select(CRMContactSourceOccurrence.id)
+            .select_from(context_from)
+            .where(candidate_section, candidate_owner, invalid_context)
+            .limit(1)
+        )
+        if invalid_occurrence_id is not None:
+            raise ContactDataIntegrityError("contact occurrence ownership is invalid")
+
+        valid_ownership = and_(
+            CRMContactSourceOccurrence.contact_id == contact_id,
+            CRMContactSectionCapture.section_name == section.value,
+            CRMContactCapturePosition.contact_id == contact_id,
+            CRMSourceRecord.source_system == "kw_command",
+            CRMSourceRecord.module == "contacts",
+            CRMSourceRecord.record_kind == expected_record_kind,
+        )
+        valid_from = (
+            CRMContactSourceOccurrence.__table__.join(
+                CRMContactSectionCapture,
+                CRMContactSectionCapture.id
+                == CRMContactSourceOccurrence.section_capture_id,
+            )
+            .join(
+                CRMContactCapturePosition,
+                CRMContactCapturePosition.id
+                == CRMContactSectionCapture.capture_position_id,
+            )
+            .join(
+                CRMSourceRecord,
+                CRMSourceRecord.id == CRMContactSourceOccurrence.source_record_id,
+            )
+        )
+        total = int(
+            await db.scalar(
+                select(func.count(CRMContactSourceOccurrence.id))
+                .select_from(valid_from)
+                .where(valid_ownership)
+            )
+            or 0
+        )
+        page_rows = (
+            await db.execute(
+                select(
+                    CRMContactSourceOccurrence.id,
+                    CRMContactSourceOccurrence.source_record_id,
+                    CRMContactSourceOccurrence.occurrence_ordinal,
+                    CRMContactSectionCapture.capture_quality,
+                    CRMContactSectionCapture.captured_at,
+                    CRMContactCapturePosition.capture_ordinal,
+                    CRMSourceRecord.source_key,
+                    CRMSourceRecord.display_label,
+                    CRMSourceRecord.payload_json,
+                )
+                .select_from(valid_from)
+                .where(
+                    valid_ownership,
+                )
+                .order_by(
+                    CRMContactSectionCapture.captured_at.is_(None).asc(),
+                    CRMContactSectionCapture.captured_at.desc(),
+                    CRMContactCapturePosition.capture_ordinal.asc(),
+                    CRMContactSourceOccurrence.occurrence_ordinal.asc(),
+                    CRMContactSourceOccurrence.id,
+                )
+                .limit(page_size)
+                .offset((page - 1) * page_size)
+            )
+        ).all()
+
+        page_source_ids = tuple(row.source_record_id for row in page_rows)
+        page_links = (
+            await db.execute(
+                select(
+                    CRMEntitySource.source_record_id,
+                    CRMEntitySource.entity_type,
+                    CRMEntitySource.entity_id,
+                )
+                .where(CRMEntitySource.source_record_id.in_(page_source_ids))
+                .order_by(CRMEntitySource.source_record_id, CRMEntitySource.id)
+            )
+        ).all()
+        links_by_source: dict[int, list] = defaultdict(list)
+        for link in page_links:
+            links_by_source[link.source_record_id].append(link)
+        linked_entity_ids = tuple(link.entity_id for link in page_links)
+        target_ids = set(
+            await db.scalars(
+                _section_owned_target_statement(
+                    contact_id=contact_id,
+                    section=section,
+                    entity_ids=linked_entity_ids,
+                )
+            )
+        )
+
+    projected_rows: list[object] = []
+    for page_row in page_rows:
+        links = links_by_source.get(page_row.source_record_id, [])
+        if len(links) > 1:
+            raise ContactDataIntegrityError("contact source link is invalid")
+        link = links[0] if links else None
+        if link is not None and (
+            link.entity_type != expected_entity_type or link.entity_id not in target_ids
+        ):
+            raise ContactDataIntegrityError("contact source link is invalid")
+        source = CRMSourceRecord(
+            id=page_row.source_record_id,
+            source_system="kw_command",
+            module="contacts",
+            record_kind=expected_record_kind,
+            source_key=page_row.source_key,
+            evidence_level="rendered_occurrence",
+            display_label=page_row.display_label,
+            payload_json=page_row.payload_json,
+            capture_quality=page_row.capture_quality,
+            parser_version="section-projection",
+        )
+        try:
+            quality = CaptureQualityValue(page_row.capture_quality)
+            source_key_hash = _section_source_key_hash(source.source_key)
+        except (AttributeError, TypeError, UnicodeError, ValueError):
+            raise ContactDataIntegrityError(
+                "contact occurrence ownership is invalid"
+            ) from None
+        captured_at = _section_datetime(page_row.captured_at)
+        value = _project_section_occurrence(source, section)
+        if link is None:
+            row = ContactSourceOnly(
+                status="source_only",
+                source_record_id=source.id,
+                source_key_hash=source_key_hash,
+                section=section,
+                occurrence_ordinal=page_row.occurrence_ordinal,
+                capture_quality=quality,
+                captured_at=captured_at,
+                value=value,
+            )
+        else:
+            row = ContactMaterialized(
+                status="materialized",
+                source_record_id=source.id,
+                source_key_hash=source_key_hash,
+                section=section,
+                occurrence_ordinal=page_row.occurrence_ordinal,
+                capture_quality=quality,
+                captured_at=captured_at,
+                value=value,
+                entity_type=expected_entity_type,  # type: ignore[arg-type]
+                entity_id=link.entity_id,
+            )
+        projected_rows.append(row)
+    return ContactSectionPage(
+        rows=tuple(projected_rows),  # type: ignore[arg-type]
+        total=total,
+        page=page,
+        page_size=page_size,
+        page_count=(total + page_size - 1) // page_size,
+    )
 
 
 async def get_contact_workspace_summary(
