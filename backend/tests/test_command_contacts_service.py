@@ -1203,11 +1203,18 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
             ("Alpha", "Same"),
             ("Dual", "Kind"),
             ("Internal", "Wins"),
+            ("Other Month", "Internal"),
+            ("Nineteen", "Hundred"),
+            ("Anniversary", "Verified"),
+            ("Anniversary", "Yearless"),
+            ("Anniversary", "Sentinel"),
         )
     ]
     contacts[3].birthday = date(1985, 8, 20)
     contacts[3].anniversary = date(2015, 8, 22)
     contacts[4].birthday = date(1990, 8, 21)
+    contacts[5].birthday = date(1980, 7, 4)
+    contacts[6].birthday = date(1900, 8, 23)
     service_db.add_all(contacts)
     await service_db.flush()
     service_db.add_all(
@@ -1255,6 +1262,48 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
                 birth_year_quality="sentinel",
                 anniversary_year_quality="unknown",
             ),
+            CRMContactProfile(
+                contact_id=contacts[5].id,
+                birth_month=8,
+                birth_day=24,
+                birth_year=None,
+                birth_year_quality="yearless",
+                anniversary_month=8,
+                anniversary_day=17,
+                anniversary_year_quality="unknown",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[6].id,
+                birth_month=8,
+                birth_day=1,
+                birth_year=None,
+                birth_year_quality="sentinel",
+                anniversary_year_quality="unknown",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[7].id,
+                birth_year_quality="unknown",
+                anniversary_month=8,
+                anniversary_day=18,
+                anniversary_year=2018,
+                anniversary_year_quality="verified",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[8].id,
+                birth_year_quality="unknown",
+                anniversary_month=8,
+                anniversary_day=18,
+                anniversary_year=None,
+                anniversary_year_quality="yearless",
+            ),
+            CRMContactProfile(
+                contact_id=contacts[9].id,
+                birth_year_quality="unknown",
+                anniversary_month=8,
+                anniversary_day=19,
+                anniversary_year=None,
+                anniversary_year_quality="sentinel",
+            ),
         ]
     )
     await service_db.flush()
@@ -1278,6 +1327,7 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
         (19, "Zulu Same", contacts[0].id),
         (20, "Dual Kind", contacts[3].id),
         (21, "Internal Wins", contacts[4].id),
+        (23, "Nineteen Hundred", contacts[6].id),
     )
     by_id = {row.contact_id: row for row in result.birthdays}
     assert (by_id[contacts[0].id].year, by_id[contacts[0].id].year_quality) == (
@@ -1295,18 +1345,98 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
     assert by_id[contacts[3].id].origin == "internal_crm"
     assert by_id[contacts[3].id].year == 1985
     assert by_id[contacts[4].id].origin == "internal_crm"
+    assert contacts[5].id not in by_id
+    assert by_id[contacts[6].id].origin == "internal_crm"
+    assert by_id[contacts[6].id].year == 1900
+    assert by_id[contacts[6].id].year_quality == "verified"
     assert tuple(row.contact_id for row in result.anniversaries) == (
+        contacts[7].id,
+        contacts[8].id,
+        contacts[9].id,
         contacts[3].id,
     )
+    anniversary_by_id = {
+        row.contact_id: row for row in result.anniversaries
+    }
+    assert anniversary_by_id[contacts[7].id].year == 2018
+    assert anniversary_by_id[contacts[7].id].year_quality == "verified"
+    assert anniversary_by_id[contacts[8].id].year is None
+    assert anniversary_by_id[contacts[8].id].year_quality == "yearless"
+    assert anniversary_by_id[contacts[9].id].year is None
+    assert anniversary_by_id[contacts[9].id].year_quality == "sentinel"
+    assert contacts[5].id not in anniversary_by_id
     assert result.anniversaries[0].kind == "anniversary"
-    assert result.anniversaries[0].year == 2015
+    assert anniversary_by_id[contacts[3].id].year == 2015
     assert all(row.kind == "birthday" for row in result.birthdays)
-    assert set(selects) == {"SELECT"}
+    assert selects == ["SELECT"]
     assert tuple((row.birthday, row.anniversary) for row in contacts) == before_dates
     assert set(service_db.identity_map) == before_identity
     assert not service_db.new
     assert not service_db.dirty
     assert not service_db.deleted
+
+
+@pytest.mark.asyncio
+async def test_contact_celebrations_never_autoflushes_unrelated_pending_state(
+    service_db: AsyncSession,
+):
+    stored = CRMContact(
+        first_name="Stored",
+        last_name="Celebration",
+        stage="lead",
+        birthday=date(2000, 8, 8),
+    )
+    service_db.add(stored)
+    await service_db.flush()
+    pending = CRMContact(first_name="Pending", last_name="Caller", stage="lead")
+    service_db.add(pending)
+    flushes: list[bool] = []
+
+    def before_flush(_session, _flush_context, _instances):
+        flushes.append(True)
+
+    event.listen(service_db.sync_session, "before_flush", before_flush)
+    try:
+        result = await list_contact_celebrations(service_db, month=8)
+    finally:
+        event.remove(service_db.sync_session, "before_flush", before_flush)
+
+    assert tuple(row.contact_id for row in result.birthdays) == (stored.id,)
+    assert flushes == []
+    assert pending in service_db.new
+    assert pending.id is None
+
+
+@pytest.mark.asyncio
+async def test_contact_celebrations_uses_one_select_for_366_rows(
+    service_db: AsyncSession,
+):
+    contacts = [
+        CRMContact(
+            first_name=f"Synthetic {index:03d}",
+            last_name="Scale",
+            stage="lead",
+            birthday=date(2000, 8, (index % 28) + 1),
+        )
+        for index in range(366)
+    ]
+    service_db.add_all(contacts)
+    await service_db.flush()
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+    assert service_db.bind is not None
+    event.listen(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        result = await list_contact_celebrations(service_db, month=8)
+    finally:
+        event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    assert len(result.birthdays) == 366
+    assert result.anniversaries == ()
+    assert statements == ["SELECT"]
 
 
 @pytest.mark.asyncio

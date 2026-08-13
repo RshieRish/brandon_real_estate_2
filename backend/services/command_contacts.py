@@ -811,23 +811,24 @@ async def list_contact_celebrations(
             quality_column=CRMContactProfile.anniversary_year_quality,
         ),
     )
-    rows = (
-        await db.execute(
-            select(CRMContact, CRMContactProfile)
-            .outerjoin(
-                CRMContactProfile,
-                CRMContactProfile.contact_id == CRMContact.id,
-            )
-            .where(
-                or_(
-                    extract("month", CRMContact.birthday) == month,
-                    extract("month", CRMContact.anniversary) == month,
-                    recovered_birthday,
-                    recovered_anniversary,
+    with db.no_autoflush:
+        rows = (
+            await db.execute(
+                select(CRMContact, CRMContactProfile)
+                .outerjoin(
+                    CRMContactProfile,
+                    CRMContactProfile.contact_id == CRMContact.id,
+                )
+                .where(
+                    or_(
+                        extract("month", CRMContact.birthday) == month,
+                        extract("month", CRMContact.anniversary) == month,
+                        recovered_birthday,
+                        recovered_anniversary,
+                    )
                 )
             )
-        )
-    ).all()
+        ).all()
     birthdays: list[ContactCelebrationRow] = []
     anniversaries: list[ContactCelebrationRow] = []
     for contact, profile in rows:
