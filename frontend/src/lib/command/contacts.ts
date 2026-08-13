@@ -1,4 +1,4 @@
-import { commandJson, CommandDecodeError, type Decoder } from './http';
+import { commandBlob, commandJson, CommandDecodeError, type Decoder } from './http';
 
 export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
@@ -259,6 +259,95 @@ export type LegacyContact = Readonly<{
 }>;
 
 export type ContactCreated = LegacyContact;
+
+export type ContactInternalTimelineEntry = Readonly<{
+  id: number;
+  kind: string;
+  summary: string;
+  created_at: string;
+}>;
+
+export type ContactInternalTask = Readonly<{
+  id: number;
+  title: string;
+  contact_id: number;
+  description: string;
+  priority: string;
+  due_at: string | null;
+  status: 'open' | 'completed' | 'archived';
+}>;
+
+export type ContactInternalNote = Readonly<{
+  id: number;
+  contact_id: number;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}>;
+
+export type ContactInternalSmartPlan = Readonly<{
+  id: number;
+  plan_id: number;
+  status: string;
+}>;
+
+export type ContactInternalOpportunity = Readonly<{
+  id: number;
+  name: string;
+  stage: string;
+  value_cents: number | null;
+  role: string;
+}>;
+
+export type ContactInternalSavedSearch = Readonly<{
+  id: number;
+  name: string;
+  criteria: string;
+}>;
+
+export type ContactInternalBooking = Readonly<{
+  id: number;
+  meeting_type: string;
+  context: string;
+  scheduled_at: string;
+  location: string | null;
+  notes: string;
+}>;
+
+export type ContactInternalWorkspace = Readonly<{
+  contact: LegacyContact;
+  timeline: readonly ContactInternalTimelineEntry[];
+  tasks: readonly ContactInternalTask[];
+  notes: readonly ContactInternalNote[];
+  smart_plans: readonly ContactInternalSmartPlan[];
+  opportunities: readonly ContactInternalOpportunity[];
+  saved_searches: readonly ContactInternalSavedSearch[];
+  bookings: readonly ContactInternalBooking[];
+  tags: readonly ContactTag[];
+}>;
+
+export type ContactJsonValue = null | boolean | number | string
+  | readonly ContactJsonValue[]
+  | Readonly<{ [key: string]: ContactJsonValue }>;
+
+export type ContactNoteCreateInput = Readonly<{ body: string }>;
+export type ContactNoteCreated = Readonly<{ id: number; body: string }>;
+export type ContactDeleted = Readonly<{ deleted: true; id: number }>;
+export type ContactSavedSearchCreateInput = Readonly<{
+  name: string;
+  criteria: Readonly<Record<string, ContactJsonValue>>;
+}>;
+export type ContactSavedSearchCreated = Readonly<{ id: number; name: string; criteria: string }>;
+export type ContactTagCreateInput = Readonly<{ name: string }>;
+export type ContactTagAssignment = Readonly<{ contact_id: number; tag_id: number }>;
+export type ContactTagRemoval = ContactTagAssignment & Readonly<{ removed: boolean }>;
+export type ContactTaskCreateInput = Readonly<{
+  title: string;
+  contact_id: number;
+  description: string;
+  priority: 'low' | 'normal' | 'high';
+  due_at: string | null;
+}>;
 
 export type ContactCreateInput = Readonly<{
   first_name: string;
@@ -844,7 +933,7 @@ function sectionEvidenceValue(input: unknown, path: string): ContactSectionEvide
     ['capture_position_id', 'section', 'source_record_id', 'capture_quality', 'row_count', 'is_empty', 'limitation_codes'],
     path,
   );
-  return {
+  const result = {
     capture_position_id: positiveInteger(read('capture_position_id'), `${path}.capture_position_id`),
     section: enumValue(read('section'), SECTION_NAMES, `${path}.section`),
     source_record_id: positiveInteger(read('source_record_id'), `${path}.source_record_id`),
@@ -853,6 +942,15 @@ function sectionEvidenceValue(input: unknown, path: string): ContactSectionEvide
     is_empty: booleanValue(read('is_empty'), `${path}.is_empty`),
     limitation_codes: arrayValue(read('limitation_codes'), `${path}.limitation_codes`, (value, itemPath) => stringValue(value, itemPath)),
   };
+  if ((result.is_empty && result.row_count !== 0)
+    || (result.row_count > 0 && result.is_empty)
+    || (result.capture_quality === 'complete' && result.row_count === 0 && !result.is_empty)) {
+    return invalid(path, 'empty flag consistent with row count');
+  }
+  if (new Set(result.limitation_codes).size !== result.limitation_codes.length) {
+    return invalid(`${path}.limitation_codes`, 'unique limitation codes');
+  }
+  return result;
 }
 
 function capturePositionValue(input: unknown, path: string): ContactCapturePosition {
@@ -878,7 +976,7 @@ export const decodeContactEvidence: Decoder<ContactEvidence> = (input, path = 'r
   ];
   const read = objectReader(input, keys, path);
   const aliases = integer(read('coalesced_aliases'), `${path}.coalesced_aliases`, 0, 0);
-  return {
+  const decoded: ContactEvidence = {
     contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
     provider_contact_rows: nonnegativeInteger(read('provider_contact_rows'), `${path}.provider_contact_rows`),
     resolved_provider_identities: nonnegativeInteger(read('resolved_provider_identities'), `${path}.resolved_provider_identities`),
@@ -891,6 +989,97 @@ export const decodeContactEvidence: Decoder<ContactEvidence> = (input, path = 'r
     sources: arrayValue(read('sources'), `${path}.sources`, sourceMetadataValue),
     capture_quality: enumValue(read('capture_quality'), EVIDENCE_QUALITIES, `${path}.capture_quality`),
   };
+  const positionById = new Map<number, ContactCapturePosition>();
+  const nestedCellByKey = new Map<string, ContactSectionEvidence>();
+  decoded.capture_positions.forEach((position, positionIndex) => {
+    if (positionById.has(position.capture_position_id)) {
+      invalid(`${path}.capture_positions[${positionIndex}].capture_position_id`, 'unique capture position identity');
+    }
+    positionById.set(position.capture_position_id, position);
+    if (position.sections.length !== SECTION_NAMES.length) {
+      invalid(`${path}.capture_positions[${positionIndex}].sections`, 'one cell for every contact section');
+    }
+    position.sections.forEach((cell, cellIndex) => {
+      if (cell.capture_position_id !== position.capture_position_id) {
+        invalid(`${path}.capture_positions[${positionIndex}].sections[${cellIndex}]`, 'owning capture position identity');
+      }
+      if (cell.section !== SECTION_NAMES[cellIndex]) {
+        invalid(`${path}.capture_positions[${positionIndex}].sections[${cellIndex}].section`, 'canonical contact section order');
+      }
+      const key = `${cell.capture_position_id}:${cell.section}`;
+      if (nestedCellByKey.has(key)) invalid(`${path}.capture_positions[${positionIndex}].sections[${cellIndex}]`, 'unique section per capture position');
+      nestedCellByKey.set(key, cell);
+    });
+  });
+  if (decoded.section_matrix.length !== nestedCellByKey.size) {
+    invalid(`${path}.section_matrix`, 'exact flattened capture-position sections');
+  }
+  const equalCell = (left: ContactSectionEvidence, right: ContactSectionEvidence) => (
+    left.capture_position_id === right.capture_position_id
+    && left.section === right.section
+    && left.source_record_id === right.source_record_id
+    && left.capture_quality === right.capture_quality
+    && left.row_count === right.row_count
+    && left.is_empty === right.is_empty
+    && left.limitation_codes.length === right.limitation_codes.length
+    && left.limitation_codes.every((value, index) => value === right.limitation_codes[index])
+  );
+  decoded.section_matrix.forEach((cell, index) => {
+    const position = positionById.get(cell.capture_position_id);
+    const nested = nestedCellByKey.get(`${cell.capture_position_id}:${cell.section}`);
+    if (!position || !nested || !equalCell(cell, nested)) {
+      invalid(`${path}.section_matrix[${index}]`, 'active capture position identity');
+    }
+  });
+  const flattened = decoded.capture_positions.flatMap((position) => position.sections);
+  decoded.section_matrix.forEach((cell, index) => {
+    const expected = flattened[index];
+    if (!expected || !equalCell(cell, expected)) {
+      invalid(`${path}.section_matrix[${index}]`, 'canonical flattened capture-position order');
+    }
+  });
+  const matrixKeys = new Set<string>();
+  decoded.section_matrix.forEach((cell, index) => {
+    const key = `${cell.capture_position_id}:${cell.section}`;
+    if (matrixKeys.has(key)) invalid(`${path}.section_matrix[${index}]`, 'unique capture-position section identity');
+    matrixKeys.add(key);
+  });
+  const sourceIds = new Set<number>();
+  let previousSourceId = 0;
+  decoded.sources.forEach((source, sourceIndex) => {
+    if (source.source_record_id <= previousSourceId || sourceIds.has(source.source_record_id)) {
+      invalid(`${path}.sources[${sourceIndex}].source_record_id`, 'unique ascending source identity');
+    }
+    previousSourceId = source.source_record_id;
+    sourceIds.add(source.source_record_id);
+    let previousArtifactId = 0;
+    source.artifacts.forEach((artifact, artifactIndex) => {
+      if (artifact.artifact_id <= previousArtifactId) {
+        invalid(
+          `${path}.sources[${sourceIndex}].artifacts[${artifactIndex}].artifact_id`,
+          'unique ascending artifact identity',
+        );
+      }
+      previousArtifactId = artifact.artifact_id;
+    });
+  });
+  decoded.capture_positions.forEach((position, positionIndex) => {
+    if (!sourceIds.has(position.source_record_id)) {
+      invalid(
+        `${path}.capture_positions[${positionIndex}].source_record_id`,
+        'source identity present in source metadata',
+      );
+    }
+  });
+  decoded.section_matrix.forEach((cell, cellIndex) => {
+    if (!sourceIds.has(cell.source_record_id)) {
+      invalid(
+        `${path}.section_matrix[${cellIndex}].source_record_id`,
+        'source identity present in source metadata',
+      );
+    }
+  });
+  return decoded;
 };
 
 function celebrationRowValue(input: unknown, path: string): ContactCelebrationRow {
@@ -939,6 +1128,343 @@ export const decodeLegacyContact: Decoder<LegacyContact> = (input, path = 'respo
     stage: stringValue(read('stage'), `${path}.stage`),
   };
 };
+
+function internalTimelineValue(input: unknown, path: string): ContactInternalTimelineEntry {
+  const read = objectReader(input, ['id', 'kind', 'summary', 'created_at'], path);
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    kind: stringValue(read('kind'), `${path}.kind`),
+    summary: stringValue(read('summary'), `${path}.summary`),
+    created_at: rfc3339(read('created_at'), `${path}.created_at`),
+  };
+}
+
+function internalTaskValue(input: unknown, path: string): ContactInternalTask {
+  const read = objectReader(
+    input,
+    ['id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status'],
+    path,
+  );
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    title: stringValue(read('title'), `${path}.title`, 1, 255),
+    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    description: stringValue(read('description'), `${path}.description`),
+    priority: stringValue(read('priority'), `${path}.priority`),
+    due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
+    status: enumValue(read('status'), ['open', 'completed', 'archived'], `${path}.status`),
+  };
+}
+
+function internalNoteValue(input: unknown, path: string): ContactInternalNote {
+  const read = objectReader(
+    input,
+    ['id', 'contact_id', 'body', 'created_at', 'updated_at'],
+    path,
+  );
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    body: stringValue(read('body'), `${path}.body`),
+    created_at: rfc3339(read('created_at'), `${path}.created_at`),
+    updated_at: rfc3339(read('updated_at'), `${path}.updated_at`),
+  };
+}
+
+function internalSmartPlanValue(input: unknown, path: string): ContactInternalSmartPlan {
+  const read = objectReader(input, ['id', 'plan_id', 'status'], path);
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    plan_id: positiveInteger(read('plan_id'), `${path}.plan_id`),
+    status: stringValue(read('status'), `${path}.status`),
+  };
+}
+
+function internalOpportunityValue(input: unknown, path: string): ContactInternalOpportunity {
+  const read = objectReader(input, ['id', 'name', 'stage', 'value_cents', 'role'], path);
+  const rawValue = read('value_cents');
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    name: stringValue(read('name'), `${path}.name`),
+    stage: stringValue(read('stage'), `${path}.stage`),
+    value_cents: rawValue === null
+      ? null
+      : integer(rawValue, `${path}.value_cents`, Number.MIN_SAFE_INTEGER),
+    role: stringValue(read('role'), `${path}.role`),
+  };
+}
+
+function internalSavedSearchValue(input: unknown, path: string): ContactInternalSavedSearch {
+  const read = objectReader(input, ['id', 'name', 'criteria'], path);
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    name: stringValue(read('name'), `${path}.name`),
+    criteria: stringValue(read('criteria'), `${path}.criteria`),
+  };
+}
+
+function internalBookingValue(input: unknown, path: string): ContactInternalBooking {
+  const read = objectReader(
+    input,
+    ['id', 'meeting_type', 'context', 'scheduled_at', 'location', 'notes'],
+    path,
+  );
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    meeting_type: stringValue(read('meeting_type'), `${path}.meeting_type`),
+    context: stringValue(read('context'), `${path}.context`),
+    scheduled_at: rfc3339(read('scheduled_at'), `${path}.scheduled_at`),
+    location: nullableString(read('location'), `${path}.location`),
+    notes: stringValue(read('notes'), `${path}.notes`),
+  };
+}
+
+export const decodeContactInternalWorkspace: Decoder<ContactInternalWorkspace> = (
+  input,
+  path = 'response',
+) => {
+  const read = objectReader(
+    input,
+    [
+      'contact', 'timeline', 'tasks', 'notes', 'smart_plans', 'opportunities',
+      'saved_searches', 'bookings', 'tags',
+    ],
+    path,
+  );
+  const workspace = {
+    contact: decodeLegacyContact(read('contact'), `${path}.contact`),
+    timeline: arrayValue(read('timeline'), `${path}.timeline`, internalTimelineValue),
+    tasks: arrayValue(read('tasks'), `${path}.tasks`, internalTaskValue),
+    notes: arrayValue(read('notes'), `${path}.notes`, internalNoteValue),
+    smart_plans: arrayValue(read('smart_plans'), `${path}.smart_plans`, internalSmartPlanValue),
+    opportunities: arrayValue(
+      read('opportunities'),
+      `${path}.opportunities`,
+      internalOpportunityValue,
+    ),
+    saved_searches: arrayValue(
+      read('saved_searches'),
+      `${path}.saved_searches`,
+      internalSavedSearchValue,
+    ),
+    bookings: arrayValue(read('bookings'), `${path}.bookings`, internalBookingValue),
+    tags: arrayValue(read('tags'), `${path}.tags`, tagValue),
+  };
+  const descendingTimestampThenId = <T extends Readonly<{ created_at: string; id: number }>>(
+    left: T,
+    right: T,
+  ) => Date.parse(right.created_at) - Date.parse(left.created_at) || right.id - left.id;
+  const descendingScheduledThenId = <T extends Readonly<{ scheduled_at: string; id: number }>>(
+    left: T,
+    right: T,
+  ) => Date.parse(right.scheduled_at) - Date.parse(left.scheduled_at) || right.id - left.id;
+  const tagNameThenId = (left: ContactTag, right: ContactTag) => (
+    left.name < right.name ? -1 : left.name > right.name ? 1 : left.id - right.id
+  );
+  return {
+    ...workspace,
+    timeline: [...workspace.timeline].sort(descendingTimestampThenId),
+    tasks: [...workspace.tasks].sort((left, right) => right.id - left.id),
+    notes: [...workspace.notes].sort(descendingTimestampThenId),
+    smart_plans: [...workspace.smart_plans].sort((left, right) => left.id - right.id),
+    opportunities: [...workspace.opportunities].sort((left, right) => right.id - left.id),
+    saved_searches: [...workspace.saved_searches].sort((left, right) => left.id - right.id),
+    bookings: [...workspace.bookings].sort(descendingScheduledThenId),
+    tags: [...workspace.tags].sort(tagNameThenId),
+  };
+};
+
+export function decodeContactInternalWorkspaceForContact(
+  input: unknown,
+  contactId: number,
+  path = 'response',
+): ContactInternalWorkspace {
+  const expectedId = positiveInteger(contactId, 'request.id');
+  const workspace = decodeContactInternalWorkspace(input, path);
+  if (workspace.contact.id !== expectedId) {
+    return invalid(`${path}.contact.id`, 'requested contact identity');
+  }
+  workspace.notes.forEach((note, index) => {
+    if (note.contact_id !== expectedId) {
+      return invalid(`${path}.notes[${index}].contact_id`, 'requested contact identity');
+    }
+  });
+  workspace.tasks.forEach((task, index) => {
+    if (task.contact_id !== expectedId) {
+      return invalid(`${path}.tasks[${index}].contact_id`, 'requested contact identity');
+    }
+  });
+  return workspace;
+}
+
+function jsonValue(
+  input: unknown,
+  path: string,
+  ancestors: Set<object> = new Set<object>(),
+): ContactJsonValue {
+  if (input === null || typeof input === 'string' || typeof input === 'boolean') return input;
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input)) return invalid(path, 'finite JSON number');
+    return input;
+  }
+  if (Array.isArray(input)) {
+    if (ancestors.has(input)) return invalid(path, 'acyclic JSON value');
+    ancestors.add(input);
+    const result: ContactJsonValue[] = [];
+    for (let index = 0; index < input.length; index += 1) {
+      if (!Object.prototype.hasOwnProperty.call(input, index)) {
+        ancestors.delete(input);
+        return invalid(`${path}[${index}]`, 'present JSON array element');
+      }
+      result.push(jsonValue(input[index], `${path}[${index}]`, ancestors));
+    }
+    ancestors.delete(input);
+    return result;
+  }
+  if (typeof input !== 'object') return invalid(path, 'JSON value');
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) return invalid(path, 'plain JSON object');
+  if (ancestors.has(input)) return invalid(path, 'acyclic JSON value');
+  ancestors.add(input);
+  const result: Record<string, ContactJsonValue> = {};
+  Object.keys(input).sort().forEach((key) => {
+    result[key] = jsonValue(Reflect.get(input, key), `${path}.${key}`, ancestors);
+  });
+  ancestors.delete(input);
+  return result;
+}
+
+function jsonObject(input: unknown, path: string): Readonly<Record<string, ContactJsonValue>> {
+  const value = jsonValue(input, path);
+  if (!isJsonRecord(value)) {
+    return invalid(path, 'JSON object');
+  }
+  return value;
+}
+
+function isJsonRecord(
+  value: ContactJsonValue,
+): value is Readonly<Record<string, ContactJsonValue>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function canonicalCriteriaText(input: unknown, path: string): string {
+  const value = stringValue(input, path, 1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return invalid(path, 'canonical compact JSON object text');
+  }
+  const canonical = JSON.stringify(jsonObject(parsed, path));
+  if (canonical !== value) return invalid(path, 'canonical compact sorted JSON object text');
+  if (new TextEncoder().encode(canonical).length > 65_536) {
+    return invalid(path, 'canonical JSON no greater than 65536 UTF-8 bytes');
+  }
+  return canonical;
+}
+
+export const decodeContactNoteCreateInput: Decoder<ContactNoteCreateInput> = (
+  input,
+  path = 'request',
+) => {
+  const read = objectReader(input, ['body'], path);
+  return { body: stringValue(read('body'), `${path}.body`, 1, 20_000) };
+};
+
+export const decodeContactSavedSearchCreateInput: Decoder<ContactSavedSearchCreateInput> = (
+  input,
+  path = 'request',
+) => {
+  const read = objectReader(input, ['name', 'criteria'], path);
+  const criteria = jsonObject(read('criteria'), `${path}.criteria`);
+  if (new TextEncoder().encode(JSON.stringify(criteria)).length > 65_536) {
+    return invalid(`${path}.criteria`, 'canonical JSON no greater than 65536 UTF-8 bytes');
+  }
+  return {
+    name: stringValue(read('name'), `${path}.name`, 1, 255),
+    criteria,
+  };
+};
+
+export const decodeContactTagCreateInput: Decoder<ContactTagCreateInput> = (
+  input,
+  path = 'request',
+) => {
+  const read = objectReader(input, ['name'], path);
+  return { name: stringValue(read('name'), `${path}.name`, 1, 80) };
+};
+
+export const decodeContactTaskCreateInput: Decoder<ContactTaskCreateInput> = (
+  input,
+  path = 'request',
+) => {
+  const read = objectReader(
+    input,
+    ['title', 'contact_id', 'description', 'priority', 'due_at'],
+    path,
+  );
+  return {
+    title: stringValue(read('title'), `${path}.title`, 1, 255),
+    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    description: stringValue(read('description'), `${path}.description`),
+    priority: enumValue(read('priority'), ['low', 'normal', 'high'], `${path}.priority`),
+    due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
+  };
+};
+
+const decodeContactNoteCreated: Decoder<ContactNoteCreated> = (input, path = 'response') => {
+  const read = objectReader(input, ['id', 'body'], path);
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    body: stringValue(read('body'), `${path}.body`),
+  };
+};
+
+const decodeContactDeleted: Decoder<ContactDeleted> = (input, path = 'response') => {
+  const read = objectReader(input, ['deleted', 'id'], path);
+  if (read('deleted') !== true) return invalid(`${path}.deleted`, 'literal true');
+  return { deleted: true, id: positiveInteger(read('id'), `${path}.id`) };
+};
+
+const decodeContactSavedSearchCreated: Decoder<ContactSavedSearchCreated> = (
+  input,
+  path = 'response',
+) => {
+  const read = objectReader(input, ['id', 'name', 'criteria'], path);
+  return {
+    id: positiveInteger(read('id'), `${path}.id`),
+    name: stringValue(read('name'), `${path}.name`),
+    criteria: canonicalCriteriaText(read('criteria'), `${path}.criteria`),
+  };
+};
+
+const decodeContactTag: Decoder<ContactTag> = (input, path = 'response') => tagValue(input, path);
+
+const decodeContactTagAssignment: Decoder<ContactTagAssignment> = (
+  input,
+  path = 'response',
+) => {
+  const read = objectReader(input, ['contact_id', 'tag_id'], path);
+  return {
+    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    tag_id: positiveInteger(read('tag_id'), `${path}.tag_id`),
+  };
+};
+
+const decodeContactTagRemoval: Decoder<ContactTagRemoval> = (input, path = 'response') => {
+  const read = objectReader(input, ['removed', 'contact_id', 'tag_id'], path);
+  return {
+    removed: booleanValue(read('removed'), `${path}.removed`),
+    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    tag_id: positiveInteger(read('tag_id'), `${path}.tag_id`),
+  };
+};
+
+const decodeContactInternalTask: Decoder<ContactInternalTask> = (
+  input,
+  path = 'response',
+) => internalTaskValue(input, path);
 
 function inputReader(input: unknown, allowed: readonly string[], path: string): Reader {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return invalid(path, 'object');
@@ -1167,6 +1693,7 @@ export type ContactsApi = Readonly<{
   detail: (id: number, options?: CommandRequestOptions) => Promise<ContactDetail>;
   neighbors: (id: number, request: ContactDirectoryRequest, options?: CommandRequestOptions) => Promise<ContactNeighbors>;
   workspace: (id: number, options?: CommandRequestOptions) => Promise<ContactWorkspaceSummary>;
+  internalWorkspace: (id: number, options?: CommandRequestOptions) => Promise<ContactInternalWorkspace>;
   timeline: (id: number, cursor: string | null, pageSize: number, options?: CommandRequestOptions) => Promise<ContactTimelinePage>;
   section: (id: number, section: Exclude<ContactSectionName, 'timeline'>, page: number, pageSize: number, options?: CommandRequestOptions) => Promise<ContactSectionPage>;
   evidence: (id: number, options?: CommandRequestOptions) => Promise<ContactEvidence>;
@@ -1174,6 +1701,14 @@ export type ContactsApi = Readonly<{
   create: (input: ContactCreateInput, options?: CommandRequestOptions) => Promise<ContactCreated>;
   update: (id: number, input: ContactUpdateInput, options?: CommandRequestOptions) => Promise<ContactCreated>;
   bulk: (input: ContactBulkInput, options?: CommandRequestOptions) => Promise<ContactBulkResult>;
+  createNote: (id: number, input: ContactNoteCreateInput, options?: CommandRequestOptions) => Promise<ContactNoteCreated>;
+  deleteNote: (id: number, noteId: number, options?: CommandRequestOptions) => Promise<ContactDeleted>;
+  createSavedSearch: (id: number, input: ContactSavedSearchCreateInput, options?: CommandRequestOptions) => Promise<ContactSavedSearchCreated>;
+  createTag: (input: ContactTagCreateInput, options?: CommandRequestOptions) => Promise<ContactTag>;
+  assignTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagAssignment>;
+  removeTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagRemoval>;
+  createTask: (input: ContactTaskCreateInput, options?: CommandRequestOptions) => Promise<ContactInternalTask>;
+  artifactBlob: (artifactId: number, options?: CommandRequestOptions) => Promise<Blob>;
 }>;
 
 function queryPath(path: string, params: string): string {
@@ -1203,17 +1738,64 @@ function sectionRoute(section: unknown): string {
   return SECTION_ROUTES[value];
 }
 
+function sectionPageForRequest(
+  input: unknown,
+  section: Exclude<ContactSectionName, 'timeline'>,
+  expectedPage: number,
+  expectedPageSize: number,
+  path = 'response',
+): ContactSectionPage {
+  const decoded = decodeContactSectionPage(input, path);
+  if (decoded.page !== expectedPage || decoded.page_size !== expectedPageSize) {
+    return invalid(path, 'requested section page identity');
+  }
+  decoded.rows.forEach((row, index) => {
+    const rowPath = `${path}.rows[${index}]`;
+    if (row.section !== section) return invalid(`${rowPath}.section`, 'requested section identity');
+    const expectedKind = section === 'opportunities' ? 'opportunity'
+      : section === 'smart_plans' ? 'smart_plan'
+        : section === 'notes' ? 'note'
+          : section === 'saved_searches' ? 'saved_search'
+            : 'task';
+    if (row.value.kind !== expectedKind) {
+      return invalid(`${rowPath}.value.kind`, 'requested section occurrence kind');
+    }
+    if (expectedKind === 'task' && row.value.kind === 'task') {
+      const expectedState = section === 'tasks_to_do' ? 'to_do'
+        : section === 'tasks_completed' ? 'completed'
+          : 'archived';
+      if (row.value.state !== expectedState) {
+        return invalid(`${rowPath}.value.state`, 'requested task section state');
+      }
+    }
+    if (row.status === 'materialized' && row.entity_type !== expectedKind) {
+      return invalid(`${rowPath}.entity_type`, 'requested section materialization type');
+    }
+  });
+  return decoded;
+}
+
 export const contactsApi: ContactsApi = {
   directory: async (request, options) => commandJson({
     path: queryPath('/contacts/directory', serializeDirectoryRequest(request)),
     decode: decodeContactDirectoryPage,
     signal: options?.signal,
   }),
-  detail: async (id, options) => commandJson({
-    path: `/contacts/${validId(id, 'request.id')}`,
-    decode: decodeContactDetail,
-    signal: options?.signal,
-  }),
+  detail: async (id, options) => {
+    const contactId = validId(id, 'request.id');
+    return commandJson({
+      path: `/contacts/${contactId}`,
+      decode: (input, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactDetail(input, responsePath);
+        if (decoded.contact.id !== contactId) {
+          return invalid(`${responsePath}.contact.id`, 'requested contact identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
   neighbors: async (id, request, options) => commandJson({
     path: queryPath(`/contacts/${validId(id, 'request.id')}/neighbors`, serializeDirectoryRequest(request)),
     decode: decodeContactNeighbors,
@@ -1224,6 +1806,14 @@ export const contactsApi: ContactsApi = {
     decode: decodeContactWorkspaceSummary,
     signal: options?.signal,
   }),
+  internalWorkspace: async (id, options) => {
+    const contactId = validId(id, 'request.id');
+    return commandJson({
+      path: `/contacts/${contactId}/workspace`,
+      decode: (input, path) => decodeContactInternalWorkspaceForContact(input, contactId, path),
+      signal: options?.signal,
+    });
+  },
   timeline: async (id, cursor, pageSize, options) => {
     if (cursor !== null && typeof cursor !== 'string') return invalid('request.cursor', 'string or null');
     const params = new URLSearchParams();
@@ -1237,19 +1827,37 @@ export const contactsApi: ContactsApi = {
   },
   section: async (id, section, page, pageSize, options) => {
     const route = sectionRoute(section);
+    const expectedPage = integer(page, 'request.page', 1);
+    const expectedPageSize = integer(pageSize, 'request.page_size', 1, 100);
     const separator = route.includes('?') ? '&' : '?';
-    const suffix = `page=${integer(page, 'request.page', 1)}&page_size=${integer(pageSize, 'request.page_size', 1, 100)}`;
+    const suffix = `page=${expectedPage}&page_size=${expectedPageSize}`;
     return commandJson({
       path: `/contacts/${validId(id, 'request.id')}/${route}${separator}${suffix}`,
-      decode: decodeContactSectionPage,
+      decode: (input, path) => sectionPageForRequest(
+        input,
+        section,
+        expectedPage,
+        expectedPageSize,
+        path,
+      ),
       signal: options?.signal,
     });
   },
-  evidence: async (id, options) => commandJson({
-    path: `/contacts/${validId(id, 'request.id')}/evidence`,
-    decode: decodeContactEvidence,
-    signal: options?.signal,
-  }),
+  evidence: async (id, options) => {
+    const contactId = validId(id, 'request.id');
+    return commandJson({
+      path: `/contacts/${contactId}/evidence`,
+      decode: (input, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactEvidence(input, responsePath);
+        if (decoded.contact_id !== contactId) {
+          return invalid(`${responsePath}.contact_id`, 'requested contact identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
   celebrations: async (month, options) => commandJson({
     path: `/celebrations?month=${integer(month, 'request.month', 1, 12)}`,
     decode: decodeContactCelebrations,
@@ -1262,18 +1870,148 @@ export const contactsApi: ContactsApi = {
     decode: decodeLegacyContact,
     signal: options?.signal,
   }),
-  update: async (id, input, options) => commandJson({
-    path: `/contacts/${validId(id, 'request.id')}`,
-    method: 'PATCH',
-    body: decodeContactUpdateInput(input),
-    decode: decodeLegacyContact,
-    signal: options?.signal,
-  }),
+  update: async (id, input, options) => {
+    const contactId = validId(id, 'request.id');
+    return commandJson({
+      path: `/contacts/${contactId}`,
+      method: 'PATCH',
+      body: decodeContactUpdateInput(input),
+      decode: (raw, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeLegacyContact(raw, responsePath);
+        if (decoded.id !== contactId) {
+          return invalid(`${responsePath}.id`, 'requested contact identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
   bulk: async (input, options) => commandJson({
     path: '/contacts/bulk',
     method: 'POST',
     body: decodeContactBulkInput(input),
     decode: decodeContactBulkResult,
+    signal: options?.signal,
+  }),
+  createNote: async (id, input, options) => {
+    const body = decodeContactNoteCreateInput(input);
+    return commandJson({
+      path: `/contacts/${validId(id, 'request.id')}/notes`,
+      method: 'POST',
+      body,
+      decode: (raw, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactNoteCreated(raw, responsePath);
+        if (decoded.body !== body.body) {
+          return invalid(`${responsePath}.body`, 'requested note body');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  deleteNote: async (id, noteId, options) => {
+    const expectedNoteId = validId(noteId, 'request.note_id');
+    return commandJson({
+      path: `/contacts/${validId(id, 'request.id')}/notes/${expectedNoteId}`,
+      method: 'DELETE',
+      decode: (input, path) => {
+        const decoded = decodeContactDeleted(input, path);
+        if (decoded.id !== expectedNoteId) return invalid(`${path}.id`, 'requested note identity');
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  createSavedSearch: async (id, input, options) => {
+    const body = decodeContactSavedSearchCreateInput(input);
+    const expectedCriteria = JSON.stringify(body.criteria);
+    return commandJson({
+      path: `/contacts/${validId(id, 'request.id')}/saved-searches`,
+      method: 'POST',
+      body,
+      decode: (raw, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactSavedSearchCreated(raw, responsePath);
+        if (decoded.name !== body.name || decoded.criteria !== expectedCriteria) {
+          return invalid(responsePath, 'requested saved search identity and criteria');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  createTag: async (input, options) => {
+    const body = decodeContactTagCreateInput(input);
+    return commandJson({
+      path: '/tags',
+      method: 'POST',
+      body,
+      decode: (raw, path) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactTag(raw, responsePath);
+        if (decoded.name !== body.name) {
+          return invalid(`${responsePath}.name`, 'requested tag identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  assignTag: async (id, tagId, options) => {
+    const contactId = validId(id, 'request.id');
+    const expectedTagId = validId(tagId, 'request.tag_id');
+    return commandJson({
+      path: `/contacts/${contactId}/tags/${expectedTagId}`,
+      method: 'POST',
+      decode: (input: unknown, path?: string) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactTagAssignment(input, responsePath);
+        if (decoded.contact_id !== contactId || decoded.tag_id !== expectedTagId) {
+          return invalid(responsePath, 'requested contact and tag identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  removeTag: async (id, tagId, options) => {
+    const contactId = validId(id, 'request.id');
+    const expectedTagId = validId(tagId, 'request.tag_id');
+    return commandJson({
+      path: `/contacts/${contactId}/tags/${expectedTagId}`,
+      method: 'DELETE',
+      decode: (input: unknown, path?: string) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactTagRemoval(input, responsePath);
+        if (decoded.contact_id !== contactId || decoded.tag_id !== expectedTagId) {
+          return invalid(responsePath, 'requested contact and tag identity');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  createTask: async (input, options) => {
+    const body = decodeContactTaskCreateInput(input);
+    return commandJson({
+      path: '/tasks',
+      method: 'POST',
+      body,
+      decode: (raw: unknown, path?: string) => {
+        const responsePath = path ?? 'response';
+        const decoded = decodeContactInternalTask(raw, responsePath);
+        if (decoded.contact_id !== body.contact_id || decoded.status !== 'open') {
+          return invalid(responsePath, 'created contact task identity and state');
+        }
+        return decoded;
+      },
+      signal: options?.signal,
+    });
+  },
+  artifactBlob: async (artifactId, options) => commandBlob({
+    path: `/archive/artifacts/${validId(artifactId, 'request.artifact_id')}/content`,
     signal: options?.signal,
   }),
 };

@@ -78,9 +78,11 @@ function contactPage(): ContactDirectoryPage {
 function contactApi(): ContactsApi {
   return {
     directory: vi.fn().mockResolvedValue(contactPage()),
-    detail: vi.fn(), neighbors: vi.fn(), workspace: vi.fn(), timeline: vi.fn(),
+    detail: vi.fn(), neighbors: vi.fn(), workspace: vi.fn(), internalWorkspace: vi.fn(), timeline: vi.fn(),
     section: vi.fn(), evidence: vi.fn(), celebrations: vi.fn(), create: vi.fn(),
-    update: vi.fn(), bulk: vi.fn(),
+    update: vi.fn(), bulk: vi.fn(), createNote: vi.fn(), deleteNote: vi.fn(),
+    createSavedSearch: vi.fn(), createTag: vi.fn(), assignTag: vi.fn(),
+    removeTag: vi.fn(), createTask: vi.fn(), artifactBlob: vi.fn(),
   };
 }
 

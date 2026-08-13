@@ -2,7 +2,13 @@ import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContactSmartView } from '@/lib/command/contacts';
 import {
+  canonicalContactLocationParams,
   CONTACT_QUERY_KEYS,
+  contactDetailLocationParams,
+  contactDetailHref,
+  contactLocationParamsForRequest,
+  parseContactDetailSelection,
+  parseContactDirectoryRequest,
   useContactDirectoryQuery,
 } from './useContactDirectoryQuery';
 
@@ -48,6 +54,59 @@ describe('useContactDirectoryQuery', () => {
       page: 1,
       page_size: 50,
     });
+  });
+
+  it('exports one canonical parser and location builder for directory/detail navigation', () => {
+    const input = new URLSearchParams(
+      'stage=past+client&source=kw_command&source=bad&sort=health_score&direction=desc'
+      + '&page=3&page_size=25&health_min=bad&campaign=sws-fall',
+    );
+    expect(parseContactDirectoryRequest(input)).toEqual({
+      stage: 'past client',
+      source: ['kw_command'],
+      smart_view: 'all',
+      sort: 'health_score',
+      direction: 'desc',
+      page: 3,
+      page_size: 25,
+    });
+    expect(canonicalContactLocationParams(input).toString()).toBe(
+      'stage=past+client&source=kw_command&sort=health_score&direction=desc'
+      + '&page=3&page_size=25&campaign=sws-fall',
+    );
+    expect(contactDetailHref(7, input)).toBe(
+      '/admin/command/contacts/7?stage=past+client&source=kw_command&sort=health_score'
+      + '&direction=desc&page=3&page_size=25&campaign=sws-fall',
+    );
+    expect(contactDetailHref(7, new URLSearchParams())).toBe('/admin/command/contacts/7');
+    expect(contactLocationParamsForRequest({ stage: 'zebra', page: 1, page_size: 50 }, input).toString()).toBe(
+      'stage=zebra&page=1&page_size=50&campaign=sws-fall',
+    );
+    expect(contactDetailLocationParams(
+      { stage: 'zebra', page: 1, page_size: 50 },
+      new URLSearchParams('contact_view=notes&task_state=archived&campaign=sws-fall'),
+    ).toString()).toBe('stage=zebra&campaign=sws-fall');
+    expect(() => contactDetailHref(0, input)).toThrow(TypeError);
+  });
+
+  it('parses and canonicalizes detail-owned tab state without retaining inapplicable keys', () => {
+    expect(parseContactDetailSelection(new URLSearchParams(
+      'contact_view=tasks&task_state=archived',
+    ))).toEqual({ view: 'tasks', taskView: 'archived' });
+    expect(parseContactDetailSelection(new URLSearchParams(
+      'contact_view=bogus&task_state=archived',
+    ))).toEqual({ view: 'timeline', taskView: 'to_do' });
+    expect(parseContactDetailSelection(new URLSearchParams(
+      'contact_view=notes&task_state=completed',
+    ))).toEqual({ view: 'notes', taskView: 'to_do' });
+
+    const raw = new URLSearchParams('contact_view=bogus&task_state=archived&campaign=sws-fall');
+    expect(contactDetailLocationParams(
+      parseContactDirectoryRequest(raw), raw, 'timeline', 'to_do',
+    ).toString()).toBe('campaign=sws-fall');
+    expect(contactDetailLocationParams(
+      parseContactDirectoryRequest(raw), raw, 'tasks', 'completed',
+    ).toString()).toBe('contact_view=tasks&task_state=completed&campaign=sws-fall');
   });
 
   it('parses, bounds, deduplicates, and sorts all repeatable values', () => {
@@ -104,6 +163,15 @@ describe('useContactDirectoryQuery', () => {
       '/admin/command/contacts?campaign=fall&page=1&page_size=50',
       { scroll: false },
     );
+
+    for (const unsupportedPageSize of ['10', '24', '26']) {
+      expect(parseContactDirectoryRequest(new URLSearchParams(
+        `page=3&page_size=${unsupportedPageSize}`,
+      ))).toMatchObject({ page: 3, page_size: 50 });
+    }
+
+    act(() => result.current.replace({ page: 3, page_size: 10 }));
+    expect(navigation.replace.mock.calls.at(-1)?.[0]).toContain('page=1&page_size=50');
   });
 
   it('drops a reversed health range instead of silently changing its meaning', () => {

@@ -1,11 +1,10 @@
-import Link from 'next/link';
-
 export type EvidenceLevel = 'observed_record' | 'rendered_occurrence' | 'displayed_aggregate';
-export type CaptureQuality = 'complete' | 'partial' | 'limitation';
+export type CaptureQuality = 'complete' | 'partial' | 'shell' | 'error' | 'limitation';
 
-export type CommandArtifactLink = Readonly<{
+export type CommandArtifactAction = Readonly<{
   label: string;
-  href: string;
+  onAction: () => void;
+  disabled?: boolean;
 }>;
 
 export type CommandEvidencePanelProps = Readonly<{
@@ -18,7 +17,7 @@ export type CommandEvidencePanelProps = Readonly<{
   displayedCount?: number;
   artifactCount?: number;
   explanation?: string;
-  artifactLinks?: readonly CommandArtifactLink[];
+  artifactActions?: readonly CommandArtifactAction[];
 }>;
 
 const evidenceLabels: Record<EvidenceLevel, string> = {
@@ -30,6 +29,8 @@ const evidenceLabels: Record<EvidenceLevel, string> = {
 const captureLabels: Record<CaptureQuality, string> = {
   complete: 'Complete capture',
   partial: 'Partial capture',
+  shell: 'Shell capture',
+  error: 'Capture error',
   limitation: 'Capture limitation',
 };
 
@@ -45,7 +46,7 @@ export function CommandEvidencePanel({
   displayedCount,
   artifactCount,
   explanation,
-  artifactLinks = [],
+  artifactActions = [],
 }: CommandEvidencePanelProps) {
   const aggregateExplanation = evidenceLevel === 'displayed_aggregate' && displayedCount !== undefined
     ? observedCount === undefined
@@ -99,11 +100,13 @@ export function CommandEvidencePanel({
       </dl>
       {aggregateExplanation ? <p className="command-evidence-explanation">{aggregateExplanation}</p> : null}
       {explanation ? <p className="command-evidence-explanation">{explanation}</p> : null}
-      {artifactLinks.length > 0 ? (
-        <ul className="command-evidence-links" aria-label="Source artifacts">
-          {artifactLinks.map((artifact) => (
-            <li key={artifact.href}>
-              <Link href={artifact.href}>{artifact.label}</Link>
+      {artifactActions.length > 0 ? (
+        <ul className="command-evidence-links" aria-label="Source artifact actions">
+          {artifactActions.map((artifact) => (
+            <li key={artifact.label}>
+              <button type="button" disabled={artifact.disabled} onClick={artifact.onAction}>
+                {artifact.label}
+              </button>
             </li>
           ))}
         </ul>

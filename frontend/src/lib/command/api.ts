@@ -25,58 +25,6 @@ export type TaskFilters = Readonly<{
 
 export type Overview = { contacts: number; open_tasks: number; opportunities: number; active_smart_plans: number };
 export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null; last_contacted_at?: string | null; recently_active_at?: string | null; health_score?: number | null };
-export type LegacyContactWorkspace = Readonly<{
-  contact: LegacyContact;
-  timeline: readonly Readonly<{
-    id: number;
-    kind: string;
-    summary: string;
-    created_at: string;
-  }>[];
-  tasks: readonly Readonly<{
-    id: number;
-    title: string;
-    contact_id: number | null;
-    description: string;
-    priority: string;
-    due_at: string | null;
-    status: string;
-  }>[];
-  notes: readonly Readonly<{
-    id: number;
-    contact_id: number;
-    body: string;
-    created_at: string;
-    updated_at: string;
-  }>[];
-  smart_plans: readonly Readonly<{
-    id: number;
-    plan_id: number;
-    status: string;
-  }>[];
-  opportunities: readonly Readonly<{
-    id: number;
-    name: string;
-    stage: string;
-    value_cents: number | null;
-    role: string;
-  }>[];
-  saved_searches: readonly Readonly<{
-    id: number;
-    name: string;
-    criteria: string;
-  }>[];
-  bookings: readonly Readonly<{
-    id: number;
-    meeting_type: string;
-    context: string;
-    scheduled_at: string;
-    location: string | null;
-    notes: string;
-  }>[];
-  tags: readonly Readonly<{ id: number; name: string }>[];
-}>;
-export type ContactWorkspace = LegacyContactWorkspace;
 export type ReportDetails = { metric: string; rows: { id: number; title: string; detail: string; occurred_at: string | null }[] };
 export type Goal = { id: number; name: string; target_value: number; current_value: number; period: 'weekly' | 'monthly' | 'quarterly' | 'annual' };
 export type AiBriefing = { summary: string; source: string; requires_review: boolean };
@@ -166,7 +114,6 @@ export const commandApi = {
   ): Promise<ContactDirectoryPage> => contactsApi.directory(directoryRequest, options),
   tasks: (filters: TaskFilters = {}, options?: CommandRequestOptions) => { const params = new URLSearchParams(); if (filters.status) params.set('status', filters.status); if (filters.due_before) params.set('due_before', filters.due_before); if (filters.due_after) params.set('due_after', filters.due_after); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`, { signal: options?.signal }); },
   celebrations: (month: number, options?: CommandRequestOptions) => contactsApi.celebrations(month, options),
-  contactWorkspace: (id: number) => request<LegacyContactWorkspace>(`/contacts/${id}/workspace`),
   createContactNote: (id: number, body: string) => request<{ id: number; body: string }>(`/contacts/${id}/notes`, { method: 'POST', body: JSON.stringify({ body }) }),
   createContactSavedSearch: (id: number, name: string, criteria: Record<string, unknown>) => request<{ id: number; name: string; criteria: string }>(`/contacts/${id}/saved-searches`, { method: 'POST', body: JSON.stringify({ name, criteria }) }),
   savedSearches: () => request<SavedSearch[]>('/saved-searches'),

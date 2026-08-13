@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   commandApi,
   contactsApi,
-  type LegacyContactWorkspace,
 } from './api';
 import { CommandDecodeError } from './http';
 
@@ -38,7 +37,6 @@ describe('commandApi', () => {
       'contactDirectory',
       'tasks',
       'celebrations',
-      'contactWorkspace',
       'createContactNote',
       'createContactSavedSearch',
       'savedSearches',
@@ -113,7 +111,6 @@ describe('commandApi', () => {
     }>[] = [
       { name: 'overview', invoke: () => commandApi.overview(), path: '/overview' },
       { name: 'tasks', invoke: () => commandApi.tasks({ status: 'open' }), path: '/tasks?status=open' },
-      { name: 'contactWorkspace', invoke: () => commandApi.contactWorkspace(7), path: '/contacts/7/workspace' },
       { name: 'savedSearches', invoke: () => commandApi.savedSearches(), path: '/saved-searches' },
       { name: 'goals', invoke: () => commandApi.goals(), path: '/goals' },
       { name: 'aiBriefing', invoke: () => commandApi.aiBriefing(), path: '/ai/briefing' },
@@ -579,53 +576,6 @@ describe('commandApi', () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('Content-Type');
   });
 
-  it('retains the complete readonly rich contact workspace type and unchecked legacy route', async () => {
-    const workspace: LegacyContactWorkspace = {
-      contact: legacyContact,
-      timeline: [{ id: 1, kind: 'note', summary: 'Called', created_at: '2026-08-13T12:00:00Z' }],
-      tasks: [{
-        id: 2,
-        title: 'Call',
-        contact_id: 7,
-        description: '',
-        priority: 'normal',
-        due_at: null,
-        status: 'open',
-      }],
-      notes: [{
-        id: 3,
-        contact_id: 7,
-        body: 'Private note',
-        created_at: '2026-08-13T12:00:00Z',
-        updated_at: '2026-08-13T12:30:00Z',
-      }],
-      smart_plans: [{ id: 4, plan_id: 5, status: 'active' }],
-      opportunities: [{
-        id: 6,
-        name: 'Listing',
-        stage: 'active',
-        value_cents: null,
-        role: 'seller',
-      }],
-      saved_searches: [{ id: 7, name: 'Search', criteria: '{}' }],
-      bookings: [{
-        id: 8,
-        meeting_type: 'consultation',
-        context: 'Intro',
-        scheduled_at: '2026-08-14T12:00:00Z',
-        location: null,
-        notes: '',
-      }],
-      tags: [{ id: 9, name: 'Seller' }],
-    };
-    vi.stubGlobal('localStorage', { getItem: () => 'token-rich-workspace' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => workspace });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(commandApi.contactWorkspace(7)).resolves.toBe(workspace);
-    expect(fetchMock.mock.calls[0]?.[0]).toContain('/contacts/7/workspace');
-  });
-
   it('requests contacts with server-side search and stage filters', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-contact-filter' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
@@ -659,15 +609,6 @@ describe('commandApi', () => {
     vi.stubGlobal('fetch', fetchMock);
     await commandApi.updateTask(9, { contact_id: 14 });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ contact_id: 14 }) }));
-  });
-
-  it('loads the complete contact workspace including internal booking history', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'token-contact-workspace' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ contact: {}, bookings: [] }) });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(commandApi.contactWorkspace(14)).resolves.toMatchObject({ bookings: [] });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/contacts/14/workspace'), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-contact-workspace' }) }));
   });
 
   it('loads a report-card drilldown through the authenticated Command API', async () => {

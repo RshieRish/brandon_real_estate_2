@@ -100,6 +100,7 @@ function fakeApi(directoryResult: ContactDirectoryPage | Promise<ContactDirector
     detail: vi.fn(),
     neighbors: vi.fn(),
     workspace: vi.fn(),
+    internalWorkspace: vi.fn(),
     timeline: vi.fn(),
     section: vi.fn(),
     evidence: vi.fn(),
@@ -111,6 +112,14 @@ function fakeApi(directoryResult: ContactDirectoryPage | Promise<ContactDirector
       actioned_contact_ids: [2, 7],
       action: 'set_stage',
     }),
+    createNote: vi.fn(),
+    deleteNote: vi.fn(),
+    createSavedSearch: vi.fn(),
+    createTag: vi.fn(),
+    assignTag: vi.fn(),
+    removeTag: vi.fn(),
+    createTask: vi.fn(),
+    artifactBlob: vi.fn(),
   };
 }
 
@@ -493,6 +502,22 @@ describe('ContactsWorkspace', () => {
     expect(navigation.push).toHaveBeenLastCalledWith('/admin/command/contacts/7');
     await user.click(within(row as HTMLElement).getByRole('button', { name: 'Open Ada Lovelace' }));
     expect(navigation.push).toHaveBeenCalledTimes(4);
+  });
+
+  it('carries the exact canonical directory universe and unrelated parameters into detail navigation', async () => {
+    navigation.search = new URLSearchParams(
+      'stage=past+client&source=kw_command&sort=health_score&direction=desc&page=3&page_size=25'
+      + '&contact_view=notes&task_state=archived&campaign=sws-fall',
+    );
+    const user = userEvent.setup();
+    renderWorkspace(fakeApi(page([ada], 1)));
+    const row = (await screen.findByText('Ada Lovelace')).closest('tr');
+
+    await user.click(row as HTMLElement);
+
+    expect(navigation.push).toHaveBeenCalledWith(
+      '/admin/command/contacts/7?stage=past+client&source=kw_command&sort=health_score&direction=desc&page=3&page_size=25&campaign=sws-fall',
+    );
   });
 
   it('limits selection to visible IDs and sends sorted explicit bulk commands once', async () => {

@@ -12,6 +12,10 @@
   --command-canvas: #f6f5f2;
   --command-surface: #ffffff;
   --command-border: #dedfdc;
+  --command-border-strong: #b9bbb7;
+  --command-gold-soft: #fbf3df;
+  --command-surface-subtle: #faf9f6;
+  --command-shadow-raised: 0 12px 32px rgb(10 10 10 / 14%);
   --command-danger: #b42318;
   --command-success: #26724a;
   min-height: 100dvh;
@@ -990,6 +994,8 @@
 
 .command-root .command-evidence-badges [data-level='displayed_aggregate'],
 .command-root .command-evidence-badges [data-quality='partial'],
+.command-root .command-evidence-badges [data-quality='shell'],
+.command-root .command-evidence-badges [data-quality='error'],
 .command-root .command-evidence-badges [data-quality='limitation'] {
   border-color: #d5b060;
   background: #fbf5e6;
@@ -1046,10 +1052,20 @@
   list-style: none;
 }
 
-.command-root .command-evidence-links a {
+.command-root .command-evidence-links a,
+.command-root .command-evidence-links button {
   color: #76521c;
   font-weight: 700;
   text-underline-offset: 3px;
+}
+
+.command-root .command-evidence-links button {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
 }
 
 .command-root .command-toast-viewport {
@@ -2300,6 +2316,390 @@
   }
 }
 
+.command-root .command-contact-detail-workspace {
+  min-width: 0;
+  color: var(--command-ink);
+}
+
+.command-root .command-contact-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 352px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  padding-block: 22px 30px;
+}
+
+.command-root .command-contact-detail-grid > div:nth-of-type(2) {
+  position: sticky;
+  top: calc(var(--command-header) + 18px);
+  align-self: start;
+  max-height: calc(100dvh - var(--command-header) - 36px);
+  overflow-y: auto;
+}
+
+.command-root .command-contact-profile-column,
+.command-root .command-contact-detail-main,
+.command-root .command-contact-detail-panel,
+.command-root .command-contact-task-panel {
+  min-width: 0;
+}
+
+.command-root .command-contact-profile-column,
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region,
+.command-root .command-contact-bookings,
+.command-root .command-contact-timeline,
+.command-root .command-contact-capture-evidence > section {
+  border: 1px solid var(--command-border);
+  border-radius: 6px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-identity-card,
+.command-root .command-contact-profile-section,
+.command-root .command-contact-map,
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region,
+.command-root .command-contact-bookings,
+.command-root .command-contact-capture-evidence > section {
+  padding: 18px;
+}
+
+.command-root .command-contact-profile-section,
+.command-root .command-contact-map {
+  border-top: 1px solid var(--command-border);
+}
+
+.command-root .command-contact-profile-name {
+  margin: 4px 0 14px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.command-root .command-contact-avatar,
+.command-root .command-contact-health,
+.command-root .command-contact-region-heading,
+.command-root .command-contact-record-heading,
+.command-root .command-contact-detail-tools,
+.command-root .command-contact-action-buttons,
+.command-root .command-contact-editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.command-root .command-contact-health {
+  width: fit-content;
+  margin-bottom: 14px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--command-gold);
+  background: var(--command-gold-soft);
+}
+
+.command-root .command-contact-methods,
+.command-root .command-contact-profile-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.command-root .command-contact-methods > div,
+.command-root .command-contact-profile-list > div {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.command-root .command-contact-methods dt,
+.command-root .command-contact-profile-list dt {
+  color: var(--command-muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: capitalize;
+}
+
+.command-root .command-contact-methods dd,
+.command-root .command-contact-profile-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.command-root .command-contact-tags,
+.command-root .command-contact-global-counts,
+.command-root .command-contact-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-root .command-contact-tags > span,
+.command-root .command-contact-global-counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--command-border);
+  border-radius: 999px;
+  background: var(--command-gold-soft);
+  font-size: 12px;
+}
+
+.command-root .command-contact-tags button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.command-root .command-contact-profile-disclosure {
+  display: none;
+}
+
+.command-root .command-contact-detail-main {
+  overflow: hidden;
+}
+
+.command-root .command-contact-detail-main > .command-tabs,
+.command-root .command-contact-task-panel + .command-tabs {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.command-root .command-contact-detail-panel {
+  padding-top: 18px;
+}
+
+.command-root .command-contact-source-region,
+.command-root .command-contact-internal-region {
+  margin-bottom: 16px;
+}
+
+.command-root .command-contact-region-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.command-root .command-contact-region-heading > span {
+  color: var(--command-gold-strong);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.command-root .command-contact-region-heading h3,
+.command-root .command-contact-record-card h4 {
+  margin: 0;
+}
+
+.command-root .command-contact-cards,
+.command-root .command-contact-timeline,
+.command-root .command-contact-bookings,
+.command-root .command-contact-capture-evidence {
+  display: grid;
+  gap: 12px;
+}
+
+.command-root .command-contact-record-card,
+.command-root .command-contact-bookings article,
+.command-root .command-contact-timeline article {
+  padding: 14px;
+  border: 1px solid var(--command-border);
+  border-left: 3px solid var(--command-gold);
+  border-radius: 4px;
+  background: var(--command-surface-subtle);
+}
+
+.command-root .command-contact-record-card code {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.command-root .command-contact-detail-workspace .command-touch-target,
+.command-root .command-contact-detail-workspace .command-primary-button,
+.command-root .command-contact-detail-workspace .command-inline-button {
+  min-height: 44px;
+}
+
+.command-root .command-contact-jump input,
+.command-root .command-contact-jump-results button,
+.command-root .command-contact-action-form input,
+.command-root .command-contact-action-form textarea,
+.command-root .command-contact-editor input {
+  min-height: 44px;
+}
+
+.command-root .command-contact-record-heading {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.command-root .command-contact-record-heading span,
+.command-root .command-contact-timeline article > div > span {
+  color: var(--command-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.command-root .command-contact-record-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--command-border);
+}
+
+.command-root .command-contact-detail-tools {
+  justify-content: space-between;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.command-root .command-contact-jump {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: min(100%, 280px);
+}
+
+.command-root .command-contact-jump input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px 8px 34px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-jump > svg {
+  position: absolute;
+  left: 10px;
+  z-index: 1;
+}
+
+.command-root .command-contact-jump-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: grid;
+  padding: 5px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  box-shadow: var(--command-shadow-raised);
+}
+
+.command-root .command-contact-jump-results button {
+  min-height: 44px;
+  padding: 9px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.command-root .command-contact-action-form,
+.command-root .command-contact-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+}
+
+.command-root .command-contact-action-form > div,
+.command-root .command-contact-editor-heading {
+  justify-content: space-between;
+}
+
+.command-root .command-contact-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.command-root .command-contact-editor-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--command-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.command-root .command-contact-editor-fields input,
+.command-root .command-contact-action-form input,
+.command-root .command-contact-action-form textarea {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--command-border-strong);
+  border-radius: 4px;
+  background: var(--command-surface);
+  color: var(--command-ink);
+}
+
+.command-root .command-contact-record-card,
+.command-root .command-contact-record-card > *,
+.command-root .command-contact-record-heading,
+.command-root .command-contact-record-heading > *,
+.command-root .command-contact-timeline,
+.command-root .command-contact-timeline article,
+.command-root .command-contact-timeline article > *,
+.command-root .command-contact-bookings,
+.command-root .command-contact-bookings article,
+.command-root .command-contact-bookings article > * {
+  min-width: 0;
+}
+
+.command-root .command-contact-record-card h4,
+.command-root .command-contact-record-card p,
+.command-root .command-contact-timeline h3,
+.command-root .command-contact-timeline p,
+.command-root .command-contact-timeline strong,
+.command-root .command-contact-bookings h4,
+.command-root .command-contact-bookings p {
+  overflow-wrap: anywhere;
+}
+
+.command-root .command-contact-summary-strip {
+  padding: 14px 24px 24px;
+}
+
+.command-root .command-contact-summary-strip span {
+  display: grid;
+  min-width: 106px;
+  padding: 10px;
+  border-top: 3px solid var(--command-gold);
+  background: var(--command-surface-subtle);
+  color: var(--command-muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.command-root .command-contact-summary-strip strong {
+  color: var(--command-ink);
+  font-size: 20px;
+}
+
+.command-root .command-contact-universe-state {
+  margin: 0 24px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--command-gold);
+  background: var(--command-gold-soft);
+  font-weight: 700;
+}
+
 @media (max-width: 1100px) {
   .command-root .command-contacts-table {
     min-width: 930px;
@@ -2307,6 +2707,50 @@
 }
 
 @media (max-width: 767px) {
+  .command-root .command-contact-detail-grid {
+    display: block;
+    padding-top: 14px;
+  }
+
+  .command-root .command-contact-profile-disclosure {
+    display: block;
+    margin-bottom: 12px;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2) {
+    position: static;
+    display: none;
+    max-height: none;
+    margin-bottom: 16px;
+    overflow: visible;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2).is-mobile-open {
+    display: block;
+  }
+
+  .command-root .command-contact-detail-main > .command-tabs,
+  .command-root .command-contact-task-panel + .command-tabs {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+
+  .command-root .command-contact-detail-tools,
+  .command-root .command-contact-action-buttons,
+  .command-root .command-contact-record-status,
+  .command-root .command-contact-region-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-root .command-contact-jump {
+    width: 100%;
+  }
+
+  .command-root .command-contact-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .command-root .command-module-title-row,
   .command-root .command-evidence-heading,
   .command-root .command-state-panel {
@@ -2481,7 +2925,36 @@
   .command-root .command-rail-overlay,
   .command-root .command-utility-header,
   .command-root .command-mobile-header,
-  .command-root .command-print-hidden {
+  .command-root .command-print-hidden,
+  .command-root .command-contact-profile-disclosure,
+  .command-root .command-contact-editor,
+  .command-root .command-contact-actions,
+  .command-root .command-contact-detail-workspace .command-module-actions,
+  .command-root .command-contact-detail-workspace .command-module-toolbar,
+  .command-root .command-contact-detail-workspace .command-tabs,
+  .command-root .command-contact-profile-column > section button,
+  .command-root .command-evidence-links,
+  .command-root .command-inline-button,
+  .command-root .command-contact-tags button,
+  .command-root .command-contact-detail-panel > button {
+    display: none !important;
+  }
+
+  .command-root .command-contact-detail-grid {
+    display: grid;
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .command-root .command-contact-detail-grid > div:nth-of-type(2) {
+    position: static;
+    display: block !important;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .command-root .command-contact-detail-panel[hidden],
+  .command-root .command-contact-task-panel[hidden] {
     display: none !important;
   }
 

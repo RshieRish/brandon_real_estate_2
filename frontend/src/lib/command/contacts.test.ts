@@ -9,6 +9,12 @@ import {
   decodeContactDetail,
   decodeContactDirectoryPage,
   decodeContactEvidence,
+  decodeContactInternalWorkspace,
+  decodeContactInternalWorkspaceForContact,
+  decodeContactNoteCreateInput,
+  decodeContactSavedSearchCreateInput,
+  decodeContactTagCreateInput,
+  decodeContactTaskCreateInput,
   decodeContactNeighbors,
   decodeContactSectionPage,
   decodeContactTimelinePage,
@@ -153,6 +159,19 @@ const timelinePage = {
   has_more: false,
 };
 
+const evidenceSections = [
+  'timeline', 'opportunities', 'smart_plans', 'notes', 'saved_searches',
+  'tasks_to_do', 'tasks_completed', 'tasks_archived',
+].map((section) => ({
+  capture_position_id: 4,
+  section,
+  source_record_id: 31,
+  capture_quality: 'complete',
+  row_count: 0,
+  is_empty: true,
+  limitation_codes: [],
+}));
+
 const evidence = {
   contact_id: 7,
   provider_contact_rows: 1,
@@ -166,17 +185,9 @@ const evidence = {
     capture_ordinal: 1,
     source_record_id: 31,
     capture_quality: 'complete',
-    sections: [{
-      capture_position_id: 4,
-      section: 'timeline',
-      source_record_id: 32,
-      capture_quality: 'complete',
-      row_count: 0,
-      is_empty: true,
-      limitation_codes: [],
-    }],
+    sections: evidenceSections,
   }],
-  section_matrix: [],
+  section_matrix: evidenceSections,
   sources: [{
     source_record_id: 31,
     record_kind: 'contact_profile',
@@ -231,6 +242,39 @@ const workspaceSummary = {
   bookings: 8,
 };
 
+const internalWorkspace = {
+  contact: legacyContact,
+  timeline: [{ id: 20, kind: 'call', summary: 'Called', created_at: '2026-08-12T12:00:00Z' }],
+  tasks: [{
+    id: 21,
+    title: 'Follow up',
+    contact_id: 7,
+    description: '',
+    priority: 'normal',
+    due_at: null,
+    status: 'open',
+  }],
+  notes: [{
+    id: 22,
+    contact_id: 7,
+    body: 'Internal note',
+    created_at: '2026-08-12T12:00:00Z',
+    updated_at: '2026-08-12T13:00:00Z',
+  }],
+  smart_plans: [{ id: 23, plan_id: 24, status: 'active' }],
+  opportunities: [{ id: 25, name: 'Listing', stage: 'active', value_cents: 100, role: 'seller' }],
+  saved_searches: [{ id: 26, name: 'Downsizer', criteria: '{"beds":2}' }],
+  bookings: [{
+    id: 27,
+    meeting_type: 'consultation',
+    context: 'seller',
+    scheduled_at: '2026-08-20T14:00:00Z',
+    location: null,
+    notes: '',
+  }],
+  tags: [{ id: 28, name: 'VIP' }],
+};
+
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -258,6 +302,129 @@ function privateDecodeFailure(operation: () => unknown): void {
 describe('Command contacts wire decoders', () => {
   it('decodes the complete directory wire without renaming snake_case fields', () => {
     expect(decodeContactDirectoryPage(directoryPage)).toEqual(directoryPage);
+  });
+
+  it('strictly decodes the complete internal workspace and binds every mutable identity', () => {
+    expect(decodeContactInternalWorkspace(internalWorkspace)).toEqual(internalWorkspace);
+    expect(decodeContactInternalWorkspace({
+      ...internalWorkspace,
+      tasks: [{ ...internalWorkspace.tasks[0], priority: 'urgent' }],
+    }).tasks[0]?.priority).toBe('urgent');
+    expect(decodeContactInternalWorkspace({
+      ...internalWorkspace,
+      tasks: [{ ...internalWorkspace.tasks[0], priority: '' }],
+    }).tasks[0]?.priority).toBe('');
+    expect(decodeContactInternalWorkspaceForContact(internalWorkspace, 7)).toEqual(internalWorkspace);
+
+    privateDecodeFailure(() => decodeContactInternalWorkspace({
+      ...internalWorkspace,
+      private_payload: true,
+    }));
+    privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+      ...internalWorkspace,
+      contact: { ...legacyContact, id: 8 },
+    }, 7));
+    privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+      ...internalWorkspace,
+      notes: [{ ...internalWorkspace.notes[0], contact_id: 8 }],
+    }, 7));
+    for (const contactId of [null, 8]) {
+      privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+        ...internalWorkspace,
+        tasks: [{ ...internalWorkspace.tasks[0], contact_id: contactId }],
+      }, 7));
+    }
+    for (const status of ['in_progress', 'cancelled', 'unknown']) {
+      privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+        ...internalWorkspace,
+        tasks: [{ ...internalWorkspace.tasks[0], status }],
+      }, 7));
+    }
+
+    const sorted = decodeContactInternalWorkspace({
+      ...internalWorkspace,
+      timeline: [
+        { id: 1, kind: 'old', summary: 'old', created_at: '2026-08-10T12:00:00Z' },
+        { id: 2, kind: 'new-low', summary: 'new low', created_at: '2026-08-12T12:00:00Z' },
+        { id: 3, kind: 'new-high', summary: 'new high', created_at: '2026-08-12T12:00:00Z' },
+      ],
+      tasks: [
+        { ...internalWorkspace.tasks[0], id: 40 },
+        { ...internalWorkspace.tasks[0], id: 42 },
+      ],
+      notes: [
+        { ...internalWorkspace.notes[0], id: 51, created_at: '2026-08-12T12:00:00Z' },
+        { ...internalWorkspace.notes[0], id: 52, created_at: '2026-08-12T12:00:00Z' },
+      ],
+      smart_plans: [{ id: 62, plan_id: 1, status: 'active' }, { id: 61, plan_id: 2, status: 'active' }],
+      opportunities: [
+        { ...internalWorkspace.opportunities[0], id: 70 },
+        { ...internalWorkspace.opportunities[0], id: 72 },
+      ],
+      saved_searches: [
+        { ...internalWorkspace.saved_searches[0], id: 82 },
+        { ...internalWorkspace.saved_searches[0], id: 81 },
+      ],
+      bookings: [
+        { ...internalWorkspace.bookings[0], id: 91, scheduled_at: '2026-08-20T14:00:00Z' },
+        { ...internalWorkspace.bookings[0], id: 92, scheduled_at: '2026-08-20T14:00:00Z' },
+      ],
+      tags: [{ id: 103, name: 'Alpha' }, { id: 102, name: 'Alpha' }, { id: 101, name: 'Zulu' }],
+    });
+    expect(sorted.timeline.map(({ id }) => id)).toEqual([3, 2, 1]);
+    expect(sorted.tasks.map(({ id }) => id)).toEqual([42, 40]);
+    expect(sorted.notes.map(({ id }) => id)).toEqual([52, 51]);
+    expect(sorted.smart_plans.map(({ id }) => id)).toEqual([61, 62]);
+    expect(sorted.opportunities.map(({ id }) => id)).toEqual([72, 70]);
+    expect(sorted.saved_searches.map(({ id }) => id)).toEqual([81, 82]);
+    expect(sorted.bookings.map(({ id }) => id)).toEqual([92, 91]);
+    expect(sorted.tags.map(({ id }) => id)).toEqual([102, 103, 101]);
+  });
+
+  it('strictly validates the approved contact-bound mutation inputs', () => {
+    expect(decodeContactNoteCreateInput({ body: 'Private note' })).toEqual({ body: 'Private note' });
+    expect(decodeContactSavedSearchCreateInput({
+      name: 'Downsizers', criteria: { beds: 2, nested: [true, null, 'x'] },
+    })).toEqual({ name: 'Downsizers', criteria: { beds: 2, nested: [true, null, 'x'] } });
+    expect(decodeContactSavedSearchCreateInput({
+      name: 'Boundary', criteria: { payload: 'x'.repeat(65_522) },
+    }).criteria).toHaveProperty('payload', 'x'.repeat(65_522));
+    expect(decodeContactSavedSearchCreateInput({
+      name: 'Unicode boundary', criteria: { payload: `${'😀'.repeat(16_380)}xx` },
+    }).criteria).toHaveProperty('payload', `${'😀'.repeat(16_380)}xx`);
+    expect(Object.keys(decodeContactSavedSearchCreateInput({
+      name: 'Canonical keys', criteria: { z: 1, nested: { z: 2, a: 1 }, a: 2 },
+    }).criteria)).toEqual(['a', 'nested', 'z']);
+    expect(decodeContactTagCreateInput({ name: 'Seller' })).toEqual({ name: 'Seller' });
+    expect(decodeContactTaskCreateInput({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    })).toEqual({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    });
+
+    privateDecodeFailure(() => decodeContactNoteCreateInput({ body: '' }));
+    privateDecodeFailure(() => decodeContactNoteCreateInput({ body: 'x'.repeat(20_001) }));
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({ name: '', criteria: {} }));
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({ name: 'x', criteria: { bad: Number.NaN } }));
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({
+      name: 'Boundary', criteria: { payload: 'x'.repeat(65_523) },
+    }));
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({
+      name: 'Unicode over', criteria: { payload: `${'😀'.repeat(16_380)}xxx` },
+    }));
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({ name: 'Cycle', criteria: cyclic }));
+    privateDecodeFailure(() => decodeContactSavedSearchCreateInput({
+      name: 'Sparse', criteria: { values: new Array(1) },
+    }));
+    privateDecodeFailure(() => decodeContactTagCreateInput({ name: 'x'.repeat(81) }));
+    privateDecodeFailure(() => decodeContactTaskCreateInput({
+      title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: null,
+    }));
+    privateDecodeFailure(() => decodeContactTaskCreateInput({
+      title: 'Call', contact_id: 7, description: '', priority: 'urgent', due_at: null,
+    }));
   });
 
   it('requires every response array even when Task 6 constructs defaults internally', () => {
@@ -453,13 +620,62 @@ describe('Command contacts wire decoders', () => {
       capture_quality: 'limitation',
     }));
 
+    const variedSections = evidenceSections.map((cell, index) => (
+      index === 0 ? { ...cell, capture_quality: 'error' } : cell
+    ));
     expect(decodeContactEvidence({
       ...evidence,
       capture_quality: 'limitation',
-      capture_positions: [{ ...evidence.capture_positions[0], capture_quality: 'shell' }],
-      section_matrix: [{ ...evidence.capture_positions[0].sections[0], capture_quality: 'error' }],
+      capture_positions: [{ ...evidence.capture_positions[0], capture_quality: 'shell', sections: variedSections }],
+      section_matrix: variedSections,
       sources: [{ ...evidence.sources[0], capture_quality: 'partial' }],
     }).capture_quality).toBe('limitation');
+
+    for (const malformed of [
+      { ...evidence, capture_positions: [], section_matrix: evidenceSections },
+      { ...evidence, section_matrix: evidenceSections.slice(1) },
+      { ...evidence, section_matrix: [...evidenceSections, evidenceSections[0]] },
+      { ...evidence, section_matrix: evidenceSections.map((cell, index) => (
+        index === 0 ? { ...cell, row_count: 1, is_empty: false } : cell
+      )) },
+    ]) {
+      privateDecodeFailure(() => decodeContactEvidence(malformed));
+    }
+    const distinctSectionSources = evidenceSections.map((cell, index) => ({
+      ...cell,
+      source_record_id: 100 + index,
+    }));
+    const distinctSourceMetadata = distinctSectionSources.map((cell) => ({
+      ...evidence.sources[0],
+      source_record_id: cell.source_record_id,
+      artifacts: [],
+    }));
+    expect(decodeContactEvidence({
+      ...evidence,
+      capture_positions: [{ ...evidence.capture_positions[0], source_record_id: 31, sections: distinctSectionSources }],
+      section_matrix: distinctSectionSources,
+      sources: [...evidence.sources, ...distinctSourceMetadata],
+    }).section_matrix.map((cell) => cell.source_record_id)).toEqual(
+      distinctSectionSources.map((cell) => cell.source_record_id),
+    );
+
+    for (const malformedSources of [
+      [],
+      [evidence.sources[0], evidence.sources[0]],
+      [
+        { ...evidence.sources[0], source_record_id: 32, artifacts: [] },
+        evidence.sources[0],
+      ],
+      [{
+        ...evidence.sources[0],
+        artifacts: [
+          { ...evidence.sources[0].artifacts[0], artifact_id: 10, content_href: '/api/v1/command/archive/artifacts/10/content' },
+          evidence.sources[0].artifacts[0],
+        ],
+      }],
+    ]) {
+      privateDecodeFailure(() => decodeContactEvidence({ ...evidence, sources: malformedSources }));
+    }
 
     for (const coalesced_aliases of [1, false, '0']) {
       privateDecodeFailure(() => decodeContactEvidence({ ...evidence, coalesced_aliases }));
@@ -717,6 +933,9 @@ describe('Command contacts request validation and serialization', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(contactsApi.update(7, { email: undefined })).rejects
       .toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.createSavedSearch(7, {
+      name: 'Sparse criteria', criteria: { values: new Array(1) },
+    })).rejects.toBeInstanceOf(CommandDecodeError);
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
@@ -766,12 +985,13 @@ describe('dedicated Contacts API transport map', () => {
     vi.unstubAllGlobals();
   });
 
-  it('exposes exactly the eleven planned methods', () => {
+  it('exposes exactly the approved decoded contact methods', () => {
     expect(Object.keys(contactsApi)).toEqual([
       'directory',
       'detail',
       'neighbors',
       'workspace',
+      'internalWorkspace',
       'timeline',
       'section',
       'evidence',
@@ -779,6 +999,14 @@ describe('dedicated Contacts API transport map', () => {
       'create',
       'update',
       'bulk',
+      'createNote',
+      'deleteNote',
+      'createSavedSearch',
+      'createTag',
+      'assignTag',
+      'removeTag',
+      'createTask',
+      'artifactBlob',
     ]);
   });
 
@@ -789,7 +1017,7 @@ describe('dedicated Contacts API transport map', () => {
       { previous_contact_id: null, next_contact_id: 8 },
       workspaceSummary,
       timelinePage,
-      sectionPage,
+      { rows: [], total: 0, page: 2, page_size: 25, page_count: 0 },
       evidence,
       celebrations,
       legacyContact,
@@ -850,6 +1078,143 @@ describe('dedicated Contacts API transport map', () => {
     });
   });
 
+  it('maps the strict internal workspace, contact-bound writes, and authenticated artifact blob', async () => {
+    const responses: unknown[] = [
+      internalWorkspace,
+      { id: 31, body: 'Private note' },
+      { deleted: true, id: 31 },
+      { id: 32, name: 'Downsizer', criteria: '{"beds":2}' },
+      { id: 33, name: 'Seller' },
+      { contact_id: 7, tag_id: 33 },
+      { removed: true, contact_id: 7, tag_id: 33 },
+      {
+        id: 34,
+        title: 'Call',
+        contact_id: 7,
+        description: '',
+        priority: 'normal',
+        due_at: null,
+        status: 'open',
+      },
+    ];
+    const fetchMock = vi.fn().mockImplementation(() => {
+      const response = responses.shift();
+      return Promise.resolve(response === undefined
+        ? new Response('artifact', { status: 200, headers: { 'Content-Type': 'text/html' } })
+        : jsonResponse(response));
+    });
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await contactsApi.internalWorkspace(7, { signal: controller.signal });
+    await contactsApi.createNote(7, { body: 'Private note' }, { signal: controller.signal });
+    await contactsApi.deleteNote(7, 31, { signal: controller.signal });
+    await contactsApi.createSavedSearch(7, {
+      name: 'Downsizer', criteria: { beds: 2 },
+    }, { signal: controller.signal });
+    await contactsApi.createTag({ name: 'Seller' }, { signal: controller.signal });
+    await contactsApi.assignTag(7, 33, { signal: controller.signal });
+    await contactsApi.removeTag(7, 33, { signal: controller.signal });
+    await contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    }, { signal: controller.signal });
+    await expect(contactsApi.artifactBlob(9, { signal: controller.signal })).resolves.toMatchObject({
+      size: 8,
+      type: 'text/html',
+    });
+
+    const expected = [
+      ['GET', '/contacts/7/workspace', undefined],
+      ['POST', '/contacts/7/notes', JSON.stringify({ body: 'Private note' })],
+      ['DELETE', '/contacts/7/notes/31', undefined],
+      ['POST', '/contacts/7/saved-searches', JSON.stringify({ name: 'Downsizer', criteria: { beds: 2 } })],
+      ['POST', '/tags', JSON.stringify({ name: 'Seller' })],
+      ['POST', '/contacts/7/tags/33', undefined],
+      ['DELETE', '/contacts/7/tags/33', undefined],
+      ['POST', '/tasks', JSON.stringify({ title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null })],
+      [undefined, '/archive/artifacts/9/content', undefined],
+    ];
+    expect(fetchMock).toHaveBeenCalledTimes(expected.length);
+    expected.forEach(([method, path, body], index) => {
+      const call = fetchMock.mock.calls[index];
+      expect(call?.[0]).toBe(`${COMMAND_BASE_URL}${path}`);
+      expect(call?.[1]).toMatchObject({
+        signal: controller.signal,
+        headers: expect.objectContaining({ Authorization: 'Bearer admin-token' }),
+      });
+      if (method === undefined) expect(call?.[1]).not.toHaveProperty('method');
+      else expect(call?.[1]?.method).toBe(method);
+      if (body === undefined) expect(call?.[1]).not.toHaveProperty('body');
+      else expect(call?.[1]?.body).toBe(body);
+    });
+  });
+
+  it('rejects wrong-contact internal and mutation responses at the boundary', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ ...detail, contact: { ...detail.contact, id: 8 } }))
+      .mockResolvedValueOnce(jsonResponse({ ...evidence, contact_id: 8 }))
+      .mockResolvedValueOnce(jsonResponse({ ...legacyContact, id: 8 }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...internalWorkspace,
+        tasks: [{ ...internalWorkspace.tasks[0], contact_id: 8 }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 34,
+        title: 'Call',
+        contact_id: 8,
+        description: '',
+        priority: 'normal',
+        due_at: null,
+        status: 'open',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.detail(7)).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.evidence(7)).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.update(7, { first_name: 'Avery' })).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.internalWorkspace(7)).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    })).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it('rejects a created tag whose response name does not bind to the request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 33, name: 'Wrong tag' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.createTag({ name: 'Seller' })).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it('rejects wrong-section pages and mismatched note/search echoes', async () => {
+    const wrongSection = {
+      ...sectionPage,
+      rows: [materializedRow],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      page_count: 1,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(wrongSection))
+      .mockResolvedValueOnce(jsonResponse({ id: 31, body: 'Wrong body' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 32, name: 'Wrong name', criteria: '{"beds":2}' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.section(7, 'notes', 1, 50)).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.createNote(7, { body: 'Expected body' })).rejects.toBeInstanceOf(CommandDecodeError);
+    await expect(contactsApi.createSavedSearch(7, {
+      name: 'Downsizer', criteria: { beds: 2 },
+    })).rejects.toBeInstanceOf(CommandDecodeError);
+  });
+
+  it('preserves the exact legacy saved-search criteria string in the internal workspace', () => {
+    const legacyCriteria = '{ "n": 1.0, "z": true }';
+    expect(decodeContactInternalWorkspace({
+      ...internalWorkspace,
+      saved_searches: [{ id: 26, name: 'Historic search', criteria: legacyCriteria }],
+    }).saved_searches[0]?.criteria).toBe(legacyCriteria);
+  });
+
   it.each([
     ['opportunities', '/contacts/7/opportunities?page=1&page_size=50'],
     ['smart_plans', '/contacts/7/smart-plans?page=1&page_size=50'],
@@ -859,7 +1224,9 @@ describe('dedicated Contacts API transport map', () => {
     ['tasks_completed', '/contacts/7/tasks?state=completed&page=1&page_size=50'],
     ['tasks_archived', '/contacts/7/tasks?state=archived&page=1&page_size=50'],
   ] as const)('maps section %s to %s', async (section, path) => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(sectionPage));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      rows: [], total: 0, page: 1, page_size: 50, page_count: 0,
+    }));
     vi.stubGlobal('fetch', fetchMock);
 
     await contactsApi.section(7, section, 1, 50);

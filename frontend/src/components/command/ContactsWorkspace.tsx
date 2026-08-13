@@ -9,7 +9,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import type {
   ContactBulkInput,
   ContactDirectoryPage,
@@ -29,7 +29,11 @@ import {
   type ContactColumnKey,
 } from './contacts/ContactsTable';
 import { ContactsToolbar } from './contacts/ContactsToolbar';
-import { useContactDirectoryQuery } from './contacts/useContactDirectoryQuery';
+import {
+  contactDetailLocationParams,
+  contactDetailHref,
+  useContactDirectoryQuery,
+} from './contacts/useContactDirectoryQuery';
 
 const SMART_VIEWS: readonly Readonly<{ value: ContactSmartView; label: string }>[] = [
   { value: 'all', label: 'All contacts' },
@@ -174,6 +178,7 @@ export function ContactsWorkspace({
   api = contactsApi,
 }: ContactsWorkspaceProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { pushToast } = useCommandToast();
   const query = useContactDirectoryQuery(initialView);
   const request = query.request;
@@ -478,7 +483,13 @@ export function ContactsWorkspace({
           activeSort={request.sort ?? 'name'}
           direction={request.direction ?? 'asc'}
           onSelectionChange={setSelected}
-          onActivate={(row) => router.push(`/admin/command/contacts/${row.id}`)}
+          onActivate={(row) => router.push(contactDetailHref(
+            row.id,
+            contactDetailLocationParams(
+              request,
+              new URLSearchParams(searchParams.toString()),
+            ),
+          ))}
           onSort={(sort, direction) => query.replace({ sort, direction })}
           emptyState={emptyState}
         />

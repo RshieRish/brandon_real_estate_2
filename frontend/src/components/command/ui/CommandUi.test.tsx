@@ -201,7 +201,7 @@ describe('Command workspace primitives', () => {
         displayedCount={2318}
         artifactCount={2}
         explanation="The dashboard repeated a displayed range; expanded profiles were limited."
-        artifactLinks={[{ label: 'Referral dashboard capture', href: '/admin/command/archive/42' }]}
+        artifactActions={[{ label: 'Open referral evidence', onAction: vi.fn() }]}
       />,
     );
 
@@ -209,10 +209,7 @@ describe('Command workspace primitives', () => {
     expect(screen.getByText('Partial capture')).toBeInTheDocument();
     expect(screen.getByText(/2,318 was displayed; 5 distinct identities were observed/i)).toBeInTheDocument();
     expect(screen.queryByText(/2,318 people imported/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Referral dashboard capture' })).toHaveAttribute(
-      'href',
-      '/admin/command/archive/42',
-    );
+    expect(screen.getByRole('button', { name: 'Open referral evidence' })).toBeInTheDocument();
   });
 
   it('labels a missing normalized count as not materialized rather than zero', () => {
