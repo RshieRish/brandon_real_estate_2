@@ -319,6 +319,21 @@ def strong_email_evidence_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _contact_targets_statement(
+    target_contact_ids: Sequence[int],
+    *,
+    lock_for_update: bool,
+):
+    statement = (
+        select(CRMContact)
+        .where(CRMContact.id.in_(tuple(target_contact_ids)))
+        .execution_options(populate_existing=True)
+    )
+    if lock_for_update:
+        statement = statement.with_for_update()
+    return statement
+
+
 async def validate_contact_overlap_manifest(
     db: AsyncSession,
     manifest: ContactOverlapManifest,
@@ -343,8 +358,9 @@ async def validate_contact_overlap_manifest(
     profiles, clusters = _resolved_profile_drafts(records)
     targets = (
         await db.scalars(
-            select(CRMContact).where(
-                CRMContact.id.in_(row.target_contact_id for row in manifest.rows)
+            _contact_targets_statement(
+                tuple(row.target_contact_id for row in manifest.rows),
+                lock_for_update=require_persisted_sources,
             )
         )
     ).all()

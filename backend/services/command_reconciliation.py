@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -12,13 +13,21 @@ from typing import Literal
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.command import CRMArchiveArtifact
+from models.command import CRMArchiveArtifact, CRMContact
+from models.command_contacts import (
+    CONTACT_SECTIONS,
+    CRMContactCapturePosition,
+    CRMContactSectionCapture,
+)
 from models.command_provenance import (
+    CRMEntitySource,
     CRMReconciliationResult,
     CRMReconciliationRun,
+    CRMSourceRecord,
 )
 from services.command_parsers import (
     ModuleMetrics,
+    ModuleParseResult,
     ParserRegistry,
     StructuredParserError,
     validate_parser_module,
@@ -50,6 +59,73 @@ class ReconciliationRunError(RuntimeError):
 
 class ReconciliationResumeError(ReconciliationRunError):
     """Raised when an audit run cannot be resumed safely."""
+
+
+class ContactApplyEligibilityError(ReconciliationRunError):
+    """Raised when Contacts does not match the bounded apply truth contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class ContactApplyExpectedCounts:
+    provider_contact_rows: int
+    capture_positions: int
+    section_artifacts: int
+    final_contact_mappings: int
+    final_contacts: int
+    lead_backed_contacts: int
+    legacy_only_contacts: int
+    scope: Literal["production", "synthetic_test"] = "production"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "provider_contact_rows",
+            "capture_positions",
+            "section_artifacts",
+            "final_contact_mappings",
+            "final_contacts",
+            "lead_backed_contacts",
+            "legacy_only_contacts",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.scope not in {"production", "synthetic_test"}:
+            raise ValueError("contact expected-count scope is invalid")
+        if self.section_artifacts != self.capture_positions * len(CONTACT_SECTIONS):
+            raise ValueError("section_artifacts must contain all eight contact views")
+        if self.final_contact_mappings != self.provider_contact_rows:
+            raise ValueError("every provider contact must have one final mapping")
+
+    @classmethod
+    def synthetic_for_tests(
+        cls,
+        *,
+        contacts: int,
+        final_contacts: int,
+        lead_backed_contacts: int,
+        legacy_only_contacts: int,
+    ) -> ContactApplyExpectedCounts:
+        return cls(
+            provider_contact_rows=contacts,
+            capture_positions=contacts,
+            section_artifacts=contacts * len(CONTACT_SECTIONS),
+            final_contact_mappings=contacts,
+            final_contacts=final_contacts,
+            lead_backed_contacts=lead_backed_contacts,
+            legacy_only_contacts=legacy_only_contacts,
+            scope="synthetic_test",
+        )
+
+
+_PRODUCTION_CONTACT_COUNTS = ContactApplyExpectedCounts(
+    provider_contact_rows=317,
+    capture_positions=317,
+    section_artifacts=2_536,
+    final_contact_mappings=317,
+    final_contacts=366,
+    lead_backed_contacts=51,
+    legacy_only_contacts=49,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +413,167 @@ def _materialized_metrics(
     )
 
 
+def _contact_expected_counts(
+    artifacts: Sequence[ArchiveArtifactInput],
+    parser_version: str,
+    override: ContactApplyExpectedCounts | None,
+) -> ContactApplyExpectedCounts:
+    if parser_version != "contacts-v1":
+        raise ContactApplyEligibilityError(
+            "contacts apply eligibility requires parser version contacts-v1"
+        )
+    if override is None:
+        return _PRODUCTION_CONTACT_COUNTS
+    if override.scope != "synthetic_test" or any(
+        not artifact.source_path.startswith("synthetic/") for artifact in artifacts
+    ):
+        raise ContactApplyEligibilityError(
+            "non-production contact counts are restricted to synthetic test artifacts"
+        )
+    return override
+
+
+def _validate_contact_parser_eligibility(
+    result: ModuleParseResult,
+    expected: ContactApplyExpectedCounts,
+) -> None:
+    metrics = result.metrics
+    exact_metric_values = {
+        "expected_count": expected.provider_contact_rows,
+        "observed_count": expected.provider_contact_rows,
+        "rendered_count": expected.capture_positions,
+        "unmatched_count": 0,
+        "error_count": 0,
+    }
+    if any(
+        getattr(metrics, field_name) != expected_value
+        for field_name, expected_value in exact_metric_values.items()
+    ):
+        raise ContactApplyEligibilityError(
+            "contacts parser eligibility counts do not match the bounded contract"
+        )
+    expected_details = {
+        "provider_contact_rows": expected.provider_contact_rows,
+        "capture_positions": expected.capture_positions,
+        "section_artifacts": expected.section_artifacts,
+        "identity_clusters": expected.provider_contact_rows,
+        "identity_aliases_coalesced": 0,
+        "ambiguous_identities": 0,
+        "unmatched_provider_rows": 0,
+        "fabricated_celebrations": 0,
+    }
+    if any(
+        metrics.details.get(field_name) != expected_value
+        for field_name, expected_value in expected_details.items()
+    ):
+        raise ContactApplyEligibilityError(
+            "contacts parser eligibility details do not match the bounded contract"
+        )
+    expected_section_counts = {
+        section: expected.capture_positions for section in CONTACT_SECTIONS
+    }
+    if dict(metrics.details.get("section_counts", {})) != expected_section_counts:
+        raise ContactApplyEligibilityError(
+            "contacts parser eligibility section counts are incomplete"
+        )
+
+    record_counts = Counter(record.record_kind for record in result.records)
+    if (
+        record_counts["contact_profile"] != expected.provider_contact_rows
+        or record_counts["contact_capture_position"] != expected.capture_positions
+        or record_counts["contact_section_capture"] != expected.section_artifacts
+    ):
+        raise ContactApplyEligibilityError(
+            "contacts parser eligibility source records are incomplete"
+        )
+
+
+async def _validate_contact_materialized_eligibility(
+    db: AsyncSession,
+    records: Sequence[SourceRecordDraft],
+    materialized: ModuleMaterializationResult,
+    *,
+    bundle_fingerprint: str,
+    expected: ContactApplyExpectedCounts,
+) -> None:
+    profile_drafts = tuple(
+        record for record in records if record.record_kind == "contact_profile"
+    )
+    profile_source_rows = (
+        await db.scalars(
+            select(CRMSourceRecord).where(
+                CRMSourceRecord.source_system == "kw_command",
+                CRMSourceRecord.module == "contacts",
+                CRMSourceRecord.record_kind == "contact_profile",
+                CRMSourceRecord.parser_version.in_(
+                    {record.parser_version for record in profile_drafts}
+                ),
+                CRMSourceRecord.source_key.in_(
+                    {record.source_key for record in profile_drafts}
+                ),
+            )
+        )
+    ).all()
+    profile_source_ids = {row.id for row in profile_source_rows}
+    mapping_links = (
+        await db.scalars(
+            select(CRMEntitySource).where(
+                CRMEntitySource.entity_type == "contact",
+                CRMEntitySource.source_record_id.in_(profile_source_ids),
+            )
+        )
+    ).all()
+    mapped_contact_ids = {link.entity_id for link in mapping_links}
+    positions = (
+        await db.scalars(
+            select(CRMContactCapturePosition).where(
+                CRMContactCapturePosition.bundle_fingerprint == bundle_fingerprint
+            )
+        )
+    ).all()
+    position_ids = {position.id for position in positions}
+    sections = (
+        await db.scalars(
+            select(CRMContactSectionCapture).where(
+                CRMContactSectionCapture.capture_position_id.in_(position_ids)
+            )
+        )
+    ).all()
+    total_contacts = len((await db.scalars(select(CRMContact.id))).all())
+    lead_backed_ids = set(
+        await db.scalars(
+            select(CRMContact.id).where(CRMContact.lead_id.is_not(None))
+        )
+    )
+    section_counts = Counter(section.section_name for section in sections)
+    expected_section_counts = {
+        section: expected.capture_positions for section in CONTACT_SECTIONS
+    }
+
+    final_detail_count = materialized.details.get("source_entity_links_final")
+    final_detail_contacts = materialized.details.get("total_contacts")
+    if (
+        materialized.normalized_count != expected.provider_contact_rows
+        or final_detail_count != expected.final_contact_mappings
+        or final_detail_contacts != expected.final_contacts
+        or len(profile_source_ids) != expected.provider_contact_rows
+        or len(mapping_links) != expected.final_contact_mappings
+        or len(mapped_contact_ids) != expected.final_contact_mappings
+        or len(positions) != expected.capture_positions
+        or len({position.contact_id for position in positions})
+        != expected.capture_positions
+        or len(sections) != expected.section_artifacts
+        or section_counts != expected_section_counts
+        or total_contacts != expected.final_contacts
+        or len(lead_backed_ids) != expected.lead_backed_contacts
+        or len(lead_backed_ids.difference(mapped_contact_ids))
+        != expected.legacy_only_contacts
+    ):
+        raise ContactApplyEligibilityError(
+            "contacts materialization eligibility counts do not match the database"
+        )
+
+
 def _is_retryable_failed_result(result: CRMReconciliationResult) -> bool:
     try:
         details = json.loads(result.details_json)
@@ -563,6 +800,7 @@ async def execute_reconciliation(
     *,
     materializers: MaterializerRegistry | None = None,
     contact_overlap_manifest: ContactOverlapManifest | None = None,
+    contact_expected_counts: ContactApplyExpectedCounts | None = None,
 ) -> ReconciliationSummary:
     """Execute selected parsers with durable, resumable module boundaries."""
     if not isinstance(request, RunRequest):
@@ -582,13 +820,25 @@ async def execute_reconciliation(
                 selected_modules.intersection(available_materializers)
             )
         }
-    if (
+    contacts_selected = "contacts" in selected_modules
+    if contacts_selected and request.mode == "apply":
+        if "contacts" not in selected_materializers:
+            raise ReconciliationRunError(
+                "contacts apply requires a registered contacts materializer"
+            )
+        if contact_overlap_manifest is None:
+            raise ReconciliationRunError(
+                "contacts reconciliation requires a reviewed overlap manifest"
+            )
+    expected_contact_counts = None
+    if contacts_selected and (
         request.mode == "apply"
-        and "contacts" in selected_materializers
-        and contact_overlap_manifest is None
+        or (request.mode == "dry_run" and contact_overlap_manifest is not None)
     ):
-        raise ReconciliationRunError(
-            "contacts apply requires a reviewed overlap manifest"
+        expected_contact_counts = _contact_expected_counts(
+            materialized_artifacts,
+            request.parser_version,
+            contact_expected_counts,
         )
     requested_modules_json = _requested_modules_json(selected_modules)
     claim_token = secrets.token_hex(32)
@@ -679,6 +929,11 @@ async def execute_reconciliation(
                 parser_version=request.parser_version,
                 artifacts_by_path=artifacts_by_path,
             )
+            if expected_module == "contacts" and expected_contact_counts is not None:
+                _validate_contact_parser_eligibility(
+                    result,
+                    expected_contact_counts,
+                )
             manifest_validation = None
             if (
                 expected_module == "contacts"
@@ -720,6 +975,15 @@ async def execute_reconciliation(
                         raise ReconciliationRunError(
                             "materializer result module does not match selected module"
                         )
+                    if expected_module == "contacts":
+                        assert expected_contact_counts is not None
+                        await _validate_contact_materialized_eligibility(
+                            db,
+                            result.records,
+                            materialized,
+                            bundle_fingerprint=fingerprint,
+                            expected=expected_contact_counts,
+                        )
                     normalized_count = materialized.normalized_count
                     result_metrics = _materialized_metrics(
                         result.metrics,
@@ -746,9 +1010,14 @@ async def execute_reconciliation(
         await _complete_claimed_run(db, run_id, claim_token)
     except Exception as exc:
         audit_error: Exception = exc
-        if "contacts" in selected_modules and contact_overlap_manifest is not None:
+        if contacts_selected and contact_overlap_manifest is not None:
+            failure_kind = (
+                "eligibility "
+                if isinstance(exc, ContactApplyEligibilityError)
+                else ""
+            )
             audit_error = ReconciliationRunError(
-                "contacts reconciliation failed; "
+                f"contacts reconciliation {failure_kind}failed; "
                 f"{_MANIFEST_DIGEST_MARKER}"
                 f"{contact_overlap_manifest.canonical_digest}"
             )
@@ -761,6 +1030,7 @@ async def execute_reconciliation(
 
 
 __all__ = (
+    "ContactApplyExpectedCounts",
     "ReconciliationResumeError",
     "ReconciliationRunError",
     "ReconciliationSummary",

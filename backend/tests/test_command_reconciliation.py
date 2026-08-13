@@ -34,6 +34,15 @@ from services.command_parsers import (
     UnknownParserModuleError,
 )
 from services.command_provenance import ArchiveArtifactInput, SourceRecordDraft
+from services.command_contact_overlap_manifest import (
+    ContactOverlapManifest,
+    ContactOverlapManifestRow,
+)
+from services.command_materializers import (
+    MaterializerRegistry,
+    default_materializer_registry,
+)
+from services.command_provenance import bundle_fingerprint
 
 
 command_db = pytest.fixture(name="command_db")(command_db_session)
@@ -160,6 +169,109 @@ def registry_for(*parsers: FakeParser) -> ParserRegistry:
     return registry
 
 
+def contact_manifest_for(artifact: ArchiveArtifactInput) -> ContactOverlapManifest:
+    return ContactOverlapManifest(
+        schema_version="command-contact-overlaps-v1",
+        bundle_fingerprint=bundle_fingerprint((artifact,)),
+        parser_version="contacts-v1",
+        rows=(
+            ContactOverlapManifestRow(
+                source_provider_identity_hash="a" * 64,
+                target_contact_id=1,
+                target_contact_row_fingerprint="b" * 64,
+                strong_evidence_hash="c" * 64,
+            ),
+            ContactOverlapManifestRow(
+                source_provider_identity_hash="d" * 64,
+                target_contact_id=2,
+                target_contact_row_fingerprint="e" * 64,
+                strong_evidence_hash="f" * 64,
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "materializers",
+    (None, MaterializerRegistry()),
+    ids=("none", "contacts-missing"),
+)
+async def test_contacts_apply_requires_registered_materializer_before_any_write(
+    command_db,
+    materializers,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    artifact = artifact_for()
+    await seed_artifacts(command_db, artifact)
+    parser = FakeParser(
+        "contacts",
+        [parse_result(module="contacts", records=(source_draft(),))],
+    )
+
+    with pytest.raises(ReconciliationRunError, match="materializer"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="contacts-v1",
+                modules=frozenset({"contacts"}),
+            ),
+            materializers=materializers,
+            contact_overlap_manifest=contact_manifest_for(artifact),
+        )
+
+    assert parser.parse_calls == 0
+    assert await command_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMReconciliationRun)
+        )
+        == 0
+    )
+
+
+async def test_contacts_apply_requires_manifest_at_service_boundary_before_any_write(
+    command_db,
+):
+    from services.command_reconciliation import (
+        ReconciliationRunError,
+        RunRequest,
+        execute_reconciliation,
+    )
+
+    artifact = artifact_for()
+    await seed_artifacts(command_db, artifact)
+    parser = FakeParser("contacts", [parse_result(module="contacts")])
+
+    with pytest.raises(ReconciliationRunError, match="manifest"):
+        await execute_reconciliation(
+            command_db,
+            registry_for(parser),
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="contacts-v1",
+                modules=frozenset({"contacts"}),
+            ),
+            materializers=default_materializer_registry(),
+        )
+
+    assert parser.parse_calls == 0
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMReconciliationRun)
+        )
+        == 0
+    )
+
+
 def test_run_request_and_summary_are_validated_frozen_slotted_values():
     from services.command_reconciliation import (
         ReconciliationResumeError,
@@ -278,15 +390,15 @@ async def test_apply_persists_idempotently_and_normalizes_every_matched_record(
 
     artifact = artifact_for()
     await seed_artifacts(command_db, artifact)
-    draft = source_draft()
+    draft = source_draft(module="tasks")
     parser = FakeParser(
-        "contacts",
-        [parse_result(module="contacts", records=(draft,), normalized_count=0)],
+        "tasks",
+        [parse_result(module="tasks", records=(draft,), normalized_count=0)],
     )
     request = RunRequest(
         mode="apply",
         parser_version="command-v1",
-        modules=frozenset({"contacts"}),
+        modules=frozenset({"tasks"}),
     )
 
     first = await execute_reconciliation(
@@ -510,12 +622,12 @@ async def test_failed_parser_preserves_prior_module_boundary_and_marks_run_faile
 
     artifact = artifact_for()
     await seed_artifacts(command_db, artifact)
-    contacts = FakeParser(
-        "contacts",
+    campaigns = FakeParser(
+        "campaigns",
         [
             parse_result(
-                module="contacts",
-                records=(source_draft(),),
+                module="campaigns",
+                records=(source_draft(module="campaigns"),),
             )
         ],
     )
@@ -524,12 +636,12 @@ async def test_failed_parser_preserves_prior_module_boundary_and_marks_run_faile
     with pytest.raises(RuntimeError, match="exploded"):
         await execute_reconciliation(
             command_db,
-            registry_for(tasks, contacts),
+            registry_for(tasks, campaigns),
             (artifact,),
             RunRequest(
                 mode="apply",
                 parser_version="command-v1",
-                modules=frozenset({"contacts", "tasks"}),
+                modules=frozenset({"campaigns", "tasks"}),
             ),
         )
 
@@ -582,7 +694,7 @@ async def test_identity_conflict_failure_persists_only_redacted_audit_details(
             registry_for(contacts),
             (artifact,),
             RunRequest(
-                mode="apply",
+                mode="dry_run",
                 parser_version="contacts-v1",
                 modules=frozenset({"contacts"}),
             ),
@@ -634,13 +746,14 @@ async def test_resume_retries_and_replaces_structured_failed_module_result(comma
             parse_result(
                 module="contacts",
                 records=(source_draft(parser_version="contacts-v1"),),
+                normalized_count=1,
                 error_count=0,
             ),
         ],
     )
     registry = registry_for(contacts)
     request = RunRequest(
-        mode="apply",
+        mode="dry_run",
         parser_version="contacts-v1",
         modules=frozenset({"contacts"}),
     )
@@ -660,7 +773,7 @@ async def test_resume_retries_and_replaces_structured_failed_module_result(comma
         registry,
         (artifact,),
         RunRequest(
-            mode="apply",
+            mode="dry_run",
             parser_version="contacts-v1",
             modules=frozenset({"contacts"}),
             resume_run_id=failed_run.id,
@@ -699,9 +812,14 @@ async def test_resume_validates_compatibility_skips_success_and_completes(comman
 
     artifact = artifact_for()
     await seed_artifacts(command_db, artifact)
-    contacts = FakeParser(
-        "contacts",
-        [parse_result(module="contacts", records=(source_draft(),))],
+    campaigns = FakeParser(
+        "campaigns",
+        [
+            parse_result(
+                module="campaigns",
+                records=(source_draft(module="campaigns"),),
+            )
+        ],
     )
     tasks = FakeParser(
         "tasks",
@@ -718,8 +836,8 @@ async def test_resume_validates_compatibility_skips_success_and_completes(comman
             ),
         ],
     )
-    registry = registry_for(tasks, contacts)
-    modules = frozenset({"contacts", "tasks"})
+    registry = registry_for(tasks, campaigns)
+    modules = frozenset({"campaigns", "tasks"})
     base_request = RunRequest(
         mode="apply", parser_version="command-v1", modules=modules
     )
@@ -744,7 +862,7 @@ async def test_resume_validates_compatibility_skips_success_and_completes(comman
         RunRequest(
             mode="apply",
             parser_version="command-v1",
-            modules=frozenset({"contacts"}),
+            modules=frozenset({"campaigns"}),
             resume_run_id=failed_run.id,
         ),
     )
@@ -782,10 +900,10 @@ async def test_resume_validates_compatibility_skips_success_and_completes(comman
 
     assert summary.run_id == failed_run.id
     assert summary.status == "completed"
-    assert contacts.parse_calls == 1
+    assert campaigns.parse_calls == 1
     assert tasks.parse_calls == 2
     assert tuple(result.module for result in summary.results) == (
-        "contacts",
+        "campaigns",
         "tasks",
     )
     assert (
@@ -1090,11 +1208,16 @@ async def test_apply_rejects_draft_parser_version_mismatch(command_db):
     artifact = artifact_for()
     await seed_artifacts(command_db, artifact)
     parser = FakeParser(
-        "contacts",
+        "tasks",
         [
             parse_result(
-                module="contacts",
-                records=(source_draft(parser_version="command-v2"),),
+                module="tasks",
+                records=(
+                    source_draft(
+                        module="tasks",
+                        parser_version="command-v2",
+                    ),
+                ),
             )
         ],
     )
@@ -1107,7 +1230,7 @@ async def test_apply_rejects_draft_parser_version_mismatch(command_db):
             RunRequest(
                 mode="apply",
                 parser_version="command-v1",
-                modules=frozenset({"contacts"}),
+                modules=frozenset({"tasks"}),
             ),
         )
 
@@ -1192,11 +1315,16 @@ async def test_apply_rejects_draft_evidence_outside_fingerprinted_bundle(command
             command_db,
             registry_for(
                 FakeParser(
-                    "contacts",
+                    "tasks",
                     [
                         parse_result(
-                            module="contacts",
-                            records=(source_draft(artifact_paths=(outside_path,)),),
+                            module="tasks",
+                            records=(
+                                source_draft(
+                                    module="tasks",
+                                    artifact_paths=(outside_path,),
+                                ),
+                            ),
                         )
                     ],
                 )
@@ -1205,7 +1333,7 @@ async def test_apply_rejects_draft_evidence_outside_fingerprinted_bundle(command
             RunRequest(
                 mode="apply",
                 parser_version="command-v1",
-                modules=frozenset({"contacts"}),
+                modules=frozenset({"tasks"}),
             ),
         )
 

@@ -709,15 +709,31 @@ async def _materialize_occurrences(
             "contact_note": "note",
             "contact_saved_search": "saved_search",
         }[draft.record_kind]
-        existing_link = await db.scalar(
-            select(CRMEntitySource).where(
-                CRMEntitySource.source_record_id == source_record.id,
-                CRMEntitySource.entity_type == entity_type,
-            )
-        )
-        if existing_link is not None:
-            continue
         values = _mapping(draft.payload.get("values"))
+        existing_links = (
+            await db.scalars(
+                select(CRMEntitySource)
+                .where(CRMEntitySource.source_record_id == source_record.id)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+        if existing_links:
+            if (
+                len(existing_links) != 1
+                or existing_links[0].entity_type != entity_type
+            ):
+                raise ContactMaterializationError(
+                    "an existing contact child link has a conflicting entity type"
+                )
+            await _validate_existing_child_link(
+                db,
+                existing_links[0],
+                draft,
+                values,
+                contact,
+                source_record,
+            )
+            continue
         if draft.record_kind == "contact_note":
             raw_lines = _string_sequence(values.get("raw_lines"))
             body = _string(values.get("body")) or "\n".join(raw_lines)
@@ -764,6 +780,74 @@ async def _materialize_occurrences(
     return links_created
 
 
+async def _validate_existing_child_link(
+    db: AsyncSession,
+    link: CRMEntitySource,
+    draft: SourceRecordDraft,
+    values: Mapping[str, object],
+    contact: CRMContact,
+    source_record: CRMSourceRecord,
+) -> None:
+    if draft.record_kind == "contact_note":
+        entity = await db.get(CRMNote, link.entity_id, populate_existing=True)
+        raw_lines = _string_sequence(values.get("raw_lines"))
+        expected_body = _string(values.get("body")) or "\n".join(raw_lines)
+        if (
+            entity is None
+            or not expected_body
+            or entity.contact_id != contact.id
+            or entity.body != expected_body
+        ):
+            raise ContactMaterializationError(
+                "an existing contact child link conflicts with its note source"
+            )
+        return
+
+    if draft.record_kind == "contact_saved_search":
+        entity = await db.get(CRMSavedSearch, link.entity_id, populate_existing=True)
+        expected_name = _string(values.get("name")) or draft.display_label
+        expected_criteria = canonical_json_text(_json_value(values))
+        if (
+            entity is None
+            or entity.contact_id != contact.id
+            or entity.name != expected_name
+            or entity.criteria_json != expected_criteria
+        ):
+            raise ContactMaterializationError(
+                "an existing contact child link conflicts with its saved-search source"
+            )
+        return
+
+    entity = await db.get(
+        CRMContactTimelineEvent,
+        link.entity_id,
+        populate_existing=True,
+    )
+    occurred_at = _event_datetime(values, draft.captured_at)
+    raw_lines = _string_sequence(values.get("raw_lines"))
+    expected_kind = (_string(values.get("kind")) or "CONTACT").casefold()
+    if (
+        entity is None
+        or occurred_at is None
+        or entity.contact_id != contact.id
+        or entity.source_record_id != source_record.id
+        or entity.source_system != "kw_command"
+        or entity.source_event_key != draft.source_key
+        or entity.kind != expected_kind
+        or entity.outcome != _string(values.get("outcome"))
+        or entity.title != draft.display_label
+        or entity.body != ("\n".join(raw_lines) or None)
+        or entity.actor_label != _string(values.get("actor_label"))
+        or entity.channel != _string(values.get("channel"))
+        or not _same_datetime(entity.occurred_at, occurred_at)
+        or entity.attributes_json
+        != canonical_json_text(_json_value(values))
+    ):
+        raise ContactMaterializationError(
+            "an existing contact child link conflicts with its timeline source"
+        )
+
+
 async def _has_reviewed_overlap(
     db: AsyncSession,
     contact_id: int,
@@ -801,6 +885,16 @@ def _event_datetime(
             return None
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
     return captured_at
+
+
+def _same_datetime(first: datetime | None, second: datetime | None) -> bool:
+    if first is None or second is None:
+        return first is second
+    if first.tzinfo is None:
+        first = first.replace(tzinfo=UTC)
+    if second.tzinfo is None:
+        second = second.replace(tzinfo=UTC)
+    return first.astimezone(UTC) == second.astimezone(UTC)
 
 
 def _mapping(value: object) -> Mapping[str, object]:

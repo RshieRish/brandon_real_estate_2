@@ -8,7 +8,8 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from database import Base
@@ -61,6 +62,29 @@ from services.command_reconciliation import RunRequest, execute_reconciliation
 
 ARTIFACT_PATH = "synthetic/contacts/source.json"
 CAPTURED_AT = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+CONTACT_TABLES = (
+    Lead.__table__,
+    CRMContact.__table__,
+    CRMNote.__table__,
+    CRMSavedSearch.__table__,
+    CRMArchiveArtifact.__table__,
+    CRMSourceRecord.__table__,
+    CRMSourceRecordArtifact.__table__,
+    CRMEntitySource.__table__,
+    CRMReconciliationRun.__table__,
+    CRMReconciliationResult.__table__,
+    CRMContactProfile.__table__,
+    CRMContactMethod.__table__,
+    CRMContactAddress.__table__,
+    CRMContactNeighborhood.__table__,
+    CRMContactOwnership.__table__,
+    CRMContactRelationship.__table__,
+    CRMContactPreference.__table__,
+    CRMContactCapturePosition.__table__,
+    CRMContactSectionCapture.__table__,
+    CRMContactTimelineEvent.__table__,
+    CRMContactAuditEvent.__table__,
+)
 
 
 class _Parser:
@@ -98,37 +122,33 @@ class _FailingContactMaterializer:
         )
 
 
+class _ForgedCompleteContactMaterializer:
+    module = "contacts"
+
+    async def materialize(self, db, records, *, bundle_fingerprint):
+        return ModuleMaterializationResult(
+            module="contacts",
+            normalized_count=317,
+            created_count=4,
+            updated_count=311,
+            unchanged_count=2,
+            links_created=315,
+            details={
+                "source_entity_links_final": 317,
+                "total_contacts": 366,
+                "legacy_only_contacts": 49,
+            },
+        )
+
+
 @pytest.fixture()
 async def contact_db(tmp_path: Path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'contacts.sqlite'}")
-    tables = (
-        Lead.__table__,
-        CRMContact.__table__,
-        CRMNote.__table__,
-        CRMSavedSearch.__table__,
-        CRMArchiveArtifact.__table__,
-        CRMSourceRecord.__table__,
-        CRMSourceRecordArtifact.__table__,
-        CRMEntitySource.__table__,
-        CRMReconciliationRun.__table__,
-        CRMReconciliationResult.__table__,
-        CRMContactProfile.__table__,
-        CRMContactMethod.__table__,
-        CRMContactAddress.__table__,
-        CRMContactNeighborhood.__table__,
-        CRMContactOwnership.__table__,
-        CRMContactRelationship.__table__,
-        CRMContactPreference.__table__,
-        CRMContactCapturePosition.__table__,
-        CRMContactSectionCapture.__table__,
-        CRMContactTimelineEvent.__table__,
-        CRMContactAuditEvent.__table__,
-    )
     async with engine.begin() as connection:
         await connection.run_sync(
             lambda sync_connection: Base.metadata.create_all(
                 sync_connection,
-                tables=tables,
+                tables=CONTACT_TABLES,
             )
         )
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -278,7 +298,7 @@ def _parse_result(records: tuple[SourceRecordDraft, ...], count: int):
         metrics=ModuleMetrics(
             source_system="kw_command",
             module="contacts",
-            expected_count=317,
+            expected_count=count,
             observed_count=count,
             rendered_count=count,
             details={
@@ -388,8 +408,23 @@ def _manifest(
     identity_hashes: dict[str, str],
     targets: tuple[CRMContact, CRMContact],
 ) -> ContactOverlapManifest:
+    return _manifest_for_indexes(
+        fingerprint=fingerprint,
+        identity_hashes=identity_hashes,
+        targets=targets,
+        source_indexes=(312, 313),
+    )
+
+
+def _manifest_for_indexes(
+    *,
+    fingerprint: str,
+    identity_hashes: dict[str, str],
+    targets: tuple[CRMContact, CRMContact],
+    source_indexes: tuple[int, int],
+) -> ContactOverlapManifest:
     rows = []
-    for index, target in zip((312, 313), targets, strict=True):
+    for index, target in zip(source_indexes, targets, strict=True):
         source_hash = identity_hashes[_source_id(index)]
         target_fingerprint = target_contact_row_fingerprint(target)
         rows.append(
@@ -443,6 +478,125 @@ def test_materializer_registry_is_deterministic_and_rejects_duplicate_modules():
     assert not hasattr(result, "__dict__")
     with pytest.raises(FrozenInstanceError):
         result.created_count = 2
+
+
+def test_manifest_target_selection_refreshes_and_locks_postgresql_rows():
+    from services.command_contact_overlap_manifest import _contact_targets_statement
+
+    statement = _contact_targets_statement((11, 12), lock_for_update=True)
+    rendered = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert statement.get_execution_options()["populate_existing"] is True
+    assert "FOR UPDATE" in rendered
+
+
+async def test_overlap_staging_revalidates_after_concurrent_target_change(
+    tmp_path: Path,
+):
+    from services.command_contact_overlap_manifest import (
+        ContactOverlapManifestError,
+        stage_reviewed_contact_overlap_links,
+        validate_contact_overlap_manifest,
+    )
+    from services.command_provenance import bundle_fingerprint, persist_source_records
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'overlap-concurrency.sqlite'}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync_connection: Base.metadata.create_all(
+                sync_connection,
+                tables=CONTACT_TABLES,
+            )
+        )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as validator, factory() as concurrent:
+            await _seed_artifact(validator)
+            validator.add_all(
+                Lead(id=index, name=f"Synthetic Lead {index}") for index in (1, 2)
+            )
+            targets = []
+            for index in (1, 2):
+                target = CRMContact(
+                    id=index,
+                    lead_id=index,
+                    first_name="Recovered",
+                    last_name=f"Person {index}",
+                    email=_email(index),
+                    stage="preserved",
+                )
+                validator.add(target)
+                targets.append(target)
+            await validator.commit()
+            records = _drafts(2)
+            artifact = _artifact()
+            fingerprint = bundle_fingerprint((artifact,))
+            manifest = _manifest_for_indexes(
+                fingerprint=fingerprint,
+                identity_hashes=_identity_hashes(2),
+                targets=(targets[0], targets[1]),
+                source_indexes=(1, 2),
+            )
+
+            await validate_contact_overlap_manifest(
+                validator,
+                manifest,
+                records,
+                bundle_fingerprint=fingerprint,
+                parser_version="contacts-v1",
+            )
+            await validator.commit()
+
+            await concurrent.execute(
+                update(CRMContact)
+                .where(CRMContact.id == targets[0].id)
+                .values(updated_at=datetime(2026, 8, 13, 12, 0, tzinfo=UTC))
+            )
+            await concurrent.commit()
+
+            validator.add(
+                CRMReconciliationRun(
+                    id=99,
+                    bundle_fingerprint=fingerprint,
+                    parser_version="contacts-v1",
+                    mode="apply",
+                    status="running",
+                    requested_modules_json='["contacts"]',
+                )
+            )
+            await validator.flush()
+            await persist_source_records(validator, records)
+            await validator.flush()
+            with pytest.raises(ContactOverlapManifestError, match="target row changed"):
+                await stage_reviewed_contact_overlap_links(
+                    validator,
+                    manifest,
+                    records,
+                    bundle_fingerprint=fingerprint,
+                    parser_version="contacts-v1",
+                    run_id=99,
+                )
+            await validator.rollback()
+
+        async with factory() as verifier:
+            assert (
+                await verifier.scalar(select(func.count()).select_from(CRMSourceRecord))
+                == 0
+            )
+            assert (
+                await verifier.scalar(select(func.count()).select_from(CRMEntitySource))
+                == 0
+            )
+            assert (
+                await verifier.scalar(
+                    select(func.count()).select_from(CRMContactAuditEvent)
+                )
+                == 0
+            )
+    finally:
+        await engine.dispose()
 
 
 async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
@@ -633,10 +787,122 @@ async def test_fresh_materializer_creates_every_identity_without_legacy_adoption
     )
 
 
+async def test_contacts_apply_rejects_partial_parser_truth_before_source_writes(
+    contact_db: AsyncSession,
+):
+    from services.command_reconciliation import ReconciliationRunError
+
+    await _seed_artifact(contact_db)
+    contact_db.add_all(
+        Lead(id=index, name=f"Synthetic Lead {index}") for index in (1, 2)
+    )
+    targets = []
+    for index in (1, 2):
+        target = CRMContact(
+            id=index,
+            lead_id=index,
+            first_name="Recovered",
+            last_name=f"Person {index}",
+            email=_email(index),
+            stage="preserved",
+        )
+        contact_db.add(target)
+        targets.append(target)
+    await contact_db.commit()
+
+    records = _drafts(2)
+    artifact = _artifact()
+    identity_hashes = _identity_hashes(2)
+    manifest = _manifest_for_indexes(
+        fingerprint=hashlib.sha256(
+            f"{artifact.source_path}\0{artifact.sha256}\0{artifact.size_bytes}\n".encode()
+        ).hexdigest(),
+        identity_hashes=identity_hashes,
+        targets=(targets[0], targets[1]),
+        source_indexes=(1, 2),
+    )
+    parsers = ParserRegistry()
+    parsers.register(_Parser(_parse_result(records, 2)))
+    materializers = MaterializerRegistry()
+    materializers.register(ContactMaterializer())
+
+    with pytest.raises(ReconciliationRunError, match="eligibility"):
+        await execute_reconciliation(
+            contact_db,
+            parsers,
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="contacts-v1",
+                modules=frozenset({"contacts"}),
+            ),
+            materializers=materializers,
+            contact_overlap_manifest=manifest,
+        )
+
+    assert await contact_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    assert await contact_db.scalar(select(func.count()).select_from(CRMEntitySource)) == 0
+
+
+async def test_contacts_apply_verifies_materialized_database_truth_before_commit(
+    contact_db: AsyncSession,
+):
+    from services.command_reconciliation import ReconciliationRunError
+
+    records = _drafts(317)
+    identity_hashes = _identity_hashes(317)
+    await _seed_artifact(contact_db)
+    targets = await _seed_repair_boundary(contact_db, identity_hashes)
+    artifact = _artifact()
+    fingerprint = hashlib.sha256(
+        f"{artifact.source_path}\0{artifact.sha256}\0{artifact.size_bytes}\n".encode()
+    ).hexdigest()
+    manifest = _manifest(
+        fingerprint=fingerprint,
+        identity_hashes=identity_hashes,
+        targets=targets,
+    )
+    parsers = ParserRegistry()
+    parsers.register(_Parser(_parse_result(records, 317)))
+    materializers = MaterializerRegistry()
+    materializers.register(_ForgedCompleteContactMaterializer())
+
+    with pytest.raises(ReconciliationRunError, match="eligibility"):
+        await execute_reconciliation(
+            contact_db,
+            parsers,
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="contacts-v1",
+                modules=frozenset({"contacts"}),
+            ),
+            materializers=materializers,
+            contact_overlap_manifest=manifest,
+        )
+
+    assert await contact_db.scalar(select(func.count()).select_from(CRMContact)) == 362
+    assert await contact_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    assert await contact_db.scalar(select(func.count()).select_from(CRMEntitySource)) == 0
+    assert (
+        await contact_db.scalar(
+            select(func.count()).select_from(CRMContactCapturePosition)
+        )
+        == 0
+    )
+    assert (
+        await contact_db.scalar(
+            select(func.count()).select_from(CRMContactSectionCapture)
+        )
+        == 0
+    )
+
+
 async def test_failed_apply_rolls_back_the_whole_module_and_resume_requires_same_manifest(
     contact_db: AsyncSession,
 ):
     from services.command_reconciliation import (
+        ContactApplyExpectedCounts,
         ReconciliationResumeError,
         ReconciliationRunError,
     )
@@ -700,6 +966,12 @@ async def test_failed_apply_rolls_back_the_whole_module_and_resume_requires_same
         parser_version="contacts-v1",
         modules=frozenset({"contacts"}),
     )
+    synthetic_counts = ContactApplyExpectedCounts.synthetic_for_tests(
+        contacts=2,
+        final_contacts=4,
+        lead_backed_contacts=4,
+        legacy_only_contacts=2,
+    )
 
     with pytest.raises(ReconciliationRunError) as captured:
         await execute_reconciliation(
@@ -709,6 +981,7 @@ async def test_failed_apply_rolls_back_the_whole_module_and_resume_requires_same
             request,
             materializers=failing_materializers,
             contact_overlap_manifest=approved,
+            contact_expected_counts=synthetic_counts,
         )
     assert "private-selector@example.test" not in str(captured.value)
 
@@ -746,6 +1019,7 @@ async def test_failed_apply_rolls_back_the_whole_module_and_resume_requires_same
             ),
             materializers=succeeding,
             contact_overlap_manifest=changed_but_valid,
+            contact_expected_counts=synthetic_counts,
         )
 
     resumed = await execute_reconciliation(
@@ -760,6 +1034,7 @@ async def test_failed_apply_rolls_back_the_whole_module_and_resume_requires_same
         ),
         materializers=succeeding,
         contact_overlap_manifest=approved,
+        contact_expected_counts=synthetic_counts,
     )
     assert resumed.run_id == failed_run.id
     assert resumed.status == "completed"
@@ -998,3 +1273,140 @@ async def test_materializer_adds_timeline_notes_and_saved_searches_once(
     assert contact is not None
     assert contact.birthday is None
     assert contact.anniversary is None
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ("wrong_type", "missing_target", "wrong_owner", "wrong_value"),
+)
+async def test_materializer_rejects_stale_or_conflicting_existing_child_link(
+    contact_db: AsyncSession,
+    corruption: str,
+):
+    from services.command_contact_materializer import ContactMaterializationError
+    from services.command_provenance import persist_source_records
+
+    await _seed_artifact(contact_db)
+    note = SourceRecordDraft(
+        source_system="kw_command",
+        module="contacts",
+        record_kind="contact_note",
+        source_key=f"contact:{_source_id(1)}:note:note-1",
+        evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
+        display_label="Synthetic note",
+        payload={
+            "capture_ordinal": "0000001",
+            "source_contact_id": _source_id(1),
+            "occurrence_ordinal": 1,
+            "values": {"body": "Synthetic note body"},
+        },
+        artifact_paths=(ARTIFACT_PATH,),
+        parser_version="contacts-v1",
+        capture_quality=CaptureQuality.COMPLETE,
+        captured_at=CAPTURED_AT,
+    )
+    records = (*_drafts(1), note)
+    await persist_source_records(contact_db, records)
+    materializer = ContactMaterializer()
+    await materializer.materialize(
+        contact_db,
+        records,
+        bundle_fingerprint="f" * 64,
+    )
+    await contact_db.flush()
+
+    note_source = await contact_db.scalar(
+        select(CRMSourceRecord).where(CRMSourceRecord.record_kind == "contact_note")
+    )
+    assert note_source is not None
+    link = await contact_db.scalar(
+        select(CRMEntitySource).where(
+            CRMEntitySource.source_record_id == note_source.id,
+            CRMEntitySource.entity_type == "note",
+        )
+    )
+    assert link is not None
+    linked_note = await contact_db.get(CRMNote, link.entity_id)
+    assert linked_note is not None
+
+    if corruption == "wrong_type":
+        link.entity_type = "saved_search"
+    elif corruption == "missing_target":
+        link.entity_id = 999_999
+    elif corruption == "wrong_owner":
+        other = CRMContact(
+            first_name="Other",
+            last_name="Owner",
+            stage="preserved",
+        )
+        contact_db.add(other)
+        await contact_db.flush()
+        other_note = CRMNote(contact_id=other.id, body="Synthetic note body")
+        contact_db.add(other_note)
+        await contact_db.flush()
+        link.entity_id = other_note.id
+    else:
+        linked_note.body = "Changed after materialization"
+    await contact_db.flush()
+
+    with pytest.raises(ContactMaterializationError, match="child link"):
+        await materializer.materialize(
+            contact_db,
+            records,
+            bundle_fingerprint="f" * 64,
+        )
+
+
+async def test_materializer_rejects_timeline_link_with_wrong_source_record(
+    contact_db: AsyncSession,
+):
+    from services.command_contact_materializer import ContactMaterializationError
+    from services.command_provenance import persist_source_records
+
+    await _seed_artifact(contact_db)
+    timeline = SourceRecordDraft(
+        source_system="kw_command",
+        module="contacts",
+        record_kind="contact_timeline_event",
+        source_key=f"contact:{_source_id(1)}:timeline:event-1",
+        evidence_level=EvidenceLevel.RENDERED_OCCURRENCE,
+        display_label="Synthetic event",
+        payload={
+            "capture_ordinal": "0000001",
+            "source_contact_id": _source_id(1),
+            "occurrence_ordinal": 1,
+            "values": {
+                "kind": "EMAIL",
+                "occurred_at": "2026-08-11T14:30:00Z",
+                "raw_lines": ["EMAIL", "Synthetic event"],
+            },
+        },
+        artifact_paths=(ARTIFACT_PATH,),
+        parser_version="contacts-v1",
+        capture_quality=CaptureQuality.COMPLETE,
+        captured_at=CAPTURED_AT,
+    )
+    records = (*_drafts(1), timeline)
+    await persist_source_records(contact_db, records)
+    materializer = ContactMaterializer()
+    await materializer.materialize(
+        contact_db,
+        records,
+        bundle_fingerprint="f" * 64,
+    )
+    await contact_db.flush()
+
+    event = await contact_db.scalar(select(CRMContactTimelineEvent))
+    profile_source = await contact_db.scalar(
+        select(CRMSourceRecord).where(CRMSourceRecord.record_kind == "contact_profile")
+    )
+    assert event is not None and profile_source is not None
+    event.source_record_id = profile_source.id
+    await contact_db.flush()
+
+    with pytest.raises(ContactMaterializationError, match="child link"):
+        await materializer.materialize(
+            contact_db,
+            records,
+            bundle_fingerprint="f" * 64,
+        )
