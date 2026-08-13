@@ -3,25 +3,45 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, func, select, text, update
+from sqlalchemy import event, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import services.command_contacts as contacts_service
 from database import Base
-from models.command import CRMActivity, CRMContact
-from models.command_contacts import CRMContactAuditEvent, CRMContactProfile
+from models.command import (
+    CRMActivity,
+    CRMContact,
+    CRMContactTag,
+    CRMNote,
+    CRMSavedSearch,
+    CRMTag,
+)
+from models.command_contacts import (
+    CRMContactAuditEvent,
+    CRMContactCapturePosition,
+    CRMContactProfile,
+    CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
+)
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
 from models.lead import Lead
 from services.command_contact_contracts import (
     ContactCreateCommand,
     ContactDetail,
+    ContactMutationResult,
+    ContactNoteCreateCommand,
+    ContactSavedSearchCreateCommand,
+    ContactSavedSearchValue,
     ContactUpdateCommand,
+    WorkspaceMutationResult,
     canonical_contact_audit_json,
+    canonical_workspace_saved_search_activity_json,
 )
 
 
@@ -711,3 +731,775 @@ async def test_update_missing_or_invalid_contact_is_safe_not_found_without_write
         )
     assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
     assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+E2_MUTATION_CALLS = (
+    "assign_contact_tag",
+    "remove_contact_tag",
+    "create_contact_note",
+    "delete_contact_note",
+    "create_contact_saved_search",
+    "delete_saved_search",
+)
+
+
+@pytest.mark.parametrize("service_name", E2_MUTATION_CALLS)
+@pytest.mark.parametrize("actor_subject", INVALID_ACTORS)
+@pytest.mark.asyncio
+async def test_e2_mutations_reject_actor_before_any_sql(
+    mutation_db, service_name, actor_subject
+):
+    db, engine = mutation_db
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        service = getattr(contacts_service, service_name)
+        with pytest.raises((TypeError, ValueError)):
+            if service_name in {"assign_contact_tag", "remove_contact_tag"}:
+                await service(db, 1, 1, actor_subject=actor_subject)
+            elif service_name == "create_contact_note":
+                await service(
+                    db,
+                    1,
+                    ContactNoteCreateCommand("private note"),
+                    actor_subject=actor_subject,
+                )
+            elif service_name == "delete_contact_note":
+                await service(db, 1, 1, actor_subject=actor_subject)
+            elif service_name == "create_contact_saved_search":
+                await service(
+                    db,
+                    1,
+                    ContactSavedSearchCreateCommand("private search", {}),
+                    actor_subject=actor_subject,
+                )
+            else:
+                await service(db, 1, actor_subject=actor_subject)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    assert statements == []
+
+
+@pytest.mark.asyncio
+async def test_assign_and_remove_tag_write_exact_audits_and_explicit_noops(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic tag")
+    db.add(tag)
+    await db.flush()
+
+    async def forbidden_commit(_self):
+        raise AssertionError("mutation services must not commit")
+
+    monkeypatch.setattr(AsyncSession, "commit", forbidden_commit)
+    assigned = await contacts_service.assign_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    assert isinstance(assigned, ContactMutationResult)
+    assert assigned.changed is True and assigned.record_id is not None
+    replay = await contacts_service.assign_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    assert replay == ContactMutationResult(
+        contact_id=contact.id,
+        record_id=assigned.record_id,
+        changed=False,
+        audit_entity_type=None,
+        audit_event_id=None,
+    )
+    removed = await contacts_service.remove_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    assert removed.changed is True and removed.record_id == assigned.record_id
+    absent = await contacts_service.remove_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    assert absent == ContactMutationResult(
+        contact_id=contact.id,
+        record_id=None,
+        changed=False,
+        audit_entity_type=None,
+        audit_event_id=None,
+    )
+    audits = (
+        await db.scalars(
+            select(CRMContactAuditEvent)
+            .where(CRMContactAuditEvent.contact_id == contact.id)
+            .order_by(CRMContactAuditEvent.id)
+        )
+    ).all()
+    assert [row.action for row in audits] == [
+        "contact.tag_added",
+        "contact.tag_removed",
+    ]
+    assert audits[0].before_json == canonical_contact_audit_json(
+        action="contact.tag_added",
+        phase="before",
+        payload={"present": False, "tag_id": tag.id},
+    )
+    assert audits[1].after_json == canonical_contact_audit_json(
+        action="contact.tag_removed",
+        phase="after",
+        payload={"present": False, "tag_id": tag.id},
+    )
+    activities = (await db.scalars(select(CRMActivity))).all()
+    assert [(row.kind, row.summary) for row in activities] == [
+        ("tag_removed", "Removed a contact tag")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_assign_tag_exact_uniqueness_race_returns_existing_link_noop(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic race tag")
+    db.add(tag)
+    await db.flush()
+    original_begin_nested = db.begin_nested
+    nested_calls = 0
+
+    def raced_begin_nested():
+        nonlocal nested_calls
+        nested_calls += 1
+        if nested_calls == 1:
+            return original_begin_nested()
+
+        @asynccontextmanager
+        async def inject_competing_assignment():
+            await db.execute(
+                insert(CRMContactTag).values(
+                    contact_id=contact.id,
+                    tag_id=tag.id,
+                )
+            )
+            async with original_begin_nested() as transaction:
+                yield transaction
+
+        return inject_competing_assignment()
+
+    monkeypatch.setattr(db, "begin_nested", raced_begin_nested)
+    result = await contacts_service.assign_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    assert result.changed is False
+    assert result.record_id is not None
+    assert nested_calls == 2
+    assert (
+        await db.scalar(select(func.count()).select_from(CRMContactTag)) == 1
+    )
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_note_create_delete_audits_activity_and_wrong_owner_is_not_found(
+    mutation_db,
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db, first_name="One")
+    other = await _seed_contact(db, first_name="Two")
+    body = "private note body"
+    created = await contacts_service.create_contact_note(
+        db,
+        contact.id,
+        ContactNoteCreateCommand(body),
+        actor_subject="7",
+    )
+    assert created.changed is True and created.record_id is not None
+    with pytest.raises(contacts_service.ContactNotFound, match="contact does not exist"):
+        await contacts_service.delete_contact_note(
+            db, other.id, created.record_id, actor_subject="7"
+        )
+    deleted = await contacts_service.delete_contact_note(
+        db, contact.id, created.record_id, actor_subject="7"
+    )
+    assert deleted.changed is True
+    assert await db.get(CRMNote, created.record_id) is None
+    activities = (
+        await db.scalars(
+            select(CRMActivity)
+            .where(CRMActivity.contact_id == contact.id)
+            .order_by(CRMActivity.id)
+        )
+    ).all()
+    assert [(row.kind, row.summary) for row in activities] == [
+        ("note", "Added a contact note"),
+        ("note_removed", "Removed a contact note"),
+    ]
+    audits = (
+        await db.scalars(
+            select(CRMContactAuditEvent)
+            .where(CRMContactAuditEvent.contact_id == contact.id)
+            .order_by(CRMContactAuditEvent.id)
+        )
+    ).all()
+    assert [row.action for row in audits] == [
+        "contact.note_created",
+        "contact.note_deleted",
+    ]
+    assert body not in audits[0].after_json
+    assert body not in audits[1].before_json
+
+
+async def _materialize_child_source(
+    db: AsyncSession,
+    *,
+    contact: CRMContact,
+    entity_type: str,
+    entity_id: int,
+    section_name: str,
+    record_kind: str,
+) -> tuple[CRMEntitySource, CRMSourceRecord]:
+    position_source = CRMSourceRecord(
+        source_system="kw_command",
+        module="contacts",
+        record_kind="contact_capture_position",
+        source_key=f"synthetic:position:{contact.id}:{entity_type}",
+        evidence_level="displayed_aggregate",
+        display_label="Synthetic position",
+        payload_json="{}",
+        capture_quality="complete",
+        parser_version="task5c-e2-tests-v1",
+    )
+    section_source = CRMSourceRecord(
+        source_system="kw_command",
+        module="contacts",
+        record_kind=f"contact_{section_name}_section",
+        source_key=f"synthetic:section:{contact.id}:{entity_type}",
+        evidence_level="displayed_aggregate",
+        display_label="Synthetic section",
+        payload_json="{}",
+        capture_quality="complete",
+        parser_version="task5c-e2-tests-v1",
+    )
+    child_source = CRMSourceRecord(
+        source_system="kw_command",
+        module="contacts",
+        record_kind=record_kind,
+        source_key=f"synthetic:child:{contact.id}:{entity_type}",
+        evidence_level="rendered_occurrence",
+        display_label="Synthetic child",
+        payload_json='{"values":{}}',
+        capture_quality="complete",
+        parser_version="task5c-e2-tests-v1",
+    )
+    db.add_all([position_source, section_source, child_source])
+    await db.flush()
+    position = CRMContactCapturePosition(
+        contact_id=contact.id,
+        source_record_id=position_source.id,
+        bundle_fingerprint=f"{contact.id:064x}",
+        capture_ordinal=1,
+        source_contact_id=f"{contact.id:024x}",
+        capture_quality="complete",
+        limitations_json="[]",
+    )
+    db.add(position)
+    await db.flush()
+    section = CRMContactSectionCapture(
+        capture_position_id=position.id,
+        source_record_id=section_source.id,
+        section_name=section_name,
+        capture_quality="complete",
+        is_empty=False,
+        row_count=1,
+        limitations_json="[]",
+    )
+    db.add(section)
+    await db.flush()
+    db.add(
+        CRMContactSourceOccurrence(
+            contact_id=contact.id,
+            section_capture_id=section.id,
+            source_record_id=child_source.id,
+            occurrence_ordinal=1,
+        )
+    )
+    link = CRMEntitySource(
+        source_record_id=child_source.id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    db.add(link)
+    await db.flush()
+    return link, child_source
+
+
+@pytest.mark.parametrize(
+    ("child_kind", "section_name", "record_kind"),
+    (
+        ("note", "notes", "contact_note"),
+        ("saved_search", "saved_searches", "contact_saved_search"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_materialized_child_delete_removes_only_target_link(
+    mutation_db, child_kind, section_name, record_kind
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    if child_kind == "note":
+        child = CRMNote(contact_id=contact.id, body="private body")
+    else:
+        child = CRMSavedSearch(
+            contact_id=contact.id,
+            name="private name",
+            criteria_json='{"stage":"lead"}',
+        )
+    db.add(child)
+    await db.flush()
+    link, source = await _materialize_child_source(
+        db,
+        contact=contact,
+        entity_type=child_kind,
+        entity_id=child.id,
+        section_name=section_name,
+        record_kind=record_kind,
+    )
+    if child_kind == "note":
+        await contacts_service.delete_contact_note(
+            db, contact.id, child.id, actor_subject="7"
+        )
+    else:
+        await contacts_service.delete_saved_search(
+            db, child.id, actor_subject="7"
+        )
+    assert await db.get(CRMEntitySource, link.id) is None
+    assert await db.get(CRMSourceRecord, source.id) is not None
+    occurrence_count = await db.scalar(
+        select(func.count())
+        .select_from(CRMContactSourceOccurrence)
+        .where(CRMContactSourceOccurrence.source_record_id == source.id)
+    )
+    assert occurrence_count == 1
+
+
+@pytest.mark.asyncio
+async def test_saved_search_create_list_and_contact_global_delete_are_exact(
+    mutation_db,
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    payload = ContactSavedSearchCreateCommand(
+        "private search", {"z": 1, "nested": {"b": True, "a": [2, 1]}}
+    )
+    created = await contacts_service.create_contact_saved_search(
+        db, contact.id, payload, actor_subject="7"
+    )
+    global_search = CRMSavedSearch(
+        contact_id=None,
+        name="private global",
+        criteria_json='{"stage":"lead"}',
+    )
+    db.add(global_search)
+    await db.flush()
+    rows = await contacts_service.list_saved_searches(db)
+    assert all(isinstance(row, ContactSavedSearchValue) for row in rows)
+    assert {row.id for row in rows} == {created.record_id, global_search.id}
+    contact_row = next(row for row in rows if row.id == created.record_id)
+    assert contact_row.criteria == payload.criteria
+    contact_deleted = await contacts_service.delete_saved_search(
+        db, created.record_id, actor_subject="7"
+    )
+    global_deleted = await contacts_service.delete_saved_search(
+        db, global_search.id, actor_subject=VALID_LONG_ACTOR
+    )
+    assert isinstance(contact_deleted, ContactMutationResult)
+    assert isinstance(global_deleted, WorkspaceMutationResult)
+    assert global_deleted.record_id == global_search.id
+    audits = (await db.scalars(select(CRMContactAuditEvent))).all()
+    assert [row.action for row in audits] == [
+        "contact.saved_search_created",
+        "contact.saved_search_deleted",
+    ]
+    for audit in audits:
+        assert "private search" not in audit.before_json + audit.after_json
+    activity = (
+        await db.scalars(
+            select(CRMActivity).where(CRMActivity.contact_id.is_(None))
+        )
+    ).one()
+    assert (
+        activity.kind,
+        activity.summary,
+        activity.source_record_id,
+        activity.metadata_json,
+    ) == (
+        "workspace.saved_search_deleted",
+        "Saved search deleted",
+        None,
+        canonical_workspace_saved_search_activity_json(
+            actor_subject=VALID_LONG_ACTOR,
+            search_id=global_search.id,
+            name="private global",
+        ),
+    )
+    assert "private global" not in activity.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_list_saved_searches_is_read_only_strict_and_deterministic(
+    mutation_db,
+):
+    db, engine = mutation_db
+    contact = await _seed_contact(db)
+    db.add_all(
+        [
+            CRMSavedSearch(
+                contact_id=contact.id,
+                name="first",
+                criteria_json='{"a":1}',
+                updated_at=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
+            CRMSavedSearch(
+                contact_id=None,
+                name="second",
+                criteria_json='{"b":2}',
+                updated_at=datetime(2026, 8, 13, tzinfo=UTC),
+            ),
+        ]
+    )
+    await db.flush()
+    pending = CRMTag(name="must not flush")
+    db.add(pending)
+    statements: list[str] = []
+    flushes = 0
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    def before_flush(*_args):
+        nonlocal flushes
+        flushes += 1
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    event.listen(db.sync_session, "before_flush", before_flush)
+    try:
+        rows = await contacts_service.list_saved_searches(db)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+        event.remove(db.sync_session, "before_flush", before_flush)
+    assert [row.name for row in rows] == ["second", "first"]
+    assert flushes == 0
+    assert sum(statement.lstrip().upper().startswith("SELECT ") for statement in statements) == 1
+    assert not any(
+        statement.lstrip().upper().startswith(("INSERT ", "UPDATE ", "DELETE "))
+        for statement in statements
+    )
+
+    await db.execute(
+        update(CRMSavedSearch)
+        .where(CRMSavedSearch.name == "first")
+        .values(criteria_json='{ "a": 1 }')
+        .execution_options(synchronize_session=False)
+    )
+    reparsed = await contacts_service.list_saved_searches(db)
+    assert next(row for row in reparsed if row.name == "first").criteria == {
+        "a": 1
+    }
+
+
+@pytest.mark.parametrize(
+    "criteria_json",
+    (
+        "not-json",
+        "null",
+        "[]",
+        '{"a":NaN}',
+        '{"a":Infinity}',
+        '{"a":1,"a":2}',
+    ),
+)
+@pytest.mark.asyncio
+async def test_list_saved_searches_rejects_noncanonical_or_ambiguous_criteria(
+    mutation_db, criteria_json
+):
+    db, _engine = mutation_db
+    db.add(
+        CRMSavedSearch(
+            contact_id=None,
+            name="private invalid search",
+            criteria_json=criteria_json,
+        )
+    )
+    await db.flush()
+    with pytest.raises(
+        contacts_service.ContactDataIntegrityError,
+        match="saved search criteria is invalid",
+    ) as caught:
+        await contacts_service.list_saved_searches(db)
+    assert criteria_json not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "record_kind", "section_name", "corruption"),
+    (
+        ("note", "contact_note", "notes", "wrong-domain"),
+        ("note", "contact_note", "notes", "wrong-kind"),
+        ("note", "contact_note", "notes", "wrong-contact"),
+        ("saved_search", "contact_saved_search", "saved_searches", "wrong-section"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_child_delete_rejects_invalid_provenance_without_partial_writes(
+    mutation_db, entity_type, record_kind, section_name, corruption
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db, first_name="Owner")
+    other = await _seed_contact(db, first_name="Other")
+    if entity_type == "note":
+        child = CRMNote(contact_id=contact.id, body="private child")
+    else:
+        child = CRMSavedSearch(
+            contact_id=contact.id,
+            name="private child",
+            criteria_json='{"a":1}',
+        )
+    db.add(child)
+    await db.flush()
+    link, source = await _materialize_child_source(
+        db,
+        contact=contact,
+        entity_type=entity_type,
+        entity_id=child.id,
+        section_name=section_name,
+        record_kind=record_kind,
+    )
+    if corruption == "wrong-domain":
+        source.source_system = "other"
+    elif corruption == "wrong-kind":
+        source.record_kind = "wrong_kind"
+    elif corruption == "wrong-contact":
+        occurrence = (
+            await db.scalars(
+                select(CRMContactSourceOccurrence).where(
+                    CRMContactSourceOccurrence.source_record_id == source.id
+                )
+            )
+        ).one()
+        occurrence.contact_id = other.id
+    else:
+        occurrence = (
+            await db.scalars(
+                select(CRMContactSourceOccurrence).where(
+                    CRMContactSourceOccurrence.source_record_id == source.id
+                )
+            )
+        ).one()
+        section = await db.get(
+            CRMContactSectionCapture, occurrence.section_capture_id
+        )
+        assert section is not None
+        section.section_name = "notes"
+    await db.flush()
+    with pytest.raises(
+        contacts_service.ContactDataIntegrityError,
+        match="contact source link is invalid",
+    ):
+        if entity_type == "note":
+            await contacts_service.delete_contact_note(
+                db, contact.id, child.id, actor_subject="7"
+            )
+        else:
+            await contacts_service.delete_saved_search(
+                db, child.id, actor_subject="7"
+            )
+    assert await db.get(type(child), child.id) is not None
+    assert await db.get(CRMEntitySource, link.id) is not None
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.parametrize(
+    ("service_name", "table_name"),
+    (
+        ("create_contact_note", "crm_contact_audit_events"),
+        ("delete_contact_note", "crm_contact_audit_events"),
+        ("create_contact_saved_search", "crm_contact_audit_events"),
+        ("delete_saved_search", "crm_contact_audit_events"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_e2_audit_failure_rolls_back_business_and_activity(
+    mutation_db, service_name, table_name
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    record_id = None
+    if service_name == "delete_contact_note":
+        row = CRMNote(contact_id=contact.id, body="private existing note")
+        db.add(row)
+        await db.flush()
+        record_id = row.id
+    elif service_name == "delete_saved_search":
+        row = CRMSavedSearch(
+            contact_id=contact.id,
+            name="private existing search",
+            criteria_json='{"a":1}',
+        )
+        db.add(row)
+        await db.flush()
+        record_id = row.id
+    await db.execute(
+        text(
+            f"CREATE TRIGGER reject_e2_audit BEFORE INSERT ON {table_name} "
+            "BEGIN SELECT RAISE(FAIL, 'audit rejected'); END"
+        )
+    )
+    with pytest.raises(contacts_service.ContactDataIntegrityError):
+        if service_name == "create_contact_note":
+            await contacts_service.create_contact_note(
+                db,
+                contact.id,
+                ContactNoteCreateCommand("private new note"),
+                actor_subject="7",
+            )
+        elif service_name == "delete_contact_note":
+            await contacts_service.delete_contact_note(
+                db, contact.id, record_id, actor_subject="7"
+            )
+        elif service_name == "create_contact_saved_search":
+            await contacts_service.create_contact_saved_search(
+                db,
+                contact.id,
+                ContactSavedSearchCreateCommand("private new search", {}),
+                actor_subject="7",
+            )
+        else:
+            await contacts_service.delete_saved_search(
+                db, record_id, actor_subject="7"
+            )
+    if service_name == "create_contact_note":
+        assert await db.scalar(select(func.count()).select_from(CRMNote)) == 0
+    elif service_name == "delete_contact_note":
+        assert await db.get(CRMNote, record_id) is not None
+    elif service_name == "create_contact_saved_search":
+        assert await db.scalar(select(func.count()).select_from(CRMSavedSearch)) == 0
+    else:
+        assert await db.get(CRMSavedSearch, record_id) is not None
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.parametrize("service_name", ("assign_contact_tag", "remove_contact_tag"))
+@pytest.mark.asyncio
+async def test_tag_audit_failure_rolls_back_assignment_change(
+    mutation_db, service_name
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic rollback tag")
+    db.add(tag)
+    await db.flush()
+    if service_name == "remove_contact_tag":
+        db.add(CRMContactTag(contact_id=contact.id, tag_id=tag.id))
+        await db.flush()
+    await db.execute(
+        text(
+            "CREATE TRIGGER reject_tag_audit BEFORE INSERT ON "
+            "crm_contact_audit_events BEGIN SELECT RAISE(FAIL, 'audit rejected'); END"
+        )
+    )
+    with pytest.raises(contacts_service.ContactDataIntegrityError):
+        await getattr(contacts_service, service_name)(
+            db, contact.id, tag.id, actor_subject="7"
+        )
+    assignment_count = await db.scalar(
+        select(func.count())
+        .select_from(CRMContactTag)
+        .where(
+            CRMContactTag.contact_id == contact.id,
+            CRMContactTag.tag_id == tag.id,
+        )
+    )
+    assert assignment_count == (1 if service_name == "remove_contact_tag" else 0)
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    ("remove_contact_tag", "create_contact_note", "delete_contact_note"),
+)
+@pytest.mark.asyncio
+async def test_e2_compatibility_activity_failure_rolls_back_business_and_audit(
+    mutation_db, service_name
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic activity rollback tag")
+    note = CRMNote(contact_id=contact.id, body="private existing note")
+    db.add_all([tag, note])
+    await db.flush()
+    assignment = CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+    db.add(assignment)
+    await db.flush()
+    await db.execute(
+        text(
+            "CREATE TRIGGER reject_e2_activity BEFORE INSERT ON "
+            "crm_activities BEGIN SELECT RAISE(FAIL, 'activity rejected'); END"
+        )
+    )
+    with pytest.raises(contacts_service.ContactDataIntegrityError):
+        if service_name == "remove_contact_tag":
+            await contacts_service.remove_contact_tag(
+                db, contact.id, tag.id, actor_subject="7"
+            )
+        elif service_name == "create_contact_note":
+            await contacts_service.create_contact_note(
+                db,
+                contact.id,
+                ContactNoteCreateCommand("private new note"),
+                actor_subject="7",
+            )
+        else:
+            await contacts_service.delete_contact_note(
+                db, contact.id, note.id, actor_subject="7"
+            )
+    assert await db.get(CRMContactTag, assignment.id) is not None
+    assert await db.get(CRMNote, note.id) is not None
+    assert (
+        await db.scalar(
+            select(func.count()).select_from(CRMNote).where(
+                CRMNote.body == "private new note"
+            )
+        )
+        == 0
+    )
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_global_saved_search_activity_failure_restores_search(
+    mutation_db,
+):
+    db, _engine = mutation_db
+    search = CRMSavedSearch(
+        contact_id=None,
+        name="private global rollback",
+        criteria_json='{"a":1}',
+    )
+    db.add(search)
+    await db.flush()
+    await db.execute(
+        text(
+            "CREATE TRIGGER reject_workspace_activity BEFORE INSERT ON "
+            "crm_activities BEGIN SELECT RAISE(FAIL, 'activity rejected'); END"
+        )
+    )
+    with pytest.raises(contacts_service.ContactDataIntegrityError) as caught:
+        await contacts_service.delete_saved_search(
+            db, search.id, actor_subject="7"
+        )
+    assert "private global rollback" not in str(caught.value)
+    assert await db.get(CRMSavedSearch, search.id) is not None
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0

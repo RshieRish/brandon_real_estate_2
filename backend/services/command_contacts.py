@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import NoReturn
 
@@ -23,7 +23,7 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
@@ -76,12 +76,16 @@ from services.command_contact_contracts import (
     ContactDirectoryRow,
     ContactEvidence,
     ContactMaterialized,
+    ContactMutationResult,
     ContactNeighbors,
+    ContactNoteCreateCommand,
     ContactNoteOccurrence,
     ContactOpportunityOccurrence,
     ContactOriginFilter,
     ContactRecoveredProfile,
+    ContactSavedSearchCreateCommand,
     ContactSavedSearchOccurrence,
+    ContactSavedSearchValue,
     ContactSection,
     ContactSectionEvidence,
     ContactSectionPage,
@@ -95,8 +99,11 @@ from services.command_contact_contracts import (
     ContactTaskOccurrence,
     ContactUpdateCommand,
     ContactWorkspaceSummary,
+    SavedSearchDeletionResult,
     SortDirection,
+    WorkspaceMutationResult,
     canonical_contact_audit_json,
+    canonical_workspace_saved_search_activity_json,
 )
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
@@ -2569,6 +2576,172 @@ async def list_contact_celebrations(
     )
 
 
+async def _lock_contact(db: AsyncSession, contact_id: int) -> CRMContact:
+    contact = (
+        await db.scalars(
+            select(CRMContact)
+            .where(CRMContact.id == contact_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+    if contact is None:
+        _safe_not_found()
+    return contact
+
+
+def _canonical_audit(
+    *, action: str, phase: str, payload: Mapping[str, object]
+) -> str:
+    try:
+        return canonical_contact_audit_json(
+            action=action,  # type: ignore[arg-type]
+            phase=phase,  # type: ignore[arg-type]
+            payload=payload,
+        )
+    except (TypeError, ValueError):
+        raise ContactDataIntegrityError(
+            "contact audit state is invalid"
+        ) from None
+
+
+def _thaw_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json_value(item) for item in value]
+    return value
+
+
+def _canonical_criteria(value: Mapping[str, object]) -> str:
+    try:
+        return json.dumps(
+            _thaw_json_value(value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        raise ContactDataIntegrityError(
+            "saved search criteria is invalid"
+        ) from None
+
+
+def _parse_canonical_criteria(value: str) -> Mapping[str, object]:
+    def reject_nonfinite(_value: str) -> NoReturn:
+        raise ValueError("nonfinite JSON value")
+
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = item
+        return result
+
+    try:
+        parsed = json.loads(
+            value,
+            parse_constant=reject_nonfinite,
+            object_pairs_hook=reject_duplicates,
+        )
+        if not isinstance(parsed, dict):
+            raise TypeError("criteria must be an object")
+        canonical = json.dumps(
+            parsed,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        if len(canonical.encode("utf-8")) > 65_536:
+            raise ValueError("canonical criteria is too large")
+        return parsed
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ContactDataIntegrityError(
+            "saved search criteria is invalid"
+        ) from None
+
+
+async def _remove_materialized_child_link(
+    db: AsyncSession,
+    *,
+    contact_id: int,
+    entity_type: str,
+    entity_id: int,
+    record_kind: str,
+    section_name: str,
+) -> None:
+    rows = (
+        await db.execute(
+            select(
+                CRMEntitySource,
+                CRMSourceRecord,
+                CRMContactSourceOccurrence,
+                CRMContactSectionCapture,
+                CRMContactCapturePosition,
+            )
+            .outerjoin(
+                CRMSourceRecord,
+                CRMSourceRecord.id == CRMEntitySource.source_record_id,
+            )
+            .outerjoin(
+                CRMContactSourceOccurrence,
+                CRMContactSourceOccurrence.source_record_id
+                == CRMEntitySource.source_record_id,
+            )
+            .outerjoin(
+                CRMContactSectionCapture,
+                CRMContactSectionCapture.id
+                == CRMContactSourceOccurrence.section_capture_id,
+            )
+            .outerjoin(
+                CRMContactCapturePosition,
+                CRMContactCapturePosition.id
+                == CRMContactSectionCapture.capture_position_id,
+            )
+            .where(
+                CRMEntitySource.entity_type == entity_type,
+                CRMEntitySource.entity_id == entity_id,
+            )
+            .with_for_update(of=CRMEntitySource)
+        )
+    ).all()
+    if not rows:
+        return
+    if len(rows) != 1:
+        raise ContactDataIntegrityError("contact source link is invalid")
+    link, source, occurrence, section, position = rows[0]
+    if (
+        source is None
+        or occurrence is None
+        or section is None
+        or position is None
+        or source.source_system != "kw_command"
+        or source.module != "contacts"
+        or source.record_kind != record_kind
+        or occurrence.contact_id != contact_id
+        or occurrence.source_record_id != source.id
+        or section.section_name != section_name
+        or section.id != occurrence.section_capture_id
+        or position.id != section.capture_position_id
+        or position.contact_id != contact_id
+    ):
+        raise ContactDataIntegrityError("contact source link is invalid")
+    await db.delete(link)
+
+
+def _is_contact_tag_uniqueness_error(error: IntegrityError) -> bool:
+    diagnostic = getattr(error.orig, "diag", None)
+    if getattr(diagnostic, "constraint_name", None) == "uq_crm_contact_tag":
+        return True
+    return (
+        "UNIQUE constraint failed: crm_contact_tags.contact_id, "
+        "crm_contact_tags.tag_id"
+    ) in str(error.orig)
+
+
 async def create_contact(
     db: AsyncSession,
     payload: ContactCreateCommand,
@@ -2735,6 +2908,613 @@ async def update_contact(
         ) from None
 
 
+async def assign_contact_tag(
+    db: AsyncSession,
+    contact_id: int,
+    tag_id: int,
+    *,
+    actor_subject: str,
+) -> ContactMutationResult:
+    """Assign one tag, recovering only the exact assignment uniqueness race."""
+    actor = _validated_actor_subject(actor_subject)
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+    if type(tag_id) is not int or tag_id <= 0:
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            contact = await _lock_contact(db, contact_id)
+            tag = (
+                await db.scalars(
+                    select(CRMTag)
+                    .where(CRMTag.id == tag_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).one_or_none()
+            if tag is None:
+                _safe_not_found()
+            existing = (
+                await db.scalars(
+                    select(CRMContactTag)
+                    .where(
+                        CRMContactTag.contact_id == contact.id,
+                        CRMContactTag.tag_id == tag.id,
+                    )
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if existing is not None:
+                return ContactMutationResult(
+                    contact_id=contact.id,
+                    record_id=existing.id,
+                    changed=False,
+                    audit_entity_type=None,
+                    audit_event_id=None,
+                )
+            link = CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+            try:
+                async with db.begin_nested():
+                    db.add(link)
+                    await db.flush()
+            except IntegrityError as error:
+                if not _is_contact_tag_uniqueness_error(error):
+                    raise
+                existing = (
+                    await db.scalars(
+                        select(CRMContactTag).where(
+                            CRMContactTag.contact_id == contact.id,
+                            CRMContactTag.tag_id == tag.id,
+                        )
+                    )
+                ).one_or_none()
+                if existing is None:
+                    raise
+                return ContactMutationResult(
+                    contact_id=contact.id,
+                    record_id=existing.id,
+                    changed=False,
+                    audit_entity_type=None,
+                    audit_event_id=None,
+                )
+            audit = _contact_audit_event(
+                contact_id=contact.id,
+                actor_subject=actor,
+                action="contact.tag_added",
+                before_json=_canonical_audit(
+                    action="contact.tag_added",
+                    phase="before",
+                    payload={"present": False, "tag_id": tag.id},
+                ),
+                after_json=_canonical_audit(
+                    action="contact.tag_added",
+                    phase="after",
+                    payload={"present": True, "tag_id": tag.id},
+                ),
+            )
+            db.add(audit)
+            await db.flush()
+            return ContactMutationResult(
+                contact_id=contact.id,
+                record_id=link.id,
+                changed=True,
+                audit_entity_type="contact_audit",
+                audit_event_id=audit.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except IntegrityError as error:
+        if "crm_contact_tags" in str(error.statement).casefold():
+            raise
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def remove_contact_tag(
+    db: AsyncSession,
+    contact_id: int,
+    tag_id: int,
+    *,
+    actor_subject: str,
+) -> ContactMutationResult:
+    """Remove one assignment, treating an absent assignment as a no-op."""
+    actor = _validated_actor_subject(actor_subject)
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+    if type(tag_id) is not int or tag_id <= 0:
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            contact = await _lock_contact(db, contact_id)
+            tag = (
+                await db.scalars(
+                    select(CRMTag)
+                    .where(CRMTag.id == tag_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).one_or_none()
+            if tag is None:
+                _safe_not_found()
+            link = (
+                await db.scalars(
+                    select(CRMContactTag)
+                    .where(
+                        CRMContactTag.contact_id == contact.id,
+                        CRMContactTag.tag_id == tag.id,
+                    )
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if link is None:
+                return ContactMutationResult(
+                    contact_id=contact.id,
+                    record_id=None,
+                    changed=False,
+                    audit_entity_type=None,
+                    audit_event_id=None,
+                )
+            record_id = link.id
+            await db.delete(link)
+            audit = _contact_audit_event(
+                contact_id=contact.id,
+                actor_subject=actor,
+                action="contact.tag_removed",
+                before_json=_canonical_audit(
+                    action="contact.tag_removed",
+                    phase="before",
+                    payload={"present": True, "tag_id": tag.id},
+                ),
+                after_json=_canonical_audit(
+                    action="contact.tag_removed",
+                    phase="after",
+                    payload={"present": False, "tag_id": tag.id},
+                ),
+            )
+            db.add_all(
+                [
+                    _compatibility_activity(
+                        contact_id=contact.id,
+                        kind="tag_removed",
+                        summary="Removed a contact tag",
+                    ),
+                    audit,
+                ]
+            )
+            await db.flush()
+            return ContactMutationResult(
+                contact_id=contact.id,
+                record_id=record_id,
+                changed=True,
+                audit_entity_type="contact_audit",
+                audit_event_id=audit.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def create_contact_note(
+    db: AsyncSession,
+    contact_id: int,
+    payload: ContactNoteCreateCommand,
+    *,
+    actor_subject: str,
+) -> ContactMutationResult:
+    """Create one internal contact note with activity and audit."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactNoteCreateCommand):
+        raise TypeError("payload must be ContactNoteCreateCommand")
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            contact = await _lock_contact(db, contact_id)
+            note = CRMNote(contact_id=contact.id, body=payload.body)
+            db.add(note)
+            await db.flush()
+            audit = _contact_audit_event(
+                contact_id=contact.id,
+                actor_subject=actor,
+                action="contact.note_created",
+                before_json=_canonical_audit(
+                    action="contact.note_created",
+                    phase="before",
+                    payload={
+                        "body": note.body,
+                        "note_id": note.id,
+                        "present": False,
+                    },
+                ),
+                after_json=_canonical_audit(
+                    action="contact.note_created",
+                    phase="after",
+                    payload={
+                        "body": note.body,
+                        "note_id": note.id,
+                        "present": True,
+                    },
+                ),
+            )
+            db.add_all(
+                [
+                    _compatibility_activity(
+                        contact_id=contact.id,
+                        kind="note",
+                        summary="Added a contact note",
+                    ),
+                    audit,
+                ]
+            )
+            await db.flush()
+            return ContactMutationResult(
+                contact_id=contact.id,
+                record_id=note.id,
+                changed=True,
+                audit_entity_type="contact_audit",
+                audit_event_id=audit.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def delete_contact_note(
+    db: AsyncSession,
+    contact_id: int,
+    note_id: int,
+    *,
+    actor_subject: str,
+) -> ContactMutationResult:
+    """Delete one same-contact note without dangling its source evidence."""
+    actor = _validated_actor_subject(actor_subject)
+    if (
+        type(contact_id) is not int
+        or contact_id <= 0
+        or type(note_id) is not int
+        or note_id <= 0
+    ):
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            contact = await _lock_contact(db, contact_id)
+            note = (
+                await db.scalars(
+                    select(CRMNote)
+                    .where(
+                        CRMNote.id == note_id,
+                        CRMNote.contact_id == contact.id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).one_or_none()
+            if note is None:
+                _safe_not_found()
+            await _remove_materialized_child_link(
+                db,
+                contact_id=contact.id,
+                entity_type="note",
+                entity_id=note.id,
+                record_kind="contact_note",
+                section_name="notes",
+            )
+            audit = _contact_audit_event(
+                contact_id=contact.id,
+                actor_subject=actor,
+                action="contact.note_deleted",
+                before_json=_canonical_audit(
+                    action="contact.note_deleted",
+                    phase="before",
+                    payload={
+                        "body": note.body,
+                        "note_id": note.id,
+                        "present": True,
+                    },
+                ),
+                after_json=_canonical_audit(
+                    action="contact.note_deleted",
+                    phase="after",
+                    payload={
+                        "body": note.body,
+                        "note_id": note.id,
+                        "present": False,
+                    },
+                ),
+            )
+            record_id = note.id
+            await db.delete(note)
+            db.add_all(
+                [
+                    _compatibility_activity(
+                        contact_id=contact.id,
+                        kind="note_removed",
+                        summary="Removed a contact note",
+                    ),
+                    audit,
+                ]
+            )
+            await db.flush()
+            return ContactMutationResult(
+                contact_id=contact.id,
+                record_id=record_id,
+                changed=True,
+                audit_entity_type="contact_audit",
+                audit_event_id=audit.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def create_contact_saved_search(
+    db: AsyncSession,
+    contact_id: int,
+    payload: ContactSavedSearchCreateCommand,
+    *,
+    actor_subject: str,
+) -> ContactMutationResult:
+    """Create one contact-owned saved search and its redacted audit."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactSavedSearchCreateCommand):
+        raise TypeError("payload must be ContactSavedSearchCreateCommand")
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+    criteria_json = _canonical_criteria(payload.criteria)
+    try:
+        async with db.begin_nested():
+            contact = await _lock_contact(db, contact_id)
+            search = CRMSavedSearch(
+                contact_id=contact.id,
+                name=payload.name,
+                criteria_json=criteria_json,
+            )
+            db.add(search)
+            await db.flush()
+            audit = _contact_audit_event(
+                contact_id=contact.id,
+                actor_subject=actor,
+                action="contact.saved_search_created",
+                before_json=_canonical_audit(
+                    action="contact.saved_search_created",
+                    phase="before",
+                    payload={
+                        "criteria": criteria_json,
+                        "name": search.name,
+                        "present": False,
+                        "search_id": search.id,
+                    },
+                ),
+                after_json=_canonical_audit(
+                    action="contact.saved_search_created",
+                    phase="after",
+                    payload={
+                        "criteria": criteria_json,
+                        "name": search.name,
+                        "present": True,
+                        "search_id": search.id,
+                    },
+                ),
+            )
+            db.add(audit)
+            await db.flush()
+            return ContactMutationResult(
+                contact_id=contact.id,
+                record_id=search.id,
+                changed=True,
+                audit_entity_type="contact_audit",
+                audit_event_id=audit.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def list_saved_searches(
+    db: AsyncSession,
+) -> tuple[ContactSavedSearchValue, ...]:
+    """List global and contact-owned searches without flushing caller state."""
+    with db.no_autoflush:
+        rows = (
+            await db.execute(
+                select(
+                    CRMSavedSearch,
+                    CRMContact.id,
+                    CRMContact.first_name,
+                    CRMContact.last_name,
+                )
+                .outerjoin(
+                    CRMContact, CRMContact.id == CRMSavedSearch.contact_id
+                )
+                .order_by(
+                    CRMSavedSearch.updated_at.desc(),
+                    CRMSavedSearch.id.desc(),
+                )
+            )
+        ).all()
+    result: list[ContactSavedSearchValue] = []
+    for search, owner_id, first_name, last_name in rows:
+        if search.contact_id is not None and owner_id != search.contact_id:
+            raise ContactDataIntegrityError("saved search ownership is invalid")
+        criteria = _parse_canonical_criteria(search.criteria_json)
+        updated_at = _section_datetime(search.updated_at)
+        if updated_at is None:
+            raise ContactDataIntegrityError("saved search timestamp is invalid")
+        contact_name = None
+        if owner_id is not None:
+            contact_name = f"{first_name} {last_name}".strip()
+        result.append(
+            ContactSavedSearchValue(
+                id=search.id,
+                contact_id=search.contact_id,
+                contact_name=contact_name,
+                name=search.name,
+                criteria=criteria,
+                updated_at=updated_at,
+            )
+        )
+    return tuple(result)
+
+
+async def delete_saved_search(
+    db: AsyncSession,
+    search_id: int,
+    *,
+    actor_subject: str,
+) -> SavedSearchDeletionResult:
+    """Delete one contact-owned or global saved search under exact locking."""
+    actor = _validated_actor_subject(actor_subject)
+    if type(search_id) is not int or search_id <= 0:
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            candidate = (
+                await db.execute(
+                    select(CRMSavedSearch.id, CRMSavedSearch.contact_id).where(
+                        CRMSavedSearch.id == search_id
+                    )
+                )
+            ).one_or_none()
+            if candidate is None:
+                _safe_not_found()
+            candidate_contact_id = candidate.contact_id
+            if candidate_contact_id is not None:
+                contact = await _lock_contact(db, candidate_contact_id)
+                search = (
+                    await db.scalars(
+                        select(CRMSavedSearch)
+                        .where(
+                            CRMSavedSearch.id == search_id,
+                            CRMSavedSearch.contact_id == contact.id,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).one_or_none()
+                if search is None:
+                    raise ContactDataIntegrityError(
+                        "saved search ownership changed"
+                    )
+                criteria_json = _canonical_criteria(
+                    _parse_canonical_criteria(search.criteria_json)
+                )
+                await _remove_materialized_child_link(
+                    db,
+                    contact_id=contact.id,
+                    entity_type="saved_search",
+                    entity_id=search.id,
+                    record_kind="contact_saved_search",
+                    section_name="saved_searches",
+                )
+                audit = _contact_audit_event(
+                    contact_id=contact.id,
+                    actor_subject=actor,
+                    action="contact.saved_search_deleted",
+                    before_json=_canonical_audit(
+                        action="contact.saved_search_deleted",
+                        phase="before",
+                        payload={
+                            "criteria": criteria_json,
+                            "name": search.name,
+                            "present": True,
+                            "search_id": search.id,
+                        },
+                    ),
+                    after_json=_canonical_audit(
+                        action="contact.saved_search_deleted",
+                        phase="after",
+                        payload={
+                            "criteria": criteria_json,
+                            "name": search.name,
+                            "present": False,
+                            "search_id": search.id,
+                        },
+                    ),
+                )
+                record_id = search.id
+                await db.delete(search)
+                db.add(audit)
+                await db.flush()
+                return ContactMutationResult(
+                    contact_id=contact.id,
+                    record_id=record_id,
+                    changed=True,
+                    audit_entity_type="contact_audit",
+                    audit_event_id=audit.id,
+                )
+
+            search = (
+                await db.scalars(
+                    select(CRMSavedSearch)
+                    .where(
+                        CRMSavedSearch.id == search_id,
+                        CRMSavedSearch.contact_id.is_(None),
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).one_or_none()
+            if search is None:
+                raise ContactDataIntegrityError(
+                    "saved search ownership changed"
+                )
+            links = (
+                await db.scalars(
+                    select(CRMEntitySource).where(
+                        CRMEntitySource.entity_type == "saved_search",
+                        CRMEntitySource.entity_id == search.id,
+                    )
+                )
+            ).all()
+            if links:
+                raise ContactDataIntegrityError("contact source link is invalid")
+            metadata = canonical_workspace_saved_search_activity_json(
+                actor_subject=actor,
+                search_id=search.id,
+                name=search.name,
+            )
+            activity = CRMActivity(
+                contact_id=None,
+                kind="workspace.saved_search_deleted",
+                summary="Saved search deleted",
+                source_record_id=None,
+                metadata_json=metadata,
+            )
+            record_id = search.id
+            await db.delete(search)
+            db.add(activity)
+            await db.flush()
+            return WorkspaceMutationResult(
+                record_id=record_id,
+                changed=True,
+                audit_entity_type="workspace_activity",
+                audit_event_id=activity.id,
+            )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
 __all__ = [
     "ContactDataIntegrityError",
     "ContactDirectoryError",
@@ -2742,12 +3522,19 @@ __all__ = [
     "ContactNotFound",
     "ContactNotInDirectory",
     "ContactSectionUnsupported",
+    "assign_contact_tag",
     "create_contact",
+    "create_contact_note",
+    "create_contact_saved_search",
+    "delete_contact_note",
+    "delete_saved_search",
     "get_contact_detail",
     "get_contact_evidence",
     "get_contact_neighbors",
     "get_contact_workspace_summary",
     "list_contact_celebrations",
     "list_contacts",
+    "list_saved_searches",
+    "remove_contact_tag",
     "update_contact",
 ]
