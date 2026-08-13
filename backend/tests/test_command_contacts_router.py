@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Annotated
 
 import pytest
+import pytest_asyncio
+from database import Base, get_db
 from fastapi import FastAPI, Query
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from middleware.auth import require_admin_subject
+from models.booking import Booking
+from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact
+from models.command_contacts import CRMContactMethod
+from models.lead import Lead
 from pydantic import ValidationError
-
+from routers import command_contacts as contact_router
 from schemas import command_contacts
 from schemas.command_contacts import (
     ContactArtifactMetadataOut,
@@ -57,10 +66,12 @@ from services.command_contact_contracts import (
     ContactDirectoryRow,
     ContactEvidence,
     ContactImportRowCommand,
+    ContactNeighbors,
     ContactOriginFilter,
     ContactRecoveredProfile,
     ContactSection,
     ContactSectionEvidence,
+    ContactSectionPage,
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
@@ -68,11 +79,44 @@ from services.command_contact_contracts import (
     ContactTagValue,
     ContactTimelineEntry,
     ContactTimelinePage,
+    ContactWorkspaceSummary,
     SortDirection,
+    TimelineCursorV1,
     TimelineOrigin,
+    encode_timeline_cursor,
 )
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 NOW = datetime(2026, 8, 13, 14, 30, tzinfo=UTC)
+
+READ_ROUTE_INVENTORY = (
+    ("GET", "/contacts/directory"),
+    ("GET", "/contacts"),
+    ("GET", "/celebrations"),
+    ("GET", "/contacts/{contact_id}"),
+    ("GET", "/contacts/{contact_id}/neighbors"),
+    ("GET", "/contacts/{contact_id}/workspace/summary"),
+    ("GET", "/contacts/{contact_id}/workspace"),
+    ("GET", "/contacts/{contact_id}/timeline"),
+    ("GET", "/contacts/{contact_id}/opportunities"),
+    ("GET", "/contacts/{contact_id}/smart-plans"),
+    ("GET", "/contacts/{contact_id}/tasks"),
+    ("GET", "/contacts/{contact_id}/notes"),
+    ("GET", "/contacts/{contact_id}/saved-searches"),
+    ("GET", "/contacts/{contact_id}/evidence"),
+)
+
+
+@pytest_asyncio.fixture
+async def contact_router_db():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
 
 
 def _query_test_client() -> TestClient:
@@ -1006,3 +1050,877 @@ def test_legacy_workspace_validates_every_populated_nested_wire_row():
         invalid = {**payload, collection: [{**payload[collection][0], "private": True}]}
         with pytest.raises(ValidationError):
             LegacyContactWorkspaceOut.model_validate(invalid)
+
+
+class _ReadOnlyBoundaryDB:
+    no_autoflush = nullcontext()
+
+    def add(self, _value):
+        raise AssertionError("read route attempted DML")
+
+    async def flush(self):
+        raise AssertionError("read route attempted a flush")
+
+    async def commit(self):
+        raise AssertionError("read route attempted a commit")
+
+
+def _focused_read_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(contact_router.router)
+    app.dependency_overrides[require_admin_subject] = lambda: "17"
+    app.dependency_overrides[get_db] = lambda: _ReadOnlyBoundaryDB()
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _route_inventory(router) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (method, route.path)
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        for method in sorted(route.methods or ())
+        if method != "HEAD"
+    )
+
+
+def test_focused_router_declares_only_the_ordered_read_subset_without_global_auth():
+    assert contact_router.router.dependencies == []
+    assert _route_inventory(contact_router.router) == READ_ROUTE_INVENTORY
+    for route in contact_router.router.routes:
+        assert isinstance(route, APIRoute)
+        assert require_admin_subject in {
+            dependency.call for dependency in route.dependant.dependencies
+        }
+
+
+def test_focused_read_openapi_pins_required_parameters_and_numeric_bounds():
+    app = FastAPI()
+    app.include_router(contact_router.router)
+    paths = app.openapi()["paths"]
+
+    detail_params = {
+        item["name"]: item
+        for item in paths["/contacts/{contact_id}"]["get"]["parameters"]
+    }
+    assert detail_params["contact_id"] == {
+        "name": "contact_id",
+        "in": "path",
+        "required": True,
+        "schema": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Contact Id",
+        },
+    }
+
+    legacy_params = {
+        item["name"]: item for item in paths["/contacts"]["get"]["parameters"]
+    }
+    assert legacy_params["limit"]["schema"] == {
+        "type": "integer",
+        "maximum": 100,
+        "minimum": 1,
+        "default": 50,
+        "title": "Limit",
+    }
+    assert legacy_params["offset"]["schema"] == {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "title": "Offset",
+    }
+
+    task_params = {
+        item["name"]: item
+        for item in paths["/contacts/{contact_id}/tasks"]["get"]["parameters"]
+    }
+    assert task_params["state"]["required"] is True
+    assert task_params["state"]["schema"] == {
+        "type": "array",
+        "items": {
+            "enum": ["to_do", "completed", "archived"],
+            "type": "string",
+        },
+        "title": "State",
+    }
+    assert task_params["page"]["schema"]["minimum"] == 1
+    assert task_params["page_size"]["schema"]["minimum"] == 1
+    assert task_params["page_size"]["schema"]["maximum"] == 100
+
+    month = {
+        item["name"]: item for item in paths["/celebrations"]["get"]["parameters"]
+    }["month"]
+    assert month["required"] is True
+    assert month["schema"]["minimum"] == 1
+    assert month["schema"]["maximum"] == 12
+
+
+def test_directory_read_forwards_every_filter_and_never_writes(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_list_contacts(_db, filters, *, now):
+        captured.update(filters=filters, now=now)
+        return ContactDirectoryPage(
+            rows=(),
+            total=0,
+            page=filters.page,
+            page_size=filters.page_size,
+            page_count=0,
+            sort=filters.sort,
+            direction=filters.direction,
+        )
+
+    monkeypatch.setattr(contact_router, "list_contacts", fake_list_contacts)
+    response = _focused_read_client().get(
+        "/contacts/directory",
+        params=[
+            ("query", "Synthetic"),
+            ("stage", "lead"),
+            ("owner_actor_id", "17"),
+            ("assignee_actor_id", "18"),
+            ("tag", "3"),
+            ("tag", "1"),
+            ("source", "kw_command"),
+            ("origin", "recovered"),
+            ("health_min", "10"),
+            ("health_max", "90"),
+            ("birthday_month", "8"),
+            ("anniversary_month", "9"),
+            ("smart_view", "recently_active"),
+            ("sort", "updated_at"),
+            ("direction", "desc"),
+            ("page", "2"),
+            ("page_size", "25"),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["rows"] == []
+    filters = captured["filters"]
+    assert filters == ContactDirectoryFilters(
+        query="Synthetic",
+        stage="lead",
+        owner_actor_id="17",
+        assignee_actor_id="18",
+        tag_ids=(1, 3),
+        sources=(ContactSourceFilter.KW_COMMAND,),
+        origins=(ContactOriginFilter.RECOVERED,),
+        health_min=10,
+        health_max=90,
+        birthday_month=8,
+        anniversary_month=9,
+        smart_view=ContactSmartView.RECENTLY_ACTIVE,
+        sort=ContactSortKey.UPDATED_AT,
+        direction=SortDirection.DESC,
+        page=2,
+        page_size=25,
+    )
+    assert captured["now"].tzinfo is UTC
+
+
+def test_legacy_contact_read_forwards_exact_unclamped_window(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_legacy(_db, **values):
+        captured.update(values)
+        return [
+            SimpleNamespace(
+                id=7,
+                first_name="Raw",
+                last_name="Contact",
+                email=" RAW@Example.Test ",
+                phone=" raw phone ",
+                lead_id=9,
+                birthday=None,
+                anniversary=None,
+                stage=" lead ",
+            )
+        ]
+
+    monkeypatch.setattr(contact_router, "_list_legacy_contacts", fake_legacy)
+    response = _focused_read_client().get(
+        "/contacts",
+        params={
+            "limit": "100",
+            "offset": "99",
+            "query": " Raw ",
+            "stage": " lead ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "limit": 100,
+        "offset": 99,
+        "query": " Raw ",
+        "stage": " lead ",
+    }
+    assert response.json()[0] == {
+        "id": 7,
+        "first_name": "Raw",
+        "last_name": "Contact",
+        "email": " RAW@Example.Test ",
+        "phone": " raw phone ",
+        "lead_id": 9,
+        "birthday": None,
+        "anniversary": None,
+        "stage": " lead ",
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": "0"},
+        {"limit": "101"},
+        {"offset": "-1"},
+        {"limit": "true"},
+        {"offset": "1.5"},
+    ],
+)
+def test_legacy_contact_read_rejects_invalid_windows_before_service(
+    monkeypatch, params
+):
+    called = False
+
+    async def fake_legacy(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(contact_router, "_list_legacy_contacts", fake_legacy)
+    response = _focused_read_client().get("/contacts", params=params)
+
+    assert response.status_code == 422
+    assert called is False
+
+
+def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    async def fake_celebrations(_db, *, month):
+        calls.append(("celebrations", month))
+        return ContactCelebrations(birthdays=(), anniversaries=())
+
+    async def fake_detail(_db, contact_id):
+        calls.append(("detail", contact_id))
+        return ContactDetail(
+            contact=_directory_row(),
+            lead_id=9,
+            recovered_profile=None,
+            addresses=(),
+            ownership=(),
+            tags=(),
+        )
+
+    async def fake_neighbors(_db, contact_id, filters, *, now):
+        calls.append(("neighbors", (contact_id, filters.page, now.tzinfo)))
+        return ContactNeighbors(previous_contact_id=6, next_contact_id=8)
+
+    async def fake_summary(_db, contact_id):
+        calls.append(("summary", contact_id))
+        return ContactWorkspaceSummary(1, 2, 3, 4, 5, 6, 7, 8)
+
+    async def fake_evidence(_db, contact_id):
+        calls.append(("evidence", contact_id))
+        return ContactEvidence(
+            contact_id=contact_id,
+            provider_contact_rows=0,
+            resolved_provider_identities=0,
+            coalesced_aliases=0,
+            lead_backed_contacts=0,
+            reviewed_overlaps=0,
+            legacy_only_contacts=0,
+            capture_positions=(),
+            section_matrix=(),
+            sources=(),
+            capture_quality="limitation",
+        )
+
+    monkeypatch.setattr(contact_router, "list_contact_celebrations", fake_celebrations)
+    monkeypatch.setattr(contact_router, "get_contact_detail", fake_detail)
+    monkeypatch.setattr(contact_router, "get_contact_neighbors", fake_neighbors)
+    monkeypatch.setattr(contact_router, "get_contact_workspace_summary", fake_summary)
+    monkeypatch.setattr(contact_router, "get_contact_evidence", fake_evidence)
+    client = _focused_read_client()
+
+    assert client.get("/celebrations", params={"month": "8"}).status_code == 200
+    assert client.get("/contacts/7").json()["lead_id"] == 9
+    assert client.get("/contacts/7/neighbors", params={"page": "2"}).json() == {
+        "previous_contact_id": 6,
+        "next_contact_id": 8,
+    }
+    assert client.get("/contacts/7/workspace/summary").json() == {
+        "open_tasks": 1,
+        "completed_tasks": 2,
+        "archived_tasks": 3,
+        "active_smart_plans": 4,
+        "opportunities": 5,
+        "notes": 6,
+        "saved_searches": 7,
+        "bookings": 8,
+    }
+    assert client.get("/contacts/7/evidence").json()["capture_quality"] == (
+        "limitation"
+    )
+    assert calls == [
+        ("celebrations", 8),
+        ("detail", 7),
+        ("neighbors", (7, 2, UTC)),
+        ("summary", 7),
+        ("evidence", 7),
+    ]
+
+
+def test_timeline_forwards_cursor_and_section_reads_map_exact_enums(monkeypatch):
+    calls: list[tuple[object, ...]] = []
+
+    async def fake_timeline(_db, contact_id, *, cursor, page_size):
+        calls.append(("timeline", contact_id, cursor, page_size))
+        return ContactTimelinePage(rows=(), next_cursor=None, has_more=False)
+
+    async def fake_section(_db, contact_id, section, *, page, page_size):
+        calls.append(("section", contact_id, section, page, page_size))
+        return ContactSectionPage(
+            rows=(), total=0, page=page, page_size=page_size, page_count=0
+        )
+
+    monkeypatch.setattr(contact_router, "list_contact_timeline", fake_timeline)
+    monkeypatch.setattr(contact_router, "list_contact_section", fake_section)
+    client = _focused_read_client()
+
+    cursor = encode_timeline_cursor(TimelineCursorV1(0, NOW, 1, 999))
+    assert (
+        client.get(
+            "/contacts/7/timeline",
+            params={"cursor": cursor, "page_size": "25"},
+        ).status_code
+        == 200
+    )
+    section_paths = (
+        ("opportunities", None, ContactSection.OPPORTUNITIES),
+        ("smart-plans", None, ContactSection.SMART_PLANS),
+        ("tasks", "to_do", ContactSection.TASKS_TO_DO),
+        ("tasks", "completed", ContactSection.TASKS_COMPLETED),
+        ("tasks", "archived", ContactSection.TASKS_ARCHIVED),
+        ("notes", None, ContactSection.NOTES),
+        ("saved-searches", None, ContactSection.SAVED_SEARCHES),
+    )
+    for path, state, _section in section_paths:
+        params = {"page": "2", "page_size": "25"}
+        if state is not None:
+            params["state"] = state
+        response = client.get(f"/contacts/7/{path}", params=params)
+        assert response.status_code == 200
+
+    assert calls == [
+        ("timeline", 7, cursor, 25),
+        *[("section", 7, section, 2, 25) for _path, _state, section in section_paths],
+    ]
+
+
+def test_malformed_timeline_cursor_is_rejected_before_service(monkeypatch):
+    called = False
+
+    async def fake_timeline(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return ContactTimelinePage(rows=(), next_cursor=None, has_more=False)
+
+    monkeypatch.setattr(contact_router, "list_contact_timeline", fake_timeline)
+    response = _focused_read_client().get(
+        "/contacts/7/timeline", params={"cursor": "not-a-valid-cursor"}
+    )
+
+    assert response.status_code == 422
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        [],
+        [("state", "unknown")],
+        [("state", "to_do"), ("state", "to_do")],
+        [("state", "to_do"), ("state", "completed")],
+    ],
+)
+def test_task_read_requires_exactly_one_known_state(monkeypatch, params):
+    called = False
+
+    async def fake_section(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return ContactSectionPage(rows=(), total=0, page=1, page_size=50, page_count=0)
+
+    monkeypatch.setattr(contact_router, "list_contact_section", fake_section)
+    response = _focused_read_client().get("/contacts/7/tasks", params=params)
+
+    assert response.status_code == 422
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (contact_router.ContactNotFound("private-provider-id"), 404),
+        (contact_router.TimelineContactNotFound("private-provider-id"), 404),
+        (contact_router.ContactNotInDirectory("private-provider-id"), 409),
+        (contact_router.ContactDataIntegrityError("private-provider-id"), 409),
+        (contact_router.ContactLinkConflict("private-provider-id"), 409),
+        (contact_router.ContactTimelineIntegrityError("private-provider-id"), 409),
+        (contact_router.ContactSectionUnsupported("private-provider-id"), 422),
+        (RuntimeError("private-provider-id"), 500),
+    ],
+)
+def test_read_error_mapping_is_exact_and_privacy_safe(
+    monkeypatch, error, expected_status
+):
+    async def fail(_db, _contact_id):
+        raise error
+
+    monkeypatch.setattr(contact_router, "get_contact_detail", fail)
+    response = _focused_read_client().get("/contacts/7")
+
+    assert response.status_code == expected_status
+    assert "private-provider-id" not in response.text
+
+
+def test_legacy_workspace_route_preserves_rich_arrays(monkeypatch):
+    async def fake_workspace(_db, *, contact_id):
+        assert contact_id == 7
+        return {
+            "contact": {
+                "id": 7,
+                "lead_id": 9,
+                "first_name": "Raw",
+                "last_name": "Contact",
+                "email": None,
+                "phone": None,
+                "stage": "lead",
+                "birthday": None,
+                "anniversary": None,
+            },
+            "timeline": [],
+            "tasks": [],
+            "notes": [],
+            "smart_plans": [],
+            "opportunities": [],
+            "saved_searches": [],
+            "bookings": [],
+            "tags": [],
+        }
+
+    monkeypatch.setattr(contact_router, "_legacy_contact_workspace", fake_workspace)
+    response = _focused_read_client().get("/contacts/7/workspace")
+
+    assert response.status_code == 200
+    assert tuple(response.json()) == (
+        "contact",
+        "timeline",
+        "tasks",
+        "notes",
+        "smart_plans",
+        "opportunities",
+        "saved_searches",
+        "bookings",
+        "tags",
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/contacts/01",
+        "/contacts/1.0",
+        "/contacts/true",
+        "/contacts/%2B1",
+        "/contacts/%201",
+        "/contacts/0",
+        "/contacts/-1",
+    ],
+)
+def test_contact_path_ids_reject_every_noncanonical_value_before_service(
+    monkeypatch, path
+):
+    called = False
+
+    async def fake_detail(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(contact_router, "get_contact_detail", fake_detail)
+    response = _focused_read_client().get(path)
+
+    assert response.status_code == 422
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        ("/celebrations", {"month": "08"}),
+        ("/celebrations", {"month": "+8"}),
+        ("/contacts", {"limit": "01"}),
+        ("/contacts", {"offset": "+1"}),
+        ("/contacts/1/timeline", {"page_size": "01"}),
+        ("/contacts/1/notes", {"page": "1.0"}),
+        ("/contacts/1/notes", {"page_size": "true"}),
+    ],
+)
+def test_all_read_query_integers_reject_noncanonical_values_before_service(
+    monkeypatch, path, params
+):
+    called = False
+
+    async def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    for name in (
+        "list_contact_celebrations",
+        "_list_legacy_contacts",
+        "list_contact_timeline",
+        "list_contact_section",
+    ):
+        monkeypatch.setattr(contact_router, name, fail_if_called)
+    response = _focused_read_client().get(path, params=params)
+
+    assert response.status_code == 422
+    assert called is False
+
+
+def test_response_validation_occurs_inside_the_safe_boundary(monkeypatch, caplog):
+    secret = "private-provider-value"
+
+    async def invalid_detail(_db, _contact_id):
+        return {
+            "contact": {"id": 7, "provider_contact_id": secret},
+            "lead_id": None,
+            "recovered_profile": None,
+            "addresses": [],
+            "ownership": [],
+            "tags": [],
+        }
+
+    monkeypatch.setattr(contact_router, "get_contact_detail", invalid_detail)
+    response = _focused_read_client().get("/contacts/7")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Unable to load contact data"}
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+
+def test_request_adapter_errors_are_422_but_service_type_errors_are_500(monkeypatch):
+    def bad_adapter(_self):
+        raise ValueError("private-request-value")
+
+    monkeypatch.setattr(ContactDirectoryQueryIn, "to_filters", bad_adapter)
+    adapter_response = _focused_read_client().get("/contacts/directory")
+
+    async def bad_service(*_args, **_kwargs):
+        raise ValueError("private-service-value")
+
+    monkeypatch.undo()
+    monkeypatch.setattr(contact_router, "list_contacts", bad_service)
+    service_response = _focused_read_client().get("/contacts/directory")
+
+    assert adapter_response.status_code == 422
+    assert "private-request-value" not in adapter_response.text
+    assert service_response.status_code == 500
+    assert "private-service-value" not in service_response.text
+
+
+async def test_legacy_raw_list_is_one_exact_select_with_stable_ties_and_no_fallback(
+    contact_router_db,
+):
+    contacts = [
+        CRMContact(
+            id=index,
+            first_name=f"Raw {index}",
+            last_name="Contact",
+            email=None if index == 2 else f"raw-{index}@example.test",
+            phone=None,
+            stage="" if index == 2 else "lead",
+            created_at=NOW,
+        )
+        for index in (1, 2, 3)
+    ]
+    contact_router_db.add_all(contacts)
+    await contact_router_db.flush()
+    contact_router_db.add(
+        CRMContactMethod(
+            contact_id=2,
+            source_key="synthetic-method",
+            kind="email",
+            label="Email",
+            raw_value="recovered@example.test",
+            normalized_value="recovered@example.test",
+            is_primary=True,
+        )
+    )
+    await contact_router_db.flush()
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(" ".join(statement.split()))
+
+    event.listen(contact_router_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        rows = await contact_router._list_legacy_contacts(
+            contact_router_db,
+            limit=2,
+            offset=1,
+            query="   ",
+            stage=None,
+        )
+        empty_stage = await contact_router._list_legacy_contacts(
+            contact_router_db,
+            limit=100,
+            offset=0,
+            query=None,
+            stage="",
+        )
+    finally:
+        event.remove(
+            contact_router_db.bind.sync_engine, "before_cursor_execute", capture
+        )
+
+    assert [row.id for row in rows] == [2, 1]
+    assert rows[0].email is None
+    assert [row.id for row in empty_stage] == [2]
+    assert len(statements) == 2
+    assert all(
+        "ORDER BY crm_contacts.created_at DESC, crm_contacts.id DESC" in sql
+        for sql in statements
+    )
+    assert all(" LIMIT ? OFFSET ?" in sql for sql in statements)
+    assert "crm_contacts.stage = ?" in statements[1]
+
+
+async def test_legacy_workspace_uses_exact_booking_ownership_and_two_opportunities(
+    contact_router_db,
+):
+    lead = Lead(id=40, name="Lead", routing_status="lead")
+    lead_contact = CRMContact(
+        id=1,
+        lead_id=40,
+        first_name="Lead",
+        last_name="Contact",
+        email="owner@example.test",
+        stage="lead",
+    )
+    other_owner = CRMContact(
+        id=2,
+        first_name="Other",
+        last_name="Owner",
+        email="duplicate@example.test",
+        stage="lead",
+    )
+    ambiguous_owner = CRMContact(
+        id=3,
+        first_name="Ambiguous",
+        last_name="Owner",
+        email=" ＤＵＰＬＩＣＡＴＥ@Example.Test ",
+        stage="lead",
+    )
+    contact_router_db.add_all([lead, lead_contact, other_owner, ambiguous_owner])
+    await contact_router_db.flush()
+    contact_router_db.add_all(
+        [
+            Booking(
+                id=1,
+                lead_id=40,
+                name="Lead booking",
+                email="lead@example.test",
+                scheduled_at=NOW,
+                meeting_type="phone",
+                context="general",
+                notes="",
+            ),
+            Booking(
+                id=2,
+                lead_id=None,
+                name="Same email but not lead-owned",
+                email="owner@example.test",
+                scheduled_at=NOW,
+                meeting_type="phone",
+                context="general",
+                notes="",
+            ),
+            Booking(
+                id=3,
+                lead_id=None,
+                name="Ambiguous booking",
+                email="duplicate@example.test",
+                scheduled_at=NOW,
+                meeting_type="phone",
+                context="general",
+                notes="",
+            ),
+        ]
+    )
+    opportunities = [
+        CRMOpportunity(id=10, name="First", stage="active"),
+        CRMOpportunity(id=11, name="Second", stage="offer"),
+    ]
+    contact_router_db.add_all(opportunities)
+    await contact_router_db.flush()
+    contact_router_db.add_all(
+        [
+            CRMOpportunityContact(opportunity_id=item.id, contact_id=1, role="client")
+            for item in opportunities
+        ]
+    )
+    await contact_router_db.flush()
+
+    lead_workspace = await contact_router._legacy_contact_workspace(
+        contact_router_db, contact_id=1
+    )
+    ambiguous_workspace = await contact_router._legacy_contact_workspace(
+        contact_router_db, contact_id=2
+    )
+
+    assert [row["id"] for row in lead_workspace["bookings"]] == [1]
+    opportunity_ids = [row["id"] for row in lead_workspace["opportunities"]]
+    assert len(opportunity_ids) == 2
+    assert sorted(opportunity_ids) == [10, 11]
+    assert ambiguous_workspace["bookings"] == []
+
+
+async def test_legacy_workspace_missing_lead_and_booking_drift_fail_safe(
+    contact_router_db,
+):
+    missing_lead = CRMContact(
+        id=1,
+        lead_id=999,
+        first_name="Missing",
+        last_name="Lead",
+        stage="lead",
+    )
+    contact_router_db.add(missing_lead)
+    await contact_router_db.flush()
+
+    with pytest.raises(contact_router.ContactTimelineIntegrityError):
+        await contact_router._legacy_contact_workspace(contact_router_db, contact_id=1)
+
+    lead = Lead(id=999, name="Now present", routing_status="lead")
+    contact_router_db.add(lead)
+    await contact_router_db.flush()
+    booking = Booking(
+        lead_id=999,
+        name="Private booking",
+        email="private@example.test",
+        scheduled_at=NOW,
+        meeting_type="phone",
+        context="general",
+        notes="",
+    )
+    contact_router_db.add(booking)
+    await contact_router_db.flush()
+    await contact_router_db.execute(
+        Booking.__table__.update()
+        .where(Booking.id == booking.id)
+        .values(normalized_email="drift@example.test")
+    )
+    contact_router_db.expire_all()
+
+    with pytest.raises(contact_router.ContactTimelineIntegrityError) as error:
+        await contact_router._legacy_contact_workspace(contact_router_db, contact_id=1)
+    assert "private@example.test" not in str(error.value)
+
+
+async def test_legacy_workspace_revalidates_same_count_booking_email_drift(
+    contact_router_db, monkeypatch
+):
+    contact_router_db.add_all(
+        [
+            Lead(id=40, name="Lead", routing_status="lead"),
+            CRMContact(
+                id=1,
+                lead_id=40,
+                first_name="Lead",
+                last_name="Contact",
+                email="owner@example.test",
+                stage="lead",
+            ),
+        ]
+    )
+    await contact_router_db.flush()
+    booking = Booking(
+        id=1,
+        lead_id=40,
+        name="Booking",
+        email="booking@example.test",
+        scheduled_at=NOW,
+        meeting_type="phone",
+        context="general",
+        notes="",
+    )
+    contact_router_db.add(booking)
+    await contact_router_db.flush()
+
+    async def count_then_corrupt(_db, _contact_id):
+        await _db.execute(
+            Booking.__table__.update()
+            .where(Booking.id == booking.id)
+            .values(email="private-raw-drift@example.test")
+        )
+        return 1
+
+    monkeypatch.setattr(contact_router, "count_contact_bookings", count_then_corrupt)
+
+    with pytest.raises(contact_router.ContactTimelineIntegrityError) as error:
+        await contact_router._legacy_contact_workspace(contact_router_db, contact_id=1)
+    assert "private-raw-drift@example.test" not in str(error.value)
+
+
+async def test_legacy_workspace_revalidates_unique_owner_after_same_count(
+    contact_router_db, monkeypatch
+):
+    contact_router_db.add(
+        CRMContact(
+            id=1,
+            first_name="Unique",
+            last_name="Owner",
+            email="owner@example.test",
+            stage="lead",
+        )
+    )
+    await contact_router_db.flush()
+    contact_router_db.add(
+        Booking(
+            id=1,
+            lead_id=None,
+            name="Booking",
+            email="owner@example.test",
+            scheduled_at=NOW,
+            meeting_type="phone",
+            context="general",
+            notes="",
+        )
+    )
+    await contact_router_db.flush()
+
+    async def count_then_make_ambiguous(_db, _contact_id):
+        _db.add(
+            CRMContact(
+                id=2,
+                first_name="Private",
+                last_name="Duplicate",
+                email=" ＯＷＮＥＲ@Example.Test ",
+                stage="lead",
+            )
+        )
+        await _db.flush()
+        return 1
+
+    monkeypatch.setattr(
+        contact_router, "count_contact_bookings", count_then_make_ambiguous
+    )
+
+    with pytest.raises(contact_router.ContactTimelineIntegrityError) as error:
+        await contact_router._legacy_contact_workspace(contact_router_db, contact_id=1)
+    assert "Private" not in str(error.value)
