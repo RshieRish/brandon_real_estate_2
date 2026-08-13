@@ -19,6 +19,11 @@ mode exactly.
 - `--apply` can create or update semantic source records and their artifact
   links. It refuses to start unless `--expect-fingerprint` exactly matches the
   fingerprint recomputed from the current database archive.
+- Any apply that selects Contacts requires `--contact-overlap-manifest`. The
+  private manifest is fingerprint/parser-bound, contains exactly two reviewed
+  hashed mappings, and is never logged. Contacts source persistence, reviewed
+  link staging, auditing, materialization, and its result commit are one module
+  transaction.
 - The default parser registry currently contains only `archive_integrity`.
   Domain modules must be registered, tested, reconciled, and reviewed before
   they are selected for apply.
@@ -37,6 +42,8 @@ into tickets, logs, or shell history.
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
 export PYTHON="${PYTHON:-python}"
 export COMMAND_PARSER_VERSION="command-v1"
+export CONTACTS_PARSER_VERSION="contacts-v1"
+export CONTACT_OVERLAP_MANIFEST="<absolute-private-path-outside-repository>"
 cd "$REPO_ROOT/backend"
 ```
 
@@ -156,6 +163,34 @@ SELECT count(*) AS source_records_after_verify FROM crm_source_records;
 The before and after counts must match. One new `verify_only` run and one
 `archive_integrity` result are expected.
 
+### Contacts private-overlap preflight
+
+For a Contacts dry-run, apply, or resume, provision the approved manifest as a
+regular access-controlled file outside the repository, deployment bundle,
+frontend/static paths, and acceptance-artifact directory. Never paste its
+contents into a command, environment variable, ticket, or log. The path may be
+an environment variable, but CLI output and errors must never echo it.
+
+```bash
+test -n "$CONTACT_OVERLAP_MANIFEST"
+test -f "$CONTACT_OVERLAP_MANIFEST"
+test ! -L "$CONTACT_OVERLAP_MANIFEST"
+case "$CONTACT_OVERLAP_MANIFEST" in
+  "$REPO_ROOT"/*) echo "manifest must be outside the repository" >&2; exit 1 ;;
+esac
+```
+
+The loader requires schema `command-contact-overlaps-v1`, the exact verified
+bundle fingerprint, the selected parser version, and exactly two unique rows.
+Each row contains only a hashed strong source-provider identity, exactly one
+opaque target selector (an existing lead-backed contact ID or stable
+admin-reviewed key), and a strong-evidence hash. It rejects raw name, email,
+phone, provider ID, address, payload, and unknown fields. Validation resolves
+each hash to one parsed source identity and each target to one existing
+`lead_id IS NOT NULL` contact, then independently recomputes the approved
+strong-email evidence. Record only the canonical manifest digest, row count
+`2`, validation state, and audit/run IDs.
+
 ## 3. Dry-run domain parsers
 
 First list the domain modules approved in the release notes and confirm they
@@ -168,8 +203,9 @@ Run one parser when reviewing it in isolation:
 DRY_JSON="$(
   "$PYTHON" -m scripts.reconcile_command_archive \
     --dry-run \
-    --parser-version "$COMMAND_PARSER_VERSION" \
-    --module contacts
+    --parser-version "$CONTACTS_PARSER_VERSION" \
+    --module contacts \
+    --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"
 )"
 printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
 ```
@@ -181,8 +217,8 @@ DRY_JSON="$(
   "$PYTHON" -m scripts.reconcile_command_archive \
     --dry-run \
     --parser-version "$COMMAND_PARSER_VERSION" \
-    --module contacts \
-    --module tasks
+    --module tasks \
+    --module opportunities
 )"
 printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
 ```
@@ -193,7 +229,8 @@ Omitting `--module` selects every parser registered in that deployed revision:
 DRY_JSON="$(
   "$PYTHON" -m scripts.reconcile_command_archive \
     --dry-run \
-    --parser-version "$COMMAND_PARSER_VERSION"
+    --parser-version "$CONTACTS_PARSER_VERSION" \
+    --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"
 )"
 printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
 ```
@@ -210,7 +247,9 @@ containing:
 - disposition for every nonzero unmatched or error total; and
 - reviewer and approval timestamp.
 
-The dry-run fingerprint must equal
+When Contacts is selected, dry-run loads and fully validates the private
+manifest against parser drafts and the live lead-backed contacts but writes no
+source records, entity links, or contact audit events. The dry-run fingerprint must equal
 `$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT`. `status` must be `completed`, and every
 metric must match its reviewed expectation. A dry-run creates reconciliation
 audit rows but zero semantic source records.
@@ -226,7 +265,9 @@ The mandatory production guard is:
 ```bash
 "$PYTHON" -m scripts.reconcile_command_archive \
   --apply \
-  --parser-version command-v1 \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
+  --module contacts \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
   --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
 ```
 
@@ -236,8 +277,9 @@ For a bounded rollout, name every approved module:
 APPLY_JSON="$(
   "$PYTHON" -m scripts.reconcile_command_archive \
     --apply \
-    --parser-version "$COMMAND_PARSER_VERSION" \
+    --parser-version "$CONTACTS_PARSER_VERSION" \
     --module contacts \
+    --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
     --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
 )"
 printf '%s\n' "$APPLY_JSON" | "$PYTHON" -m json.tool
@@ -248,9 +290,15 @@ before it creates a reconciliation run or writes a semantic source record. Do
 not replace the expected value with the newly reported value without a fresh
 verify-only review.
 
-Each successful module is committed as a transaction boundary. Stop on the
-first error; preserve the run ID and use the resume procedure after fixing the
-cause under a reviewed code or data change.
+Each successful module is committed as a transaction boundary. For Contacts,
+the transaction order is: persist and flush exact source records; revalidate
+the manifest against those records, existing lead-backed contacts, and strong
+evidence; create two reviewed `crm_entity_sources` links and append-only contact
+audit events; run the materializer, which creates the other 315 mappings and
+four missing recovered contacts; write the result; commit. Any failure rolls
+back every Contacts module write. Stop on the first error; preserve the run ID
+and use the resume procedure after fixing the cause under a reviewed code or
+data change.
 
 ## 5. Resume a failed or abandoned run
 
@@ -280,27 +328,30 @@ WHERE id = 42;
 Resume the same dry run:
 
 ```bash
-"$PYTHON" -m scripts.reconcile_command_archive \
+  "$PYTHON" -m scripts.reconcile_command_archive \
   --dry-run \
-  --parser-version "$COMMAND_PARSER_VERSION" \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
   --module contacts \
-  --module tasks \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
   --resume 42
 ```
 
 Resume the same apply run, retaining the production guard:
 
 ```bash
-"$PYTHON" -m scripts.reconcile_command_archive \
+  "$PYTHON" -m scripts.reconcile_command_archive \
   --apply \
-  --parser-version "$COMMAND_PARSER_VERSION" \
+  --parser-version "$CONTACTS_PARSER_VERSION" \
   --module contacts \
-  --module tasks \
+  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
   --resume 42 \
   --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
 ```
 
-Replace `42` with the recorded failed run ID. Already committed successful
+Replace `42` with the recorded failed run ID. A Contacts resume must use the
+same approved private file and must revalidate its exact source/target/evidence
+set against the run's identical fingerprint/parser version; never substitute a
+newly reviewed mapping into an existing run. Already committed successful
 module results are skipped; the remaining selected modules continue. If a
 `running` run has no live worker, wait for the claim lease to expire and record
 the incident before resuming. Never modify claim columns directly.
@@ -443,6 +494,38 @@ The duplicate query and non-aggregate missing-link query must return zero rows.
 Entity-link counts and displayed-aggregate artifact links may legitimately be
 zero when the reviewed parser expectation says the evidence was not
 materialized as a business entity.
+
+For the reviewed Contacts repair, the result details and database must agree
+on these non-private totals:
+
+```text
+preexisting contacts                         362
+reviewed overlap links staged                  2
+source/entity links created by materializer  315
+final recovered contact mappings             317
+recovered contacts newly created               4
+final contacts                               366
+lead-backed contacts                          51
+lead-backed legacy-only contacts              49
+```
+
+```sql
+SELECT count(*) FROM crm_contacts; -- 366
+SELECT count(*), count(DISTINCT lead_id)
+FROM crm_contacts WHERE lead_id IS NOT NULL; -- 51, 51
+SELECT count(*) FROM crm_entity_sources WHERE entity_type = 'contact'; -- 317
+SELECT count(*) FROM crm_contact_capture_positions; -- 317
+SELECT count(*) FROM crm_contact_section_captures; -- 2536
+```
+
+The Contacts result must report only the canonical manifest digest, manifest
+row count `2`, validation state, `reviewed_overlap_links_staged=2`,
+`source_entity_links_created_by_materializer=315`,
+`source_entity_links_final=317`, and `expected_combined_contact_total=366`.
+Never include the private manifest path, its selectors, raw identity evidence,
+or source payloads. Repeat the same apply once and prove it creates zero
+contacts, source/entity links, audit events, source artifacts, and contact
+extension rows.
 
 Confirm no failed or actively claimed run was overlooked:
 

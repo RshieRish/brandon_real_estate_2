@@ -40,7 +40,7 @@ The current production archive contains **12,580 checksum-valid artifacts** tota
 
 ### Recoverable Command baseline
 
-- **Contacts:** 317 captured contact positions with 317 unique upstream provider IDs and the required eight-view matrix: Timeline, Opportunities, SmartPlans, Notes, Saved Searches, and Tasks in To Do/Completed/Archived states. The immutable identity audit resolves 317 recovered identities and coalesces zero aliases. The existing 313 source-normalized/311 leadless database rows are stale legacy-import audit history that must be repaired in place; they are not the recovered source target and must not be deleted blindly. The database also contains 51 lead-backed contacts, including two strong verified overlaps with recovered identities, leaving 49 legacy-only contacts and an expected combined directory total of 366. Those two overlaps may attach only through reviewed, pre-verified source/entity links; the import never auto-merges an unreviewed lead-backed contact and never changes a lead-backed contact field.
+- **Contacts:** 317 captured contact positions with 317 unique upstream provider IDs and the required eight-view matrix: Timeline, Opportunities, SmartPlans, Notes, Saved Searches, and Tasks in To Do/Completed/Archived states. The immutable identity audit resolves 317 recovered identities and coalesces zero aliases. The existing 313 source-normalized/311 leadless database rows are stale legacy-import audit history that must be repaired in place; they are not the recovered source target and must not be deleted blindly. The database also contains 51 lead-backed contacts, including two strong verified overlaps with recovered identities, leaving 49 legacy-only contacts and an expected combined directory total of 366. The two overlaps are supplied through a private, fingerprint- and parser-bound manifest with hashed source/evidence identities and opaque existing-contact selectors. Apply persists the exact source records, validates strong evidence against those records and the lead-backed targets, then creates two audited reviewed links in the same Contacts transaction before materialization. The materializer adopts those links and creates the remaining 315 recovered mappings. The import never auto-merges an unreviewed lead-backed contact and never changes a lead-backed contact field.
 - **Tasks:** 2,173 stable task IDs with expanded panels: 1,506 To Do, 44 Completed, and 623 Archived.
 - **SmartPlans:** 25 rendered plan rows, 14 unique expanded plan names, zero Published rows, and a displayed badge of 31. The difference is evidence-only, not six invented plans.
 - **Opportunities:** 23 exposed opportunity IDs with four captured secondary tabs each (92 tab captures): Documents, Notes, Timeline, and Offers & Commissions. Vendors has representative UI coverage, not bulk vendor coverage.
@@ -215,7 +215,7 @@ All imports are idempotent by `(source_system, module, record_kind, source_key, 
 7. Refuse the production write phase if immutable archive counts/checksums differ, a stable source ID maps ambiguously, or a module violates a hard expected total.
 8. Emit machine-readable JSON and an admin reconciliation screen.
 
-The importer supports `--dry-run`, `--apply`, `--resume`, `--module`, and `--verify-only`. Production import uses a single recorded source-bundle fingerprint and resumable module transactions.
+The importer supports `--dry-run`, `--apply`, `--resume`, `--module`, and `--verify-only`. Production import uses a single recorded source-bundle fingerprint and resumable module transactions. Contacts dry-run and apply additionally accept `--contact-overlap-manifest`; production Contacts apply requires it. That private file remains outside source control and frontend assets, contains exactly two hashed reviewed mappings bound to the bundle fingerprint/parser version, and is never logged. Dry-run validates it without semantic writes. Apply persists source records, revalidates and stages the two audited source/entity links, then materializes the remaining 315 mappings inside one transaction; any failure rolls back all module writes. Resume receives the same approved file and repeats exact source/target/evidence validation against the run fingerprint and parser version.
 
 ### Reconciliation operations contract
 
@@ -228,6 +228,7 @@ recent accepted verification and is not authorized until every selected domain
 parser has a reviewed reconciliation expectation and a completed, reviewed dry
 run. Migration, module-bounded rollout, resume, post-run evidence, and rollback
 procedures are part of the acceptance contract rather than operator discretion.
+For Contacts, acceptance records only the manifest digest, row count, validation state, counts, and audit/run IDs. It never records the manifest path, selectors, or raw identity evidence. The required final counts are 317 recovered mappings and 366 total contacts, with all 51 lead-backed contacts unchanged and 49 remaining legacy-only.
 
 ## API and Ownership
 

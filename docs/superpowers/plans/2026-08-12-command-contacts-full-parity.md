@@ -17,9 +17,10 @@ The operator supplies the authorized archive root without committing a user-spec
 ```text
 COMMAND_ARCHIVE_ROOT=<absolute-path-to-authorized-account-archive>
 PROJECT_PYTHON=<absolute-path-to-project-venv-python>
+CONTACT_OVERLAP_MANIFEST=<absolute-path-to-private-reviewed-overlap-manifest>
 ```
 
-It is an operator input, not an application runtime dependency and not a frontend asset. Tests use synthetic fixtures; the real-archive gate receives `COMMAND_ARCHIVE_ROOT` explicitly.
+These are operator inputs, not application runtime dependencies or frontend assets. Tests use synthetic fixtures; the real-archive gate receives `COMMAND_ARCHIVE_ROOT` explicitly, while Contacts reconciliation receives the private manifest explicitly only when selected.
 
 The contacts import is accepted only when one apply run records all of these values:
 
@@ -39,7 +40,8 @@ The contacts import is accepted only when one apply run records all of these val
   "legacy_only_contacts": 49,
   "legacy_lead_ids_preserved": 51,
   "recovered_contacts_created": 4,
-  "source_entity_links_created": 315,
+  "reviewed_overlap_links_staged": 2,
+  "source_entity_links_created_by_materializer": 315,
   "source_entity_links_final": 317,
   "expected_combined_contact_total": 366,
   "section_artifacts": 2536,
@@ -97,6 +99,34 @@ A permissible production evidence shape is:
 
 The literal angle-bracket values above are documentation placeholders, not production evidence. The acceptance run substitutes only capture ordinals and nonreversible hashes generated from the immutable bundle; private identity values never enter the file.
 
+### Private reviewed-overlap manifest contract
+
+The two cross-system overlaps are supplied at operation time through `--contact-overlap-manifest`; they are not fixtures, environment variables containing JSON, or values committed to the repository. The manifest is a private, access-controlled JSON file outside the checkout and outside any frontend/static path. The loader never emits its path or contents. Its canonical schema is:
+
+```json
+{
+  "schema_version": "command-contact-overlaps-v1",
+  "bundle_fingerprint": "<64-lowercase-hex>",
+  "parser_version": "contacts-v1",
+  "rows": [
+    {
+      "source_provider_identity_hash": "<64-lowercase-hex-a>",
+      "target": {"contact_id": "<positive-internal-id>"},
+      "strong_evidence_hash": "<64-lowercase-hex-evidence-a>"
+    },
+    {
+      "source_provider_identity_hash": "<64-lowercase-hex-b>",
+      "target": {"admin_reviewed_contact_key": "<opaque-stable-key>"},
+      "strong_evidence_hash": "<64-lowercase-hex-evidence-b>"
+    }
+  ]
+}
+```
+
+Production validation requires exactly two rows, two unique source hashes, and two unique targets. Each target supplies exactly one of a positive existing lead-backed `contact_id` or an opaque stable admin-reviewed key that resolves uniquely to such a contact. The source hash must resolve to exactly one of the 317 parsed provider identities. The service independently compares the source record and target contact using the approved strong-email rule and recomputes the domain-separated evidence hash; the manifest cannot authorize a name-only, weak, ambiguous, or conflicting match. The top-level fingerprint and parser version must exactly equal the current verified bundle and parser. Raw names, emails, phones, provider IDs, addresses, source payloads, and tokens are forbidden in the manifest schema, repository, CLI output, logs, exceptions, and acceptance evidence.
+
+Preflight and dry-run load, canonicalize, fingerprint, and fully validate the private manifest against parsed source drafts plus the live 51 lead-backed contacts without writing source/entity links. Apply revalidates the approved manifest after the 317 source records have been persisted inside the Contacts module transaction. It then creates the two reviewed `CRMEntitySource` links and append-only contact audit events before invoking the materializer. The materializer adopts those two mappings, creates the remaining 315 source/entity links, and produces 317 final recovered mappings and 366 total contacts. A missing/malformed manifest, changed fingerprint/version, wrong row count, unresolved/non-lead-backed target, missing/ambiguous source, weak/conflicting evidence, or link conflict aborts and rolls back the whole Contacts module transaction. A resumed Contacts run must receive the same approved private file and repeat validation against the run fingerprint/version and exact source/target/evidence sets; only the canonical digest, row count, validation state, and audit/run IDs may be recorded on success.
+
 The second apply of the same fingerprint/parser version must add zero rows to every contact-domain table, zero `crm_entity_sources` rows, zero source-artifact links, and must produce the identical reconciliation detail object.
 
 ### Eight-view ownership boundary
@@ -144,11 +174,11 @@ Names are confirmation signals, never merge keys. Local/national phone numbers t
 To attach to pre-existing rows without duplication:
 
 - a current, unambiguous source/entity mapping wins;
-- an operator-reviewed overlap manifest may pre-create exactly one source/entity link for each identity backed by the redacted strong-evidence audit; the audited production manifest contains exactly two such links to lead-backed contacts;
+- after the source records exist inside the Contacts apply transaction, the reviewed-overlap service may stage exactly one source/entity link for each identity backed by the private strong-evidence manifest; the audited production manifest contains exactly two such links to lead-backed contacts;
 - otherwise one `lead_id IS NULL` contact with the exact recovered identity hash and compatible fields may be adopted;
 - zero matches creates a recovered contact;
 - multiple matches block apply;
-- an unreviewed or unmapped `lead_id IS NOT NULL` contact is never auto-merged from raw email, phone, or name. Only the explicit pre-verified source/entity link above may attach a recovered source to a lead-backed contact; adoption does not change `lead_id` or any legacy contact field. The other 49 lead-backed contacts remain legacy-only and may be shown as probable duplicates for manual review.
+- an unreviewed or unmapped `lead_id IS NOT NULL` contact is never auto-merged from raw email, phone, or name. Only an explicit reviewed link staged from the validated private manifest may attach a recovered source to a lead-backed contact; adoption does not change `lead_id` or any legacy contact field. The other 49 lead-backed contacts remain legacy-only and may be shown as probable duplicates for manual review.
 
 The identity hash is SHA-256 over a versioned canonical tuple such as `contacts-v1\0email\0avery@example.com`; raw email/phone values remain only in private contact tables and provenance payloads.
 
@@ -209,16 +239,20 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `backend/services/command_parsers/contacts.py`: pure `ContactsParser` and exact metrics/details.
 - Modify `backend/services/command_parsers/__init__.py`: register/export Contacts.
 - Create `backend/services/command_contact_identity.py`: canonical identifiers, cluster resolution, and conflicts.
+- Create `backend/services/command_contact_overlap_manifest.py`: private manifest schema/loader, canonical digest, strong-evidence validation, and audited two-link staging.
 - Create `backend/services/command_contact_materializer.py`: idempotent normalized writes and entity-source links.
 - Create `backend/services/command_materializers/base.py`: small generic materializer protocol/registry used by later domains.
 - Create `backend/services/command_materializers/__init__.py`: default registry with Contacts.
-- Modify `backend/services/command_reconciliation.py`: invoke a selected module materializer during apply and record its normalized count/details; dry-run and verify-only remain non-materializing.
+- Modify `backend/services/command_reconciliation.py`: validate the Contacts manifest during dry-run; during apply persist source records, stage reviewed links, invoke the materializer, and commit or roll back as one module transaction.
+- Modify `backend/scripts/reconcile_command_archive.py`: add `--contact-overlap-manifest`, Contacts apply requirement, private preflight, and redacted JSON output.
 - Create `backend/tests/fixtures/command_contacts/`: synthetic, non-production structured/visible/accessibility captures covering duplicates, yearless celebrations, empty tabs, and partial captures.
 - Create `backend/tests/test_command_contacts_parser.py`: parser/source-record/matrix/date tests.
 - Create `backend/tests/test_command_contact_identity.py`: strong-identity and conflict tests.
+- Create `backend/tests/test_command_contact_overlap_manifest.py`: private schema, exact-two, fingerprint/version, strong-evidence, redaction, staging, and rollback tests.
 - Create `backend/tests/test_command_contact_materializer.py`: real async SQLite import/idempotency/legacy-preservation tests.
 - Create `backend/tests/test_command_contacts_archive_gate.py`: opt-in real-archive gate for 317 positions, 317 unique provider IDs, 317 resolved identities, zero coalesced aliases, and 2,536 sections.
 - Modify `backend/tests/test_command_reconciliation.py`: materializer transaction, failure, resume, and no-materializer regression cases.
+- Modify `backend/tests/test_reconcile_command_archive_cli.py`: Contacts manifest requirement, preflight/dry-run/resume, digest, and no-private-output tests.
 
 ### Backend query/API boundary
 
@@ -666,10 +700,14 @@ git commit -m "feat: resolve Command contact identities"
 **Files:**
 - Create: `backend/services/command_materializers/base.py`
 - Create: `backend/services/command_materializers/__init__.py`
+- Create: `backend/services/command_contact_overlap_manifest.py`
 - Create: `backend/services/command_contact_materializer.py`
 - Modify: `backend/services/command_reconciliation.py`
+- Modify: `backend/scripts/reconcile_command_archive.py`
+- Create: `backend/tests/test_command_contact_overlap_manifest.py`
 - Create: `backend/tests/test_command_contact_materializer.py`
 - Modify: `backend/tests/test_command_reconciliation.py`
+- Modify: `backend/tests/test_reconcile_command_archive_cli.py`
 
 - [ ] **Step 1: Write failing materializer tests against real async SQLite**
 
@@ -679,7 +717,7 @@ Preseed the full stale repair boundary as exactly 362 unique `CRMContact` rows:
 - 51 lead-backed rows with 51 distinct `lead_id` values, consisting of two rows already included in the 313 stale source-normalized population plus 49 legacy-only rows; and
 - therefore `313 + 51 - 2 == 362` unique rows before apply, not 364.
 
-Before materialization, create exactly two reviewed `CRMEntitySource` links from recovered source records to those two shared lead-backed/source-normalized rows, matching a synthetic redacted strong-evidence manifest. Give 311 stale leadless rows exact recoverable identity hashes, leave four recovered identities absent from the database, and leave the other 49 lead-backed contacts unmapped and legacy-only. Apply a synthetic 317-identity/317-position source set. The materializer must honor the two pre-verified links, adopt the 311 compatible leadless rows without mutating their base contact fields, create exactly four missing recovered contacts, and never derive another lead-backed adoption from raw identity fields. Assert:
+Begin with zero recovered source records and zero `CRMEntitySource` links: those links cannot exist before their source records. Give 311 stale leadless rows exact recoverable identity hashes, leave four recovered identities absent from the database, and leave the other 49 lead-backed contacts unmapped and legacy-only. Supply a private synthetic manifest with exactly two redacted source-hash/lead-backed-target/evidence-hash rows, the exact synthetic bundle fingerprint, and `parser_version="contacts-v1"`. Apply a synthetic 317-identity/317-position source set through reconciliation. The apply transaction must persist the source records first, validate and stage the two reviewed links plus audit events, then invoke the materializer. The materializer must adopt those two links, adopt the 311 compatible leadless rows without mutating their base contact fields, create exactly four missing recovered contacts, create the remaining 315 mappings, and never derive another lead-backed adoption from raw identity fields. Assert:
 
 ```python
 assert result.normalized_count == 317
@@ -692,9 +730,15 @@ assert await count(CRMContactSectionCapture) == 2536
 assert await count(CRMEntitySource, CRMEntitySource.entity_type == "contact") == 317
 ```
 
-Snapshot all 362 pre-existing CRM rows before apply and assert every base-column value is byte-for-byte equal after apply; recovered child/provenance rows are additive and do not count as base-row mutation. Assert four and only four new `CRMContact` IDs, the two prelinked contacts each owning exactly one recovered mapping, 311 adopted leadless rows each owning one recovered mapping, the other 49 lead-backed rows owning none, and all 317 recovered source records mapping exactly once. The first apply creates 315 source/entity links because two reviewed links were preseeded; the final mapping count is 317. Apply the same drafts again and assert all create/link counts are zero. Add conflict tests for two adoptable leadless contacts, a provider source mapped to two normalized contacts, an attempted raw-identifier auto-merge into an unlinked lead-backed contact, an invalid/unreviewed overlap manifest entry, and a missing source record.
+Snapshot all 362 pre-existing CRM rows before apply and assert every base-column value is byte-for-byte equal after apply; recovered child/provenance rows are additive and do not count as base-row mutation. Assert four and only four new `CRMContact` IDs, the two manifest-linked contacts each owning exactly one recovered mapping, 311 adopted leadless rows each owning one recovered mapping, the other 49 lead-backed rows owning none, and all 317 recovered source records mapping exactly once. Assert two links were staged by the reviewed-overlap service, 315 were created by the materializer, 317 mappings exist at commit, and the combined directory contains 366 contacts. Apply the same drafts and manifest again and assert all create/link/audit counts are zero. Add conflict tests for two adoptable leadless contacts, a provider source mapped to two normalized contacts, an attempted raw-identifier auto-merge into an unlinked lead-backed contact, an invalid/unreviewed overlap manifest entry, and a missing source record.
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [ ] **Step 2: Write failing private-manifest and CLI tests**
+
+Test `command_contact_overlap_manifest.py` with synthetic values only. Require the exact schema/version, a 64-hex bundle fingerprint, exact parser version, exactly two unique rows, a 64-hex source provider identity hash, exactly one target selector, a 64-hex strong-evidence hash, and a canonical order-independent manifest digest. Reject raw identity fields and unknown fields. Validate each source hash against exactly one parsed draft in dry-run and exactly one persisted Contacts source record in apply; resolve each target to exactly one existing `lead_id IS NOT NULL` contact; recompute and compare the approved strong-email evidence; reject cross-links, weak/name-only matches, and existing conflicting mappings.
+
+CLI tests require `--contact-overlap-manifest` whenever `--apply` selects Contacts, before database writes. Dry-run and resume accept and fully validate the file. Fingerprint/parser-version drift or any changed source/target/evidence set fails preflight; no log, JSON result, exception, or captured output may contain the manifest path, contact selector, raw source/target values, or evidence input. Output may contain only schema version, canonical digest, row count `2`, validation state, staged/materializer/final mapping counts, and audit/run IDs. A failure after source persistence but before materialization must prove that source records, both staged links, their audit events, all materialized rows, and the module result roll back together.
+
+- [ ] **Step 3: Run tests and confirm RED**
 
 Run:
 
@@ -702,12 +746,14 @@ Run:
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_materializer.py \
-  tests/test_command_reconciliation.py
+  tests/test_command_contact_overlap_manifest.py \
+  tests/test_command_reconciliation.py \
+  tests/test_reconcile_command_archive_cli.py
 ```
 
 Expected: FAIL because the materializer protocol and Contacts materializer do not exist.
 
-- [ ] **Step 3: Implement the generic materializer registry**
+- [ ] **Step 4: Implement the generic materializer registry**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -729,12 +775,16 @@ Give the protocol one exact async method contract: `materialize(self, db: AsyncS
 
 The registry enforces one materializer per module and deterministic selection, matching parser-registry validation behavior.
 
-- [ ] **Step 4: Implement `ContactMaterializer`**
+- [ ] **Step 5: Implement the private manifest loader and reviewed-link service**
+
+Load the path once without logging it, reject non-regular files and schema drift, canonicalize rows by source hash, and return an immutable typed manifest plus canonical SHA-256 digest. Preflight binds it to the computed archive fingerprint and selected parser version. Dry-run validates it against parsed drafts and live target contacts without writes. During Contacts apply, after `persist_source_records()` has flushed the exact source rows, `stage_reviewed_contact_overlap_links()` repeats the source/target/strong-evidence checks, inserts exactly two idempotent `CRMEntitySource` rows, and appends `CRMContactAuditEvent` rows attributed to the reconciliation run/service actor and containing only run ID, manifest digest, source/evidence hashes, and reviewed-link action. Existing identical links/audits are unchanged; any difference is a conflict.
+
+- [ ] **Step 6: Implement `ContactMaterializer`**
 
 Materialize in this order inside the caller transaction:
 
 1. Load persisted contact source rows and identity clusters.
-2. Resolve existing source/entity mappings, including the two operator-reviewed pre-verified overlap links. Reject ambiguous, missing, or unreviewed lead-backed links.
+2. Resolve existing source/entity mappings, including the two links already staged from the validated private manifest in the caller transaction. Reject ambiguous, missing, or unreviewed lead-backed links.
 3. For every unmapped identity, adopt exactly one compatible `lead_id IS NULL` contact or create one; never auto-adopt a `lead_id IS NOT NULL` contact from raw identity fields.
 4. Upsert profile and child values by `(contact_id, source_key)`.
 5. Insert all 317 capture positions and 2,536 section captures.
@@ -742,23 +792,29 @@ Materialize in this order inside the caller transaction:
 7. Insert `CRMEntitySource` links for contacts and materialized child entities.
 8. Return counts without committing.
 
-Never change a lead-backed contact field (including `CRMContact.lead_id`), delete a contact, write `CRMContact.birthday/anniversary`, or create Tasks/SmartPlans/Opportunities here. A pre-verified overlap adds provenance/source links and recovered child observations only; it does not copy recovered profile values onto the lead-backed row.
+Never change a lead-backed contact field (including `CRMContact.lead_id`), delete a contact, write `CRMContact.birthday/anniversary`, or create Tasks/SmartPlans/Opportunities here. A manifest-reviewed overlap adds provenance/source links and recovered child observations only; it does not copy recovered profile values onto the lead-backed row.
 
-- [ ] **Step 5: Integrate materializers into reconciliation**
+- [ ] **Step 7: Integrate manifest staging and materializers into reconciliation**
 
-Add the keyword-only `materializers: MaterializerRegistry | None = None` parameter to `execute_reconciliation`. In `apply` mode, after `persist_source_records()` and before the module commit, invoke the matching materializer. Record `normalized_count` from its result and merge namespaced materializer details into `details_json`. Dry-run and verify-only never call a materializer. Any materializer failure rolls back that module, marks the run failed, and is resumable under the existing claim/fingerprint rules.
+Add keyword-only overlap-manifest and `materializers: MaterializerRegistry | None = None` inputs to `execute_reconciliation`. Contacts preflight/dry-run validates the manifest against parser output and the target database without semantic writes. In Contacts apply, use one module transaction in this exact order: persist and flush source records; validate the manifest against those exact persisted records, the existing lead-backed contacts, and recomputed strong evidence; stage two reviewed links and audit events; invoke the materializer, which creates the remaining 315 links and four contacts; add the module result; commit. Record only the canonical manifest digest/count/state plus the `2` staged, `315` materializer-created, `317` final mapping, and `366` total-contact counts in `details_json`. Any failure rolls back every write in that sequence before the failed run is recorded. Verify-only never loads the manifest; dry-run never calls a materializer. Resume receives the same approved file and repeats all validation under the existing claim/fingerprint/version/module rules.
 
-- [ ] **Step 6: Run idempotency/reconciliation regressions and commit**
+In `reconcile_command_archive.py`, add `--contact-overlap-manifest PATH`. `--apply --module contacts` (and unbounded apply when Contacts is registered) fails before opening the database if the flag is absent. Load/canonicalize it for Contacts preflight, validate its embedded fingerprint and parser version against the computed request, and pass the typed value to reconciliation. Never include the path or field values in output or errors.
+
+- [ ] **Step 8: Run idempotency/reconciliation regressions and commit**
 
 ```bash
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_materializer.py \
+  tests/test_command_contact_overlap_manifest.py \
   tests/test_command_reconciliation.py \
+  tests/test_reconcile_command_archive_cli.py \
   tests/test_command_provenance_service.py
 git add services/command_materializers services/command_contact_materializer.py \
-  services/command_reconciliation.py tests/test_command_contact_materializer.py \
-  tests/test_command_reconciliation.py
+  services/command_contact_overlap_manifest.py services/command_reconciliation.py \
+  scripts/reconcile_command_archive.py tests/test_command_contact_materializer.py \
+  tests/test_command_contact_overlap_manifest.py tests/test_command_reconciliation.py \
+  tests/test_reconcile_command_archive_cli.py
 git commit -m "feat: materialize recovered Command contacts"
 ```
 
@@ -1180,16 +1236,16 @@ Document and execute, substituting only the fingerprint/run ID returned by the p
 
 ```bash
 cd backend
-python scripts/reconcile_command_archive.py --verify-only --json > /tmp/command-contacts-verify.json
-python scripts/reconcile_command_archive.py --dry-run --module contacts --parser-version contacts-v1 --json > /tmp/command-contacts-dry-run.json
-python scripts/reconcile_command_archive.py --apply --module contacts --parser-version contacts-v1 --expected-fingerprint "$VERIFIED_FINGERPRINT" --json > /tmp/command-contacts-apply.json
+python -m scripts.reconcile_command_archive --verify-only --parser-version contacts-v1 > /tmp/command-contacts-verify.json
+python -m scripts.reconcile_command_archive --dry-run --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" > /tmp/command-contacts-dry-run.json
+python -m scripts.reconcile_command_archive --apply --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" --expect-fingerprint "$VERIFIED_FINGERPRINT" > /tmp/command-contacts-apply.json
 ```
 
-Apply is blocked unless verification and reviewed dry-run used the exact production bundle fingerprint. A failed run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint.
+`CONTACT_OVERLAP_MANIFEST` names a private file outside the checkout and acceptance-artifact directories. Contacts apply is blocked unless the flag is present, its manifest has exactly two reviewed rows, and verification plus reviewed dry-run used the exact production bundle fingerprint/parser version/manifest digest. A failed Contacts run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint/manifest; the resumed command repeats `--contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"`.
 
 - [ ] **Step 2: Run the real archive and database preflight**
 
-Before production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Store only totals/hashes/run IDs in the acceptance document—no private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
+Before production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Verify that the private manifest is a regular access-controlled file outside the repository, embeds the verified bundle fingerprint and `contacts-v1`, resolves exactly two source hashes to exact parsed records and two unique lead-backed targets, and passes independent strong-evidence recomputation. Store only totals, canonical manifest/evidence hashes, validation state, and run/audit IDs in the acceptance document—no manifest path, target selector, private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
 
 - [ ] **Step 3: Apply migration and Contacts module in a bounded rollout**
 
@@ -1212,7 +1268,7 @@ SELECT count(*), count(DISTINCT lead_id) FROM crm_contacts WHERE lead_id IS NOT 
 SELECT count(*) FROM crm_entity_sources WHERE entity_type='contact'; -- 317
 ```
 
-Also prove every capture position has eight section rows, every source record has at least one artifact unless it is an allowed aggregate, no source profile maps to two contact entities, no contact extension row is orphaned, no recovered profile overwrote an internal date, and a second apply adds zero rows.
+The Contacts reconciliation detail must also prove `reviewed_overlap_links_staged == 2`, `source_entity_links_created_by_materializer == 315`, `source_entity_links_final == 317`, and `expected_combined_contact_total == 366`. Also prove every capture position has eight section rows, every source record has at least one artifact unless it is an allowed aggregate, no source profile maps to two contact entities, no contact extension row is orphaned, no recovered profile overwrote an internal date, and a second apply with the same manifest adds zero rows, links, or audit events.
 
 - [ ] **Step 5: Run authenticated production smoke tests**
 
@@ -1239,7 +1295,7 @@ Production is not declared complete until the acceptance document contains the d
 - 317 provider rows and 317 capture positions remain individually traceable.
 - Exactly 317 recovered identities are normalized from 317 unique upstream provider IDs; zero aliases are coalesced.
 - All 2,536 section records exist, eight per position and 317 per section.
-- All 51 lead-backed contacts and all 51 `lead_id` values are unchanged; two verified overlaps are linked and the other 49 remain legacy-only.
+- All 51 lead-backed contacts and all 51 `lead_id` values are unchanged; the private manifest stages exactly two audited verified-overlap links after source persistence, the materializer creates the other 315 recovered links, all 317 mappings exist, and the other 49 lead-backed contacts remain legacy-only.
 - The stale 313 source-normalized/311 leadless rows remain auditable throughout repair and are never deleted blindly.
 - No name-only merge, title-only merge, first-row-wins conflict, or email/phone assumption exists.
 - Birthday/anniversary month/day/year quality is explicit; sentinel/missing years are never presented as verified.
