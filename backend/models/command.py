@@ -2,6 +2,8 @@
 from datetime import date, datetime
 from enum import Enum
 
+from database import Base
+from services.command_contact_identity import canonical_email
 from sqlalchemy import (
     Date,
     DateTime,
@@ -17,9 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
-from database import Base
 from models._utc import normalize_database_datetime
-from services.command_contact_identity import canonical_email
 
 
 class AgreementStatus(str, Enum):
@@ -108,6 +108,14 @@ class CRMActivity(Base):
 
 class CRMTask(Timestamped, Base):
     __tablename__ = "crm_tasks"
+    __table_args__ = (
+        Index(
+            "ix_crm_tasks_contact_status_id",
+            "contact_id",
+            "status",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
     title: Mapped[str] = mapped_column(String(255))
@@ -135,6 +143,9 @@ class CRMTaskLink(Base):
 
 class CRMNote(Timestamped, Base):
     __tablename__ = "crm_notes"
+    __table_args__ = (
+        Index("ix_crm_notes_contact_id", "contact_id", "id"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
     body: Mapped[str] = mapped_column(Text)
@@ -157,6 +168,13 @@ class CRMContactTag(Base):
 
 class CRMSavedSearch(Timestamped, Base):
     __tablename__ = "crm_saved_searches"
+    __table_args__ = (
+        Index(
+            "ix_crm_saved_searches_contact_id",
+            "contact_id",
+            "id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int | None] = mapped_column(ForeignKey("crm_contacts.id"))
     name: Mapped[str] = mapped_column(String(255))
@@ -184,6 +202,12 @@ class CRMSmartPlanEnrollment(Timestamped, Base):
     __tablename__ = "crm_smart_plan_enrollments"
     __table_args__ = (
         UniqueConstraint("smart_plan_id", "contact_id", name="uq_crm_smart_plan_enrollment"),
+        Index(
+            "ix_crm_smart_plan_enrollments_contact_status_id",
+            "contact_id",
+            "status",
+            "id",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     smart_plan_id: Mapped[int] = mapped_column(ForeignKey("crm_smart_plans.id"))
@@ -200,7 +224,19 @@ class CRMOpportunity(Timestamped, Base):
 
 class CRMOpportunityContact(Base):
     __tablename__ = "crm_opportunity_contacts"
-    __table_args__ = (UniqueConstraint("opportunity_id", "contact_id", "role", name="uq_crm_opportunity_contact_role"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_id",
+            "contact_id",
+            "role",
+            name="uq_crm_opportunity_contact_role",
+        ),
+        Index(
+            "ix_crm_opportunity_contacts_contact_opportunity",
+            "contact_id",
+            "opportunity_id",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("crm_opportunities.id"))
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))

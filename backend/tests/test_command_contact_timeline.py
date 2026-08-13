@@ -7,9 +7,6 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from database import Base
 from models.booking import Booking
 from models.command import CRMActivity, CRMContact
@@ -33,8 +30,11 @@ from services.command_contact_timeline import (
     ContactNotFound,
     ContactTimelineIntegrityError,
     _as_utc,
+    count_contact_bookings,
     list_contact_timeline,
 )
+from sqlalchemy import event, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 BASE_TIME = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 TABLES = (
@@ -131,6 +131,119 @@ def _timeline_ownership(
 async def _flush(db: AsyncSession, *rows: object) -> None:
     db.add_all(rows)
     await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_booking_count_uses_lead_and_unique_email_ownership(
+    timeline_db: AsyncSession,
+):
+    lead = Lead(id=701, name="Synthetic Lead")
+    lead_contact = CRMContact(
+        id=702,
+        lead_id=lead.id,
+        first_name="Lead",
+        last_name="Owned",
+        email="lead-owned@example.test",
+        stage="lead",
+    )
+    email_contact = CRMContact(
+        id=703,
+        first_name="Email",
+        last_name="Owned",
+        email="email-owned@example.test",
+        stage="lead",
+    )
+    await _flush(timeline_db, lead, lead_contact, email_contact)
+    await _flush(
+        timeline_db,
+        Booking(
+            id=704,
+            lead_id=lead.id,
+            name="Lead booking one",
+            email="one@example.test",
+            meeting_type="phone",
+            scheduled_at=BASE_TIME,
+        ),
+        Booking(
+            id=705,
+            lead_id=lead.id,
+            name="Lead booking two",
+            email="two@example.test",
+            meeting_type="phone",
+            scheduled_at=BASE_TIME,
+        ),
+        Booking(
+            id=706,
+            lead_id=None,
+            name="Email booking",
+            email="EMAIL-OWNED@example.test",
+            meeting_type="phone",
+            scheduled_at=BASE_TIME,
+        ),
+    )
+
+    assert await count_contact_bookings(timeline_db, lead_contact.id) == 2
+    assert await count_contact_bookings(timeline_db, email_contact.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_booking_count_rejects_drift_and_ambiguous_email_owns_none(
+    timeline_db: AsyncSession,
+):
+    first = CRMContact(
+        id=710,
+        first_name="First",
+        last_name="Duplicate",
+        email="duplicate@example.test",
+        stage="lead",
+    )
+    second = CRMContact(
+        id=711,
+        first_name="Second",
+        last_name="Duplicate",
+        email="DUPLICATE@example.test",
+        stage="lead",
+    )
+    drift = CRMContact(
+        id=712,
+        first_name="Drift",
+        last_name="Owner",
+        email="drift@example.test",
+        stage="lead",
+    )
+    await _flush(timeline_db, first, second, drift)
+    booking = Booking(
+        id=713,
+        lead_id=None,
+        name="Ambiguous booking",
+        email="duplicate@example.test",
+        meeting_type="phone",
+        scheduled_at=BASE_TIME,
+    )
+    await _flush(timeline_db, booking)
+    assert await count_contact_bookings(timeline_db, first.id) == 0
+
+    # Simulate storage drift without triggering the ordinary ORM invariant.
+    await timeline_db.execute(
+        Booking.__table__.update()
+        .where(Booking.id == booking.id)
+        .values(normalized_email="drift@example.test")
+    )
+    booking.email = "drift-booking@example.test"
+    await timeline_db.flush()
+    await timeline_db.execute(
+        Booking.__table__.update()
+        .where(Booking.id == booking.id)
+        .values(normalized_email="drift@example.test")
+    )
+    with pytest.raises(
+        ContactTimelineIntegrityError,
+        match="booking email normalization is invalid",
+    ):
+        await count_contact_bookings(timeline_db, drift.id)
+
+    with pytest.raises(ContactNotFound, match="contact does not exist"):
+        await count_contact_bookings(timeline_db, 999_999)
 
 
 @pytest.mark.asyncio

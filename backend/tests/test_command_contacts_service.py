@@ -2,33 +2,40 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from database import Base
+from models.booking import Booking
 from models.command import (
     CRMActivity,
     CRMContact,
     CRMContactTag,
+    CRMNote,
+    CRMOpportunity,
+    CRMOpportunityContact,
+    CRMSavedSearch,
+    CRMSmartPlan,
+    CRMSmartPlanEnrollment,
     CRMTag,
     CRMTask,
 )
 from models.command_contacts import (
+    CRMContactAddress,
     CRMContactCapturePosition,
     CRMContactMethod,
     CRMContactOwnership,
     CRMContactProfile,
     CRMContactSectionCapture,
+    CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
 )
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
-from models.lead import Lead  # noqa: F401 - registers the FK target in metadata
+from models.lead import Lead
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     ContactCelebrations,
@@ -37,6 +44,7 @@ from services.command_contact_contracts import (
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
+    ContactWorkspaceSummary,
     SortDirection,
 )
 from services.command_contacts import (
@@ -46,11 +54,15 @@ from services.command_contacts import (
     ContactNotFound,
     ContactNotInDirectory,
     ContactSectionUnsupported,
+    get_contact_detail,
     get_contact_neighbors,
+    get_contact_workspace_summary,
     list_contact_celebrations,
     list_contacts,
 )
-
+from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
 
@@ -134,6 +146,614 @@ async def _add_timeline_capture(
     db.add(section)
     await db.flush()
     return position, section
+
+
+async def _add_contact_occurrence(
+    db: AsyncSession,
+    contact: CRMContact,
+    index: int,
+    *,
+    section_name: str,
+    record_kind: str,
+    values: dict[str, object],
+    linked_entity: tuple[str, int] | None = None,
+) -> CRMContactSourceOccurrence:
+    position_source = _source_record(index * 10)
+    position_source.record_kind = "contact_capture_position"
+    position_source.source_key = f"synthetic:summary:position:{index}"
+    section_source = _source_record(index * 10 + 1)
+    section_source.record_kind = "contact_section_capture"
+    section_source.source_key = (
+        f"synthetic:summary:position:{index}:section:{section_name}"
+    )
+    child_source = _source_record(index * 10 + 2)
+    child_source.record_kind = record_kind
+    child_source.evidence_level = "rendered_occurrence"
+    child_source.source_key = f"synthetic:summary:child:{index}"
+    child_source.payload_json = json.dumps(
+        {
+            "capture_ordinal": f"{index:07d}",
+            "source_contact_id": f"{index:024x}",
+            "section_name": section_name,
+            "occurrence_ordinal": 1,
+            "values": values,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    db.add_all([position_source, section_source, child_source])
+    await db.flush()
+    position = CRMContactCapturePosition(
+        contact_id=contact.id,
+        source_record_id=position_source.id,
+        bundle_fingerprint=f"{index:064x}",
+        capture_ordinal=index,
+        source_contact_id=f"{index:024x}",
+        captured_at=NOW,
+        capture_quality="complete",
+        limitations_json="[]",
+    )
+    db.add(position)
+    await db.flush()
+    section = CRMContactSectionCapture(
+        capture_position_id=position.id,
+        source_record_id=section_source.id,
+        section_name=section_name,
+        captured_at=NOW,
+        capture_quality="complete",
+        is_empty=False,
+        row_count=1,
+        limitations_json="[]",
+    )
+    db.add(section)
+    await db.flush()
+    occurrence = CRMContactSourceOccurrence(
+        contact_id=contact.id,
+        section_capture_id=section.id,
+        source_record_id=child_source.id,
+        occurrence_ordinal=1,
+    )
+    db.add(occurrence)
+    await db.flush()
+    if linked_entity is not None:
+        db.add(
+            CRMEntitySource(
+                entity_type=linked_entity[0],
+                entity_id=linked_entity[1],
+                source_record_id=child_source.id,
+            )
+        )
+        await db.flush()
+    return occurrence
+
+
+@pytest.mark.asyncio
+async def test_contact_detail_hydrates_profile_addresses_actors_and_tags(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(
+        first_name="Synthetic",
+        last_name="Detail",
+        email="detail@example.test",
+        phone="+15550120000",
+        stage="lead",
+        birthday=date(1988, 8, 13),
+    )
+    service_db.add(contact)
+    await service_db.flush()
+    profile_source = _source_record(80_001)
+    service_db.add(profile_source)
+    await service_db.flush()
+    service_db.add_all(
+        [
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=contact.id,
+                source_record_id=profile_source.id,
+            ),
+            CRMContactProfile(
+                contact_id=contact.id,
+                legal_name="Synthetic Legal",
+                preferred_name="Synthetic Preferred",
+                description="Synthetic description",
+                company="Synthetic Company",
+                title="Synthetic Title",
+                lead_source="Synthetic Source",
+                account_name="Synthetic Account",
+                health_score=72,
+                birth_year_quality="unknown",
+                anniversary_month=4,
+                anniversary_day=5,
+                anniversary_year_quality="yearless",
+            ),
+            CRMContactAddress(
+                contact_id=contact.id,
+                source_record_id=profile_source.id,
+                source_key="synthetic:address:secondary",
+                address_type="work",
+                formatted="2 Synthetic Street",
+                latitude=Decimal("40.1000000"),
+                longitude=Decimal("-73.2000000"),
+                is_primary=False,
+            ),
+            CRMContactAddress(
+                contact_id=contact.id,
+                source_key="synthetic:address:primary",
+                address_type="home",
+                formatted="1 Synthetic Street",
+                is_primary=True,
+            ),
+            CRMContactOwnership(
+                contact_id=contact.id,
+                source_key="synthetic:owner",
+                role="owner",
+                provider_actor_id="synthetic-owner",
+                display_name="Synthetic Owner",
+                is_primary=True,
+            ),
+            CRMContactOwnership(
+                contact_id=contact.id,
+                source_key="synthetic:collaborator",
+                role="collaborator",
+                provider_actor_id=None,
+                display_name="Synthetic Collaborator",
+                is_primary=False,
+            ),
+            CRMTag(name="Synthetic A"),
+            CRMTag(name="Synthetic B"),
+        ]
+    )
+    await service_db.flush()
+    tags = (await service_db.scalars(select(CRMTag).order_by(CRMTag.name))).all()
+    service_db.add_all(
+        CRMContactTag(contact_id=contact.id, tag_id=tag.id) for tag in reversed(tags)
+    )
+    await service_db.flush()
+
+    detail = await get_contact_detail(service_db, contact.id)
+
+    assert detail.contact.id == contact.id
+    assert detail.contact.primary_email == "detail@example.test"
+    assert detail.contact.health_score == 72
+    assert detail.contact.birthday is not None
+    assert detail.contact.birthday.origin == "internal_crm"
+    assert detail.lead_id is None
+    assert detail.recovered_profile is not None
+    assert detail.recovered_profile.legal_name == "Synthetic Legal"
+    assert detail.recovered_profile.anniversary is not None
+    assert detail.recovered_profile.anniversary.year_quality == "yearless"
+    assert tuple(address.formatted for address in detail.addresses) == (
+        "1 Synthetic Street",
+        "2 Synthetic Street",
+    )
+    assert detail.addresses[1].source_record_id == profile_source.id
+    assert tuple(actor.role for actor in detail.ownership) == (
+        "owner",
+        "collaborator",
+    )
+    assert tuple(tag.name for tag in detail.tags) == (
+        "Synthetic A",
+        "Synthetic B",
+    )
+
+
+@pytest.mark.asyncio
+async def test_contact_detail_missing_and_query_count_are_bounded(
+    service_db: AsyncSession,
+):
+    with pytest.raises(ContactNotFound, match="contact does not exist"):
+        await get_contact_detail(service_db, 999_999)
+
+    contact = CRMContact(first_name="Bounded", last_name="Detail", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    pending = CRMContact(first_name="Pending", last_name="Caller", stage="lead")
+    service_db.add(pending)
+    selects = 0
+    flushes = 0
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    def before_flush(_session, _flush_context, _instances):
+        nonlocal flushes
+        flushes += 1
+
+    assert service_db.bind is not None
+    event.listen(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    event.listen(service_db.sync_session, "before_flush", before_flush)
+    try:
+        await get_contact_detail(service_db, contact.id)
+    finally:
+        event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
+        event.remove(service_db.sync_session, "before_flush", before_flush)
+    assert selects <= 8
+    assert flushes == 0
+    assert pending in service_db.new
+    assert pending.id is None
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_counts_internal_and_source_only_union_once(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(
+        first_name="Synthetic",
+        last_name="Workspace",
+        email="workspace@example.test",
+        stage="lead",
+    )
+    service_db.add(contact)
+    await service_db.flush()
+    tasks = [
+        CRMTask(contact_id=contact.id, title="Open", status="open"),
+        CRMTask(contact_id=contact.id, title="Completed", status="completed"),
+        CRMTask(contact_id=contact.id, title="Archived", status="archived"),
+    ]
+    plans = [
+        CRMSmartPlan(name="Active Plan", status="active"),
+        CRMSmartPlan(name="Paused Plan", status="active"),
+    ]
+    opportunity = CRMOpportunity(name="Synthetic Opportunity")
+    note = CRMNote(contact_id=contact.id, body="Internal note")
+    search = CRMSavedSearch(contact_id=contact.id, name="Internal search")
+    service_db.add_all([*tasks, *plans, opportunity, note, search])
+    await service_db.flush()
+    service_db.add_all(
+        [
+            CRMSmartPlanEnrollment(
+                smart_plan_id=plans[0].id,
+                contact_id=contact.id,
+                status="ACTIVE",
+            ),
+            CRMSmartPlanEnrollment(
+                smart_plan_id=plans[1].id,
+                contact_id=contact.id,
+                status="paused",
+            ),
+            CRMOpportunityContact(
+                opportunity_id=opportunity.id,
+                contact_id=contact.id,
+                role="client",
+            ),
+        ]
+    )
+    await service_db.flush()
+    occurrence_specs = (
+        (81_001, "tasks_to_do", "contact_task", {"title": "Recovered open"}),
+        (
+            81_002,
+            "tasks_completed",
+            "contact_task",
+            {"title": "Recovered complete"},
+        ),
+        (
+            81_003,
+            "tasks_archived",
+            "contact_task",
+            {"title": "Recovered archive"},
+        ),
+        (
+            81_004,
+            "smart_plans",
+            "contact_smart_plan",
+            {"title": "Recovered active", "status": "ACTIVE"},
+        ),
+        (
+            81_005,
+            "smart_plans",
+            "contact_smart_plan",
+            {"title": "Recovered inactive", "status": None},
+        ),
+        (
+            81_006,
+            "opportunities",
+            "contact_opportunity",
+            {"title": "Recovered opportunity"},
+        ),
+        (
+            81_007,
+            "notes",
+            "contact_note",
+            {"body": "Recovered note"},
+        ),
+        (
+            81_008,
+            "saved_searches",
+            "contact_saved_search",
+            {"name": "Recovered search"},
+        ),
+    )
+    for index, section, record_kind, values in occurrence_specs:
+        await _add_contact_occurrence(
+            service_db,
+            contact,
+            index,
+            section_name=section,
+            record_kind=record_kind,
+            values=values,
+        )
+    await _add_contact_occurrence(
+        service_db,
+        contact,
+        81_009,
+        section_name="notes",
+        record_kind="contact_note",
+        values={"body": "Internal note"},
+        linked_entity=("note", note.id),
+    )
+    materialized = (
+        (
+            81_010,
+            "tasks_to_do",
+            "contact_task",
+            {"title": "Open"},
+            ("task", tasks[0].id),
+        ),
+        (
+            81_011,
+            "smart_plans",
+            "contact_smart_plan",
+            {"title": "Active Plan", "status": "active"},
+            ("smart_plan", plans[0].id),
+        ),
+        (
+            81_012,
+            "opportunities",
+            "contact_opportunity",
+            {"title": "Synthetic Opportunity"},
+            ("opportunity", opportunity.id),
+        ),
+        (
+            81_013,
+            "saved_searches",
+            "contact_saved_search",
+            {"name": "Internal search"},
+            ("saved_search", search.id),
+        ),
+    )
+    for index, section, record_kind, values, link in materialized:
+        await _add_contact_occurrence(
+            service_db,
+            contact,
+            index,
+            section_name=section,
+            record_kind=record_kind,
+            values=values,
+            linked_entity=link,
+        )
+    for offset in range(16):
+        await _add_contact_occurrence(
+            service_db,
+            contact,
+            81_100 + offset,
+            section_name="notes",
+            record_kind="contact_note",
+            values={"body": f"Recovered note {offset}"},
+        )
+    service_db.add(
+        Booking(
+            name="Workspace booking",
+            email="WORKSPACE@example.test",
+            meeting_type="phone",
+            scheduled_at=NOW,
+        )
+    )
+    await service_db.flush()
+
+    selects = 0
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    assert service_db.bind is not None
+    event.listen(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        summary = await get_contact_workspace_summary(service_db, contact.id)
+    finally:
+        event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    assert summary == ContactWorkspaceSummary(
+        open_tasks=2,
+        completed_tasks=2,
+        archived_tasks=2,
+        active_smart_plans=2,
+        opportunities=2,
+        notes=18,
+        saved_searches=2,
+        bookings=1,
+    )
+    assert selects <= 14
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_fails_closed_on_unknown_state_and_bad_link(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Integrity", last_name="Owner", stage="lead")
+    other = CRMContact(first_name="Wrong", last_name="Owner", stage="lead")
+    service_db.add_all([contact, other])
+    await service_db.flush()
+    invalid = CRMTask(contact_id=contact.id, title="Unknown", status="in_progress")
+    wrong = CRMNote(contact_id=other.id, body="Wrong owner")
+    service_db.add_all([invalid, wrong])
+    await service_db.flush()
+
+    with pytest.raises(ContactDataIntegrityError, match="task status"):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+    invalid.status = "open"
+    await service_db.flush()
+    await _add_contact_occurrence(
+        service_db,
+        contact,
+        82_001,
+        section_name="notes",
+        record_kind="contact_note",
+        values={"body": "Wrong owner"},
+        linked_entity=("note", wrong.id),
+    )
+    with pytest.raises(ContactDataIntegrityError, match="source link"):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_missing_contact_is_safe(
+    service_db: AsyncSession,
+):
+    with pytest.raises(ContactNotFound, match="contact does not exist"):
+        await get_contact_workspace_summary(service_db, 999_999)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_rejects_dangling_and_wrong_domain_links(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Dangling", last_name="Link", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    occurrence = await _add_contact_occurrence(
+        service_db,
+        contact,
+        83_001,
+        section_name="tasks_to_do",
+        record_kind="contact_task",
+        values={"title": "Dangling task"},
+        linked_entity=("task", 999_999),
+    )
+    with pytest.raises(ContactDataIntegrityError, match="source link"):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+    link = await service_db.scalar(
+        select(CRMEntitySource).where(
+            CRMEntitySource.source_record_id == occurrence.source_record_id
+        )
+    )
+    assert link is not None
+    link.entity_type = "note"
+    await service_db.flush()
+    with pytest.raises(ContactDataIntegrityError, match="source link"):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_rejects_reverse_cross_contact_source_link(
+    service_db: AsyncSession,
+):
+    requested = CRMContact(first_name="Requested", last_name="Owner", stage="lead")
+    wrong = CRMContact(first_name="Wrong", last_name="Occurrence", stage="lead")
+    service_db.add_all([requested, wrong])
+    await service_db.flush()
+    task = CRMTask(contact_id=requested.id, title="Requested task", status="open")
+    service_db.add(task)
+    await service_db.flush()
+    await _add_contact_occurrence(
+        service_db,
+        wrong,
+        83_101,
+        section_name="tasks_to_do",
+        record_kind="contact_task",
+        values={"title": "Wrong occurrence owner"},
+        linked_entity=("task", task.id),
+    )
+
+    with pytest.raises(ContactDataIntegrityError, match="ownership"):
+        await get_contact_workspace_summary(service_db, requested.id)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_rejects_internal_link_without_occurrence(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Missing", last_name="Occurrence", stage="lead")
+    service_db.add(contact)
+    await service_db.flush()
+    task = CRMTask(contact_id=contact.id, title="Linked task", status="open")
+    source = _source_record(83_201)
+    source.record_kind = "contact_task"
+    source.evidence_level = "rendered_occurrence"
+    service_db.add_all([task, source])
+    await service_db.flush()
+    service_db.add(
+        CRMEntitySource(
+            entity_type="task",
+            entity_id=task.id,
+            source_record_id=source.id,
+        )
+    )
+    await service_db.flush()
+
+    with pytest.raises(ContactDataIntegrityError, match="ownership"):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_empty_lead_booking_and_query_work_are_bounded(
+    service_db: AsyncSession,
+):
+    lead = Lead(id=91_001, name="Synthetic workspace lead")
+    service_db.add(lead)
+    await service_db.flush()
+    contact = CRMContact(
+        first_name="Lead",
+        last_name="Workspace",
+        lead_id=lead.id,
+        stage="lead",
+    )
+    service_db.add(contact)
+    await service_db.flush()
+    service_db.add_all(
+        Booking(
+            lead_id=lead.id,
+            name=f"Synthetic booking {index}",
+            email=f"booking-{index}@example.test",
+            meeting_type="phone",
+            scheduled_at=NOW,
+        )
+        for index in range(2)
+    )
+    await service_db.flush()
+    pending = CRMContact(first_name="Pending", last_name="Summary", stage="lead")
+    service_db.add(pending)
+    selects = 0
+    flushes = 0
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    def before_flush(_session, _flush_context, _instances):
+        nonlocal flushes
+        flushes += 1
+
+    assert service_db.bind is not None
+    event.listen(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    event.listen(service_db.sync_session, "before_flush", before_flush)
+    try:
+        summary = await get_contact_workspace_summary(service_db, contact.id)
+    finally:
+        event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
+        event.remove(service_db.sync_session, "before_flush", before_flush)
+
+    assert summary == ContactWorkspaceSummary(
+        open_tasks=0,
+        completed_tasks=0,
+        archived_tasks=0,
+        active_smart_plans=0,
+        opportunities=0,
+        notes=0,
+        saved_searches=0,
+        bookings=2,
+    )
+    assert selects <= 15
+    assert flushes == 0
+    assert pending in service_db.new
+    assert pending.id is None
 
 
 def test_contact_service_error_taxonomy_has_no_http_dependency():
