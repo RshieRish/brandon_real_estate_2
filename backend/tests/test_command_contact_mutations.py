@@ -35,6 +35,11 @@ from models.command_contacts import (
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
 from models.lead import Lead
 from services.command_contact_contracts import (
+    ContactBulkAddTag,
+    ContactBulkCommand,
+    ContactBulkRemoveTag,
+    ContactBulkResult,
+    ContactBulkSetStage,
     ContactCreateCommand,
     ContactDetail,
     ContactMutationResult,
@@ -1833,6 +1838,504 @@ async def test_assign_tag_does_not_recover_unrelated_constraint_error(
     with pytest.raises(IntegrityError):
         await contacts_service.assign_contact_tag(
             db, contact.id, tag.id, actor_subject="7"
+        )
+    assert await db.scalar(select(func.count()).select_from(CRMContactTag)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.parametrize("actor_subject", INVALID_ACTORS)
+@pytest.mark.parametrize(
+    "action",
+    (
+        ContactBulkSetStage("set_stage", "active"),
+        ContactBulkAddTag("add_tag", 1),
+        ContactBulkRemoveTag("remove_tag", 1),
+    ),
+)
+@pytest.mark.asyncio
+async def test_bulk_rejects_actor_before_any_sql(mutation_db, actor_subject, action):
+    db, engine = mutation_db
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        with pytest.raises((TypeError, ValueError)):
+            await contacts_service.apply_contact_bulk_action(
+                db,
+                ContactBulkCommand((1,), action),
+                actor_subject=actor_subject,
+            )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    assert statements == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_stage_sorts_ids_changes_only_effective_rows_and_audits(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    first = await _seed_contact(db, first_name="First", stage="lead")
+    second = await _seed_contact(db, first_name="Second", stage="active")
+    third = await _seed_contact(db, first_name="Third", stage="lead")
+
+    async def forbidden_commit(_self):
+        raise AssertionError("mutation services must not commit")
+
+    monkeypatch.setattr(AsyncSession, "commit", forbidden_commit)
+    result = await contacts_service.apply_contact_bulk_action(
+        db,
+        ContactBulkCommand(
+            (third.id, first.id, second.id),
+            ContactBulkSetStage("set_stage", "active"),
+        ),
+        actor_subject="7",
+    )
+    assert result == ContactBulkResult(
+        requested_contact_ids=(first.id, second.id, third.id),
+        actioned_contact_ids=(first.id, third.id),
+        action="set_stage",
+    )
+    rows = (await db.scalars(select(CRMContact).order_by(CRMContact.id))).all()
+    assert [row.stage for row in rows] == ["active", "active", "active"]
+    audits = (
+        await db.scalars(
+            select(CRMContactAuditEvent).order_by(CRMContactAuditEvent.contact_id)
+        )
+    ).all()
+    assert [row.contact_id for row in audits] == [first.id, third.id]
+    assert all(row.action == "contact.bulk_stage_set" for row in audits)
+    assert all(
+        row.before_json
+        == canonical_contact_audit_json(
+            action="contact.bulk_stage_set",
+            phase="before",
+            payload={"stage": "lead"},
+        )
+        for row in audits
+    )
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_and_remove_tag_preserve_mixed_noops_and_exact_audits(
+    mutation_db,
+):
+    db, _engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Contact{index}") for index in range(3)
+    ]
+    tag = CRMTag(name="Synthetic bulk tag")
+    db.add(tag)
+    await db.flush()
+    existing = CRMContactTag(contact_id=contacts[1].id, tag_id=tag.id)
+    db.add(existing)
+    await db.flush()
+    requested = tuple(row.id for row in reversed(contacts))
+
+    added = await contacts_service.apply_contact_bulk_action(
+        db,
+        ContactBulkCommand(requested, ContactBulkAddTag("add_tag", tag.id)),
+        actor_subject="7",
+    )
+    assert added == ContactBulkResult(
+        requested_contact_ids=tuple(row.id for row in contacts),
+        actioned_contact_ids=(contacts[0].id, contacts[2].id),
+        action="add_tag",
+    )
+    replay = await contacts_service.apply_contact_bulk_action(
+        db,
+        ContactBulkCommand(requested, ContactBulkAddTag("add_tag", tag.id)),
+        actor_subject="7",
+    )
+    assert replay.actioned_contact_ids == ()
+
+    await db.delete(
+        (
+            await db.scalars(
+                select(CRMContactTag).where(
+                    CRMContactTag.contact_id == contacts[1].id,
+                    CRMContactTag.tag_id == tag.id,
+                )
+            )
+        ).one()
+    )
+    await db.flush()
+    removed = await contacts_service.apply_contact_bulk_action(
+        db,
+        ContactBulkCommand(requested, ContactBulkRemoveTag("remove_tag", tag.id)),
+        actor_subject="7",
+    )
+    assert removed == ContactBulkResult(
+        requested_contact_ids=tuple(row.id for row in contacts),
+        actioned_contact_ids=(contacts[0].id, contacts[2].id),
+        action="remove_tag",
+    )
+    audits = (
+        await db.scalars(select(CRMContactAuditEvent).order_by(CRMContactAuditEvent.id))
+    ).all()
+    assert [row.action for row in audits] == [
+        "contact.bulk_tag_added",
+        "contact.bulk_tag_added",
+        "contact.bulk_tag_removed",
+        "contact.bulk_tag_removed",
+    ]
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+
+
+async def _capture_bulk_selects(
+    db: AsyncSession,
+    engine,
+    payload: ContactBulkCommand,
+) -> tuple[ContactBulkResult, list[str]]:
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT "):
+            statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        result = await contacts_service.apply_contact_bulk_action(
+            db, payload, actor_subject="7"
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    return result, statements
+
+
+@pytest.mark.parametrize(
+    ("action_name", "expected_selects"),
+    (("set_stage", 1), ("add_tag", 3), ("remove_tag", 3)),
+)
+@pytest.mark.asyncio
+async def test_bulk_select_count_is_fixed_for_one_vs_two_hundred(
+    mutation_db, action_name, expected_selects
+):
+    db, engine = mutation_db
+    contacts = [
+        CRMContact(
+            first_name=f"Bulk{index}",
+            last_name="Contact",
+            stage="lead",
+        )
+        for index in range(200)
+    ]
+    db.add_all(contacts)
+    await db.flush()
+    one_id = (contacts[0].id,)
+    all_ids = tuple(contact.id for contact in contacts)
+    if action_name == "set_stage":
+        one_action = ContactBulkSetStage("set_stage", "active")
+        all_action = ContactBulkSetStage("set_stage", "qualified")
+    else:
+        one_tag = CRMTag(name=f"one-{action_name}")
+        all_tag = CRMTag(name=f"all-{action_name}")
+        db.add_all([one_tag, all_tag])
+        await db.flush()
+        if action_name == "remove_tag":
+            db.add(CRMContactTag(contact_id=contacts[0].id, tag_id=one_tag.id))
+            db.add_all(
+                [
+                    CRMContactTag(contact_id=contact.id, tag_id=all_tag.id)
+                    for contact in contacts
+                ]
+            )
+            await db.flush()
+            one_action = ContactBulkRemoveTag("remove_tag", one_tag.id)
+            all_action = ContactBulkRemoveTag("remove_tag", all_tag.id)
+        else:
+            one_action = ContactBulkAddTag("add_tag", one_tag.id)
+            all_action = ContactBulkAddTag("add_tag", all_tag.id)
+
+    one_result, one_selects = await _capture_bulk_selects(
+        db, engine, ContactBulkCommand(one_id, one_action)
+    )
+    all_result, all_selects = await _capture_bulk_selects(
+        db, engine, ContactBulkCommand(all_ids, all_action)
+    )
+    assert len(one_selects) == len(all_selects) == expected_selects
+    assert one_result.requested_contact_ids == one_id
+    assert all_result.requested_contact_ids == all_ids
+    assert "ORDER BY crm_contacts.id" in one_selects[0]
+    assert "ORDER BY crm_contacts.id" in all_selects[0]
+
+
+@pytest.mark.asyncio
+async def test_bulk_tag_locks_compile_in_binding_order_for_postgresql(
+    mutation_db,
+):
+    db, _engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Lock{index}") for index in range(3)
+    ]
+    tag = CRMTag(name="Synthetic lock order tag")
+    db.add(tag)
+    await db.flush()
+    compiled_selects: list[str] = []
+
+    def capture(execute_state):
+        if execute_state.is_select:
+            compiled_selects.append(
+                str(execute_state.statement.compile(dialect=postgresql.dialect()))
+            )
+
+    event.listen(db.sync_session, "do_orm_execute", capture)
+    try:
+        await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand(
+                tuple(contact.id for contact in reversed(contacts)),
+                ContactBulkAddTag("add_tag", tag.id),
+            ),
+            actor_subject="7",
+        )
+    finally:
+        event.remove(db.sync_session, "do_orm_execute", capture)
+
+    assert len(compiled_selects) == 3
+    assert "FROM crm_contacts" in compiled_selects[0]
+    assert "ORDER BY crm_contacts.id FOR UPDATE" in compiled_selects[0]
+    assert "FROM crm_tags" in compiled_selects[1]
+    assert compiled_selects[1].endswith("FOR UPDATE")
+    assert "FROM crm_contact_tags" in compiled_selects[2]
+    assert "ORDER BY crm_contact_tags.contact_id FOR UPDATE" in compiled_selects[2]
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_race_rereads_all_losers_once(mutation_db, monkeypatch):
+    db, engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Race{index}") for index in range(3)
+    ]
+    tag = CRMTag(name="Synthetic bulk race tag")
+    db.add(tag)
+    await db.flush()
+    original_begin_nested = db.begin_nested
+    nested_calls = 0
+
+    def raced_begin_nested():
+        nonlocal nested_calls
+        nested_calls += 1
+        if nested_calls != 2:
+            return original_begin_nested()
+
+        @asynccontextmanager
+        async def inject_competing_assignments():
+            await db.execute(
+                insert(CRMContactTag),
+                [{"contact_id": contact.id, "tag_id": tag.id} for contact in contacts],
+            )
+            async with original_begin_nested() as transaction:
+                yield transaction
+
+        return inject_competing_assignments()
+
+    monkeypatch.setattr(db, "begin_nested", raced_begin_nested)
+    tag_selects: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if (
+            statement.lstrip().upper().startswith("SELECT ")
+            and "FROM crm_contact_tags" in statement
+        ):
+            tag_selects.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        result = await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand(
+                tuple(contact.id for contact in contacts),
+                ContactBulkAddTag("add_tag", tag.id),
+            ),
+            actor_subject="7",
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    assert result.actioned_contact_ids == ()
+    # Initial batch plus exactly one set-based loser reread.
+    assert len(tag_selects) == 2
+    assert await db.scalar(select(func.count()).select_from(CRMContactTag)) == 3
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+
+
+@pytest.mark.parametrize("action_name", ("set_stage", "add_tag", "remove_tag"))
+@pytest.mark.asyncio
+async def test_bulk_second_audit_failure_rolls_back_every_action(
+    mutation_db, action_name
+):
+    db, _engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Rollback{index}", stage="lead")
+        for index in range(3)
+    ]
+    tag = CRMTag(name=f"Synthetic rollback {action_name}")
+    db.add(tag)
+    await db.flush()
+    if action_name == "set_stage":
+        action = ContactBulkSetStage("set_stage", "active")
+    elif action_name == "add_tag":
+        action = ContactBulkAddTag("add_tag", tag.id)
+    else:
+        db.add_all(
+            [
+                CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+                for contact in contacts
+            ]
+        )
+        await db.flush()
+        action = ContactBulkRemoveTag("remove_tag", tag.id)
+    await db.execute(
+        text(
+            "CREATE TRIGGER reject_second_bulk_audit BEFORE INSERT ON "
+            "crm_contact_audit_events WHEN NEW.contact_id = "
+            f"{contacts[1].id} BEGIN SELECT RAISE(FAIL, 'audit rejected'); END"
+        )
+    )
+    with pytest.raises(contacts_service.ContactDataIntegrityError):
+        await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand(tuple(contact.id for contact in contacts), action),
+            actor_subject="7",
+        )
+    for contact in contacts:
+        await db.refresh(contact)
+        assert contact.stage == "lead"
+    assignment_count = await db.scalar(
+        select(func.count())
+        .select_from(CRMContactTag)
+        .where(CRMContactTag.tag_id == tag.id)
+    )
+    assert assignment_count == (3 if action_name == "remove_tag" else 0)
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+
+
+@pytest.mark.parametrize("missing_kind", ("contact", "tag"))
+@pytest.mark.asyncio
+async def test_bulk_missing_contact_or_tag_fails_before_dml(mutation_db, missing_kind):
+    db, engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic validation tag")
+    db.add(tag)
+    await db.flush()
+    payload = ContactBulkCommand(
+        (contact.id, 999) if missing_kind == "contact" else (contact.id,),
+        ContactBulkAddTag("add_tag", tag.id if missing_kind == "contact" else 999),
+    )
+    dml: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith(("INSERT ", "UPDATE ", "DELETE ")):
+            dml.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        with pytest.raises(contacts_service.ContactNotFound):
+            await contacts_service.apply_contact_bulk_action(
+                db, payload, actor_subject="7"
+            )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    assert dml == []
+
+
+@pytest.mark.parametrize("action_name", ("add_tag", "remove_tag"))
+@pytest.mark.asyncio
+async def test_bulk_tag_writes_and_audits_follow_ascending_contact_order(
+    mutation_db, action_name
+):
+    db, engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Ordered{index}") for index in range(3)
+    ]
+    tag = CRMTag(name=f"Synthetic ordered {action_name}")
+    db.add(tag)
+    await db.flush()
+    if action_name == "remove_tag":
+        db.add_all(
+            [
+                CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+                for contact in contacts
+            ]
+        )
+        await db.flush()
+        action = ContactBulkRemoveTag("remove_tag", tag.id)
+    else:
+        action = ContactBulkAddTag("add_tag", tag.id)
+
+    tag_write_contact_ids: list[int] = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, executemany):
+        normalized = statement.casefold()
+        if action_name == "add_tag" and normalized.startswith(
+            "insert into crm_contact_tags"
+        ):
+            rows = parameters if executemany else [parameters]
+            tag_write_contact_ids.extend(int(row[0]) for row in rows)
+        if action_name == "remove_tag" and normalized.startswith(
+            "delete from crm_contact_tags"
+        ):
+            rows = parameters if executemany else [parameters]
+            tag_write_contact_ids.extend(int(row[0]) for row in rows)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        result = await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand(
+                tuple(contact.id for contact in reversed(contacts)), action
+            ),
+            actor_subject="7",
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+
+    expected = [contact.id for contact in contacts]
+    assert result.actioned_contact_ids == tuple(expected)
+    assert tag_write_contact_ids == expected
+    audits = (
+        await db.scalars(select(CRMContactAuditEvent).order_by(CRMContactAuditEvent.id))
+    ).all()
+    assert [row.contact_id for row in audits] == expected
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_reraises_unrelated_assignment_constraint_error(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic unrelated bulk constraint")
+    db.add(tag)
+    await db.flush()
+    original_flush = db.flush
+
+    class PostgreSQLOrigin(Exception):
+        def __init__(self):
+            self.diag = type(
+                "Diagnostic", (), {"constraint_name": "other_constraint"}
+            )()
+
+    async def fail_assignment_flush(*args, **kwargs):
+        if any(isinstance(row, CRMContactTag) for row in db.new):
+            raise IntegrityError(
+                "INSERT INTO crm_contact_tags",
+                {},
+                PostgreSQLOrigin(),
+            )
+        return await original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", fail_assignment_flush)
+    with pytest.raises(IntegrityError):
+        await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand((contact.id,), ContactBulkAddTag("add_tag", tag.id)),
+            actor_subject="7",
         )
     assert await db.scalar(select(func.count()).select_from(CRMContactTag)) == 0
     assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0

@@ -65,6 +65,11 @@ from services.command_contact_contracts import (
     ContactActorValue,
     ContactAddressValue,
     ContactArtifactMetadata,
+    ContactBulkAddTag,
+    ContactBulkCommand,
+    ContactBulkRemoveTag,
+    ContactBulkResult,
+    ContactBulkSetStage,
     ContactCaptureEvidence,
     ContactCelebrationRow,
     ContactCelebrations,
@@ -2924,6 +2929,196 @@ async def update_contact(
         ) from None
 
 
+async def apply_contact_bulk_action(
+    db: AsyncSession,
+    payload: ContactBulkCommand,
+    *,
+    actor_subject: str,
+) -> ContactBulkResult:
+    """Apply one audited action to a sorted, fully validated contact set."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactBulkCommand):
+        raise TypeError("payload must be ContactBulkCommand")
+    requested_ids = tuple(sorted(payload.contact_ids))
+    actioned_ids: list[int] = []
+    audits: list[CRMContactAuditEvent] = []
+    try:
+        async with db.begin_nested():
+            contacts = (
+                await db.scalars(
+                    select(CRMContact)
+                    .where(CRMContact.id.in_(requested_ids))
+                    .order_by(CRMContact.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+            if tuple(contact.id for contact in contacts) != requested_ids:
+                _safe_not_found()
+
+            if isinstance(payload.action, ContactBulkSetStage):
+                result_action = "set_stage"
+                for contact in contacts:
+                    old_stage = contact.stage
+                    if old_stage == payload.action.stage:
+                        continue
+                    contact.stage = payload.action.stage
+                    actioned_ids.append(contact.id)
+                    audits.append(
+                        _contact_audit_event(
+                            contact_id=contact.id,
+                            actor_subject=actor,
+                            action="contact.bulk_stage_set",
+                            before_json=_canonical_audit(
+                                action="contact.bulk_stage_set",
+                                phase="before",
+                                payload={"stage": old_stage},
+                            ),
+                            after_json=_canonical_audit(
+                                action="contact.bulk_stage_set",
+                                phase="after",
+                                payload={"stage": contact.stage},
+                            ),
+                        )
+                    )
+            else:
+                result_action = payload.action.action
+                tag = (
+                    await db.scalars(
+                        select(CRMTag)
+                        .where(CRMTag.id == payload.action.tag_id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).one_or_none()
+                if tag is None:
+                    _safe_not_found()
+                assignments = (
+                    await db.scalars(
+                        select(CRMContactTag)
+                        .where(
+                            CRMContactTag.contact_id.in_(requested_ids),
+                            CRMContactTag.tag_id == tag.id,
+                        )
+                        .order_by(CRMContactTag.contact_id)
+                        .with_for_update()
+                    )
+                ).all()
+                assignments_by_contact = {
+                    assignment.contact_id: assignment for assignment in assignments
+                }
+
+                if isinstance(payload.action, ContactBulkAddTag):
+                    raced_contact_ids: list[int] = []
+                    for contact in contacts:
+                        if contact.id in assignments_by_contact:
+                            continue
+                        assignment = CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+                        try:
+                            async with db.begin_nested():
+                                db.add(assignment)
+                                await db.flush()
+                        except IntegrityError as error:
+                            if not _is_contact_tag_uniqueness_error(error):
+                                raise
+                            raced_contact_ids.append(contact.id)
+                            continue
+                        actioned_ids.append(contact.id)
+                        audits.append(
+                            _contact_audit_event(
+                                contact_id=contact.id,
+                                actor_subject=actor,
+                                action="contact.bulk_tag_added",
+                                before_json=_canonical_audit(
+                                    action="contact.bulk_tag_added",
+                                    phase="before",
+                                    payload={
+                                        "present": False,
+                                        "tag_id": tag.id,
+                                    },
+                                ),
+                                after_json=_canonical_audit(
+                                    action="contact.bulk_tag_added",
+                                    phase="after",
+                                    payload={
+                                        "present": True,
+                                        "tag_id": tag.id,
+                                    },
+                                ),
+                            )
+                        )
+                    if raced_contact_ids:
+                        raced_assignments = (
+                            await db.scalars(
+                                select(CRMContactTag)
+                                .where(
+                                    CRMContactTag.contact_id.in_(raced_contact_ids),
+                                    CRMContactTag.tag_id == tag.id,
+                                )
+                                .order_by(CRMContactTag.contact_id)
+                                .with_for_update()
+                            )
+                        ).all()
+                        if tuple(
+                            assignment.contact_id for assignment in raced_assignments
+                        ) != tuple(raced_contact_ids):
+                            raise ContactDataIntegrityError(
+                                "contact tag race could not be reconciled"
+                            )
+                elif isinstance(payload.action, ContactBulkRemoveTag):
+                    for contact in contacts:
+                        assignment = assignments_by_contact.get(contact.id)
+                        if assignment is None:
+                            continue
+                        await db.delete(assignment)
+                        actioned_ids.append(contact.id)
+                        audits.append(
+                            _contact_audit_event(
+                                contact_id=contact.id,
+                                actor_subject=actor,
+                                action="contact.bulk_tag_removed",
+                                before_json=_canonical_audit(
+                                    action="contact.bulk_tag_removed",
+                                    phase="before",
+                                    payload={
+                                        "present": True,
+                                        "tag_id": tag.id,
+                                    },
+                                ),
+                                after_json=_canonical_audit(
+                                    action="contact.bulk_tag_removed",
+                                    phase="after",
+                                    payload={
+                                        "present": False,
+                                        "tag_id": tag.id,
+                                    },
+                                ),
+                            )
+                        )
+                else:  # pragma: no cover - ContactBulkCommand rejects this.
+                    raise TypeError("bulk action is invalid")
+
+            db.add_all(audits)
+            await db.flush()
+            return ContactBulkResult(
+                requested_contact_ids=requested_ids,
+                actioned_contact_ids=tuple(actioned_ids),
+                action=result_action,
+            )
+    except ContactDirectoryError:
+        raise
+    except IntegrityError as error:
+        if "crm_contact_tags" in str(error.statement).casefold():
+            raise
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
 async def assign_contact_tag(
     db: AsyncSession,
     contact_id: int,
@@ -3538,6 +3733,7 @@ __all__ = [
     "ContactNotFound",
     "ContactNotInDirectory",
     "ContactSectionUnsupported",
+    "apply_contact_bulk_action",
     "assign_contact_tag",
     "create_contact",
     "create_contact_note",
