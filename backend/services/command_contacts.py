@@ -1056,8 +1056,25 @@ def _occurrence_values(source: CRMSourceRecord) -> dict[str, object]:
         raise ContactDataIntegrityError("contact occurrence payload is invalid")
     values = payload.get("values")
     if not isinstance(values, dict):
-        return {}
+        raise ContactDataIntegrityError("contact occurrence payload is invalid")
     return values
+
+
+def _bounded_occurrence_text(
+    values: dict[str, object],
+    key: str,
+    *,
+    max_length: int,
+) -> str | None:
+    value = values.get(key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) > max_length:
+        raise ContactDataIntegrityError("contact occurrence payload is invalid")
+    return normalized
 
 
 async def get_contact_workspace_summary(
@@ -1156,9 +1173,10 @@ async def get_contact_workspace_summary(
                 if not owned:
                     raise ContactDataIntegrityError("contact source link is invalid")
                 continue
+            values = _occurrence_values(source)
             if section.section_name == "smart_plans":
-                status = _occurrence_values(source).get("status")
-                if not isinstance(status, str) or status.strip().casefold() != "active":
+                status = _bounded_occurrence_text(values, "status", max_length=120)
+                if status is None or status.casefold() != "active":
                     continue
             counts[section.section_name] += 1
 

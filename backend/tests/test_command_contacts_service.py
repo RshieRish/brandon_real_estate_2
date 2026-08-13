@@ -831,6 +831,54 @@ async def test_workspace_summary_strips_internal_and_source_plan_statuses(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("section_name", "record_kind", "payload"),
+    (
+        ("notes", "contact_note", {}),
+        ("saved_searches", "contact_saved_search", {"values": []}),
+        ("tasks_to_do", "contact_task", {"values": None}),
+        ("opportunities", "contact_opportunity", {"values": "scalar"}),
+        (
+            "smart_plans",
+            "contact_smart_plan",
+            {"values": {"status": "x" * 121}},
+        ),
+    ),
+)
+async def test_workspace_summary_rejects_invalid_source_only_payload_values(
+    service_db: AsyncSession,
+    section_name: str,
+    record_kind: str,
+    payload: dict[str, object],
+):
+    contact = CRMContact(
+        first_name="Invalid",
+        last_name="Source Payload",
+        stage="lead",
+    )
+    service_db.add(contact)
+    await service_db.flush()
+    occurrence = await _add_contact_occurrence(
+        service_db,
+        contact,
+        81_600,
+        section_name=section_name,
+        record_kind=record_kind,
+        values={"title": "Synthetic placeholder"},
+    )
+    source = await service_db.get(CRMSourceRecord, occurrence.source_record_id)
+    assert source is not None
+    source.payload_json = json.dumps(payload)
+    await service_db.flush()
+
+    with pytest.raises(
+        ContactDataIntegrityError,
+        match="contact occurrence payload is invalid",
+    ):
+        await get_contact_workspace_summary(service_db, contact.id)
+
+
+@pytest.mark.asyncio
 async def test_workspace_summary_fails_closed_on_unknown_state_and_bad_link(
     service_db: AsyncSession,
 ):
