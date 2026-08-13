@@ -261,6 +261,11 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 
 ### Backend query/API boundary
 
+- Modify `backend/models/command.py`: add nullable, uniquely indexed provenance from `CRMActivity` to a recovered source record.
+- Modify `backend/models/command_contacts.py`: add contact/source-occurrence ownership and permit recovered timeline rows with no exposed timestamp.
+- Create `backend/alembic/versions/5b9d1e2f3a4c_add_contact_occurrence_context.py`: additive occurrence/activity/timeline migration whose parent is `4a8c0d1e2f3b`.
+- Create `backend/services/command_contact_contracts.py`: framework-neutral directory, detail, section, evidence, timeline, celebration, bulk, audit, filter, and sort contracts shared by query services.
+- Create `backend/services/command_contact_occurrences.py`: validate and idempotently persist child-occurrence ownership from parser payload context.
 - Create `backend/services/command_contact_timeline.py`: typed merge of recovered timeline events, `CRMActivity`, leads, and bookings with source-key dedupe.
 - Create `backend/services/command_contacts.py`: directory/detail/tab queries, stable pagination, mutations, and audits.
 - Create `backend/schemas/command_contacts.py`: request/response/page/evidence contracts.
@@ -268,12 +273,17 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Modify `backend/routers/command.py`: remove moved contact, contact-note, tag-assignment, contact-saved-search, and celebration handlers; retain unrelated routes.
 - Modify `backend/routers/command_provenance.py`: allow contact extension entity types.
 - Modify `backend/main.py`: mount `command_contacts.router` under `/api/v1/command`.
+- Create `backend/tests/test_command_contact_contracts.py`: exact filters, sorts, SmartViews, cursors, bulk variants, and redaction contracts.
+- Create `backend/tests/test_command_contact_occurrences.py`: occurrence ownership, backfill, idempotency, and ambiguity gates.
 - Create `backend/tests/test_command_contact_timeline.py`: deterministic aggregation and non-duplication.
+- Create `backend/tests/test_command_contacts_service.py`: directory/detail/section/evidence/celebration/mutation query tests.
 - Create `backend/tests/test_command_contacts_router.py`: authenticated page/detail/tab/mutation/evidence integration tests.
 - Modify `backend/tests/test_command_models.py`: retain compatibility coverage for legacy Command entities.
 
 ### Frontend typed client and directory
 
+- Create `frontend/src/lib/command/http.ts`: shared authenticated JSON/blob transport, typed HTTP errors, response decoding, and `AbortSignal` support.
+- Create `frontend/src/lib/command/http.test.ts`: authentication, error, malformed-response, blob, and abort tests.
 - Create `frontend/src/lib/command/contacts.ts`: contact types, page/filter/sort state, route builders, and contact API methods.
 - Create `frontend/src/lib/command/contacts.test.ts`: encoding and response-contract tests.
 - Modify `frontend/src/lib/command/api.ts`: re-export contact types and keep the `commandApi.contacts(limit, offset, filters)` array contract for Home/Tasks while exposing `contactDirectory()` for full metadata.
@@ -283,6 +293,9 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `frontend/src/components/command/contacts/ContactsTable.tsx`: stable columns, evidence badges, selection, activation, and pagination.
 - Create `frontend/src/components/command/contacts/ContactCreateDrawer.tsx`: internal-contact creation in the shared overlay.
 - Create `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`: component states, filters, keyboard, and bulk behavior.
+- Modify `frontend/src/components/command/shell/CommandShell.tsx`: mount the shared toast provider around every Command route.
+- Modify `frontend/src/components/command/shell/CommandShell.test.tsx`: prove workspace toasts render without a missing-provider error.
+- Modify `frontend/src/app/admin/command/command-shell.css`: add scoped directory/toolbar/table/drawer/responsive styles.
 - Modify `frontend/src/app/admin/command/contacts/page.tsx`: route-only wrapper.
 
 ### Frontend contact detail
@@ -316,14 +329,18 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 
 ## Dependency and commit order
 
-1. Schema and migration.
+1. Base contact schema and migration.
 2. Pure parser/extractors.
 3. Identity resolver and materializer protocol.
 4. Contact materializer and reconciliation integration.
-5. Focused query/timeline services and API.
-6. Typed frontend client and directory.
-7. Contact detail and eight views.
-8. Browser/visual/production gates.
+5. Additive query schema plus framework-neutral Contacts contracts.
+6. Timeline aggregation.
+7. Directory/detail/section/evidence query services.
+8. Focused Contacts router with an explicit legacy-route inventory.
+9. Shared typed frontend transport, Contacts client, and Home compatibility adapter.
+10. Dense directory UI after the toast provider and shell styles are available.
+11. Contact detail and eight views.
+12. Browser/visual/production gates.
 
 The Tasks, SmartPlans, and Opportunities domain imports depend on tasks 1–5 because they link their normalized entities to contact section source records. Contacts does not depend on those later materializers: it renders source-only occurrences truthfully until links exist.
 
@@ -823,14 +840,138 @@ git add services/command_materializers services/command_contact_materializer.py 
 git commit -m "feat: materialize recovered Command contacts"
 ```
 
-### Task 5: Build a non-duplicating contact timeline and workspace service
+### Task 5A: Add lossless occurrence ownership and timeline provenance
+
+**Files:**
+- Modify: `backend/models/command.py`
+- Modify: `backend/models/command_contacts.py`
+- Modify: `backend/models/__init__.py`
+- Modify: `backend/alembic/env.py`
+- Create: `backend/alembic/versions/5b9d1e2f3a4c_add_contact_occurrence_context.py`
+- Create: `backend/services/command_contact_contracts.py`
+- Create: `backend/services/command_contact_occurrences.py`
+- Modify: `backend/services/command_contact_materializer.py`
+- Create: `backend/tests/test_command_contact_contracts.py`
+- Create: `backend/tests/test_command_contact_occurrences.py`
+- Modify: `backend/tests/test_command_contacts_models.py`
+- Modify: `backend/tests/test_command_contacts_migration.py`
+- Modify: `backend/tests/test_command_contact_materializer.py`
+
+- [ ] **Step 1: Write failing schema, cursor, and occurrence-ownership tests**
+
+Add these exact additive model contracts:
+
+```python
+class CRMActivity(Base):
+    # Existing columns remain unchanged.
+    source_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crm_source_records.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+class CRMContactSourceOccurrence(Timestamped, Base):
+    __tablename__ = "crm_contact_source_occurrences"
+
+    id: Mapped[int]
+    contact_id: Mapped[int]                 # FK crm_contacts.id, CASCADE
+    section_capture_id: Mapped[int]         # FK crm_contact_section_captures.id, CASCADE
+    source_record_id: Mapped[int]           # FK crm_source_records.id, RESTRICT, UNIQUE
+    occurrence_ordinal: Mapped[int]         # > 0
+```
+
+`CRMActivity.source_record_id` has the named unique index `uq_crm_activities_source_record_id`; multiple legacy `NULL` values remain legal, while one recovered source record can mirror at most one internal activity. `CRMContactSourceOccurrence` has unique constraints `uq_crm_contact_source_occurrence_source` on `source_record_id` and `uq_crm_contact_source_occurrence_section_ordinal` on `(section_capture_id, occurrence_ordinal)`, plus index `ix_crm_contact_source_occurrence_contact_section` on `(contact_id, section_capture_id, id)`. `CRMContactTimelineEvent.occurred_at` becomes nullable; a recovered event without an exposed timestamp must remain visible instead of being discarded or assigned capture time.
+
+Create framework-neutral contracts in `command_contact_contracts.py` using `StrEnum`, frozen/slotted dataclasses, and tuples rather than mutable defaults:
+
+```python
+class ContactSection(StrEnum):
+    TIMELINE = "timeline"
+    OPPORTUNITIES = "opportunities"
+    SMART_PLANS = "smart_plans"
+    NOTES = "notes"
+    SAVED_SEARCHES = "saved_searches"
+    TASKS_TO_DO = "tasks_to_do"
+    TASKS_COMPLETED = "tasks_completed"
+    TASKS_ARCHIVED = "tasks_archived"
+
+class CaptureQualityValue(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    SHELL = "shell"
+    ERROR = "error"
+
+class MaterializationStatus(StrEnum):
+    SOURCE_ONLY = "source_only"
+    MATERIALIZED = "materialized"
+
+class TimelineOrigin(StrEnum):
+    RECOVERED = "recovered"
+    INTERNAL_CRM = "internal_crm"
+    LEGACY_LEAD = "legacy_lead"
+    BOOKING = "booking"
+
+@dataclass(frozen=True, slots=True)
+class TimelineCursorV1:
+    null_rank: Literal[0, 1]
+    occurred_at: datetime | None
+    origin_rank: Literal[0, 1, 2, 3]
+    entity_id: int
+```
+
+The timeline order is exactly `(occurred_at IS NULL) ASC, occurred_at DESC NULLS LAST, origin_rank ASC, entity_id DESC`, where recovered/internal/lead/booking ranks are `0/1/2/3`. The opaque cursor is unpadded base64url of canonical JSON `{"v":1,"n":0|1,"t":"<UTC-RFC3339-microseconds-Z>"|null,"o":0|1|2|3,"i":<positive-int>}`. `encode_timeline_cursor()` always emits that canonical form. `decode_timeline_cursor()` rejects padding, noncanonical base64url/JSON, unknown or missing keys, non-UTC/noncanonical timestamps, a timestamp inconsistent with `n`, booleans posing as integers, nonpositive IDs, and versions other than `1`. “After cursor” means a greater null rank, then an older timestamp, then a greater origin rank, then a smaller entity ID. Tests pin byte-for-byte cursor output, round-trip behavior, every rejection, and the null boundary.
+
+Migration `5b9d1e2f3a4c` has parent `4a8c0d1e2f3b`. It adds the activity FK/index, creates the ownership table parent-first, and changes only `crm_contact_timeline_events.occurred_at` from non-null to nullable using Alembic batch operations where SQLite requires them. Downgrade reverses only these additions and restores non-nullability only after explicitly refusing when null recovered timestamps exist; it never fabricates timestamps. Migration tests perform real SQLite upgrade/downgrade, compile PostgreSQL SQL, and assert `5b9d1e2f3a4c (head)`.
+
+- [ ] **Step 2: Implement exact occurrence ownership without text inference**
+
+Expose:
+
+```python
+@dataclass(frozen=True, slots=True)
+class ContactOccurrenceSyncResult:
+    observed: int
+    created: int
+    unchanged: int
+
+async def sync_contact_occurrence_ownership(
+    db: AsyncSession,
+    *,
+    bundle_fingerprint: str,
+    parser_version: str,
+) -> ContactOccurrenceSyncResult: ...
+```
+
+The service selects persisted Contacts source records whose `record_kind` is exactly `contact_timeline_event`, `contact_note`, `contact_saved_search`, `contact_task`, `contact_smart_plan`, or `contact_opportunity`. It reads only the typed payload context emitted by the parser: `source_contact_id`, `capture_ordinal`, `section_name`, and positive `occurrence_ordinal`. It resolves the contact through the exact `contact_profile` source record's `CRMEntitySource(entity_type="contact")`, then resolves the position by `(bundle_fingerprint, source_contact_id, capture_ordinal)` and the section capture by `(position_id, section_name)`. All three contact IDs must agree. Missing, duplicate, malformed, cross-contact, cross-section, or parser-version-mismatched context raises `ContactOccurrenceOwnershipError` and rolls back; display label, text, name, timestamp, and row position are never fallback keys.
+
+One ownership row is written for every child occurrence, including timeline rows with no timestamp and Tasks/SmartPlans/Opportunities that remain source-only. Re-running returns all rows as unchanged. An existing row is accepted only when all owner fields and ordinal match byte-for-byte; otherwise it is a conflict. Call the sync from `ContactMaterializer` after positions/sections exist and before selective note/search/timeline materialization so the same transaction owns both provenance and normalized writes. Existing internal `CRMActivity` rows retain `source_record_id=NULL`; only deliberate mirrors set it.
+
+- [ ] **Step 3: Run focused schema/ownership gates and commit**
+
+```bash
+cd backend
+"$PROJECT_PYTHON" -m pytest -q \
+  tests/test_command_contact_contracts.py \
+  tests/test_command_contact_occurrences.py \
+  tests/test_command_contacts_models.py \
+  tests/test_command_contacts_migration.py \
+  tests/test_command_contact_materializer.py
+"$PROJECT_PYTHON" -m alembic heads
+git add models/command.py models/command_contacts.py models/__init__.py alembic/env.py \
+  alembic/versions/5b9d1e2f3a4c_add_contact_occurrence_context.py \
+  services/command_contact_contracts.py services/command_contact_occurrences.py \
+  services/command_contact_materializer.py tests/test_command_contact_contracts.py \
+  tests/test_command_contact_occurrences.py tests/test_command_contacts_models.py \
+  tests/test_command_contacts_migration.py tests/test_command_contact_materializer.py
+git commit -m "feat: retain Command contact occurrence ownership"
+```
+
+### Task 5B: Build the non-duplicating timeline
 
 **Files:**
 - Create: `backend/services/command_contact_timeline.py`
-- Create: `backend/services/command_contacts.py`
 - Create: `backend/tests/test_command_contact_timeline.py`
 
-- [ ] **Step 1: Write failing aggregation tests**
+- [ ] **Step 1: Write failing aggregation and cursor tests**
 
 Pin the output contract:
 
@@ -838,48 +979,129 @@ Pin the output contract:
 @dataclass(frozen=True, slots=True)
 class ContactTimelineEntry:
     key: str
-    origin: Literal["recovered", "internal_crm", "legacy_lead", "booking"]
+    origin: TimelineOrigin
     kind: str
     title: str
     body: str | None
     outcome: str | None
-    occurred_at: datetime
+    occurred_at: datetime | None
     source_record_id: int | None
     entity_type: str
     entity_id: int
+
+@dataclass(frozen=True, slots=True)
+class ContactTimelinePage:
+    rows: tuple[ContactTimelineEntry, ...]
+    next_cursor: str | None
+    has_more: bool
 ```
 
-Tests must prove recovered event + mirrored CRM activity with the same `source_record_id` returns once; unrelated entries with the same text/time remain distinct; booking linkage uses `lead_id` first and exact normalized email only as an unambiguous fallback; null timestamps do not reorder nondeterministically; pagination uses `(occurred_at, origin, entity_id)`.
+Expose `list_contact_timeline(db, contact_id: int, *, cursor: str | None, page_size: int) -> ContactTimelinePage`, with `page_size` restricted to `1..100` and 404 expressed as `ContactNotFound`, not an HTTP exception.
 
-- [ ] **Step 2: Run and confirm RED**
+Recovered rows come from `CRMContactTimelineEvent`, internal rows from `CRMActivity`, the single legacy-lead row from the exact `CRMContact.lead_id`, and booking rows from the linkage rule below. Keys are `recovered:<id>`, `activity:<id>`, `lead:<id>`, and `booking:<id>`; text/time similarity is never a dedupe key. When a recovered event and `CRMActivity` share the same non-null `source_record_id`, return only the recovered entry. A `CRMActivity.source_record_id` that points to a different contact or to a non-timeline source is an integrity error, not a silent drop.
 
-Run: `cd backend && "$PROJECT_PYTHON" -m pytest -q tests/test_command_contact_timeline.py`
+Booking linkage uses `Booking.lead_id == contact.lead_id` exclusively whenever the contact has a lead. Email fallback is allowed only when the contact has no lead, its normalized email is nonblank and belongs to exactly one `CRMContact`, and the booking has `lead_id IS NULL` plus the exact same normalized email. Ambiguous/shared email, a booking tied to another lead, or a name/phone match never links. The legacy-lead entry uses the persisted lead creation timestamp and ID; no synthetic history rows are derived from current status.
 
-Expected: FAIL because the aggregation services do not exist.
+Tests cover mirrored-source dedupe, same-text/same-time distinctness, all booking branches, nullable recovered times, exact ordering/cursors across page boundaries, cursor tampering, deleted cursor-bound entities, empty pages, `page_size` bounds, timezone normalization, and deterministic results after reversing fixture insertion order.
 
-- [ ] **Step 3: Implement timeline and query services**
+- [ ] **Step 2: Implement, run, and commit**
 
-`command_contact_timeline.py` owns merge/dedupe only. `command_contacts.py` owns SQL queries and mutations. Expose these exact async contracts:
-
-- `list_contacts(db, filters: ContactDirectoryFilters) -> ContactPage`
-- `get_contact_detail(db, contact_id: int) -> ContactDetail`
-- `get_contact_neighbors(db, contact_id: int, filters: ContactDirectoryFilters) -> ContactNeighbors`
-- `get_contact_workspace_summary(db, contact_id: int) -> ContactWorkspaceSummary`
-- `list_contact_timeline(db, contact_id: int, cursor: str | None, page_size: int) -> TimelinePage`
-- `list_contact_section(db, contact_id: int, section: ContactSection, page: int, page_size: int) -> ContactSectionPage`
-- `get_contact_evidence(db, contact_id: int) -> ContactEvidence`
-
-Every list has deterministic secondary ordering by primary key. Source-only rows include `source_record_id`, `capture_quality`, and `materialization_status="source_only"`; normalized links return `materialization_status="materialized"`.
-
-- [ ] **Step 4: Run tests and commit**
+Fetch at most `page_size + 1` eligible rows per origin after the decoded cursor, merge by the exact Task 5A key, and return a cursor for the last emitted row only when another eligible row exists. Do not load an unbounded timeline into memory.
 
 ```bash
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
-  tests/test_command_contact_timeline.py tests/test_command_contact_materializer.py
-git add services/command_contact_timeline.py services/command_contacts.py \
-  tests/test_command_contact_timeline.py
-git commit -m "feat: aggregate Command contact workspaces"
+  tests/test_command_contact_contracts.py tests/test_command_contact_timeline.py
+git add services/command_contact_timeline.py tests/test_command_contact_timeline.py
+git commit -m "feat: aggregate Command contact timelines"
+```
+
+### Task 5C: Build deterministic Contacts query and mutation services
+
+**Files:**
+- Create: `backend/services/command_contacts.py`
+- Create: `backend/tests/test_command_contacts_service.py`
+
+- [ ] **Step 1: Complete the framework-neutral query contracts**
+
+Add these exact enums to `command_contact_contracts.py`:
+
+```python
+class ContactOriginFilter(StrEnum):
+    RECOVERED = "recovered"          # has a recovered contact-profile source link
+    LEAD_BACKED = "lead_backed"      # lead_id is non-null
+    LEGACY_ONLY = "legacy_only"      # lead_id is non-null and no recovered link
+    INTERNAL_ONLY = "internal_only"  # no lead_id and no recovered link
+
+class ContactSourceFilter(StrEnum):
+    KW_COMMAND = "kw_command"
+    INTERNAL_CRM = "internal_crm"
+    LEGACY_LEAD = "legacy_lead"
+
+class ContactSmartView(StrEnum):
+    ALL = "all"
+    NEVER_CONTACTED = "never_contacted"
+    RECENTLY_ACTIVE = "recently_active"
+    BIRTHDAYS_THIS_MONTH = "birthdays_this_month"
+    ANNIVERSARIES_THIS_MONTH = "anniversaries_this_month"
+
+class ContactSortKey(StrEnum):
+    NAME = "name"
+    STAGE = "stage"
+    HEALTH_SCORE = "health_score"
+    LAST_CONTACTED_AT = "last_contacted_at"
+    LAST_INTERACTION_AT = "last_interaction_at"
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
+
+class SortDirection(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
+```
+
+`ContactDirectoryFilters` is frozen/slotted and contains `page: int=1`, `page_size: int=50`, trimmed literal `query`, exact `stage`, `owner_actor_id`, `assignee_actor_id`, unique sorted `tag_ids`, unique sorted `sources`, unique sorted `origins`, `health_min`, `health_max`, `birthday_month`, `anniversary_month`, `smart_view`, `sort`, and `direction`. Validate page `>=1`, page size `1..100`, query `<=200`, actor IDs `<=255`, tag IDs positive, health `0..100` with min `<=` max, and months `1..12`. Repeated tag filters mean “has every requested tag.” All filters are ANDed after SmartView expansion.
+
+SmartView semantics are fixed: `never_contacted` requires lead stage plus no explicit recovered/internal last-contact observation; unknown capture is excluded rather than called never contacted. `recently_active` means an explicit last-interaction timestamp in `[now-30 days, now]`. Birthday/anniversary views use explicit month/day from the internal date first, otherwise an exposed recovered profile month/day; sentinel/yearless years remain null. The two month views use the injected `now` month. No tag, task title, name, or current date supplies a missing celebration/contact timestamp.
+
+Sort uses the requested primary expression, then case-folded last name, case-folded first name, then contact ID. Null values are always last in either direction; contact ID follows the requested direction. `name` sorts by case-folded last name, first name, then ID. Literal search escapes `%`, `_`, and `\\` and searches first name, last name, legal/preferred name, normalized methods, company, and title; it never interpolates SQL.
+
+- [ ] **Step 2: Write failing directory/detail/section/evidence/mutation tests**
+
+Expose these exact async functions; service exceptions are typed domain errors and contain no HTTP concerns:
+
+```python
+async def list_contacts(db, filters: ContactDirectoryFilters, *, now: datetime) -> ContactDirectoryPage: ...
+async def get_contact_detail(db, contact_id: int) -> ContactDetail: ...
+async def get_contact_neighbors(db, contact_id: int, filters: ContactDirectoryFilters, *, now: datetime) -> ContactNeighbors: ...
+async def get_contact_workspace_summary(db, contact_id: int) -> ContactWorkspaceSummary: ...
+async def list_contact_section(db, contact_id: int, section: ContactSection, *, page: int, page_size: int) -> ContactSectionPage: ...
+async def get_contact_evidence(db, contact_id: int) -> ContactEvidence: ...
+async def list_contact_celebrations(db, *, month: int) -> ContactCelebrations: ...
+async def create_contact(db, payload: ContactCreateCommand, *, actor_subject: str) -> ContactDetail: ...
+async def update_contact(db, contact_id: int, payload: ContactUpdateCommand, *, actor_subject: str) -> ContactDetail: ...
+async def apply_contact_bulk_action(db, payload: ContactBulkCommand, *, actor_subject: str) -> ContactBulkResult: ...
+```
+
+`list_contact_section` accepts page `>=1` and page size `1..100`. It queries `CRMContactSourceOccurrence`, not text. Each row is a discriminated union: `source_only` includes `source_record_id`, source key, section, occurrence ordinal, capture quality, captured time, and redacted typed values; `materialized` additionally includes the one `CRMEntitySource` target. Allowed target types are timeline event, note, saved search, task, smart plan, or opportunity according to source record kind. Zero targets is source-only, one compatible target is materialized, and multiple/incompatible/cross-contact targets are integrity errors. All rows order by section capture time descending nulls last, capture ordinal ascending, occurrence ordinal ascending, then ownership ID ascending. Timeline uses Task 5B rather than this page API.
+
+`get_contact_evidence` returns all provider rows/positions separately, eight section cells per position, source/artifact metadata only, the 317/317/zero-alias identity summary and redacted 51/2/49 overlap summary. It never loads artifact bytes or emits raw overlap evidence. Aggregate quality is complete only when all required cells are complete, partial when no cell is shell/error and at least one is partial, otherwise limitation.
+
+Celebrations merge internal and recovered observations per `(contact_id, kind)`: an internal date wins; otherwise an explicitly exposed recovered month/day is returned with its year-quality. Rows order by day, case-folded name, and ID. Missing month/day, sentinel year, tags, or task text never create a date. Mutation tests snapshot canonical before/after JSON, prove JWT subjects are passed unchanged by the router later, preserve `lead_id`, reject recovered-field overwrite, and roll back the business write if its audit insert fails.
+
+- [ ] **Step 3: Implement source/materialized joins, exact pagination, and commits**
+
+Use count and page queries with the same predicates. Return page count `ceil(total/page_size)` with `0` when total is `0`; a page beyond the last returns an empty row tuple without changing the requested page. `get_contact_neighbors` locates the contact in exactly the same filter/sort universe and returns adjacent IDs or null; if the contact is outside that universe, raise `ContactNotInDirectory`.
+
+```bash
+cd backend
+"$PROJECT_PYTHON" -m pytest -q \
+  tests/test_command_contact_contracts.py \
+  tests/test_command_contacts_service.py \
+  tests/test_command_contact_timeline.py \
+  tests/test_command_contact_occurrences.py
+git add services/command_contact_contracts.py services/command_contacts.py \
+  tests/test_command_contact_contracts.py tests/test_command_contacts_service.py
+git commit -m "feat: query Command contact workspaces"
 ```
 
 ### Task 6: Split and type the Contacts API without losing existing behavior
@@ -893,46 +1115,61 @@ git commit -m "feat: aggregate Command contact workspaces"
 - Create: `backend/tests/test_command_contacts_router.py`
 - Modify: `backend/tests/test_command_models.py`
 
-- [ ] **Step 1: Write authenticated router tests**
+- [ ] **Step 1: Freeze route ownership, declaration order, and administrator identity tests**
 
-Test these routes with admin dependency override and reject unauthenticated/public JWTs:
+`command_contacts.py` owns every contact-scoped URL below. `command.py` must delete the moved handlers rather than retaining aliases. It keeps the unrelated global `POST /tags`, `GET /saved-searches`, and `DELETE /saved-searches/{search_id}` URLs; those two global saved-search handlers delegate to the same Task 5C service and audit helper. `main.py` includes each router once under `/api/v1/command`.
+
+Declare focused routes in this exact order so no string is ever offered to `{contact_id}`:
 
 ```text
-GET    /api/v1/command/contacts
-GET    /api/v1/command/contacts/directory
-POST   /api/v1/command/contacts
-GET    /api/v1/command/contacts/{id}
-PATCH  /api/v1/command/contacts/{id}
-POST   /api/v1/command/contacts/bulk
-GET    /api/v1/command/contacts/{id}/neighbors
-GET    /api/v1/command/contacts/{id}/workspace
-GET    /api/v1/command/contacts/{id}/timeline
-GET    /api/v1/command/contacts/{id}/opportunities
-GET    /api/v1/command/contacts/{id}/smart-plans
-GET    /api/v1/command/contacts/{id}/tasks?state=to_do|completed|archived
-GET    /api/v1/command/contacts/{id}/notes
-POST   /api/v1/command/contacts/{id}/notes
-DELETE /api/v1/command/contacts/{id}/notes/{note_id}
-GET    /api/v1/command/contacts/{id}/saved-searches
-POST   /api/v1/command/contacts/{id}/saved-searches
-GET    /api/v1/command/contacts/{id}/evidence
-GET    /api/v1/command/celebrations?month=8
+GET    /contacts/directory
+POST   /contacts/sync-leads
+POST   /contacts/import
+POST   /contacts/bulk
+GET    /contacts
+POST   /contacts
+GET    /celebrations
+GET    /contacts/{contact_id}
+PATCH  /contacts/{contact_id}
+GET    /contacts/{contact_id}/neighbors
+GET    /contacts/{contact_id}/workspace
+GET    /contacts/{contact_id}/timeline
+GET    /contacts/{contact_id}/opportunities
+GET    /contacts/{contact_id}/smart-plans
+GET    /contacts/{contact_id}/tasks
+GET    /contacts/{contact_id}/notes
+POST   /contacts/{contact_id}/notes
+DELETE /contacts/{contact_id}/notes/{note_id}
+GET    /contacts/{contact_id}/saved-searches
+POST   /contacts/{contact_id}/saved-searches
+GET    /contacts/{contact_id}/evidence
+POST   /contacts/{contact_id}/tags/{tag_id}
+DELETE /contacts/{contact_id}/tags/{tag_id}
 ```
 
-The existing `GET /contacts?limit=&offset=&query=&stage=` route remains array-shaped for compatibility; `GET /contacts/directory` owns the paginated response. Directory tests cover query, stage, owner, assignee, tag, source, origin, health range, birthday, anniversary, SmartView, sort, direction, page `>=1`, page size `1..100`, totals, and stable ties. Bulk requests max at 200 IDs, are atomic, and emit actor-attributed audits. Evidence tests assert 317 provider/317 identity/zero-alias semantics, the 51/2/49 internal-overlap partition, and artifact links without archive bytes or private identity values.
+The legacy `GET /contacts?limit=&offset=&query=&stage=` remains an array with `limit=1..100` and `offset>=0`; it delegates to the service but does not masquerade as the directory page. The task route requires exactly one `state=to_do|completed|archived`. Static-route tests specifically call `/contacts/directory`, `/contacts/import`, `/contacts/bulk`, and `/contacts/sync-leads` and prove none returns an integer-path 422.
 
-- [ ] **Step 2: Run router tests and confirm RED**
+Replace dependency-only authentication with a subject-bearing dependency:
 
-Run:
+```python
+async def require_admin_subject(
+    claims: dict[str, object] = Depends(require_admin),
+) -> str:
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.isascii() or not subject.isdigit() or int(subject) <= 0:
+        raise HTTPException(status_code=401, detail="Invalid administrator subject")
+    return subject
 
-```bash
-cd backend
-"$PROJECT_PYTHON" -m pytest -q tests/test_command_contacts_router.py
+AdminSubject = Annotated[str, Depends(require_admin_subject)]
 ```
 
-Expected: FAIL because focused schemas/router and the new directory endpoint do not exist.
+Every focused route receives `actor_subject: AdminSubject`; read handlers assign it to `_actor_subject`, while mutations pass the unchanged string to Task 5C. Tests exercise missing token `401`, a non-admin token `403`, malformed/missing `sub` `401`, and a valid admin subject. Do not derive an actor from email, display name, request IP, or a constant service value.
 
-- [ ] **Step 3: Define exact page and evidence responses**
+- [ ] **Step 2: Define the complete Pydantic boundary and RED tests**
+
+All models use `ConfigDict(extra="forbid", from_attributes=True)` and strict enums matching Task 5C. Define `ContactDirectoryQueryIn` with `query`, `stage`, `owner_actor_id`, `assignee_actor_id`, repeated `tag`, repeated `source`, repeated `origin`, `health_min`, `health_max`, `birthday_month`, `anniversary_month`, `smart_view`, `sort`, `direction`, `page`, and `page_size`. Its `to_filters()` normalizes only as Task 5C permits; it never silently clamps invalid values.
+
+Define these response/mutation boundaries, including every named nested type rather than `dict`:
 
 ```python
 class ContactDirectoryPageOut(BaseModel):
@@ -941,30 +1178,102 @@ class ContactDirectoryPageOut(BaseModel):
     page: int
     page_size: int
     page_count: int
-    sort: str
-    direction: Literal["asc", "desc"]
+    sort: ContactSortKey
+    direction: SortDirection
+
+class ContactSectionPageOut(BaseModel):
+    rows: list[Annotated[ContactSourceOnlyOut | ContactMaterializedOut, Field(discriminator="status")]]
+    total: int
+    page: int
+    page_size: int
+    page_count: int
+
+class ContactTimelinePageOut(BaseModel):
+    rows: list[ContactTimelineEntryOut]
+    next_cursor: str | None
+    has_more: bool
 
 class ContactEvidenceOut(BaseModel):
     contact_id: int
     provider_contact_rows: int
+    resolved_provider_identities: int
+    coalesced_aliases: Literal[0]
     capture_positions: list[ContactCapturePositionOut]
     section_matrix: list[ContactSectionEvidenceOut]
     sources: list[SourceRecordDetailOut]
     capture_quality: Literal["complete", "partial", "limitation"]
+
+class ContactBulkSetStage(BaseModel):
+    action: Literal["set_stage"]
+    stage: str = Field(min_length=1, max_length=64)
+
+class ContactBulkAddTag(BaseModel):
+    action: Literal["add_tag"]
+    tag_id: int = Field(gt=0)
+
+class ContactBulkRemoveTag(BaseModel):
+    action: Literal["remove_tag"]
+    tag_id: int = Field(gt=0)
+
+ContactBulkActionIn = Annotated[
+    ContactBulkSetStage | ContactBulkAddTag | ContactBulkRemoveTag,
+    Field(discriminator="action"),
+]
+
+class ContactBulkRequest(BaseModel):
+    contact_ids: list[int] = Field(min_length=1, max_length=200)
+    action: ContactBulkActionIn
 ```
 
-`ContactSectionEvidenceOut.capture_quality` retains the source enum `complete | partial | shell | error`. The aggregate `ContactEvidenceOut.capture_quality` is `complete` only when all eight captures are complete, `partial` when at least one capture is usable but partial, and `limitation` when any required capture is shell/error or artifact retrieval is unavailable. Use `model_config = ConfigDict(from_attributes=True)`. All mutation inputs validate lengths/enums and use the concrete collection factory required by the field, such as `Field(default_factory=list)` or `Field(default_factory=dict)`.
+Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models with bounded strings and `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. Evidence source rows exclude `payload_json` and artifact bytes.
 
-- [ ] **Step 4: Move contact routes and keep one owner per URL**
+Router tests cover every URL/method in Step 1, all filters and repeated values, exact response models, stable sort ties, `page>=1`, `page_size=1..100`, timeline cursor forwarding, task-state validation, 404 domain mapping, 409 integrity/conflict mapping, and 422 boundary errors. Evidence fixtures assert 317 upstream provider IDs, 317 resolved identities, zero aliases, 317 positions, 2,536 sections, plus aggregate-only 51 lead-backed/2 reviewed-overlap/49 legacy-only counts without private values.
 
-Create `command_contacts.router = APIRouter(dependencies=[Depends(require_admin)])`. Move, do not copy, existing contact handlers out of `command.py`, delegate to services, and mount the focused router at the same prefix. Declare `/contacts/directory` before `/contacts/{id}`. Preserve the legacy list response, create/edit/tag/note/search behavior, and add audit events. Update allowed provenance entity types with `contact_profile`, `contact_method`, `contact_address`, `contact_neighborhood`, `contact_ownership`, `contact_relationship`, `contact_preference`, `contact_capture_position`, `contact_section_capture`, and `contact_timeline_event`.
+Run:
 
-- [ ] **Step 5: Run API/auth regressions and commit**
+```bash
+cd backend
+"$PROJECT_PYTHON" -m pytest -q tests/test_command_contacts_router.py
+```
+
+Expected: FAIL because the focused schema/router and new service-backed URLs do not exist.
+
+- [ ] **Step 3: Implement one transaction and one audit for every mutation**
+
+Map service `ContactNotFound` to 404, `ContactNotInDirectory`/integrity/link conflicts to 409, and validation to 422. Unexpected errors remain 500 and never expose payloads. Read routes never write audit rows.
+
+Use these canonical audit actions:
+
+```text
+contact.created
+contact.updated
+contact.bulk_stage_set
+contact.bulk_tag_added
+contact.bulk_tag_removed
+contact.tag_added
+contact.tag_removed
+contact.note_created
+contact.note_deleted
+contact.saved_search_created
+contact.saved_search_deleted
+contact.legacy_sync_applied
+contact.legacy_import_applied
+```
+
+`before_json` and `after_json` are canonical JSON with sorted keys and compact separators. They include record IDs and changed business fields, never bearer tokens, overlap-manifest values, raw provenance payloads, or archive bytes. Create, edit, tag, note, search, sync/import, and each affected bulk contact write its audit inside the same database transaction as the business change. A bulk request locks contacts in sorted ID order, requires all requested contacts and the referenced tag to exist, applies all-or-nothing, writes one audit per contact with the same `actor_subject`, and returns requested/actioned IDs sorted ascending. An audit failure rolls back the business rows. Replays are ordinary explicit admin actions, not reconciliation idempotency.
+
+`GET /celebrations` requires `month=1..12` and returns separate `birthdays` and `anniversaries` rows with `contact_id`, display name, `month`, `day`, nullable verified year, `year_quality=verified|sentinel|unknown`, and `origin=internal_crm|recovered`. It follows Task 5C precedence and never infers a celebration.
+
+Add all contact provenance entity types to the allowlist: `contact_profile`, `contact_method`, `contact_address`, `contact_neighborhood`, `contact_ownership`, `contact_relationship`, `contact_preference`, `contact_capture_position`, `contact_section_capture`, `contact_timeline_event`, `contact_note`, and `contact_saved_search`. Artifact detail remains behind the existing authenticated provenance endpoint.
+
+- [ ] **Step 4: Run API, auth, and ownership regressions and commit**
 
 ```bash
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_router.py \
+  tests/test_command_contacts_service.py \
+  tests/test_command_contact_timeline.py \
   tests/test_command_provenance_router.py \
   tests/test_command_models.py
 git add schemas/command_contacts.py routers/command_contacts.py routers/command.py \
@@ -976,6 +1285,8 @@ git commit -m "feat: expose Command contact parity APIs"
 ### Task 7: Add the typed contact client and preserve Home compatibility
 
 **Files:**
+- Create: `frontend/src/lib/command/http.ts`
+- Create: `frontend/src/lib/command/http.test.ts`
 - Create: `frontend/src/lib/command/contacts.ts`
 - Create: `frontend/src/lib/command/contacts.test.ts`
 - Modify: `frontend/src/lib/command/api.ts`
@@ -983,39 +1294,63 @@ git commit -m "feat: expose Command contact parity APIs"
 - Modify: `frontend/src/lib/command/home.ts`
 - Modify: `frontend/src/lib/command/home.test.ts`
 
-- [ ] **Step 1: Write failing URL/compatibility tests**
+- [ ] **Step 1: Specify the shared abortable HTTP boundary and write RED tests**
+
+Move authenticated JSON behavior from the untyped local `request<T>` cast in `api.ts` into `http.ts`:
 
 ```ts
-it('encodes all directory filters and stable pagination', async () => {
-  await contactsApi.directory({ page: 3, pageSize: 50, query: 'Avery & Lake', tags: [4, 9], sort: 'last_contacted_at', direction: 'desc' });
-  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/contacts/directory?page=3&page_size=50&query=Avery+%26+Lake&tag=4&tag=9&sort=last_contacted_at&direction=desc'), expect.anything());
-});
+export type Decoder<T> = (input: unknown, path?: string) => T;
 
-it('keeps the legacy Home and Tasks contacts contract array-shaped', async () => {
-  await expect(commandApi.contacts(100, 100)).resolves.toEqual(legacyRows);
-  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/contacts?limit=100&offset=100'), expect.anything());
-});
+export class CommandHttpError extends Error {
+  constructor(readonly status: number, readonly detail: string) { super(detail); }
+}
+
+export class CommandDecodeError extends Error {
+  constructor(readonly path: string, readonly expected: string) {
+    super(`Invalid Command response at ${path}: expected ${expected}`);
+  }
+}
+
+export type CommandJsonRequest<T> = Readonly<{
+  path: string;
+  decode: Decoder<T>;
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  body?: unknown;
+  signal?: AbortSignal;
+}>;
+
+export async function commandJson<T>(request: CommandJsonRequest<T>): Promise<T>;
 ```
 
-Also test timeline cursor encoding, task-state enum paths, source-only discriminated unions, evidence responses, 404/422 errors, and authenticated headers.
+`commandJson` reads `admin_token`, sends `Authorization: Bearer <token>` and `Content-Type: application/json`, serializes `body` exactly once, and forwards the identical `AbortSignal`. A missing/blank token throws `CommandHttpError(401, "Administrator session required")` before fetch. A non-2xx response reads only a string `detail` from a bounded JSON error body and otherwise uses `Command request failed (<status>)`; it does not decode the success schema. A 204 passes `null` to the decoder. A successful response parses JSON as `unknown`, then requires the supplied decoder. JSON parse/schema failures throw `CommandDecodeError`; they may identify a field path and expected type but never include response values. Native abort rejection is rethrown unchanged so callers can recognize `AbortError`.
 
-- [ ] **Step 2: Run and confirm RED**
+Tests assert bearer/header/body behavior, missing token, 204, 401/404/409/422/500 messages, invalid JSON, nested decoder paths, signal identity, and an aborted fetch. Run:
 
-Run: `cd frontend && npm test -- src/lib/command/contacts.test.ts src/lib/command/api.test.ts`
+```bash
+cd frontend
+npm test -- src/lib/command/http.test.ts
+```
 
-Expected: FAIL because the typed contact module and page adapter do not exist.
+Expected: FAIL because `commandJson` and decoder errors do not exist.
 
-- [ ] **Step 3: Implement discriminated contact types**
+- [ ] **Step 2: Define exact wire types, decoders, URL serialization, and client methods**
+
+`contacts.ts` uses snake_case wire fields exactly as returned by Task 6 and exports no `any` or unchecked `as` cast. Build decoder combinators `object`, `array`, `string`, `number`, `nullable`, `literal`, and `optional` locally or from `http.ts`; every response below has a named decoder.
 
 ```ts
-export type ContactMaterialization =
-  | Readonly<{ status: 'materialized'; entityType: string; entityId: number }>
-  | Readonly<{ status: 'source_only'; sourceRecordId: number; captureQuality: CaptureQuality }>;
-
+export type CaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactSectionName =
   | 'timeline' | 'opportunities' | 'smart_plans' | 'notes' | 'saved_searches'
   | 'tasks_to_do' | 'tasks_completed' | 'tasks_archived';
-
+export type ContactSmartView =
+  | 'all' | 'never_contacted' | 'recently_active'
+  | 'birthdays_this_month' | 'anniversaries_this_month';
+export type ContactSortKey =
+  | 'name' | 'stage' | 'health_score' | 'last_contacted_at'
+  | 'last_interaction_at' | 'created_at' | 'updated_at';
+export type ContactMaterialization =
+  | Readonly<{ status: 'materialized'; source_record_id: number; entity_type: string; entity_id: number }>
+  | Readonly<{ status: 'source_only'; source_record_id: number; capture_quality: CaptureQuality }>;
 export type ContactDirectoryPage = Readonly<{
   rows: readonly ContactDirectoryRow[];
   total: number;
@@ -1027,21 +1362,85 @@ export type ContactDirectoryPage = Readonly<{
 }>;
 ```
 
-Do not use `any`. Keep new directory/detail/tab requests in `contacts.ts`; `api.ts` re-exports their types and retains the existing `commandApi.contacts` compatibility request until all non-Contacts consumers migrate deliberately.
+Define named readonly types/decoders for directory rows/pages, detail, neighbors, workspace summary, timeline entry/page, each section union/page, evidence matrix, celebrations, create/update requests, and bulk action/result. The section decoder dispatches on `status` and rejects unknown discriminants. The evidence decoder requires `coalesced_aliases === 0`; it never accepts raw source payloads as an alternative schema. Nullable recovered timeline timestamps remain nullable. Datetimes are validated RFC3339 strings, positive IDs are integral, and `health_score` is nullable `0..100`.
 
-- [ ] **Step 4: Update Home to consume pages without count truncation**
+`serializeDirectoryRequest()` starts with a fresh `URLSearchParams`, emits keys in this canonical order, and sorts/deduplicates set-valued IDs/enums before repeating them:
 
-`loadAllContacts()` loops over `contactDirectory`, stops on `page >= page_count`, and returns rows. It does not infer completion from exactly 100 records. Existing partial-region behavior remains unchanged.
+```text
+query, stage, owner_actor_id, assignee_actor_id, tag, source, origin,
+health_min, health_max, birthday_month, anniversary_month, smart_view,
+sort, direction, page, page_size
+```
 
-- [ ] **Step 5: Run frontend tests/typecheck and commit**
+It omits blank/default-absent values, never appends `undefined`, and encodes through `URLSearchParams` only. Expose exactly:
+
+```ts
+export type ContactsApi = Readonly<{
+  directory: (request: ContactDirectoryRequest, options?: { signal?: AbortSignal }) => Promise<ContactDirectoryPage>;
+  detail: (id: number, options?: { signal?: AbortSignal }) => Promise<ContactDetail>;
+  neighbors: (id: number, request: ContactDirectoryRequest, options?: { signal?: AbortSignal }) => Promise<ContactNeighbors>;
+  workspace: (id: number, options?: { signal?: AbortSignal }) => Promise<ContactWorkspaceSummary>;
+  timeline: (id: number, cursor: string | null, pageSize: number, options?: { signal?: AbortSignal }) => Promise<ContactTimelinePage>;
+  section: (id: number, section: Exclude<ContactSectionName, 'timeline'>, page: number, pageSize: number, options?: { signal?: AbortSignal }) => Promise<ContactSectionPage>;
+  evidence: (id: number, options?: { signal?: AbortSignal }) => Promise<ContactEvidence>;
+  celebrations: (month: number, options?: { signal?: AbortSignal }) => Promise<ContactCelebrations>;
+  create: (input: ContactCreateInput, options?: { signal?: AbortSignal }) => Promise<ContactDetail>;
+  update: (id: number, input: ContactUpdateInput, options?: { signal?: AbortSignal }) => Promise<ContactDetail>;
+  bulk: (input: ContactBulkInput, options?: { signal?: AbortSignal }) => Promise<ContactBulkResult>;
+}>;
+```
+
+`section()` maps `opportunities`, `smart_plans`, `notes`, and `saved_searches` to their route segment; task sections map to `/tasks?state=to_do|completed|archived`. Timeline forwards the opaque cursor unchanged through `URLSearchParams`. Every method validates positive IDs and page bounds before fetch.
+
+Tests pin the full canonical URL, repeated filters, reserved characters, stable sorting, omitted values, decoder rejection for every discriminated union, nullable timeline time, evidence constants, authenticated headers, 404/422 propagation, and signal forwarding.
+
+- [ ] **Step 3: Preserve legacy consumers through a decoded adapter**
+
+`api.ts` imports `commandJson` and named decoders. Replace its private unchecked JSON cast without changing unrelated public method signatures. `commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page.
+
+Add a separate `commandApi.contactDirectory(request, options)` delegate to `contactsApi.directory` for gradual compatibility. Tests assert:
+
+```ts
+it('keeps the legacy contacts URL and decoded array shape', async () => {
+  await expect(commandApi.contacts(100, 100)).resolves.toEqual(legacyRows);
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining('/contacts?limit=100&offset=100'),
+    expect.anything(),
+  );
+});
+```
+
+Malformed legacy rows now fail closed with `CommandDecodeError`; no caller receives partially decoded data.
+
+- [ ] **Step 4: Make Home page-aware, abortable, and complete**
+
+Change `CommandHomeApi` to expose `contactDirectory(request, options?)`, not the legacy offset method. Add:
+
+```ts
+export async function loadAllContacts(
+  api: Pick<CommandHomeApi, 'contactDirectory'>,
+  signal?: AbortSignal,
+): Promise<readonly ContactDirectoryRow[]>;
+```
+
+It requests pages `1..page_count` at `page_size=100`, with `smart_view='all'`, `sort='name'`, and `direction='asc'`, forwards one signal to every request, and checks these invariants on every page: stable `total/page_count/page_size/sort/direction`, response page equals request, no duplicate contact ID, no page beyond the first is empty, collected length never exceeds total, and final length equals total. `total=0,page_count=0,rows=[]` returns immediately. Drift throws `CommandDecodeError("contacts", "stable complete pagination")`; abort propagates unchanged. Tests prove all 366 contacts are loaded across four pages, not truncated at 100, and cover zero, duplicate IDs, total drift, early empty page, final-count mismatch, and abort.
+
+Home maps the decoded directory row into its existing `Contact` view explicitly and retains region-isolated error handling: a Contacts failure marks only `errors.contacts`; it does not erase tasks, opportunities, celebrations, goals, or briefing.
+
+- [ ] **Step 5: Run frontend contracts and commit**
 
 ```bash
 cd frontend
-npm test -- src/lib/command/contacts.test.ts src/lib/command/api.test.ts src/lib/command/home.test.ts
-npm run typecheck
-git add src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
-  src/lib/command/api.ts src/lib/command/api.test.ts src/lib/command/home.ts \
+npm test -- \
+  src/lib/command/http.test.ts \
+  src/lib/command/contacts.test.ts \
+  src/lib/command/api.test.ts \
   src/lib/command/home.test.ts
+npm run typecheck
+git add src/lib/command/http.ts src/lib/command/http.test.ts \
+  src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
+  src/lib/command/api.ts src/lib/command/api.test.ts \
+  src/lib/command/home.ts src/lib/command/home.test.ts
 git commit -m "feat: add typed Command contacts client"
 ```
 
@@ -1052,43 +1451,133 @@ git commit -m "feat: add typed Command contacts client"
 - Create: `frontend/src/components/command/contacts/ContactsToolbar.tsx`
 - Create: `frontend/src/components/command/contacts/ContactsTable.tsx`
 - Create: `frontend/src/components/command/contacts/ContactCreateDrawer.tsx`
+- Create: `frontend/src/components/command/contacts/useContactDirectoryQuery.ts`
+- Create: `frontend/src/components/command/contacts/useContactDirectoryQuery.test.tsx`
 - Create: `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`
+- Modify: `frontend/src/components/command/shell/CommandShell.tsx`
+- Modify: `frontend/src/components/command/shell/CommandShell.test.tsx`
+- Modify: `frontend/src/components/command/command-shell.css`
 - Modify: `frontend/src/app/admin/command/contacts/page.tsx`
 
-- [ ] **Step 1: Write failing component tests**
+- [ ] **Step 1: Mount the existing toast system once at the authenticated shell**
 
-Render synthetic pages and assert:
+Wrap the complete shell, including rail/header/mobile navigation/canvas, in `CommandToastProvider`; do not mount another provider inside Contacts. `CommandShell.test.tsx` renders a child that calls `useCommandToast`, clicks a trigger, and asserts one live-region toast, one dismiss action, and no provider error. It also proves route changes do not duplicate the viewport. Add `.command-toast-viewport` positioning above overlays, 16px edge spacing, pointer-event isolation, stacked 8px gaps, and the existing SWS tone variables to `command-shell.css`; toast buttons remain at least 44×44px and focus-visible.
 
-- full-width light Command canvas with module header, total, SmartViews, search, filters, column menu, create action;
-- 48–56px dense rows with selection, name, primary methods, owner/assignee, tags, stage, health, last activity, origin/evidence;
-- server-backed sort/filter/page changes and URL query persistence;
-- row Enter/Space activation;
-- select-all applies only to the visible page and bulk actions send explicit IDs;
-- loading, true empty, no-results, evidence-only, partial, error, and retry states;
-- source-only and legacy-only badges never read as recovered normalized records;
-- add drawer uses shared overlay/focus behavior and creates an internal record.
-
-- [ ] **Step 2: Run and confirm RED**
-
-Run: `cd frontend && npm test -- src/components/command/contacts/ContactsWorkspace.test.tsx`
-
-Expected: FAIL because the current dark four-column table does not use the shared shell/table contracts.
-
-- [ ] **Step 3: Implement the directory from shared primitives**
-
-Compose `CommandModuleHeader`, `CommandDataTable`, `CommandStatePanel`, `CommandEvidencePanel`, `CommandOverlay`, and toast context. Use an abortable/debounced server request; discard stale responses by request ID. Store filter/sort/page in `URLSearchParams`, reset page to 1 when filters change, and never load all 366 rows into the browser just to filter.
-
-Desktop geometry follows `contacts-live-current.png` at 1800×982 with SWS tokens; mobile collapses low-priority columns and preserves a horizontally scrollable table region. All icons come from Phosphor and every interactive target is at least 44×44px.
-
-- [ ] **Step 4: Run component/full frontend checks and commit**
+Run:
 
 ```bash
 cd frontend
-npm test -- src/components/command/contacts/ContactsWorkspace.test.tsx \
+npm test -- src/components/command/shell/CommandShell.test.tsx
+```
+
+Expected: FAIL because `CommandShell` does not mount `CommandToastProvider`.
+
+- [ ] **Step 2: Implement and test the canonical URL-query adapter**
+
+`useContactDirectoryQuery.ts` owns only these parameters:
+
+```ts
+export const CONTACT_QUERY_KEYS = [
+  'query', 'stage', 'owner_actor_id', 'assignee_actor_id', 'tag', 'source', 'origin',
+  'health_min', 'health_max', 'birthday_month', 'anniversary_month', 'smart_view',
+  'sort', 'direction', 'page', 'page_size',
+] as const;
+
+export type ContactDirectoryQueryController = Readonly<{
+  request: ContactDirectoryRequest;
+  replace: (patch: Partial<ContactDirectoryRequest>) => void;
+  reset: () => void;
+}>;
+```
+
+The parser accepts only Task 5C enums and bounded integers. Invalid owned values resolve to defaults (`page=1`, `page_size=50`, `smart_view=all`, `sort=name`, `direction=asc`) and the next canonical replace removes them; repeated `tag/source/origin` values are parsed, deduplicated, and sorted. The serializer preserves unrelated query parameters, deletes all owned keys before writing canonical values in `CONTACT_QUERY_KEYS` order, and omits default/empty values except `page` and `page_size`. `replace()` resets page to 1 whenever any filter, SmartView, sort, direction, or page-size value changes; an explicit page-only patch preserves filters. It calls `router.replace(pathname + '?' + params, {scroll:false})` and never writes browser history per keystroke. `initialView` is used only when `smart_view` is absent, supporting the existing Home deep links; canonical Home links use `smart_view=never_contacted|recently_active|birthdays_this_month|anniversaries_this_month`.
+
+Tests cover round trip, invalid enum/range cleanup, repeated-value ordering, reserved characters, unrelated-param preservation, initial-view precedence, reset-to-page-one, explicit pagination, and deterministic output after reordered input parameters.
+
+- [ ] **Step 3: Write the full directory interaction contract and confirm RED**
+
+`ContactsWorkspace.test.tsx` uses a typed fake `ContactsApi`, fake router/search params, and fake timers. It asserts:
+
+- a full-width light canvas with module title, exact total, SmartView tabs, search, filter trigger, column menu, Add Contact, and server page controls;
+- columns in default order: select, Name, Primary contact, Owner / Assignee, Tags, Stage, Health, Last activity, Origin / evidence, row action;
+- 52px body rows, sticky 44px header, 44px minimum controls, visible keyboard focus, and no card-per-contact layout at desktop width;
+- sort/filter/SmartView/page updates call the server with the canonical request and persist in the URL;
+- search waits exactly 250ms, aborts the superseded request, and ignores a stale response even if the mock resolves it after the latest request;
+- one initial fetch under React Strict Mode, retry creates one fresh request, and unmount aborts without an error toast;
+- Enter/Space opens `/admin/command/contacts/{id}` unless focus is on checkbox/menu/action; pointer row click uses the same URL;
+- page checkbox selects only visible IDs, indeterminate state is correct, navigation/filter changes clear selection, and bulk stage/tag operations send the explicit sorted IDs once;
+- bulk success replaces/refetches the page, clears selection, and raises a success toast; 409/422 preserves selection and raises an error toast;
+- loading skeleton, global true-empty, filtered no-results with Clear filters, evidence-only rows, partial/shell limitation, recoverable request error, and retry all have distinct text/actions;
+- `recovered`, `lead_backed`, `legacy_only`, and `internal_only` badges are distinct; source-only evidence never uses the normalized/recovered-success badge;
+- Add Contact opens the shared overlay, traps/restores focus, closes on Escape only when not submitting, validates fields, calls `contactsApi.create`, announces success, closes, and navigates to the returned internal contact.
+
+Run:
+
+```bash
+cd frontend
+npm test -- src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/components/command/contacts/ContactsWorkspace.test.tsx
+```
+
+Expected: FAIL because the query adapter and dense server-backed workspace do not exist.
+
+- [ ] **Step 4: Build the abortable directory controller and exact states**
+
+`ContactsWorkspace` receives optional test injection only through this stable boundary:
+
+```ts
+export type ContactsWorkspaceProps = Readonly<{
+  initialView?: ContactSmartView;
+  api?: ContactsApi;
+}>;
+```
+
+Production defaults to `contactsApi`. Keep `searchDraft` separate from the committed URL request. A 250ms timer commits trimmed search; all other controls commit immediately. For each request: abort the previous controller, increment a monotonically increasing request ID, set loading, call `api.directory(request,{signal})`, and apply success/error only when both ID and signal still match. `AbortError` is silent. Retain the prior page under a subtle refreshing state, but clear it when filters change to a universe that cannot describe those rows. Never fetch all 366 rows for client-side filtering or sort.
+
+State rules are exact:
+
+```text
+loading + no page       -> table-shaped skeleton
+success total=0 + no active filters -> "No contacts yet" and Add Contact
+success rows=[] + active filters     -> "No contacts match these filters" and Clear filters
+row with recovered source but no normalized children -> "Source evidence only"
+row/evidence with partial|shell|error capture         -> "Recovered with limitations"
+non-abort request failure                             -> error panel + Retry
+refreshing prior page                                 -> aria-busy table, controls remain usable
+```
+
+The table renders only server rows, supplies an accessible caption, uses `aria-sort`, labels checkboxes with contact display labels, and uses a native table inside a horizontally scrollable region. Selection is a `Set<number>` limited to current row IDs. Bulk action menus expose only Task 6 actions. The create drawer fields exactly match `ContactCreateInput`; recovered/provider fields are read-only and absent.
+
+- [ ] **Step 5: Apply Command geometry and responsive behavior in shared CSS**
+
+Use existing SWS color/type/spacing tokens in `command-shell.css`; introduce only `command-contacts-*` structural classes. At the 1800×982 reference viewport the content fills the Command canvas, toolbar controls remain on one line, the table uses a 44px header and 52px rows, Name is sticky after selection, and page controls remain below the table. Do not reproduce source-brand colors or add another rail/header.
+
+At `max-width: 1100px`, hide Owner/Assignee and evidence columns behind the column menu. At `max-width: 760px`, keep Name, Primary contact, Stage, and action visible, move filters into the shared overlay, and retain horizontal scroll rather than changing rows into cards. Print hides selection, actions, toolbar, bulk controls, pagination, and toast viewport. Icons are Phosphor with `aria-hidden`; icon-only buttons have explicit labels. Text and focus contrast use the existing accessible tokens.
+
+- [ ] **Step 6: Wire the route, run focused/full checks, and commit**
+
+`page.tsx` renders `<ContactsWorkspace />` without fetching or duplicating state. Home shortcut links use the canonical `smart_view` values. Preserve the current `/admin/command/contacts/[contactId]` navigation contract for Task 9.
+
+```bash
+cd frontend
+npm test -- \
+  src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/components/command/contacts/ContactsWorkspace.test.tsx \
   src/components/command/ui/CommandUi.test.tsx \
-  src/components/command/shell/CommandShell.test.tsx
+  src/components/command/shell/CommandShell.test.tsx \
+  src/lib/command/contacts.test.ts \
+  src/lib/command/home.test.ts
 npm run typecheck
-git add src/components/command/ContactsWorkspace.tsx src/components/command/contacts \
+git add src/components/command/ContactsWorkspace.tsx \
+  src/components/command/contacts/ContactsToolbar.tsx \
+  src/components/command/contacts/ContactsTable.tsx \
+  src/components/command/contacts/ContactCreateDrawer.tsx \
+  src/components/command/contacts/useContactDirectoryQuery.ts \
+  src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/components/command/contacts/ContactsWorkspace.test.tsx \
+  src/components/command/shell/CommandShell.tsx \
+  src/components/command/shell/CommandShell.test.tsx \
+  src/components/command/command-shell.css \
   src/app/admin/command/contacts/page.tsx
 git commit -m "feat: rebuild Command contacts directory"
 ```
