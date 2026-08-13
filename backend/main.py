@@ -1,12 +1,13 @@
 import asyncio
+import logging
 import os
 import random
-from datetime import datetime, timezone
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 import traceback
-import logging
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import settings
 from routers import (
@@ -227,11 +228,13 @@ async def stop_background_loops() -> None:
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logging.error(f"Global exception caught: {exc}")
-    logging.error(traceback.format_exc())
+    # This is the final privacy boundary for failures raised while FastAPI is
+    # unwinding yield dependencies (including transaction finalizers). Never
+    # log or return exception text, request values, database paths, or payloads.
+    logging.error("Unhandled application exception")
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "error": str(exc)},
+        content={"detail": "Internal Server Error"},
     )
 
 
