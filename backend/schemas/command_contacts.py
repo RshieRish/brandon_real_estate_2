@@ -40,6 +40,7 @@ from services.command_contact_contracts import (
     ContactUpdateCommand,
     JsonValue,
     SortDirection,
+    UnsetType,
 )
 from services.command_contact_contracts import (
     ContactBulkAddTag as ContactBulkAddTagCommand,
@@ -58,11 +59,24 @@ _DATE_ONLY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
 def _date_only_input(value: object) -> object:
-    if isinstance(value, datetime) or (
-        isinstance(value, str) and _DATE_ONLY.fullmatch(value) is None
+    if value is None or type(value) is date:
+        return value
+    if type(value) is str and _DATE_ONLY.fullmatch(value) is not None:
+        return value
+    raise ValueError("contact date must be an exact date")
+
+
+def _canonical_query_integer(value: object) -> object:
+    if type(value) is int:
+        return value
+    if (
+        type(value) is str
+        and value.isascii()
+        and value.isdigit()
+        and (value == "0" or not value.startswith("0"))
     ):
-        raise ValueError("contact date must not include a time")
-    return value
+        return int(value)
+    raise ValueError("query integer must be a canonical unsigned decimal")
 
 
 class ContactBoundaryModel(BaseModel):
@@ -86,6 +100,30 @@ class ContactDirectoryQueryIn(ContactBoundaryModel):
     direction: SortDirection = SortDirection.ASC
     page: Annotated[StrictInt, Field(ge=1)] = 1
     page_size: BoundedPageSize = 50
+
+    @field_validator(
+        "health_min",
+        "health_max",
+        "birthday_month",
+        "anniversary_month",
+        "page",
+        "page_size",
+        mode="before",
+    )
+    @classmethod
+    def _canonical_numeric_query_value(cls, value: object) -> object:
+        if value is None:
+            return None
+        return _canonical_query_integer(value)
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def _canonical_numeric_query_list(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(  # noqa: TRY004 - Pydantic wraps ValueError only
+                "tag must be a repeated query parameter"
+            )
+        return [_canonical_query_integer(item) for item in value]
 
     @model_validator(mode="after")
     def _valid_health_range(self) -> ContactDirectoryQueryIn:
@@ -396,7 +434,7 @@ class ContactCelebrationsOut(ContactBoundaryModel):
     anniversaries: list[ContactCelebrationRowOut] = Field(default_factory=list)
 
 
-class ContactCreateIn(ContactBoundaryModel):
+class _ContactCreateFields(ContactBoundaryModel):
     first_name: str = Field(min_length=1, max_length=120)
     last_name: str = Field(default="", max_length=120)
     email: str | None = Field(default=None, max_length=255)
@@ -410,6 +448,8 @@ class ContactCreateIn(ContactBoundaryModel):
     def _exact_date_or_null(cls, value: object) -> object:
         return _date_only_input(value)
 
+
+class ContactCreateIn(_ContactCreateFields):
     def to_command(self) -> ContactCreateCommand:
         return ContactCreateCommand(**self.model_dump())
 
@@ -440,22 +480,26 @@ class ContactUpdateIn(ContactBoundaryModel):
         return self
 
     def to_command(self) -> ContactUpdateCommand:
-        values: dict[str, object] = {}
-        for field_name in (
-            "first_name",
-            "last_name",
-            "email",
-            "phone",
-            "stage",
-            "birthday",
-            "anniversary",
-        ):
-            values[field_name] = (
-                getattr(self, field_name)
-                if field_name in self.model_fields_set
-                else UNSET
-            )
-        return ContactUpdateCommand(**values)
+        return ContactUpdateCommand(
+            first_name=self._required_text_update("first_name", self.first_name),
+            last_name=self._required_text_update("last_name", self.last_name),
+            email=self.email if "email" in self.model_fields_set else UNSET,
+            phone=self.phone if "phone" in self.model_fields_set else UNSET,
+            stage=self._required_text_update("stage", self.stage),
+            birthday=(self.birthday if "birthday" in self.model_fields_set else UNSET),
+            anniversary=(
+                self.anniversary if "anniversary" in self.model_fields_set else UNSET
+            ),
+        )
+
+    def _required_text_update(
+        self, field_name: str, value: str | None
+    ) -> str | UnsetType:
+        if field_name not in self.model_fields_set:
+            return UNSET
+        if value is None:
+            raise ValueError("required contact fields cannot be null")
+        return value
 
 
 class ContactBulkSetStage(ContactBoundaryModel):
@@ -492,18 +536,25 @@ class ContactBulkRequest(ContactBoundaryModel):
 
     def to_command(self) -> ContactBulkCommand:
         if isinstance(self.action, ContactBulkSetStage):
-            action = ContactBulkSetStageCommand(
-                action=self.action.action, stage=self.action.stage
+            return ContactBulkCommand(
+                contact_ids=tuple(self.contact_ids),
+                action=ContactBulkSetStageCommand(
+                    action=self.action.action, stage=self.action.stage
+                ),
             )
-        elif isinstance(self.action, ContactBulkAddTag):
-            action = ContactBulkAddTagCommand(
+        if isinstance(self.action, ContactBulkAddTag):
+            return ContactBulkCommand(
+                contact_ids=tuple(self.contact_ids),
+                action=ContactBulkAddTagCommand(
+                    action=self.action.action, tag_id=self.action.tag_id
+                ),
+            )
+        return ContactBulkCommand(
+            contact_ids=tuple(self.contact_ids),
+            action=ContactBulkRemoveTagCommand(
                 action=self.action.action, tag_id=self.action.tag_id
-            )
-        else:
-            action = ContactBulkRemoveTagCommand(
-                action=self.action.action, tag_id=self.action.tag_id
-            )
-        return ContactBulkCommand(contact_ids=tuple(self.contact_ids), action=action)
+            ),
+        )
 
 
 class ContactBulkResultOut(ContactBoundaryModel):
@@ -568,15 +619,26 @@ class ContactSavedSearchCreateIn(ContactBoundaryModel):
 
     @model_validator(mode="after")
     def _validate_service_command(self) -> ContactSavedSearchCreateIn:
-        ContactSavedSearchCreateCommand(name=self.name, criteria=self.criteria)
+        ContactSavedSearchCreateCommand(
+            name=self.name, criteria=self._service_criteria()
+        )
         return self
 
     def to_command(self) -> ContactSavedSearchCreateCommand:
-        return ContactSavedSearchCreateCommand(name=self.name, criteria=self.criteria)
+        return ContactSavedSearchCreateCommand(
+            name=self.name, criteria=self._service_criteria()
+        )
+
+    def _service_criteria(self) -> Mapping[str, JsonValue]:
+        frozen = _freeze_json(self.criteria)
+        if not isinstance(frozen, Mapping):
+            raise TypeError("criteria must be an object")
+        return frozen
 
 
-class ContactImportRowIn(ContactCreateIn):
-    pass
+class ContactImportRowIn(_ContactCreateFields):
+    def to_command(self) -> ContactImportRowCommand:
+        return ContactImportRowCommand(**self.model_dump())
 
 
 class ContactImportIn(ContactBoundaryModel):
@@ -584,9 +646,7 @@ class ContactImportIn(ContactBoundaryModel):
 
     def to_command(self) -> ContactImportCommand:
         return ContactImportCommand(
-            contacts=tuple(
-                ContactImportRowCommand(**row.model_dump()) for row in self.contacts
-            )
+            contacts=tuple(row.to_command() for row in self.contacts)
         )
 
 
@@ -714,14 +774,65 @@ class LegacyContactWorkspaceOut(ContactBoundaryModel):
 
 
 __all__ = [
-    name
-    for name in globals()
-    if name.startswith("Contact")
-    or name
-    in {
-        "LegacyContactOut",
-        "LegacyContactWorkspaceOut",
-        "SavedSearchOut",
-        "canonical_saved_search_criteria",
-    }
+    "ContactActorOut",
+    "ContactAddressOut",
+    "ContactArtifactMetadataOut",
+    "ContactBoundaryModel",
+    "ContactBulkActionIn",
+    "ContactBulkAddTag",
+    "ContactBulkRemoveTag",
+    "ContactBulkRequest",
+    "ContactBulkResultOut",
+    "ContactBulkSetStage",
+    "ContactCapturePositionOut",
+    "ContactCelebrationRowOut",
+    "ContactCelebrationValueOut",
+    "ContactCelebrationsOut",
+    "ContactCreateIn",
+    "ContactDeletedOut",
+    "ContactDetailOut",
+    "ContactDirectoryPageOut",
+    "ContactDirectoryQueryIn",
+    "ContactDirectoryRowOut",
+    "ContactEvidenceOut",
+    "ContactImportIn",
+    "ContactImportResultOut",
+    "ContactImportRowIn",
+    "ContactLegacySyncResultOut",
+    "ContactMaterializedOut",
+    "ContactNeighborsOut",
+    "ContactNoteCreateIn",
+    "ContactNoteCreatedOut",
+    "ContactNoteOccurrenceOut",
+    "ContactOccurrenceOut",
+    "ContactOpportunityOccurrenceOut",
+    "ContactRecoveredProfileOut",
+    "ContactSavedSearchCreateIn",
+    "ContactSavedSearchCreatedOut",
+    "ContactSavedSearchOccurrenceOut",
+    "ContactSectionEvidenceOut",
+    "ContactSectionPageOut",
+    "ContactSectionRowOut",
+    "ContactSmartPlanOccurrenceOut",
+    "ContactSourceMetadataOut",
+    "ContactSourceOnlyOut",
+    "ContactTagAssignmentOut",
+    "ContactTagOut",
+    "ContactTagRemovalOut",
+    "ContactTaskOccurrenceOut",
+    "ContactTimelineEntryOut",
+    "ContactTimelinePageOut",
+    "ContactUpdateIn",
+    "ContactWorkspaceSummaryOut",
+    "LegacyBookingOut",
+    "LegacyContactOut",
+    "LegacyContactWorkspaceOut",
+    "LegacyNoteOut",
+    "LegacyOpportunityOut",
+    "LegacySavedSearchOut",
+    "LegacySmartPlanOut",
+    "LegacyTaskOut",
+    "LegacyTimelineOut",
+    "SavedSearchOut",
+    "canonical_saved_search_criteria",
 ]

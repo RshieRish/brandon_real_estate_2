@@ -5,10 +5,14 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Annotated
 
 import pytest
+from fastapi import FastAPI, Query
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from schemas import command_contacts
 from schemas.command_contacts import (
     ContactArtifactMetadataOut,
     ContactBoundaryModel,
@@ -20,6 +24,7 @@ from schemas.command_contacts import (
     ContactDirectoryQueryIn,
     ContactEvidenceOut,
     ContactImportIn,
+    ContactImportRowIn,
     ContactMaterializedOut,
     ContactNoteCreateIn,
     ContactNoteOccurrenceOut,
@@ -51,6 +56,7 @@ from services.command_contact_contracts import (
     ContactDirectoryPage,
     ContactDirectoryRow,
     ContactEvidence,
+    ContactImportRowCommand,
     ContactOriginFilter,
     ContactRecoveredProfile,
     ContactSection,
@@ -67,6 +73,18 @@ from services.command_contact_contracts import (
 )
 
 NOW = datetime(2026, 8, 13, 14, 30, tzinfo=UTC)
+
+
+def _query_test_client() -> TestClient:
+    app = FastAPI()
+
+    @app.get("/contacts")
+    async def contacts(
+        filters: Annotated[ContactDirectoryQueryIn, Query()],
+    ) -> dict[str, object]:
+        return filters.model_dump(mode="json")
+
+    return TestClient(app)
 
 
 def _directory_row() -> ContactDirectoryRow:
@@ -158,6 +176,56 @@ def test_directory_query_maps_every_repeated_filter_without_clamping():
 def test_directory_query_rejects_invalid_integer_boundaries(field, value):
     with pytest.raises(ValidationError):
         ContactDirectoryQueryIn.model_validate({field: value})
+
+
+def test_directory_query_accepts_canonical_numeric_url_values_and_repeated_tags():
+    response = _query_test_client().get(
+        "/contacts",
+        params=[
+            ("page", "2"),
+            ("page_size", "100"),
+            ("health_min", "10"),
+            ("health_max", "90"),
+            ("birthday_month", "8"),
+            ("anniversary_month", "9"),
+            ("tag", "3"),
+            ("tag", "1"),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        **ContactDirectoryQueryIn().model_dump(mode="json"),
+        "page": 2,
+        "page_size": 100,
+        "health_min": 10,
+        "health_max": 90,
+        "birthday_month": 8,
+        "anniversary_month": 9,
+        "tag": [3, 1],
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("page", "+1"),
+        ("page", "01"),
+        ("page", "1.0"),
+        ("page", "true"),
+        ("page_size", " 50"),
+        ("health_min", "-1"),
+        ("birthday_month", "08"),
+        ("tag", "+1"),
+        ("tag", "01"),
+        ("tag", "1.0"),
+        ("tag", "true"),
+    ],
+)
+def test_directory_query_rejects_noncanonical_numeric_url_values(field, value):
+    response = _query_test_client().get("/contacts", params=[(field, value)])
+
+    assert response.status_code == 422
 
 
 def test_directory_page_and_detail_adapt_framework_neutral_dtos():
@@ -265,6 +333,49 @@ def test_contact_inputs_reject_datetime_values_for_exact_date_fields(
         model.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        0,
+        86_400,
+        -86_400,
+        0.0,
+        True,
+        b"2026-08-13",
+        datetime(2026, 8, 13, tzinfo=UTC),
+        "2026-08-13T00:00:00Z",
+    ],
+)
+@pytest.mark.parametrize("field", ["birthday", "anniversary"])
+def test_all_contact_write_inputs_reject_non_exact_date_values(field, value):
+    create_payload = {"first_name": "Synthetic", field: value}
+    update_payload = {field: value}
+    import_payload = {
+        "contacts": [{"first_name": "Synthetic", field: value}],
+    }
+
+    for model, payload in (
+        (ContactCreateIn, create_payload),
+        (ContactUpdateIn, update_payload),
+        (ContactImportIn, import_payload),
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate(payload)
+
+
+@pytest.mark.parametrize("value", [None, date(2026, 8, 13), "2026-08-13"])
+def test_all_contact_write_inputs_accept_only_exact_date_values(value):
+    assert ContactCreateIn(first_name="Synthetic", birthday=value).birthday == (
+        date(2026, 8, 13) if value is not None else None
+    )
+    assert ContactUpdateIn(birthday=value).birthday == (
+        date(2026, 8, 13) if value is not None else None
+    )
+    assert ContactImportIn(
+        contacts=[{"first_name": "Synthetic", "birthday": value}]
+    ).contacts[0].birthday == (date(2026, 8, 13) if value is not None else None)
+
+
 def test_every_new_contact_boundary_forbids_extra_mapping_fields():
     assert ContactBoundaryModel.model_config["extra"] == "forbid"
     assert ContactBoundaryModel.model_config["from_attributes"] is True
@@ -368,6 +479,32 @@ def test_note_saved_search_and_import_inputs_build_strict_commands():
         '{"nested":{"a":1,"b":2},"stage":"lead"}'
     )
     assert len(imported.contacts) == 1
+
+
+def test_import_row_builds_the_exact_import_row_command_type():
+    row = ContactImportRowIn(first_name="Synthetic")
+
+    command = row.to_command()
+    imported = ContactImportIn(contacts=[row]).to_command()
+
+    assert type(command) is ContactImportRowCommand
+    assert type(imported.contacts[0]) is ContactImportRowCommand
+
+
+def test_schema_exports_are_explicit_and_never_expose_service_commands():
+    assert {
+        "ContactDirectoryQueryIn",
+        "ContactOccurrenceOut",
+        "ContactSectionRowOut",
+        "ContactBulkActionIn",
+        "LegacyContactWorkspaceOut",
+        "canonical_saved_search_criteria",
+    } <= set(command_contacts.__all__)
+    assert {
+        "ContactCreateCommand",
+        "ContactDirectoryFilters",
+        "ContactBulkCommand",
+    }.isdisjoint(command_contacts.__all__)
 
 
 @pytest.mark.parametrize(
