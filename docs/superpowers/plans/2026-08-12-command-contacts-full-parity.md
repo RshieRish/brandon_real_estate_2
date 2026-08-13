@@ -3727,64 +3727,221 @@ git commit -m "feat: add full Command contact detail workspace"
 ### Task 10: Verify browser behavior, accessibility, and visual parity
 
 **Files:**
+- Modify: `frontend/playwright.config.ts`
+- Create: `frontend/e2e/fixtures/command-contacts.ts`
+- Modify: `frontend/e2e/fixtures/command.ts`
+- Modify: `frontend/e2e/fixtures/command-home.json`
 - Create: `frontend/e2e/command-contacts.spec.ts`
 - Create: `frontend/e2e/command-contacts-mobile.spec.ts`
 - Create: `frontend/e2e/command-contacts-accessibility.spec.ts`
 - Create: `frontend/e2e/command-contacts-visual.spec.ts`
+- Modify: `frontend/e2e/command-home.spec.ts`
+- Modify: `frontend/e2e/command-shell.spec.ts`
+- Modify: `frontend/e2e/command-mobile.spec.ts`
+- Modify: `frontend/e2e/command-accessibility.spec.ts`
+- Modify: `frontend/e2e/command-visual.spec.ts`
+- Modify: `frontend/e2e/command-visual.spec.ts-snapshots/`
+- Create: `frontend/e2e/command-contacts-visual.spec.ts-snapshots/`
 - Modify: `frontend/e2e/visual/command-reference-manifest.ts`
+- Modify: `frontend/src/test/command-reference-manifest.test.ts`
 - Modify: `frontend/design-qa.md`
 
-- [ ] **Step 1: Add deterministic browser fixtures/routes**
+- [ ] **Step 1: RED-check Playwright discovery, stale fixtures, and the visual manifest**
 
-Use synthetic names/data and intercept every contact endpoint. Include 317 recovered identities/317 positions/zero aliases, 51 lead-backed contacts partitioned into two verified overlaps and 49 legacy-only contacts, five redacted placeholder-evidence fixtures identified only by fake ordinals/hashes and field categories, every view state, one materialized and one source-only cross-domain row, one sentinel birthday, one yearless birthday, and one verified anniversary. Directory fixtures expose only exact Task 5C origin/source facts; the materialized/source-only and capture-quality fixtures belong to the Task 9 detail section/evidence endpoints whose DTOs carry those discriminants.
+First make the four new filenames discoverable by exactly one existing Chromium project each. Preserve the existing files in every project and extend `frontend/playwright.config.ts` with this exact `testMatch` ownership:
 
-- [ ] **Step 2: Write Playwright journeys**
-
-Cover directory search/filter/sort/page, selection/bulk action, add drawer, arbitrary nonblank bounded stage filter/bulk/create values, contact activation, previous/next/jump, all eight views, nested task states, evidence download request, detail partial/error evidence and retry, mobile profile disclosure, keyboard-only operation, focus restoration, escape, no horizontal page overflow, and browser console error gate.
-
-Run axe on directory, detail Timeline, source-only Tasks, and evidence drawer. Verify tab/tabpanel relationships, live announcements, headings, table names, target sizes, forced colors, and reduced motion.
-
-- [ ] **Step 3: Add only valid visual references**
-
-Use logical reference aliases resolved through the operator-only private QA manifest:
-
-```text
-kw_command_ui_screenshots/contacts-live-current.png              1800×982
-contact-detail-live                                                1793×1166
-contact-opportunities-live                                         observed detail tab
-contact-notes-live                                                 observed detail tab
+```ts
+{
+  name: 'command-desktop',
+  testMatch: [
+    '**/command-shell.spec.ts',
+    '**/command-home.spec.ts',
+    '**/command-contacts.spec.ts',
+  ],
+  use: { ...devices['Desktop Chrome'], viewport: { width: 1800, height: 982 } },
+},
+{
+  name: 'command-mobile',
+  testMatch: ['**/command-mobile.spec.ts', '**/command-contacts-mobile.spec.ts'],
+  use: { ...devices['iPhone 14'], browserName: 'chromium', viewport: { width: 390, height: 844 } },
+},
+{
+  name: 'command-a11y',
+  testMatch: ['**/command-accessibility.spec.ts', '**/command-contacts-accessibility.spec.ts'],
+  use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+},
+{
+  name: 'command-visual',
+  testMatch: ['**/command-visual.spec.ts', '**/command-contacts-visual.spec.ts'],
+  use: { ...devices['Desktop Chrome'], viewport: { width: 1800, height: 982 } },
+},
 ```
 
-The private QA manifest maps those three logical aliases to the recovered files at runtime. Do not copy a contact name, provider ID, email, phone, or other private filename component into source-controlled test names, snapshots, or documentation.
+Add failing manifest Vitest coverage in `frontend/src/test/command-reference-manifest.test.ts` for the logical aliases, allowed mask reasons, invalid private-manifest paths, and limitation exclusions described in Step 4. Add failing Playwright assertions for the required journeys before expanding the fixtures. Existing `command-home.json`, `fixtures/command.ts`, and the Home/shell/mobile/accessibility/visual specs are explicitly stale because Home now reads paged `/contacts/directory` data and Contacts navigation no longer consumes the old raw-array-only fixture. Update those existing tests in this task; do not delete or weaken their Home/shell contracts.
 
-Do not treat `contacts-list.png`, retry images, blank shells, redirects, or error captures as success targets. Brand-mask only vendor marks/colors and dynamic private text; do not mask geometry, row density, tabs, toolbar, split layout, or drawer bounds.
-
-- [ ] **Step 4: Run browser and production-build gates**
+Run:
 
 ```bash
 cd frontend
+npx playwright test --list
+npx vitest run src/test/command-reference-manifest.test.ts
 npx playwright test e2e/command-contacts.spec.ts \
   e2e/command-contacts-mobile.spec.ts \
   e2e/command-contacts-accessibility.spec.ts \
   e2e/command-contacts-visual.spec.ts
-npm test
+```
+
+Expected RED: all four new specs appear under only their mapped projects; the new journey/manifest expectations fail because the Contacts fixture, private alias resolver, and current snapshots do not exist. A new spec reported in two projects is a configuration failure, not acceptable duplication.
+
+- [ ] **Step 2: Build one deterministic, stateful, fail-closed Contacts fixture**
+
+Create `frontend/e2e/fixtures/command-contacts.ts` as the only generator for Contacts browser data and compose it from `frontend/e2e/fixtures/command.ts`. Generate exactly 366 internally consistent `ContactDirectoryRow` records: 317 recovered identities with 317 distinct contact-scoped capture positions, including exactly two reviewed lead-backed overlaps, plus 49 lead-backed `legacy_only` contacts with no recovered capture position. The directory and detail IDs, neighbors, internal workspace records, section rows, evidence ownership, mutations, and artifact IDs must all refer to the same generated contacts. The global evidence totals are exactly:
+
+```text
+provider_contact_rows=317
+resolved_provider_identities=317
+coalesced_aliases=0
+lead_backed_contacts=51
+reviewed_overlaps=2
+legacy_only_contacts=49
+```
+
+Those six numbers are archive-wide aggregates repeated by the accepted evidence response; `capture_positions`, `section_matrix`, and `sources` are only for the active contact. A recovered contact has its own position/eight section cells; a legacy-only contact has no recovered position and cannot inherit another contact's evidence. Supply the exact fields accepted by the current `contacts.ts` decoders and nothing else. Do not add `capture_ordinal`, `evidence_hash`, or `present_fields` as invented test-only response fields; if an already accepted DTO requires an existing positional field, populate only that defined field with a synthetic contract-valid value and do not represent it as a hash or private identity. Directory rows expose only their exact `origins`, `sources`, and `evidence_quality`; materialized/source-only status belongs only to section rows. Include one materialized and one source-only occurrence, all eight captured section states, the three nested task states, one sentinel birthday, one yearless birthday, one verified anniversary, partial evidence, true empty sections, loading, and recoverable failures.
+
+Extend `fixtures/command.ts` without relaxing its current browser-error gate. The exact interception matrix is:
+
+| Boundary | Required behavior |
+|---|---|
+| Route matching | Match exact HTTP method plus normalized path and canonical query; explicitly register `/contacts/directory`, `/contacts/:id`, `/contacts/:id/neighbors`, `/contacts/:id/workspace/summary`, `/contacts/:id/workspace`, `/contacts/:id/timeline`, all section routes, `/contacts/:id/evidence`, `/celebrations`, contact/tag/task mutations, and `/archive/artifacts/:id/content`. A wrong method or unknown endpoint returns deterministic `500 Unexpected Command fixture request` and cannot consume another route's one-shot response. |
+| Authentication | Every `/api/v1/**` request requires exactly `Authorization: Bearer test-admin-token`; missing/wrong auth returns `401`. Keep `/api/v1/auth/me` deterministic and admin-only. |
+| JSON bodies | Parse request JSON, reject malformed JSON, unexpected keys, cross-contact IDs, unsorted/duplicate bulk IDs, or a body that disagrees with the route. Assert exact create/update/bulk/note/search/tag/task bodies in the journey that sends them. Task create accepts only `title`, `contact_id`, `description`, `priority`, and `due_at`; its response must have `status=open`. Captured task state is validated only in section queries and responses. |
+| Directory state | Apply query/filter/sort/page to the complete 366-row in-memory dataset, return the accepted page envelope, preserve the requested `page_size`, and retain it across detail links. Jump is a separate `page_size=10` lookup but its selected detail URL retains the originating directory page size. |
+| Mutations | Stateful create, update, bulk, note delete/create, saved-search create, tag create/assign/remove, and task create update the in-memory stores exactly once; subsequent GETs expose the result. Provide deterministic one-shot `404` and `409` responses without mutating state. |
+| Binary artifact | Fulfill authenticated `GET /api/v1/command/archive/artifacts/:id/content` with deterministic bytes and a binary content type via `body`/headers, never JSON. Assert the bearer header, response bytes, browser download, and failure copy. |
+| Fail closed | Unregistered routes, invalid method/query/body/auth, cross-contact records, and malformed fixture setup fail with privacy-safe diagnostics. No request falls through to a live backend or network. |
+
+Update `frontend/e2e/fixtures/command-home.json` to the current Home-compatible facts and update `command-home.spec.ts`, `command-shell.spec.ts`, `command-mobile.spec.ts`, `command-accessibility.spec.ts`, and `command-visual.spec.ts` wherever their old raw Contacts request, role/name, navigation, or screenshot expectation has gone stale. This is explicit regression work: all prior Home, shell, mobile, axe, and visual checks must remain runnable against the shared fixture after the 366-row addition. Use roles, labels, and web-first assertions; use no CSS/XPath locator when a role/label contract exists and no `waitForTimeout`.
+
+- [ ] **Step 3: Implement the desktop, mobile, and accessibility browser matrix**
+
+In `command-contacts.spec.ts`, cover the directory's true empty, filtered-empty, loading, refresh, error/retry, 366-total first page, search debounce/result, arbitrary nonblank stage, source/origin/tag/filter combinations, stable ascending/descending sort, pagination, row activation, visible-page selection, selection clearing, exact sorted bulk body, bulk success, `409` preservation, Add Contact focus/validation/body/success, and browser `console` plus `pageerror` cleanliness. Cover detail loading and recoverable error, explicit `404`, outside-current-universe `409`, previous/next, and jump lookup with `page_size=10` while the selected URL retains the original directory `page_size`.
+
+Exercise all eight top-level panels as tabs and tabpanels—Timeline, Opportunities, SmartPlans, Tasks, Notes, Saved Searches, Source Evidence, and Bookings—plus the To Do, Completed, and Archived nested task panels. `Source Evidence` is a normal `tab`/`tabpanel`, not a drawer or dialog. Verify source-only versus materialized labels, partial/empty evidence, the exact archive-global `317/317/0` and `51/2/49` totals, contact-scoped capture positions, sentinel/yearless/verified celebration wording, internal-only mutation boundaries, authenticated artifact bytes/download, retry, focus restoration, Escape behavior, live status/error announcements, and a zero unexpected-console/page-error gate.
+
+In `command-contacts-mobile.spec.ts`, use 390×844 to cover the collapsed profile disclosure, open/close/focus restoration, all eight top-level panels and three task panels, jump/previous/next navigation, table/toolbar containment, touch operation, every interactive target at least 44×44 CSS pixels, and no document-level horizontal overflow. Internal table/tab strips may scroll only inside their named containers.
+
+In `command-contacts-accessibility.spec.ts`, run axe with the repository WCAG tag set on exactly four meaningful states: populated directory, detail Timeline, source-only Tasks, and Source Evidence. Also prove accessible table names/caption and `aria-sort`, unique headings, roving tab keyboard behavior and exact `aria-controls`/`aria-labelledby` tab-to-tabpanel pairs for all eight plus three panels, dialog/disclosure containment and restored focus, polite/assertive live regions, 44px controls, forced-colors visibility, and reduced-motion transition duration no greater than `0.001s`.
+
+Run:
+
+```bash
+cd frontend
+npx playwright test --list
+npx playwright test --project=command-desktop e2e/command-shell.spec.ts e2e/command-home.spec.ts e2e/command-contacts.spec.ts
+npx playwright test --project=command-mobile e2e/command-mobile.spec.ts e2e/command-contacts-mobile.spec.ts
+npx playwright test --project=command-a11y e2e/command-accessibility.spec.ts e2e/command-contacts-accessibility.spec.ts
+```
+
+Expected: discovery lists each new file once; the complete existing-plus-Contacts desktop/mobile/accessibility matrix passes with zero unexpected browser errors.
+
+- [ ] **Step 4: Add a privacy-safe source alias resolver and visual baselines**
+
+Replace the source-controlled private contact-name filename in `command-reference-manifest.ts` with logical aliases only:
+
+```text
+contacts-list-live       1800×982
+contact-detail-live      1793×1166
+contact-opportunities-live
+contact-notes-live
+```
+
+The first may retain the already non-private recovered list filename through the private mapping; the three detail aliases never expose a contact name, provider ID, email, phone, address, archive path, or recovered private basename in source. Resolve aliases only for operator comparison from `COMMAND_VISUAL_SOURCE_MANIFEST`, whose value must be an absolute path to an access-controlled regular non-symlink JSON file outside the repository/worktree, `frontend/public`, build/deployment roots, and `frontend/artifacts`. Reject a missing/relative path, symlink, directory, non-JSON file, wrong schema/version, duplicate/unknown alias, non-absolute source path, source path inside any forbidden root, non-regular/symlink source, extension other than `.png`, dimension mismatch, and extra keys. The exact private schema is:
+
+```json
+{
+  "schema_version": 1,
+  "references": {
+    "contacts-list-live": { "path": "/operator/private/list.png", "width": 1800, "height": 982 },
+    "contact-detail-live": { "path": "/operator/private/detail.png", "width": 1793, "height": 1166 },
+    "contact-opportunities-live": { "path": "/operator/private/opportunities.png", "width": 1793, "height": 1166 },
+    "contact-notes-live": { "path": "/operator/private/notes.png", "width": 1793, "height": 1166 }
+  }
+}
+```
+
+The private file and resolved images are read-only operator inputs: never copy them into the checkout, snapshot directory, `artifacts/`, build output, test report, trace, screenshot attachment, CI artifact, docs, or commit. Log/report logical alias, dimensions, comparison result, and optional non-private digest only—never the environment value, resolved path, basename, or image pixels. `SourceBrandMask.reason` remains limited to vendor mark/utilities/account identity plus `dynamic private text`. The new reason may cover only tightly measured changing glyph pixels; masks must never cover borders, bounds, whitespace used for measurement, row height/density, toolbar, columns, split geometry, tabs, map/drawer bounds, or any other layout geometry. `contacts-list.png`, retry/error/redirect captures, blank shells, and incomplete views remain limitations, not success targets.
+
+In `command-contacts-visual.spec.ts`, freeze time/data/fonts/animations and capture deterministic synthetic current-state baselines at 1800×982 for directory, 1793×1166 for detail and its Opportunities/Notes/Source Evidence panels, and 390×844 for directory/detail mobile. Store only synthetic Playwright baselines in `frontend/e2e/command-contacts-visual.spec.ts-snapshots/`, including inspected `*-command-visual-darwin.png` and `*-command-visual-linux.png` counterparts. Write non-source current captures only to the existing gitignored `frontend/artifacts/command-qa/current/` for manual comparison.
+
+Generate/update and inspect Darwin candidates locally, then generate Linux candidates with the exact pinned image that matches `@playwright/test`:
+
+```bash
+cd frontend
+npx playwright test --project=command-visual e2e/command-visual.spec.ts e2e/command-contacts-visual.spec.ts --update-snapshots
+docker run --rm --ipc=host -v "$PWD":/work -w /work mcr.microsoft.com/playwright:v1.62.1-noble \
+  bash -lc 'npm ci && npx playwright test --project=command-visual e2e/command-visual.spec.ts e2e/command-contacts-visual.spec.ts --update-snapshots'
+```
+
+Inspect every changed Darwin and Linux PNG at native size; do not accept a baseline solely because Playwright wrote it. Run `npx vitest run src/test/command-reference-manifest.test.ts`, perform same-viewport comparisons in the in-app Browser, and record in `frontend/design-qa.md`: logical source/current pair, viewport, non-private digest if used, exact masks and reasons, rail/header/canvas/toolbar/row/split/tab/map/Source Evidence/mobile geometry, remaining differences, and pass/fail. Do not call the visual gate passed from snapshots alone.
+
+- [ ] **Step 5: Run the complete scoped verification and inspect the diff**
+
+Run all existing and new browser specs so this task cannot pass while stale Home/shell files remain broken, then run scoped unit/lint/type/build gates:
+
+```bash
+cd frontend
+npx playwright test --list
+npx playwright test
+npx vitest run src/test/command-reference-manifest.test.ts \
+  src/lib/command/http.test.ts src/lib/command/contacts.test.ts src/lib/command/api.test.ts \
+  src/lib/command/home.test.ts src/components/command/CommandWorkspaceDeepLinks.test.tsx \
+  src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/components/command/contacts/ContactsWorkspace.test.tsx \
+  src/components/command/contacts/ContactDetailWorkspace.test.tsx \
+  src/components/command/ui/CommandUi.test.tsx
+npx eslint playwright.config.ts e2e/command-*.spec.ts e2e/fixtures/command.ts \
+  e2e/fixtures/command-contacts.ts e2e/visual/command-reference-manifest.ts \
+  src/test/command-reference-manifest.test.ts
 npm run typecheck
 npm run build
 ```
 
-Expected: all journeys, a11y checks, snapshots, unit/component tests, TypeScript, and production build pass.
-
-- [ ] **Step 5: Inspect with the in-app Browser and record QA**
-
-At the same source/current viewports, inspect rail/header geometry, full-width work canvas, toolbars, row heights, split width, tabs, map bounds, evidence drawer, focus, and mobile transitions. Record each source/current pair, brand-mask rectangles, remaining differences, and final pass/fail in `frontend/design-qa.md`. Do not mark the visual gate passed from Playwright output alone.
-
-- [ ] **Step 6: Commit**
+Expected: all four projects discover their exact old-plus-new spec sets, the full existing browser suite and scoped Vitest/lint/type/build checks pass, both platform baseline sets were individually inspected, and the in-app same-viewport comparison is recorded. Before committing, run the plan/docs contradiction and file-scope gates:
 
 ```bash
-git add frontend/e2e/command-contacts*.spec.ts \
-  frontend/e2e/visual/command-reference-manifest.ts frontend/design-qa.md
+cd ..
+task10_text="$(sed -n '/^### Task 10:/,/^### Task 11:/p' \
+  docs/superpowers/plans/2026-08-12-command-contacts-full-parity.md | \
+  sed '/^```bash$/,/^```$/d')"
+! printf '%s\n' "$task10_text" | rg -q 'evidence drawer|fake ordinals|fake [^ ]*hash|contact-adam|contacts-list\.png.*quality.*valid'
+git diff --check -- docs/superpowers/plans/2026-08-12-command-contacts-full-parity.md
+git diff --name-only
+git diff -- docs/superpowers/plans/2026-08-12-command-contacts-full-parity.md
+```
+
+Expected: the contradiction scan has no Task 10 hits; `git diff --check` is clean; every Task 10 file named in an implementation command or `git add` appears in **Files**; no live/private source image, private manifest, trace, report, downloaded artifact, current-comparison capture, or other QA artifact is source-controlled.
+
+- [ ] **Step 6: Commit the complete browser gate**
+
+```bash
+git add frontend/playwright.config.ts \
+  frontend/e2e/fixtures/command-contacts.ts \
+  frontend/e2e/fixtures/command.ts frontend/e2e/fixtures/command-home.json \
+  frontend/e2e/command-contacts.spec.ts frontend/e2e/command-contacts-mobile.spec.ts \
+  frontend/e2e/command-contacts-accessibility.spec.ts frontend/e2e/command-contacts-visual.spec.ts \
+  frontend/e2e/command-home.spec.ts frontend/e2e/command-shell.spec.ts \
+  frontend/e2e/command-mobile.spec.ts frontend/e2e/command-accessibility.spec.ts \
+  frontend/e2e/command-visual.spec.ts \
+  frontend/e2e/command-visual.spec.ts-snapshots \
+  frontend/e2e/command-contacts-visual.spec.ts-snapshots \
+  frontend/e2e/visual/command-reference-manifest.ts \
+  frontend/src/test/command-reference-manifest.test.ts frontend/design-qa.md
+git diff --cached --check
+git diff --cached --name-only
 git commit -m "test: verify Command contact parity"
 ```
+
+The staged file list must equal the Task 10 **Files** inventory exactly. Abort the implementation commit if the index contains a private/live reference, an unlisted file, or misses a listed stale-regression file.
 
 ### Task 11: Reconcile, migrate, deploy, and prove production Contacts
 
