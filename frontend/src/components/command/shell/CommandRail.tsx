@@ -64,18 +64,11 @@ export function CommandRail() {
   const overlayRef = useRef<HTMLElement>(null);
   const close = useCallback(() => setExpanded(false), []);
 
-  useFocusContainment({
-    active: expanded,
-    containerRef: overlayRef,
-    onDismiss: close,
-    restoreFocusRef: triggerRef,
-  });
-
   useEffect(() => {
     if (!expanded) return;
     const root = triggerRef.current?.closest('.command-root');
     const background = Array.from(root?.querySelectorAll<HTMLElement>(
-      '.command-utility-header, .command-mobile-header, .command-canvas',
+      '.command-rail, .command-utility-header, .command-mobile-header, .command-canvas',
     ) ?? []);
     const previous = background.map((element) => ({
       element,
@@ -96,6 +89,13 @@ export function CommandRail() {
       });
     };
   }, [expanded]);
+
+  useFocusContainment({
+    active: expanded,
+    containerRef: overlayRef,
+    onDismiss: close,
+    restoreFocusRef: triggerRef,
+  });
 
   return (
     <>

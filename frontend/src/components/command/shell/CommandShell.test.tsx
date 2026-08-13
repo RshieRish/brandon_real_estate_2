@@ -134,12 +134,15 @@ describe('CommandShell', () => {
     );
 
     const trigger = screen.getByRole('button', { name: 'Expand Command navigation' });
+    const baseRail = screen.getByRole('complementary');
     const canvas = screen.getByRole('main').parentElement;
     await user.click(trigger);
     const overlay = screen.getByRole('dialog', { name: 'Expanded Command navigation' });
     expect(overlay).toHaveAttribute('aria-modal', 'true');
     expect(canvas).toHaveAttribute('aria-hidden', 'true');
     expect(canvas).toHaveAttribute('inert');
+    expect(baseRail).toHaveAttribute('aria-hidden', 'true');
+    expect(baseRail).toHaveAttribute('inert');
     await waitFor(() => expect(overlay).toContainElement(document.activeElement as HTMLElement));
     expect(document.body.style.overflow).toBe('hidden');
     await user.keyboard('{Shift>}{Tab}{/Shift}');
@@ -149,6 +152,8 @@ describe('CommandShell', () => {
     expect(document.body.style.overflow).toBe('');
     expect(canvas).not.toHaveAttribute('aria-hidden');
     expect(canvas).not.toHaveAttribute('inert');
+    expect(baseRail).not.toHaveAttribute('aria-hidden');
+    expect(baseRail).not.toHaveAttribute('inert');
     expect(trigger).toHaveFocus();
   });
 
