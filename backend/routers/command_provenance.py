@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Sequence
-import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -16,12 +16,12 @@ from database import get_db
 from middleware.auth import require_admin
 from models.command import CRMArchiveArtifact
 from models.command_provenance import (
+    CaptureQuality,
     CRMEntitySource,
     CRMReconciliationResult,
     CRMReconciliationRun,
     CRMSourceRecord,
     CRMSourceRecordArtifact,
-    CaptureQuality,
     EvidenceLevel,
 )
 from schemas.command_provenance import (
@@ -36,7 +36,6 @@ from schemas.command_provenance import (
     SourceRecordPageOut,
 )
 
-
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 ALLOWED_ENTITY_TYPES = frozenset(
@@ -49,6 +48,18 @@ ALLOWED_ENTITY_TYPES = frozenset(
         "analytics_event",
         "booking",
         "contact",
+        "contact_address",
+        "contact_capture_position",
+        "contact_method",
+        "contact_neighborhood",
+        "contact_note",
+        "contact_ownership",
+        "contact_preference",
+        "contact_profile",
+        "contact_relationship",
+        "contact_saved_search",
+        "contact_section_capture",
+        "contact_timeline_event",
         "content_block",
         "file_asset",
         "funnel",

@@ -7,20 +7,18 @@ from fastapi import (
     Depends,
     HTTPException,
     Path,
-    Query,
     Response,
     UploadFile,
     status,
 )
 from pydantic import BeforeValidator, TypeAdapter
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
 from middleware.auth import AdminSubject, require_admin
 from models.analytics_event import AnalyticsEvent
-from models.booking import Booking
 from models.command import (
     AgreementStatus,
     CRMActivity,
@@ -30,7 +28,6 @@ from models.command import (
     CRMAgreementTemplate,
     CRMArchiveArtifact,
     CRMContact,
-    CRMContactTag,
     CRMFileAsset,
     CRMGoal,
     CRMListingRecord,
@@ -40,7 +37,6 @@ from models.command import (
     CRMOpportunityOffer,
     CRMOpportunityVendor,
     CRMReferral,
-    CRMSavedSearch,
     CRMSmartPlan,
     CRMSmartPlanEnrollment,
     CRMSmartPlanStep,
@@ -57,12 +53,6 @@ from schemas.command import (
     AgreementStatusUpdate,
     ArchiveBundleImportRequest,
     ArchiveBundleImportResult,
-    ContactCreate,
-    ContactImportRequest,
-    ContactImportResult,
-    ContactOut,
-    ContactUpdate,
-    ContactWorkspaceOpportunityOut,
     FileAssetCreate,
     FileAssetOut,
     GoalCreate,
@@ -73,7 +63,6 @@ from schemas.command import (
     ListingStatusUpdate,
     NamedRecordCreate,
     NamedRecordOut,
-    NoteCreate,
     OpportunityCreate,
     OpportunityOut,
     OpportunityUpdate,
@@ -83,7 +72,6 @@ from schemas.command import (
     ReferralUpdate,
     RelationshipCreate,
     RelationshipOut,
-    SavedSearchCreate,
     SmartPlanEnrollmentCreate,
     SmartPlanEnrollmentUpdate,
     SmartPlanStatusUpdate,
@@ -155,32 +143,6 @@ async def _count(db: AsyncSession, model, *where) -> int:
     query = select(func.count()).select_from(model)
     if where: query = query.where(*where)
     return int((await db.execute(query)).scalar_one())
-
-
-async def _contacts_by_normalized_emails(
-    db: AsyncSession, values: set[str]
-) -> dict[str, CRMContact | None]:
-    """Map each referenced email to its sole owner, or ``None`` if ambiguous."""
-    contacts: dict[str, CRMContact | None] = {}
-    ordered = sorted(values)
-    for start in range(0, len(ordered), 500):
-        batch = ordered[start : start + 500]
-        rows = (
-            await db.scalars(
-                select(CRMContact)
-                .where(CRMContact.normalized_email.in_(batch))
-                .order_by(CRMContact.id)
-            )
-        ).all()
-        for contact in rows:
-            if canonical_email(contact.email) != contact.normalized_email:
-                raise RuntimeError("contact email normalization is invalid")
-            assert contact.normalized_email is not None
-            if contact.normalized_email in contacts:
-                contacts[contact.normalized_email] = None
-            else:
-                contacts[contact.normalized_email] = contact
-    return contacts
 
 
 @router.get("/overview", response_model=OverviewOut)
@@ -313,98 +275,6 @@ async def website_records(db: AsyncSession = Depends(get_db)):
 async def event_breakdown(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(AnalyticsEvent.event_type, func.count(AnalyticsEvent.id)).group_by(AnalyticsEvent.event_type).order_by(func.count(AnalyticsEvent.id).desc()).limit(25))).all()
     return {"events": [{"event_type": event_type, "count": int(count)} for event_type, count in rows]}
-
-
-@router.get("/contacts", response_model=list[ContactOut])
-async def contacts(limit: int = 50, offset: int = 0, query: str | None = None, stage: str | None = None, db: AsyncSession = Depends(get_db)):
-    statement = select(CRMContact).order_by(CRMContact.created_at.desc())
-    if query and (term := query.strip()):
-        needle = f"%{term}%"
-        statement = statement.where(or_(CRMContact.first_name.ilike(needle), CRMContact.last_name.ilike(needle), CRMContact.email.ilike(needle), CRMContact.phone.ilike(needle)))
-    if stage:
-        statement = statement.where(CRMContact.stage == stage)
-    result = await db.execute(statement.offset(max(offset, 0)).limit(min(max(limit, 1), 100)))
-    return result.scalars().all()
-
-
-@router.get("/celebrations")
-async def celebrations(month: int = Query(ge=1, le=12), db: AsyncSession = Depends(get_db)):
-    """Return only internal contact celebrations for the requested calendar month."""
-    birthdays = (await db.execute(
-        select(CRMContact)
-        .where(func.extract("month", CRMContact.birthday) == month)
-        .order_by(func.extract("day", CRMContact.birthday), CRMContact.last_name, CRMContact.first_name)
-    )).scalars().all()
-    anniversaries = (await db.execute(
-        select(CRMContact)
-        .where(func.extract("month", CRMContact.anniversary) == month)
-        .order_by(func.extract("day", CRMContact.anniversary), CRMContact.last_name, CRMContact.first_name)
-    )).scalars().all()
-    return {"birthdays": birthdays, "anniversaries": anniversaries}
-
-
-@router.post("/contacts", response_model=ContactOut)
-async def create_contact(payload: ContactCreate, db: AsyncSession = Depends(get_db)):
-    item = CRMContact(**payload.model_dump())
-    db.add(item); await db.flush()
-    db.add(CRMActivity(contact_id=item.id, kind="contact_created", summary="Contact created in Command workspace"))
-    await db.flush(); return item
-
-@router.post("/contacts/sync-leads")
-async def sync_legacy_leads(db: AsyncSession = Depends(get_db)):
-    """Idempotently project existing internal leads into CRM contacts."""
-    leads = (await db.execute(select(Lead))).scalars().all()
-    linked = {row[0] for row in (await db.execute(select(CRMContact.lead_id).where(CRMContact.lead_id.is_not(None)))).all()}
-    created = 0
-    for lead in leads:
-        if lead.id in linked: continue
-        parts = (lead.name or "Unnamed contact").strip().split(maxsplit=1)
-        contact=CRMContact(lead_id=lead.id, first_name=parts[0], last_name=parts[1] if len(parts) > 1 else "", email=lead.email, phone=lead.phone, stage=lead.routing_status or "lead")
-        db.add(contact); await db.flush()
-        db.add(CRMActivity(contact_id=contact.id,kind="lead_imported",summary=f"Imported from internal lead source: {lead.source or 'website'}"))
-        created += 1
-    contacts = (await db.execute(select(CRMContact).where(CRMContact.lead_id.is_not(None)))).scalars().all()
-    backfilled = 0
-    for contact in contacts:
-        has_activity = (await db.execute(select(CRMActivity.id).where(CRMActivity.contact_id == contact.id).limit(1))).scalar_one_or_none()
-        if has_activity is None:
-            db.add(CRMActivity(contact_id=contact.id, kind="lead_imported", summary="Imported from internal lead source"))
-            backfilled += 1
-    await db.flush()
-    return {"created": created, "timeline_backfilled": backfilled, "total_legacy_leads": len(leads)}
-
-@router.post("/contacts/import", response_model=ContactImportResult)
-async def import_contacts(
-    payload: ContactImportRequest, db: AsyncSession = Depends(get_db)
-):
-    created = 0
-    skipped = 0
-    canonical_emails = {
-        canonical
-        for row in payload.contacts
-        if (canonical := canonical_email(row.email)) is not None
-    }
-    contacts_by_email = await _contacts_by_normalized_emails(db, canonical_emails)
-    for row in payload.contacts:
-        canonical = canonical_email(row.email)
-        if canonical is not None and canonical in contacts_by_email:
-            skipped += 1
-            continue
-        contact = CRMContact(**row.model_dump())
-        db.add(contact)
-        await db.flush()
-        if canonical is not None:
-            contacts_by_email[canonical] = contact
-        db.add(
-            CRMActivity(
-                contact_id=contact.id,
-                kind="contact_imported",
-                summary="Imported through internal CRM import",
-            )
-        )
-        created += 1
-    await db.flush()
-    return {"created": created, "skipped_duplicates": skipped}
 
 
 async def _import_archive_bundle(
@@ -578,91 +448,11 @@ async def import_archive_bundle(
         ) from None
 
 
-@router.get("/contacts/{contact_id}", response_model=ContactOut)
-async def contact_detail(contact_id: int, db: AsyncSession = Depends(get_db)):
-    item = await db.get(CRMContact, contact_id)
-    if not item: raise HTTPException(404, "Contact not found")
-    return item
-
-@router.patch("/contacts/{contact_id}", response_model=ContactOut)
-async def update_contact(contact_id: int, payload: ContactUpdate, db: AsyncSession = Depends(get_db)):
-    item = await db.get(CRMContact, contact_id)
-    if not item: raise HTTPException(404, "Contact not found")
-    changes = payload.model_dump(exclude_unset=True)
-    for required_field in ("first_name", "last_name", "stage"):
-        if changes.get(required_field) is None:
-            changes.pop(required_field, None)
-    for field, value in changes.items(): setattr(item, field, value)
-    kind = "stage_changed" if set(changes) == {"stage"} else "contact_updated"
-    summary = f"Contact stage changed to {changes['stage']}" if kind == "stage_changed" else "Updated contact profile"
-    db.add(CRMActivity(contact_id=item.id, kind=kind, summary=summary))
-    await db.flush(); return item
-
-@router.get("/contacts/{contact_id}/workspace")
-async def contact_workspace(contact_id: int, db: AsyncSession = Depends(get_db)):
-    contact = await db.get(CRMContact, contact_id)
-    if not contact: raise HTTPException(404, "Contact not found")
-    async def rows(model, field):
-        return (await db.execute(select(model).where(field == contact_id).order_by(model.created_at.desc()))).scalars().all()
-    tasks = await rows(CRMTask, CRMTask.contact_id)
-    notes = await rows(CRMNote, CRMNote.contact_id)
-    activity = await rows(CRMActivity, CRMActivity.contact_id)
-    enrollments = (await db.execute(select(CRMSmartPlanEnrollment).where(CRMSmartPlanEnrollment.contact_id == contact_id))).scalars().all()
-    opportunity_rows = (await db.execute(
-        select(CRMOpportunity, CRMOpportunityContact.role)
-        .join(CRMOpportunityContact, CRMOpportunity.id == CRMOpportunityContact.opportunity_id)
-        .where(CRMOpportunityContact.contact_id == contact_id)
-        .order_by(CRMOpportunity.created_at.desc())
-    )).all()
-    searches=(await db.execute(select(CRMSavedSearch).where(CRMSavedSearch.contact_id == contact_id))).scalars().all()
-    tag_rows=(await db.execute(select(CRMTag).join(CRMContactTag,CRMTag.id==CRMContactTag.tag_id).where(CRMContactTag.contact_id==contact_id))).scalars().all()
-    booking_predicates = []
-    if contact.lead_id is not None:
-        booking_predicates.append(Booking.lead_id == contact.lead_id)
-    if contact.email:
-        booking_predicates.append(func.lower(Booking.email) == contact.email.lower())
-    booking_rows = (await db.execute(select(Booking).where(or_(*booking_predicates)).order_by(Booking.scheduled_at.desc()))).scalars().all() if booking_predicates else []
-    opportunities = [ContactWorkspaceOpportunityOut(id=item.id, name=item.name, stage=item.stage, value_cents=item.value_cents, role=role).model_dump() for item, role in opportunity_rows]
-    return {"contact": contact, "timeline": [{"id":a.id,"kind":a.kind,"summary":a.summary,"created_at":a.created_at} for a in activity], "tasks": tasks, "notes": notes, "smart_plans": [{"id":e.id,"plan_id":e.smart_plan_id,"status":e.status} for e in enrollments], "opportunities": opportunities, "saved_searches": [{"id":s.id,"name":s.name,"criteria":s.criteria_json} for s in searches], "bookings":[{"id":b.id,"meeting_type":b.meeting_type,"context":b.context,"scheduled_at":b.scheduled_at,"location":b.location,"notes":b.notes} for b in booking_rows], "tags":[{"id":t.id,"name":t.name} for t in tag_rows]}
-
 @router.post("/tags")
 async def create_tag(payload:TagCreate,db:AsyncSession=Depends(get_db)):
     existing=(await db.execute(select(CRMTag).where(CRMTag.name==payload.name))).scalar_one_or_none()
     if existing:return {"id":existing.id,"name":existing.name}
     tag=CRMTag(name=payload.name);db.add(tag);await db.flush();return {"id":tag.id,"name":tag.name}
-@router.post("/contacts/{contact_id}/tags/{tag_id}")
-async def assign_tag(contact_id:int,tag_id:int,db:AsyncSession=Depends(get_db)):
-    if not await db.get(CRMContact,contact_id) or not await db.get(CRMTag,tag_id):raise HTTPException(404,"Contact or tag not found")
-    existing=(await db.execute(select(CRMContactTag).where(CRMContactTag.contact_id==contact_id,CRMContactTag.tag_id==tag_id))).scalar_one_or_none()
-    if not existing:db.add(CRMContactTag(contact_id=contact_id,tag_id=tag_id));await db.flush()
-    return {"contact_id":contact_id,"tag_id":tag_id}
-
-@router.delete("/contacts/{contact_id}/tags/{tag_id}")
-async def remove_tag(contact_id: int, tag_id: int, db: AsyncSession = Depends(get_db)):
-    assignment = (await db.execute(select(CRMContactTag).where(CRMContactTag.contact_id == contact_id, CRMContactTag.tag_id == tag_id))).scalar_one_or_none()
-    if not assignment: raise HTTPException(404, "Contact tag not found")
-    await db.delete(assignment)
-    db.add(CRMActivity(contact_id=contact_id, kind="tag_removed", summary="Removed a contact tag"))
-    await db.flush()
-    return {"removed": True, "contact_id": contact_id, "tag_id": tag_id}
-
-@router.post("/contacts/{contact_id}/notes")
-async def create_contact_note(contact_id:int,payload:NoteCreate,db:AsyncSession=Depends(get_db)):
-    if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
-    note=CRMNote(contact_id=contact_id,body=payload.body);db.add(note);db.add(CRMActivity(contact_id=contact_id,kind="note",summary="Added a contact note"));await db.flush();return {"id":note.id,"body":note.body}
-
-@router.delete("/contacts/{contact_id}/notes/{note_id}")
-async def delete_contact_note(contact_id: int, note_id: int, db: AsyncSession = Depends(get_db)):
-    note = await db.get(CRMNote, note_id)
-    if not note or note.contact_id != contact_id: raise HTTPException(404, "Contact note not found")
-    await db.delete(note)
-    db.add(CRMActivity(contact_id=contact_id, kind="note_removed", summary="Removed a contact note"))
-    await db.flush()
-    return {"deleted": True, "id": note_id}
-@router.post("/contacts/{contact_id}/saved-searches")
-async def create_saved_search(contact_id:int,payload:SavedSearchCreate,db:AsyncSession=Depends(get_db)):
-    if not await db.get(CRMContact,contact_id):raise HTTPException(404,"Contact not found")
-    item=CRMSavedSearch(contact_id=contact_id,name=payload.name,criteria_json=__import__('json').dumps(payload.criteria));db.add(item);await db.flush();return {"id":item.id,"name":item.name,"criteria":item.criteria_json}
 
 @router.get("/saved-searches", response_model=list[SavedSearchOut])
 async def saved_searches(db: AsyncSession = Depends(get_db)):

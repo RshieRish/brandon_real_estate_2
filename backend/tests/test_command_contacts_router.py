@@ -11,17 +11,26 @@ from typing import Annotated
 
 import pytest
 import pytest_asyncio
-from database import Base, get_db
 from fastapi import FastAPI, Query
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, Match
 from fastapi.testclient import TestClient
+from jose import jwt
+from pydantic import ValidationError
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from config import settings
+from database import Base, get_db
+from main import app as main_app
+from middleware import auth as auth_middleware
 from middleware.auth import require_admin_subject
 from models.booking import Booking
 from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact
 from models.command_contacts import CRMContactMethod
 from models.lead import Lead
-from pydantic import ValidationError
+from routers import command as command_router
 from routers import command_contacts as contact_router
+from routers import command_provenance as provenance_router
 from schemas import command_contacts
 from schemas.command_contacts import (
     ContactArtifactMetadataOut,
@@ -96,8 +105,6 @@ from services.command_contact_contracts import (
     TimelineOrigin,
     encode_timeline_cursor,
 )
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 NOW = datetime(2026, 8, 13, 14, 30, tzinfo=UTC)
 
@@ -143,6 +150,41 @@ FULL_ROUTE_INVENTORY = (
     ("GET", "/contacts/{contact_id}/evidence"),
     ("POST", "/contacts/{contact_id}/tags/{tag_id}"),
     ("DELETE", "/contacts/{contact_id}/tags/{tag_id}"),
+)
+
+RETAINED_GLOBAL_ROUTE_INVENTORY = (
+    ("POST", "/archive/import"),
+    ("POST", "/tags"),
+    ("GET", "/saved-searches"),
+    ("DELETE", "/saved-searches/{search_id}"),
+)
+
+PROVENANCE_ROUTE_INVENTORY = (
+    ("GET", "/source-records"),
+    ("GET", "/source-records/{record_id}"),
+    ("GET", "/entities/{entity_type}/{entity_id}/sources"),
+    ("GET", "/reconciliation/runs"),
+    ("GET", "/reconciliation/runs/latest"),
+    ("GET", "/reconciliation/runs/{run_id}"),
+)
+
+MOVED_MONOLITH_NAMES = frozenset(
+    {
+        "contacts",
+        "celebrations",
+        "create_contact",
+        "sync_legacy_leads",
+        "import_contacts",
+        "contact_detail",
+        "update_contact",
+        "contact_workspace",
+        "assign_tag",
+        "remove_tag",
+        "create_contact_note",
+        "delete_contact_note",
+        "create_saved_search",
+        "_contacts_by_normalized_emails",
+    }
 )
 
 
@@ -1125,6 +1167,182 @@ def _route_inventory(router) -> tuple[tuple[str, str], ...]:
         for method in sorted(route.methods or ())
         if method != "HEAD"
     )
+
+
+def _main_command_routes() -> tuple[APIRoute, ...]:
+    return tuple(
+        route
+        for route in main_app.routes
+        if isinstance(route, APIRoute)
+        and route.path.startswith("/api/v1/command")
+    )
+
+
+def _mounted_inventory(routes: tuple[APIRoute, ...]) -> tuple[tuple[str, str], ...]:
+    prefix = "/api/v1/command"
+    return tuple(
+        (method, route.path.removeprefix(prefix))
+        for route in routes
+        for method in sorted(route.methods or ())
+        if method != "HEAD"
+    )
+
+
+def _first_main_endpoint(method: str, path: str):
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": (),
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    for route in main_app.routes:
+        match, _ = route.matches(scope)
+        if match is Match.FULL:
+            return route.endpoint
+    raise AssertionError(f"no route matched {method} {path}")
+
+
+def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
+    routes = _main_command_routes()
+    inventory = _mounted_inventory(routes)
+
+    assert len(inventory) == 86
+    assert inventory[:24] == FULL_ROUTE_INVENTORY
+    assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
+    assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (
+        38,
+        39,
+        40,
+        41,
+    )
+    assert len(set(inventory)) == len(inventory)
+    assert all(
+        route.endpoint.__module__ == "routers.command_contacts"
+        for route in routes[:24]
+    )
+    assert all(
+        routes[index].endpoint.__module__ == "routers.command"
+        for index in (38, 39, 40, 41)
+    )
+    assert all(
+        route.endpoint.__module__ == "routers.command_provenance"
+        for route in routes[-6:]
+    )
+
+
+def test_cutover_has_no_monolith_contact_aliases_or_legacy_owner_helper():
+    assert MOVED_MONOLITH_NAMES.isdisjoint(vars(command_router))
+    assert _route_inventory(command_router.router)[14:18] == (
+        RETAINED_GLOBAL_ROUTE_INVENTORY
+    )
+
+
+def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
+    fresh = FastAPI()
+    fresh.include_router(contact_router.router, prefix="/api/v1/command")
+    fresh.include_router(command_router.router, prefix="/api/v1/command")
+    fresh.include_router(provenance_router.router, prefix="/api/v1/command")
+
+    routes = tuple(
+        route for route in fresh.routes if isinstance(route, APIRoute)
+    )
+    inventory = tuple(
+        (method, route.path)
+        for route in routes
+        for method in sorted(route.methods or ())
+        if method != "HEAD"
+    )
+    assert len(inventory) == 86
+    assert len(set(inventory)) == len(inventory)
+    schema = fresh.openapi()
+    operation_ids = [
+        operation["operationId"]
+        for path in schema["paths"].values()
+        for method, operation in path.items()
+        if method.lower() in {"get", "post", "patch", "delete", "put"}
+    ]
+    assert len(operation_ids) == 86
+    assert len(set(operation_ids)) == len(operation_ids)
+    expected_response_schemas = {
+        ("/api/v1/command/contacts/directory", "get"): "ContactDirectoryPageOut",
+        ("/api/v1/command/contacts/sync-leads", "post"): "ContactLegacySyncResultOut",
+        ("/api/v1/command/contacts/import", "post"): "ContactImportResultOut",
+        ("/api/v1/command/contacts/bulk", "post"): "ContactBulkResultOut",
+        ("/api/v1/command/contacts/{contact_id}", "get"): "ContactDetailOut",
+    }
+    for (path, method), model_name in expected_response_schemas.items():
+        response_schema = schema["paths"][path][method]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        assert response_schema["$ref"] == f"#/components/schemas/{model_name}"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/v1/command/contacts/directory"),
+        ("POST", "/api/v1/command/contacts/import"),
+        ("POST", "/api/v1/command/contacts/sync-leads"),
+        ("POST", "/api/v1/command/contacts/bulk"),
+    ],
+)
+def test_main_static_contact_paths_dispatch_to_focused_router(method, path):
+    endpoint = _first_main_endpoint(method, path)
+
+    assert endpoint.__module__ == "routers.command_contacts"
+
+
+def test_main_focused_route_decodes_admin_token_once(monkeypatch):
+    decode_calls = 0
+    real_decode = auth_middleware.jwt.decode
+
+    def counted_decode(*args, **kwargs):
+        nonlocal decode_calls
+        decode_calls += 1
+        return real_decode(*args, **kwargs)
+
+    async def fake_list_contacts(_db, filters, *, now):
+        assert now.tzinfo is UTC
+        return ContactDirectoryPage(
+            rows=(),
+            total=0,
+            page=filters.page,
+            page_size=filters.page_size,
+            page_count=0,
+            sort=filters.sort,
+            direction=filters.direction,
+        )
+
+    token = jwt.encode(
+        {
+            "sub": "17",
+            "token_type": "admin_session",
+            "scope": "admin",
+            "exp": int(datetime.now(UTC).timestamp()) + 300,
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+    monkeypatch.setattr(auth_middleware.jwt, "decode", counted_decode)
+    monkeypatch.setattr(contact_router, "list_contacts", fake_list_contacts)
+    main_app.dependency_overrides[get_db] = lambda: _ReadOnlyBoundaryDB()
+    try:
+        response = TestClient(main_app, raise_server_exceptions=False).get(
+            "/api/v1/command/contacts/directory",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        main_app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    assert decode_calls == 1
 
 
 def test_focused_router_declares_exact_ordered_inventory_without_global_auth():

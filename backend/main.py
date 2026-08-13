@@ -18,6 +18,7 @@ from routers import (
     booking,
     chat,
     command,
+    command_contacts,
     command_provenance,
     content,
     crm,
@@ -79,6 +80,11 @@ app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
 app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
+app.include_router(
+    command_contacts.router,
+    prefix="/api/v1/command",
+    tags=["command-contacts"],
+)
 app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
 app.include_router(
     command_provenance.router,

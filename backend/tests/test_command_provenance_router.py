@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -25,7 +25,6 @@ from models.command_provenance import (
 )
 from routers import command_provenance
 
-
 PROVENANCE_TABLES = (
     CRMArchiveArtifact.__table__,
     CRMSourceRecord.__table__,
@@ -33,6 +32,57 @@ PROVENANCE_TABLES = (
     CRMEntitySource.__table__,
     CRMReconciliationRun.__table__,
     CRMReconciliationResult.__table__,
+)
+
+CONTACT_PROVENANCE_ENTITY_TYPES = (
+    "contact_profile",
+    "contact_method",
+    "contact_address",
+    "contact_neighborhood",
+    "contact_ownership",
+    "contact_relationship",
+    "contact_preference",
+    "contact_capture_position",
+    "contact_section_capture",
+    "contact_timeline_event",
+    "contact_note",
+    "contact_saved_search",
+)
+
+LEGACY_PROVENANCE_ENTITY_TYPES = frozenset(
+    {
+        "activity",
+        "agreement",
+        "agreement_event",
+        "agreement_recipient",
+        "agreement_template",
+        "analytics_event",
+        "booking",
+        "contact",
+        "content_block",
+        "file_asset",
+        "funnel",
+        "goal",
+        "lead",
+        "listing",
+        "marketing_campaign",
+        "marketing_design",
+        "note",
+        "opportunity",
+        "opportunity_contact",
+        "opportunity_offer",
+        "opportunity_vendor",
+        "referral",
+        "report",
+        "saved_search",
+        "smart_plan",
+        "smart_plan_enrollment",
+        "smart_plan_step",
+        "tag",
+        "task",
+        "task_link",
+        "website",
+    }
 )
 
 
@@ -443,6 +493,30 @@ async def test_entity_sources_are_typed_safe_and_reject_unknown_entity_types(
         "/api/v1/command/entities/contact/0/sources"
     )
     assert invalid_id.status_code == 422
+
+
+@pytest.mark.parametrize("entity_type", CONTACT_PROVENANCE_ENTITY_TYPES)
+async def test_all_contact_provenance_entity_types_are_allowed(
+    authenticated_client,
+    entity_type,
+):
+    response = await authenticated_client.get(
+        f"/api/v1/command/entities/{entity_type}/12/sources"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "entity_type": entity_type,
+        "entity_id": 12,
+        "sources": [],
+    }
+
+
+def test_contact_provenance_allowlist_has_the_exact_additive_types():
+    assert command_provenance.ALLOWED_ENTITY_TYPES == LEGACY_PROVENANCE_ENTITY_TYPES.union(
+        CONTACT_PROVENANCE_ENTITY_TYPES
+    )
+    assert len(command_provenance.ALLOWED_ENTITY_TYPES) == 43
 
 
 async def test_reconciliation_runs_are_newest_first_paginated_and_typed(

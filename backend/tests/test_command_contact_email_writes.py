@@ -45,6 +45,7 @@ from schemas.command import (
 )
 from schemas.command_contacts import ContactImportIn, ContactImportRowIn
 from services.command_contact_contracts import (
+    ContactImportRowCommand,
     ContactMutationResult,
     ContactSavedSearchValue,
     WorkspaceMutationResult,
@@ -484,6 +485,7 @@ async def test_archive_import_delegates_contacts_once_with_all_child_references(
     contacts, references, actor = calls[0]
     assert actor == "17"
     assert len(contacts) == 1
+    assert isinstance(contacts[0], ContactImportRowCommand)
     assert contacts[0].email == "contact@example.test"
     assert references == (
         "task@example.test",
@@ -776,13 +778,10 @@ async def test_archive_children_use_private_id_map_without_contact_refetch(
             {"owner@example.test": owner.id},
         )
 
-    async def forbidden(*_args, **_kwargs):
-        raise AssertionError("legacy owner resolver must not run")
-
     monkeypatch.setattr(
         command_router.contact_service, "ingest_archive_contacts", ingest
     )
-    monkeypatch.setattr(command_router, "_contacts_by_normalized_emails", forbidden)
+    assert not hasattr(command_router, "_contacts_by_normalized_emails")
     statements: list[str] = []
 
     def capture(_connection, _cursor, statement, _params, _context, _many):
