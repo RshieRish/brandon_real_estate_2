@@ -583,7 +583,7 @@
 }
 
 .command-root .command-breadcrumbs a {
-  color: var(--command-gold-strong);
+  color: var(--command-ink);
   text-decoration: none;
 }
 
@@ -2069,6 +2069,10 @@
   margin-top: 2px;
   color: var(--command-muted);
   font-size: 10px;
+}
+
+.command-root .command-contacts-table-head .command-contacts-name-column span {
+  color: inherit;
 }
 
 .command-root .command-contacts-primary-column { width: 230px; min-width: 230px; }
