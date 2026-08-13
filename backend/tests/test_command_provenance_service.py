@@ -51,7 +51,7 @@ def source_draft(**overrides):
         "source_system": "kw_command",
         "module": "contacts",
         "record_kind": "contact",
-        "source_key": "63ac84e09655a08ec4d5d3ef",
+        "source_key": "aaaaaaaaaaaaaaaaaaaaaaaa",
         "evidence_level": EvidenceLevel.OBSERVED_RECORD,
         "display_label": "José Rivera",
         "payload": {"name": "José Rivera"},
@@ -84,7 +84,7 @@ def test_source_draft_uses_exact_five_part_identity():
         "kw_command",
         "contacts",
         "contact",
-        "63ac84e09655a08ec4d5d3ef",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
         "command-v1",
     )
 

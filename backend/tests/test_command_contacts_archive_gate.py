@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from models.command_provenance import CaptureQuality
+from services.command_contact_identity import canonical_email
 from services.command_parsers.contact_extractors import CONTACT_SECTIONS
 from services.command_parsers.contacts import ContactsParser
 from services.command_provenance import ArchiveArtifactInput
@@ -85,6 +86,37 @@ async def _verified_archive_artifacts(
     return tuple(contacts)
 
 
+def _redacted_overlap_hash(email: str) -> str:
+    canonical = f"contacts-v1\0verified-overlap\0{email}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _redacted_provider_hash(source_contact_id: str) -> str:
+    canonical = f"contacts-v1\0provider-evidence\0{source_contact_id}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def _lead_backed_emails() -> tuple[str, ...]:
+    from sqlalchemy import select
+
+    from database import AsyncSessionLocal
+    from models.command import CRMContact
+
+    async with AsyncSessionLocal() as db:
+        values = (
+            await db.execute(
+                select(CRMContact.email).where(CRMContact.lead_id.is_not(None))
+            )
+        ).scalars().all()
+
+    assert len(values) == 51
+    return tuple(
+        canonical
+        for value in values
+        if (canonical := canonical_email(value)) is not None
+    )
+
+
 async def test_recovered_contacts_have_complete_eight_view_matrix():
     configured_root = os.environ.get("COMMAND_ARCHIVE_ROOT")
     if not configured_root:
@@ -128,8 +160,15 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
     assert result.metrics.details["ambiguous_identities"] == 0
     assert result.metrics.details["unmatched_provider_rows"] == 0
     identity_hashes = result.metrics.details["identity_cluster_hashes"]
+    membership_hashes = result.metrics.details["identity_cluster_membership_hashes"]
     assert len(identity_hashes) == 317
     assert len(set(identity_hashes)) == 317
+    assert len(membership_hashes) == 317
+    assert len(set(membership_hashes)) == 317
+    assert (
+        hashlib.sha256("\n".join(membership_hashes).encode("utf-8")).hexdigest()
+        == "a42a7bc6efbf6133951b9534188c455d0728d2cc5a33adebb15b6d4a2c3de7de"
+    )
     assert (
         hashlib.sha256("\n".join(identity_hashes).encode("utf-8")).hexdigest()
         == "3bb6bc7754da2bb17d58162ef0af72b602316230f9c3b2e3fac4c73341eb6474"
@@ -138,10 +177,8 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
         tuple(reversed(artifacts)),
         "contacts-v1",
     )
-    assert reversed_result.metrics.details["identity_cluster_hashes"] == identity_hashes
-    assert tuple(record.identity for record in reversed_result.records) == tuple(
-        record.identity for record in result.records
-    )
+    assert reversed_result.metrics == result.metrics
+    assert reversed_result.records == result.records
     profile_source_ids = {
         record.payload["source_contact_id"]
         for record in result.records
@@ -155,6 +192,69 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
     assert len(profile_source_ids) == 317
     assert Counter(position_source_ids) == Counter(
         {source_contact_id: 1 for source_contact_id in profile_source_ids}
+    )
+    source_id_by_ordinal = {
+        record.payload["capture_ordinal"]: record.payload["source_contact_id"]
+        for record in result.records
+        if record.record_kind == "contact_capture_position"
+    }
+    scoped_records = [
+        record
+        for record in result.records
+        if "capture_ordinal" in record.payload
+        and "source_contact_id" in record.payload
+    ]
+    assert len(scoped_records) == len(result.records)
+    assert all(
+        record.payload["source_contact_id"]
+        == source_id_by_ordinal[record.payload["capture_ordinal"]]
+        for record in scoped_records
+    )
+
+    profiles_by_ordinal = {
+        record.payload["capture_ordinal"]: record
+        for record in result.records
+        if record.record_kind == "contact_profile"
+    }
+    placeholder_evidence = tuple(
+        (
+            ordinal,
+            tuple(
+                field_label
+                for payload_key, field_label in (
+                    ("primary_email", "email"),
+                    ("primary_phone", "phone"),
+                    ("legal_name", "legal_name"),
+                    ("preferred_name", "preferred_name"),
+                )
+                if profiles_by_ordinal[ordinal].payload[payload_key]
+            ),
+        )
+        for ordinal in ("0000102", "0000103", "0000104", "0000105", "0000106")
+    )
+    assert placeholder_evidence == (
+        ("0000102", ("email",)),
+        ("0000103", ()),
+        ("0000104", ("legal_name",)),
+        ("0000105", ("legal_name",)),
+        ("0000106", ("email",)),
+    )
+
+    recovered_emails = {
+        canonical
+        for record in result.records
+        if record.record_kind == "contact_profile"
+        if (canonical := canonical_email(record.payload["primary_email"])) is not None
+    }
+    overlap_hashes = tuple(
+        sorted(
+            _redacted_overlap_hash(email)
+            for email in recovered_emails.intersection(await _lead_backed_emails())
+        )
+    )
+    assert overlap_hashes == (
+        "77b6ade5b93b9781ebcd48d8e36068d8faf6f5d5b2f7a185f061a3d6a98ca1fe",
+        "babca90f14f8f7fd69a09f80c5ca4ef586551e36562edb7bab6af0690ca7371d",
     )
     assert result.metrics.details["section_artifacts"] == 2_536
     assert result.metrics.details["section_counts"] == {
@@ -206,7 +306,10 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
     partial = partial_sections[0]
     assert partial.source_key == "position:0000246:section:smart_plans"
     assert partial.payload["capture_ordinal"] == "0000246"
-    assert partial.payload["source_contact_id"] == "63ac84e3b32c9750b2ab694f"
+    assert (
+        _redacted_provider_hash(partial.payload["source_contact_id"])
+        == "654e2b1f539f8df01fcd6c24c2fdaacff5cc1651db633e95e632514c46448bb3"
+    )
     assert partial.payload["section_name"] == "smart_plans"
     assert partial.payload["is_empty"] is False
     assert partial.payload["row_count"] == 0

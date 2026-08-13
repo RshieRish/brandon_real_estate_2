@@ -553,6 +553,53 @@ async def test_failed_parser_preserves_prior_module_boundary_and_marks_run_faile
     )
 
 
+async def test_identity_conflict_failure_persists_only_redacted_audit_details(
+    command_db,
+):
+    from services.command_contact_identity import IdentityConflict
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    first_source_id = "aaaaaaaaaaaaaaaaaaaaaaaa"
+    second_source_id = "bbbbbbbbbbbbbbbbbbbbbbbb"
+    artifact = artifact_for()
+    await seed_artifacts(command_db, artifact)
+    contacts = FakeParser(
+        "contacts",
+        [
+            IdentityConflict(
+                "conflicting phone",
+                (first_source_id, second_source_id),
+            )
+        ],
+    )
+
+    with pytest.raises(IdentityConflict):
+        await execute_reconciliation(
+            command_db,
+            registry_for(contacts),
+            (artifact,),
+            RunRequest(
+                mode="apply",
+                parser_version="contacts-v1",
+                modules=frozenset({"contacts"}),
+            ),
+        )
+
+    run = await command_db.scalar(select(CRMReconciliationRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert "ambiguous_identities=1" in run.error_text
+    assert "evidence_hashes=" in run.error_text
+    assert first_source_id not in run.error_text
+    assert second_source_id not in run.error_text
+    assert (
+        await command_db.scalar(
+            select(func.count()).select_from(CRMReconciliationResult)
+        )
+        == 0
+    )
+
+
 async def test_resume_validates_compatibility_skips_success_and_completes(command_db):
     from services.command_reconciliation import (
         ReconciliationResumeError,

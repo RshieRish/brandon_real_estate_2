@@ -12,6 +12,7 @@ from models.command_provenance import CaptureQuality, EvidenceLevel
 from services.command_contact_identity import (
     ContactIdentityCandidate,
     canonical_phone,
+    redacted_cluster_membership_hash,
     resolve_identity_clusters,
 )
 from services.command_parsers.base import ModuleMetrics, ModuleParseResult
@@ -192,6 +193,10 @@ class ContactsParser:
                     ),
                     "identity_cluster_hashes": tuple(
                         cluster.identity_hash for cluster in identity_clusters
+                    ),
+                    "identity_cluster_membership_hashes": tuple(
+                        redacted_cluster_membership_hash(cluster)
+                        for cluster in identity_clusters
                     ),
                     "ambiguous_identities": 0,
                     "unmatched_provider_rows": 0,

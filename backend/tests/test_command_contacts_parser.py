@@ -87,9 +87,9 @@ def test_extract_source_contact_id_requires_canonical_contact_url():
     assert (
         extract_source_contact_id(
             "https://console.command.kw.com/command/contacts/"
-            "63ac84e09655a08ec4d5d3ef?page=2"
+            "aaaaaaaaaaaaaaaaaaaaaaaa?page=2"
         )
-        == "63ac84e09655a08ec4d5d3ef"
+        == "aaaaaaaaaaaaaaaaaaaaaaaa"
     )
     with pytest.raises(ContactParseError):
         extract_source_contact_id("https://example.com/contacts/not-an-id")
@@ -98,9 +98,9 @@ def test_extract_source_contact_id_requires_canonical_contact_url():
 @pytest.mark.parametrize(
     "url",
     [
-        "http://console.command.kw.com/command/contacts/63ac84e09655a08ec4d5d3ef",
-        "https://console.command.kw.com/command/contacts/63AC84E09655A08EC4D5D3EF",
-        "https://console.command.kw.com/command/contacts/63ac84e09655a08ec4d5d3ef/extra",
+        "http://console.command.kw.com/command/contacts/aaaaaaaaaaaaaaaaaaaaaaaa",
+        "https://console.command.kw.com/command/contacts/AAAAAAAAAAAAAAAAAAAAAAAA",
+        "https://console.command.kw.com/command/contacts/aaaaaaaaaaaaaaaaaaaaaaaa/extra",
     ],
 )
 def test_extract_source_contact_id_rejects_noncanonical_variants(url):
@@ -150,11 +150,12 @@ def test_parser_emits_one_profile_one_position_and_eight_sections_per_position(
     assert result.metrics.details["ambiguous_identities"] == 0
     assert result.metrics.details["unmatched_provider_rows"] == 0
     assert len(result.metrics.details["identity_cluster_hashes"]) == 2
+    assert len(result.metrics.details["identity_cluster_membership_hashes"]) == 2
 
 
 def test_parser_marks_1900_birth_year_as_sentinel_without_inventing_a_date(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    profile = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    profile = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa")
     assert profile.payload["birthday"] == {
         "month": 8,
         "day": 30,
@@ -174,8 +175,8 @@ def test_parser_marks_1900_birth_year_as_sentinel_without_inventing_a_date(bundl
 
 def test_parser_preserves_yearless_and_displayed_placeholder_evidence(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    second = source_record(result, "contact:63ac84ec62224587b69e9bb4")
-    third = source_record(result, "contact:63ac84f03f774d538e8593ca")
+    second = source_record(result, "contact:bbbbbbbbbbbbbbbbbbbbbbbb")
+    third = source_record(result, "contact:cccccccccccccccccccccccc")
     assert second.payload["raw_fields"]["birthday"] == "--"
     assert second.payload["birthday"]["raw"] == "--"
     assert second.payload["birthday"]["year_quality"] == "unknown"
@@ -192,15 +193,15 @@ def test_parser_preserves_yearless_and_displayed_placeholder_evidence(bundle):
 
 def test_structured_profile_precedes_conflicting_html_fallback(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    first = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    first = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa")
     assert first.payload["primary_email"] == "avery@example.test"
     assert first.payload["profile_source"] == "structured_json"
 
 
 def test_profile_identity_candidate_uses_only_explicit_e164_phone(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    first = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
-    second = source_record(result, "contact:63ac84ec62224587b69e9bb4")
+    first = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa")
+    second = source_record(result, "contact:bbbbbbbbbbbbbbbbbbbbbbbb")
     assert first.payload["identity_candidate"]["e164_phone"] == "+19785550101"
     assert second.payload["primary_phone"] == "+1 978 555 0101"
     assert second.payload["identity_candidate"]["e164_phone"] is None
@@ -253,16 +254,16 @@ def test_parser_does_not_treat_supporting_html_and_text_as_extra_occurrences(bun
 
 def test_parser_emits_child_rows_with_truthful_evidence_and_stable_keys(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    note = source_record(result, "contact:63ac84e09655a08ec4d5d3ef:note:note-1")
+    note = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa:note:note-1")
     task = next(
         record
         for record in result.records
-        if record.source_key.startswith("contact:63ac84e09655a08ec4d5d3ef:task:to_do:")
+        if record.source_key.startswith("contact:aaaaaaaaaaaaaaaaaaaaaaaa:task:to_do:")
     )
     smart_plan = next(
         record
         for record in result.records
-        if record.source_key.startswith("contact:63ac84e09655a08ec4d5d3ef:smart-plan:")
+        if record.source_key.startswith("contact:aaaaaaaaaaaaaaaaaaaaaaaa:smart-plan:")
     )
     assert note.evidence_level is EvidenceLevel.OBSERVED_RECORD
     assert task.evidence_level is EvidenceLevel.RENDERED_OCCURRENCE
@@ -357,7 +358,7 @@ def test_only_profile_and_stable_note_id_are_observed_records(bundle):
     ]
     assert [
         (record.record_kind, record.source_key) for record in observed_children
-    ] == [("contact_note", "contact:63ac84e09655a08ec4d5d3ef:note:note-1")]
+    ] == [("contact_note", "contact:aaaaaaaaaaaaaaaaaaaaaaaa:note:note-1")]
 
 
 def test_stable_ids_outside_note_remain_rendered_occurrences(bundle):
@@ -403,7 +404,7 @@ def test_rendered_note_uses_matching_stable_nested_note_evidence(bundle):
         rendered_note,
     )
     result = ContactsParser().parse(changed, "contacts-v1")
-    note = source_record(result, "contact:63ac84e09655a08ec4d5d3ef:note:note-1")
+    note = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa:note:note-1")
     assert note.evidence_level is EvidenceLevel.OBSERVED_RECORD
     assert note.payload["stable_id"] == "note-1"
 
@@ -538,7 +539,7 @@ def test_real_empty_state_variants_remain_complete_empty_sections(
 def test_section_and_child_link_all_deterministic_supporting_evidence(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
     section = source_record(result, "position:0000001:section:notes")
-    child = source_record(result, "contact:63ac84e09655a08ec4d5d3ef:note:note-1")
+    child = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa:note:note-1")
     expected = (
         "kw_command_repaired/contacts/nested/0000001/notes.json",
         "kw_command_repaired/contacts/sections/0000001/notes.html",
@@ -551,7 +552,7 @@ def test_section_and_child_link_all_deterministic_supporting_evidence(bundle):
 
 def test_profile_links_all_contributing_structured_and_rendered_artifacts(bundle):
     result = ContactsParser().parse(bundle, "contacts-v1")
-    profile = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    profile = source_record(result, "contact:aaaaaaaaaaaaaaaaaaaaaaaa")
     assert profile.artifact_paths == (
         "kw_command_repaired/contacts/details/0000001.html",
         "kw_command_repaired/contacts/nested/0000001/contact.json",
@@ -596,7 +597,7 @@ def test_parser_rejects_ambiguous_source_ids_within_one_position(bundle):
         lambda payload: payload.__setitem__(
             "url",
             "https://console.command.kw.com/command/contacts/"
-            "63ac84f03f774d538e8593ca",
+            "cccccccccccccccccccccccc",
         ),
     )
     with pytest.raises(ContactParseError, match="ambiguous source contact IDs"):

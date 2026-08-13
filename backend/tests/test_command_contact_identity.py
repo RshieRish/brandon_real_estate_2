@@ -13,6 +13,7 @@ from services.command_contact_identity import (
     IdentityConflict,
     canonical_email,
     canonical_phone,
+    redacted_cluster_membership_hash,
     resolve_identity_clusters,
 )
 
@@ -80,6 +81,34 @@ def test_shared_email_with_conflicting_phone_blocks_apply():
 
     assert captured.value.ambiguous_identities == 1
     assert captured.value.source_contact_ids == ("a", "b")
+
+
+def test_identity_conflict_text_is_redacted_and_keeps_auditable_count():
+    first_source_id = "aaaaaaaaaaaaaaaaaaaaaaaa"
+    second_source_id = "bbbbbbbbbbbbbbbbbbbbbbbb"
+
+    with pytest.raises(IdentityConflict) as captured:
+        resolve_identity_clusters(
+            (
+                profile(
+                    first_source_id,
+                    email="shared@example.test",
+                    phone="+19785550101",
+                ),
+                profile(
+                    second_source_id,
+                    email="shared@example.test",
+                    phone="+19785550102",
+                ),
+            )
+        )
+
+    message = str(captured.value)
+    assert captured.value.ambiguous_identities == 1
+    assert "ambiguous_identities=1" in message
+    assert "evidence_hashes=" in message
+    assert first_source_id not in message
+    assert second_source_id not in message
 
 
 def test_non_e164_phone_is_preserved_but_not_used_as_merge_key():
@@ -188,6 +217,27 @@ def test_identity_hash_is_versioned_stable_sha256():
         clusters[0].identity_hash
         == hashlib.sha256(b"contacts-v1\0email\0avery@example.com").hexdigest()
     )
+
+
+def test_cluster_membership_hash_is_redacted_and_source_order_stable():
+    forward = resolve_identity_clusters(
+        (
+            profile("aaaaaaaaaaaaaaaaaaaaaaaa", email="same@example.test"),
+            profile("bbbbbbbbbbbbbbbbbbbbbbbb", email="SAME@example.test"),
+        )
+    )[0]
+    reverse = resolve_identity_clusters(
+        (
+            profile("bbbbbbbbbbbbbbbbbbbbbbbb", email="same@example.test"),
+            profile("aaaaaaaaaaaaaaaaaaaaaaaa", email="SAME@example.test"),
+        )
+    )[0]
+
+    membership_hash = redacted_cluster_membership_hash(forward)
+    assert membership_hash == redacted_cluster_membership_hash(reverse)
+    assert len(membership_hash) == 64
+    assert "aaaaaaaaaaaaaaaaaaaaaaaa" not in membership_hash
+    assert "bbbbbbbbbbbbbbbbbbbbbbbb" not in membership_hash
 
 
 def test_source_order_does_not_change_clusters_or_hashes():

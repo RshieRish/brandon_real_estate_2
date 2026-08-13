@@ -20,10 +20,21 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 class IdentityConflict(ValueError):
     """Raised when strong identity evidence conflicts across source contacts."""
 
-    def __init__(self, message: str, source_contact_ids: Sequence[str]) -> None:
+    def __init__(self, reason: str, source_contact_ids: Sequence[str]) -> None:
         self.source_contact_ids = tuple(sorted(source_contact_ids))
         self.ambiguous_identities = 1
-        super().__init__(message)
+        self.evidence_hashes = tuple(
+            _provider_evidence_hash(source_contact_id)
+            for source_contact_id in self.source_contact_ids
+        )
+        evidence_digest = hashlib.sha256(
+            "\n".join(self.evidence_hashes).encode("utf-8")
+        ).hexdigest()
+        super().__init__(
+            f"identity conflict: {reason}; ambiguous_identities=1; "
+            f"evidence_count={len(self.evidence_hashes)}; "
+            f"evidence_hashes={evidence_digest}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +134,7 @@ def resolve_identity_clusters(
         source_contact_id = candidate.source_contact_id.strip()
         if source_contact_id in by_source:
             raise IdentityConflict(
-                f"duplicate provider contact ID: {source_contact_id}",
+                "duplicate provider contact ID",
                 (source_contact_id,),
             )
         by_source[source_contact_id] = candidate
@@ -191,6 +202,25 @@ def resolve_identity_clusters(
     return tuple(cluster for _, _, cluster in sorted(sortable))
 
 
+def redacted_cluster_membership_hash(cluster: ContactIdentityCluster) -> str:
+    """Hash one identity partition without exposing its provider source IDs."""
+    if not isinstance(cluster, ContactIdentityCluster):
+        raise TypeError("cluster must be a ContactIdentityCluster")
+    evidence_hashes = tuple(
+        _provider_evidence_hash(source_contact_id)
+        for source_contact_id in cluster.source_contact_ids
+    )
+    canonical = "\0".join(
+        (
+            _SOURCE_HASH_VERSION,
+            "cluster-membership",
+            cluster.identity_hash,
+            *evidence_hashes,
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _canonical_candidate(
     source_contact_id: str,
     candidate: ContactIdentityCandidate,
@@ -246,10 +276,12 @@ def _raise_conflict(
     indexes: Sequence[int],
 ) -> None:
     source_ids = tuple(candidates[index].source_contact_id for index in indexes)
-    raise IdentityConflict(
-        f"{reason} evidence for provider contacts: {', '.join(sorted(source_ids))}",
-        source_ids,
-    )
+    raise IdentityConflict(reason, source_ids)
+
+
+def _provider_evidence_hash(source_contact_id: str) -> str:
+    canonical = f"{_SOURCE_HASH_VERSION}\0provider-evidence\0{source_contact_id}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _find(parents: list[int], index: int) -> int:
@@ -283,5 +315,6 @@ __all__ = (
     "IdentityConflict",
     "canonical_email",
     "canonical_phone",
+    "redacted_cluster_membership_hash",
     "resolve_identity_clusters",
 )

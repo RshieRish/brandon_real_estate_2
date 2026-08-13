@@ -404,7 +404,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "source_record_id": 7,
                 "bundle_fingerprint": "b" * 64, "capture_ordinal": 1,
-                "source_contact_id": "63ac84e09655a08ec4d5d3ef",
+                "source_contact_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
                 "captured_at": now, "capture_quality": "complete",
                 "limitations_json": "[]",
             },
@@ -476,7 +476,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "source_record_id": 1,
                 "bundle_fingerprint": "b" * 64, "capture_ordinal": 0,
-                "source_contact_id": "63ac84e09655a08ec4d5d3ef",
+                "source_contact_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
                 "capture_quality": "complete",
             },
             "ordinal",
@@ -486,7 +486,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "source_record_id": 1,
                 "bundle_fingerprint": "b" * 64, "capture_ordinal": 1,
-                "source_contact_id": "63AC84E09655A08EC4D5D3EF",
+                "source_contact_id": "AAAAAAAAAAAAAAAAAAAAAAAA",
                 "capture_quality": "complete",
             },
             "provider id",
@@ -496,7 +496,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "source_record_id": 1,
                 "bundle_fingerprint": "b" * 64, "capture_ordinal": 1,
-                "source_contact_id": "63ac84e09655a08ec4d5d3eg",
+                "source_contact_id": "aaaaaaaaaaaaaaaaaaaaaaag",
                 "capture_quality": "complete",
             },
             "provider id",
@@ -506,7 +506,7 @@ def test_every_contact_table_accepts_a_valid_row_and_json_is_canonical(
             {
                 "contact_id": 1, "source_record_id": 1,
                 "bundle_fingerprint": "b" * 64, "capture_ordinal": 1,
-                "source_contact_id": "63ac84e09655a08ec4d5d3ef",
+                "source_contact_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
                 "capture_quality": "unknown",
             },
             "quality",
@@ -549,7 +549,7 @@ def test_contact_database_rejects_invalid_section_capture_values(
                 "source_record_id": 1,
                 "bundle_fingerprint": "b" * 64,
                 "capture_ordinal": 1,
-                "source_contact_id": "63ac84e09655a08ec4d5d3ef",
+                "source_contact_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
                 "capture_quality": "complete",
             },
         ).scalar_one()
