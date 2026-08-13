@@ -2438,15 +2438,18 @@ then consumes these service contracts without rebuilding audit JSON in a router.
 **Files:**
 - Create: `backend/schemas/command_contacts.py`
 - Create: `backend/routers/command_contacts.py`
+- Modify: `backend/middleware/auth.py`
 - Modify: `backend/routers/command.py`
 - Modify: `backend/routers/command_provenance.py`
 - Modify: `backend/main.py`
 - Create: `backend/tests/test_command_contacts_router.py`
+- Modify: `backend/tests/test_admin_auth.py`
+- Modify: `backend/tests/test_command_contact_email_writes.py`
 - Modify: `backend/tests/test_command_models.py`
 
 - [ ] **Step 1: Freeze route ownership, declaration order, and administrator identity tests**
 
-`command_contacts.py` owns every contact-scoped URL below. `command.py` must delete the moved handlers rather than retaining aliases. It keeps the unrelated global `POST /tags`, `GET /saved-searches`, `DELETE /saved-searches/{search_id}`, and `POST /archive/import` URLs. The two global saved-search handlers delegate to the exact Task 5C `list_saved_searches()`/`delete_saved_search()` contracts; deletion receives `AdminSubject` and follows the contact-owned/global audit split defined there. `/archive/import` remains exactly once in the monolithic router with its existing request/response contract, receives `AdminSubject`, and delegates contact creation plus request-scoped contact owner resolution to Task 5C-E `ingest_archive_contacts()` before writing the remaining archive children. The handler never serializes/logs the private owner-ID map, never constructs contact audit JSON, and relies on `get_db` for one outer atomic commit/rollback. It must neither be shadowed nor duplicated by the focused router. `main.py` includes each router once under `/api/v1/command`.
+`command_contacts.py` owns every contact-scoped URL below. Its router is exactly `APIRouter()` with no router-wide authentication dependency; every handler receives `AdminSubject` directly. `command.py` must delete the moved handlers rather than retaining compatibility aliases. It keeps exactly the unrelated global `POST /tags`, `GET /saved-searches`, `DELETE /saved-searches/{search_id}`, and `POST /archive/import` URLs. The two global saved-search handlers delegate to the exact Task 5C `list_saved_searches()`/`delete_saved_search()` contracts; deletion receives `AdminSubject` and follows the contact-owned/global audit split defined there. `/archive/import` remains exactly once in the monolithic router with its existing request/response contract, receives `AdminSubject`, and delegates contact creation plus request-scoped contact owner resolution to Task 5C-E `ingest_archive_contacts()` before writing the remaining archive children. The handler never serializes/logs the private owner-ID map, never constructs contact audit JSON, and relies on `get_db` for one outer atomic commit/rollback. It must neither be shadowed nor duplicated by the focused router. `main.py` includes `command_contacts.router` first, `command.router` second, and `command_provenance.router` third, each exactly once under `/api/v1/command`.
 
 Declare focused routes in this exact order so no string is ever offered to `{contact_id}`:
 
@@ -2461,6 +2464,7 @@ GET    /celebrations
 GET    /contacts/{contact_id}
 PATCH  /contacts/{contact_id}
 GET    /contacts/{contact_id}/neighbors
+GET    /contacts/{contact_id}/workspace/summary
 GET    /contacts/{contact_id}/workspace
 GET    /contacts/{contact_id}/timeline
 GET    /contacts/{contact_id}/opportunities
@@ -2476,17 +2480,19 @@ POST   /contacts/{contact_id}/tags/{tag_id}
 DELETE /contacts/{contact_id}/tags/{tag_id}
 ```
 
-The legacy `GET /contacts?limit=&offset=&query=&stage=` remains an array with `limit=1..100` and `offset>=0`; it delegates to the service but does not masquerade as the directory page. The task route requires exactly one `state=to_do|completed|archived`. Static-route tests specifically call `/contacts/directory`, `/contacts/import`, `/contacts/bulk`, and `/contacts/sync-leads` and prove none returns an integer-path 422. A compatibility inventory test enumerates every method/path above plus `POST /tags`, `GET /saved-searches`, `DELETE /saved-searches/{search_id}`, and `POST /archive/import`; it asserts one registered route per method/path, the existing `/archive/import` response model, and no behavior-changing redirect or 404/405/422 collision.
+This is an exact inventory of `24` focused method/path pairs. `GET /contacts/{contact_id}` is the one intentional response upgrade: it returns `ContactDetailOut` for Tasks 7-8. The existing rich `GET /contacts/{contact_id}/workspace` response remains byte-for-wire compatible through Task 8 so the current contact page keeps working; it is not replaced with eight counts. The new `ContactWorkspaceSummaryOut` count contract lives only at `GET /contacts/{contact_id}/workspace/summary`. Declare `/workspace/summary` before `/workspace` and keep both before later section routes.
+
+The legacy `GET /contacts?limit=&offset=&query=&stage=` remains a raw `CRMContact` array. Validate `limit=1..100` and `offset>=0` at the FastAPI boundary instead of clamping. Its one bounded SELECT applies the existing blank-query behavior and `query` search over raw first name, last name, email, and phone, applies exact raw `stage` when present, orders by `CRMContact.created_at DESC, CRMContact.id DESC`, then applies the arbitrary requested offset and limit. It preserves raw stored `email`, `phone`, birthday, anniversary, stage, and `lead_id`; it never maps arbitrary offsets onto the name-sorted directory page and never substitutes recovered contact methods. This compatibility helper may remain a focused-router read because `list_contacts()` deliberately has a different paged directory contract.
+
+The task route requires exactly one `state=to_do|completed|archived`. Static-route tests specifically call `/contacts/directory`, `/contacts/import`, `/contacts/bulk`, and `/contacts/sync-leads` and prove none returns an integer-path 422. A compatibility inventory test enumerates all `24` focused method/path pairs above plus the four retained global routes; it asserts one registered route per method/path, exact route declaration indexes, unique operation IDs, successful `app.openapi()` generation, the existing `/archive/import` response-model identity, and no behavior-changing redirect or 404/405/422 collision.
 
 Replace dependency-only authentication with a subject-bearing dependency:
 
 ```python
-async def require_admin_subject(
-    claims: dict[str, object] = Depends(require_admin),
-) -> str:
+def _canonical_admin_subject(claims: dict[str, object]) -> str:
     subject = claims.get("sub")
     if (
-        not isinstance(subject, str)
+        type(subject) is not str
         or not 1 <= len(subject) <= 255
         or not subject.isascii()
         or not subject.isdigit()
@@ -2496,10 +2502,17 @@ async def require_admin_subject(
         raise HTTPException(status_code=401, detail="Invalid administrator subject")
     return subject
 
+async def require_admin_subject(
+    claims: dict[str, object] = Depends(require_admin),
+) -> str:
+    return _canonical_admin_subject(claims)
+
 AdminSubject = Annotated[str, Depends(require_admin_subject)]
 ```
 
-Every focused route receives `actor_subject: AdminSubject`; read handlers assign it to `_actor_subject`, while mutations pass the unchanged string to Task 5C. The retained global `DELETE /saved-searches/{search_id}` and `POST /archive/import` handlers also receive `actor_subject: AdminSubject` and pass it unchanged to `delete_saved_search()`/`ingest_archive_contacts()`. Tests exercise missing token `401`, a non-admin token `403`, every malformed/missing/noncanonical `sub` case from Task 5C-E as `401`, and a valid unchanged admin subject on focused mutations, global saved-search deletion, and archive import. Do not derive or trim an actor from email, display name, request IP, or a constant service value.
+Place `_canonical_admin_subject`, `require_admin_subject`, and `AdminSubject` in `backend/middleware/auth.py`. Strengthen the existing `require_admin()` subject gate to call `_canonical_admin_subject()` so the `len(subject) <= 255` check occurs before `int(subject)`; a thousands-of-digits subject must return `401`, not escape as `ValueError`. `require_admin_subject()` depends on that existing `require_admin()` and returns the same string unchanged. The focused router has no second router-wide dependency. The retained monolithic global deletion/archive handlers may use `AdminSubject` under `command.router`'s existing router-wide `Depends(require_admin)`: FastAPI's dependency cache must execute the shared inner `require_admin`/JWT decode exactly once per request.
+
+Every focused route receives `actor_subject: AdminSubject`; read handlers assign it to `_actor_subject`, while mutations pass the unchanged string to Task 5C. The retained global `DELETE /saved-searches/{search_id}` and `POST /archive/import` handlers also receive `actor_subject: AdminSubject` and pass it unchanged to `delete_saved_search()`/`ingest_archive_contacts()`. Tests exercise missing token `401`, a non-admin token `403`, every malformed/missing/noncanonical/over-255 `sub` case from Task 5C-E as `401`, a single JWT decode/dependency execution on both router styles, and a valid unchanged subject such as `"17"` on every focused mutation, global saved-search deletion, and archive import. Do not derive or trim an actor from email, display name, request IP, or a constant service value.
 
 - [ ] **Step 2: Define the complete Pydantic boundary and RED tests**
 
@@ -2583,9 +2596,15 @@ class ContactBulkRequest(BaseModel):
 
 Validate every contact ID as a positive integer and reject duplicate IDs rather than deduplicating them. Define concrete `ContactDetailOut`, `ContactNeighborsOut`, `ContactWorkspaceSummaryOut`, `ContactCelebrationsOut`, `ContactCreateIn`, `ContactUpdateIn`, `ContactNoteCreateIn`, and `ContactSavedSearchCreateIn` models as one-to-one adapters over the Task 5C DTOs, with `Field(default_factory=list)`/`Field(default_factory=dict)` for collections. All stage inputs use `min_length=1,max_length=50`, matching `CRMContact.stage VARCHAR(50)`; there is no 51–64-character acceptance path. `ContactUpdateIn` must contain at least one set field and must not expose `lead_id`, provenance, recovered-profile fields, or audit fields. `ContactCreateIn` accepts internal first/last name, email, phone, stage, birthday, and anniversary only. Timeline times remain nullable. `ContactEvidenceOut` must use `ContactSourceMetadataOut` only; no import or adapter from `SourceRecordDetailOut` is permitted. Validate `content_href == f"/api/v1/command/archive/artifacts/{artifact_id}/content"` and reject filename, source key, provider ID, source/archive path, preview, payload, stored URL, and artifact bytes as extra fields. Router tests serialize a source fixture containing all those private database fields and prove none appears in the response while the ID-derived authenticated link does.
 
-Preserve existing mutation response shapes while delegating writes to Task 5C: `POST /contacts` and `PATCH /contacts/{contact_id}` return legacy `ContactOut`; sync/import retain `ContactLegacySyncResult`/`ContactImportResult`; tag assignment/removal, note creation/deletion, and saved-search creation retain their current public JSON keys; `/archive/import` retains `ArchiveBundleImportResult` and merges the private helper's contact counts into its existing maps without exposing the owner map. The router maps service DTOs to those explicit compatibility models. `create_contact`/`update_contact` still return `ContactDetail` internally; no audit envelope is added. The new `contactsApi.create()`/`update()` clients decode a `ContactCreated` basic-contact result containing the positive `id` and editable internal fields, then detail consumers call `detail(id)` when the expanded DTO is needed. No endpoint silently changes a legacy response from a contact row into `ContactDetailOut`.
+Define an explicit `LegacyContactWorkspaceOut` rather than returning an untyped `dict`. It preserves these existing top-level keys and nested wire fields through Task 8: raw `contact: ContactOut`; `timeline[{id,kind,summary,created_at}]`; `tasks[{id,title,contact_id,description,priority,due_at,status}]`; `notes[{id,contact_id,body,created_at,updated_at}]`; `smart_plans[{id,plan_id,status}]`; `opportunities[{id,name,stage,value_cents,role}]`; `saved_searches[{id,name,criteria}]` where `criteria` is the stored JSON string exactly as the legacy route returned it; `bookings[{id,meeting_type,context,scheduled_at,location,notes}]`; and `tags[{id,name}]`. It remains at `/contacts/{contact_id}/workspace`. `ContactWorkspaceSummaryOut` contains only the eight Task 5C counts and is returned only from `/contacts/{contact_id}/workspace/summary`.
 
-Router tests cover every URL/method in Step 1, all filters and repeated values, exact response models, stable sort ties, `page>=1`, `page_size=1..100`, timeline cursor forwarding, task-state validation, 404 domain mapping, 409 integrity/conflict mapping, and 422 boundary errors. Evidence fixtures assert 317 upstream provider IDs, 317 resolved identities, zero aliases, 317 positions, 2,536 sections, plus aggregate-only 51 lead-backed/2 reviewed-overlap/49 legacy-only counts without private values.
+Preserve existing mutation response shapes while delegating writes to Task 5C. `POST /contacts` and `PATCH /contacts/{contact_id}` return legacy `ContactOut`; their adapter uses the service `ContactDetail.contact.id` only to retrieve/map the same raw `CRMContact` and returns raw `first_name`, `last_name`, `email`, `phone`, `stage`, `birthday`, `anniversary`, and `lead_id`. It must not substitute `ContactDirectoryRow.primary_email`/`primary_phone` recovered-method fallbacks. A missing raw row after a successful service call is a `409` integrity failure. `create_contact`/`update_contact` still return `ContactDetail` internally and no audit envelope is added. `GET /contacts/{contact_id}` alone intentionally returns `ContactDetailOut`.
+
+Sync/import retain exact `ContactLegacySyncResult`/`ContactImportResult` count keys. Declare explicit compatibility response models for the remaining mutations with exactly these JSON keys: tag assignment `{contact_id,tag_id}`; tag removal `{removed,contact_id,tag_id}` with `removed=result.changed` (an absent assignment is `removed:false`, `200`, and has no audit/activity rather than restoring the old `404`); note creation `{id,body}`; note deletion `{deleted:true,id}`; and contact saved-search creation `{id,name,criteria}`. For saved searches, `criteria` is always a canonical compact sorted JSON **string**, never a JSON object. Serialize the already validated/frozen command criteria with `json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))`; do not echo the pre-validation request value.
+
+The retained global `GET /saved-searches` maps each `ContactSavedSearchValue` to exactly `{id,name,criteria,contact_id,contact_name,updated_at}`, using the same canonical compact sorted JSON string and preserving service order `updated_at DESC, id DESC`. The retained global delete maps either `ContactMutationResult` or `WorkspaceMutationResult` to exactly `{deleted:true,id}` and never exposes audit type/ID. `/archive/import` retains `ArchiveBundleImportResult` and merges the private helper's contact counts into its existing maps without exposing the owner map. The new `contactsApi.create()`/`update()` clients decode the legacy basic-contact result containing the positive `id`, raw editable internal fields, and `lead_id`; detail consumers call `detail(id)` when the expanded DTO is needed.
+
+Router tests cover every URL/method in Step 1, all filters and repeated values, exact response models, stable sort ties, `page>=1`, `page_size=1..100`, timeline cursor forwarding, task-state validation, 404 domain mapping, 409 integrity/conflict mapping, and 422 boundary errors. Exact integer validators reject booleans, zero, negatives, and non-integers. Task-section tests reject a missing state, an unknown state, duplicate-equal states, and duplicate-conflicting states instead of accepting FastAPI's last value. Pin the compatibility bridges independently: legacy raw-list windows `limit=100,offset=99` and `limit=2,offset=1`; duplicate `created_at` values still order by descending ID; recovered method/date fallbacks never enter a raw list or POST/PATCH `ContactOut`; `GET /contacts/{id}` returns detail; `/workspace` retains rich arrays; and `/workspace/summary` returns exactly eight counts. Evidence fixtures assert 317 upstream provider IDs, 317 resolved identities, zero aliases, 317 positions, 2,536 sections, plus aggregate-only 51 lead-backed/2 reviewed-overlap/49 legacy-only counts without private values.
 
 Run:
 
@@ -2598,7 +2617,21 @@ Expected: FAIL because the focused schema/router and new service-backed URLs do 
 
 - [ ] **Step 3: Implement one transaction and one audit for every mutation**
 
-Map service `ContactNotFound` to 404, `ContactNotInDirectory`/integrity/link conflicts to 409, and validation to 422. Unexpected errors remain 500 and never expose payloads. Read routes never write audit rows.
+Use only this exception/status map:
+
+```text
+services.command_contacts.ContactNotFound                    -> 404
+services.command_contact_timeline.ContactNotFound            -> 404
+services.command_contacts.ContactNotInDirectory              -> 409
+services.command_contacts.ContactDataIntegrityError          -> 409
+services.command_contacts.ContactLinkConflict                -> 409
+services.command_contact_timeline.ContactTimelineIntegrityError -> 409
+services.command_contacts.ContactSectionUnsupported          -> 422
+request adapter/command/cursor/page validation               -> 422
+unexpected exception                                         -> 500 generic detail
+```
+
+The two service modules define distinct `ContactNotFound` classes, so import/alias and map both exact classes. Catch `TypeError`/`ValueError` as `422` only around construction of a request-derived command/cursor; do not turn a service programming error into validation. Do not broadly map `LookupError`, `RuntimeError`, or arbitrary exceptions to a domain status. The last unexpected-error boundary may sanitize to a generic `500` but must never put `str(exc)`, request input, recovered payloads, provider values, or paths in the response or logs. Parameterized tests exercise every row above, including an unexpected exception carrying a planted private value. Read routes run under `db.no_autoflush` where their service contract requires it and create no audit, activity, flush, or DML.
 
 Use these canonical audit actions:
 
@@ -2620,25 +2653,42 @@ contact.archive_import_applied
 workspace.saved_search_deleted
 ```
 
-Apply the Task 5C-E action-aware audit builders, activity compatibility matrix, lock order, provenance-link deletion rules, and hashing rules exactly; a router never constructs ad hoc audit JSON. Contact-owned create, edit, tag, note, search, sync/import/archive import, and each affected bulk contact write `CRMContactAuditEvent` inside the service savepoint and request outer transaction. Global saved-search deletion writes the exact actor-attributed `workspace.saved_search_deleted` activity specified in Task 5C-E. Bulk uses the fixed-query sorted locks and all-or-none semantics there. Any activity/audit or later archive-child failure rolls back the relevant business rows. Replays reevaluate Task 5C-E's explicit no-op rules; they are ordinary admin actions without idempotency tokens, but a no-op creates no activity/audit. Router tests prove `/archive/import` passes the unchanged admin subject, preserves its response, uses the private owner-ID map only for child linkage, never serializes it, and rolls back contact ingest when a later child fails.
+Apply the Task 5C-E action-aware audit builders, activity compatibility matrix, lock order, provenance-link deletion rules, and hashing rules exactly; a router never constructs ad hoc audit JSON. Contact-owned create, edit, tag, note, search, sync/import/archive import, and each affected bulk contact write `CRMContactAuditEvent` inside the service savepoint and request outer transaction. Global saved-search deletion writes the exact actor-attributed `workspace.saved_search_deleted` activity specified in Task 5C-E. Bulk uses the fixed-query sorted locks and all-or-none semantics there. Replays reevaluate Task 5C-E's explicit no-op rules; they are ordinary admin actions without idempotency tokens, but a no-op creates no activity/audit.
+
+`get_db` alone owns the outer request commit/rollback. No focused or retained-global handler calls `commit()`, `rollback()`, or `begin()`, and no handler creates an audit row. A Task 5C service may use its one nested savepoint; releasing that savepoint is not a commit. Service, audit, adapter, or later archive-child failure must propagate out of the dependency so the outer transaction rolls back every business row, compatibility activity, audit, and provenance change. Tests spy on commits and reproduce the real dependency finalizer rather than using a session override that cannot prove request atomicity.
+
+The retained `/archive/import` handler performs the following exact continuation:
+
+1. Convert request contacts to an exact tuple of `ContactImportRowCommand` and collect one tuple of every child email reference from tasks, notes, opportunity-contact lists, referrals, and agreements.
+2. Call `ingest_archive_contacts(db, contacts, referenced_child_emails, actor_subject=actor_subject)` exactly once. Set `created["contacts"]`/`skipped["contacts"]` from its public counts; do not run the former contact loop.
+3. Resolve each child with `canonical_email(raw_email)` and a direct lookup in the returned immutable `owner_contact_ids_by_normalized_email`. A positive ID is written directly to the child's `contact_id`; `None` means ambiguous/unresolved. Never query/refetch a `CRMContact` to rebuild ownership, never scan all contacts, and never use a name, phone, raw-email equality, or `CRMContactMethod` fallback.
+4. Preserve existing child behavior and unresolved counts: unresolved task/referral/agreement rows may be created with null `contact_id`; unresolved notes and opportunity links are skipped; every nonempty unresolved reference increments the existing counter once.
+5. Keep the private map in local scope only. Do not return, serialize, log, format, `repr`, attach to an exception, or place its canonical-email keys in a response. Return the unchanged `ArchiveBundleImportResult` shape after the remaining children finish.
+
+Router tests cover child-only input, a newly created sole owner, a preexisting sole owner, an ambiguous owner, invalid/noncanonical reference input, exact count merging, input-scoped/batched owner queries, and a planted failure after contact ingestion. Catching that failure and then allowing the outer transaction to finish must still leave zero imported contacts, marker activities, audits, and later children.
 
 `GET /celebrations` requires `month=1..12` and returns separate `birthdays` and `anniversaries` rows with `contact_id`, display name, `month`, `day`, nullable verified year, `year_quality=verified|yearless|sentinel|unknown`, and `origin=internal_crm|recovered`. It follows Task 5C precedence and never infers a celebration. A recovered month/day with no exposed year returns `year=None,year_quality="yearless"`; sentinel `1900` returns `year=None,year_quality="sentinel"`.
 
-Add all contact provenance entity types to the allowlist: `contact_profile`, `contact_method`, `contact_address`, `contact_neighborhood`, `contact_ownership`, `contact_relationship`, `contact_preference`, `contact_capture_position`, `contact_section_capture`, `contact_timeline_event`, `contact_note`, and `contact_saved_search`. Artifact detail remains behind the existing authenticated provenance endpoint.
+Add exactly these 12 contact provenance entity types to the existing allowlist: `contact_profile`, `contact_method`, `contact_address`, `contact_neighborhood`, `contact_ownership`, `contact_relationship`, `contact_preference`, `contact_capture_position`, `contact_section_capture`, `contact_timeline_event`, `contact_note`, and `contact_saved_search`. Retain existing generic `contact`, `note`, and `saved_search` values. Parameterized authenticated tests exercise every new value and retain unknown-value `422` coverage. Artifact detail remains behind the existing authenticated provenance endpoint.
+
+Update `backend/tests/test_command_contact_email_writes.py` for the ownership split instead of leaving imports pointed at deleted handlers. Direct import tests import `import_contacts` from `routers.command_contacts`; archive tests import `import_archive_bundle` from `routers.command`; both pass `actor_subject="17"` explicitly. They continue to assert canonical primary-email dedupe, ambiguous-owner child isolation, request-scoped/batched contact queries, exact counts, and child linkage. No compatibility handler alias remains in `command.py` solely to satisfy these tests.
 
 - [ ] **Step 4: Run API, auth, and ownership regressions and commit**
 
 ```bash
 cd backend
 "$PROJECT_PYTHON" -m pytest -q \
+  tests/test_admin_auth.py \
+  tests/test_command_contact_email_writes.py \
   tests/test_command_contacts_router.py \
   tests/test_command_contacts_service.py \
   tests/test_command_contact_timeline.py \
   tests/test_command_provenance_router.py \
   tests/test_command_models.py
-git add schemas/command_contacts.py routers/command_contacts.py routers/command.py \
-  routers/command_provenance.py main.py tests/test_command_contacts_router.py \
-  tests/test_command_models.py
+git add middleware/auth.py schemas/command_contacts.py routers/command_contacts.py \
+  routers/command.py routers/command_provenance.py main.py \
+  tests/test_admin_auth.py tests/test_command_contact_email_writes.py \
+  tests/test_command_contacts_router.py tests/test_command_models.py
 git commit -m "feat: expose Command contact parity APIs"
 ```
 
@@ -2732,6 +2782,7 @@ export type ContactDirectoryPage = Readonly<{
 
 export type ContactCreated = Readonly<{
   id: number;
+  lead_id: number | null;
   first_name: string;
   last_name: string;
   email: string | null;
@@ -2769,6 +2820,13 @@ export type ContactsApi = Readonly<{
   bulk: (input: ContactBulkInput, options?: { signal?: AbortSignal }) => Promise<ContactBulkResult>;
 }>;
 ```
+
+`contactsApi.workspace(id)` calls
+`/contacts/${id}/workspace/summary`; it never calls the retained rich legacy
+`/contacts/${id}/workspace`. Existing `commandApi.contactWorkspace(id)` keeps
+calling the rich legacy URL through its retained unchecked legacy transport
+until Task 8 removes that consumer. `contactsApi.detail(id)` calls
+`/contacts/${id}` and decodes the intentional `ContactDetailOut` upgrade.
 
 `section()` maps `opportunities`, `smart_plans`, `notes`, and `saved_searches` to their route segment; task sections map to `/tasks?state=to_do|completed|archived`. Timeline forwards the opaque cursor unchanged through `URLSearchParams`. Every method validates positive IDs and page bounds before fetch.
 
