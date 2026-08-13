@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { useState } from 'react';
 import type { Task } from '@/lib/command/api';
 import { CommandTabs } from '../ui/CommandTabs';
+import { CommandStatePanel } from '../ui/CommandStatePanel';
 
 const taskTabs = [
-  { value: 'my', label: 'My Tasks' },
-  { value: 'team', label: 'Team Tasks' },
-  { value: 'all', label: 'All Tasks' },
+  { value: 'personal', label: 'Personal' },
+  { value: 'team', label: 'Team' },
+  { value: 'all', label: 'All' },
 ] as const;
 
 type TaskScope = (typeof taskTabs)[number]['value'];
@@ -16,14 +17,16 @@ const taskDueCutoff = Date.now();
 
 export function HomeTaskQueue({
   tasks,
+  errorMessage,
   onCreateTask,
 }: {
-  tasks: readonly Task[];
+  tasks: readonly Task[] | null;
+  errorMessage?: string;
   onCreateTask: () => void;
 }) {
-  const [scope, setScope] = useState<TaskScope>('my');
+  const [scope, setScope] = useState<TaskScope>('all');
   const [dueFilter, setDueFilter] = useState('all');
-  const filteredTasks = scope === 'team'
+  const filteredTasks = scope !== 'all' || tasks === null
     ? []
     : tasks.filter((task) => {
         if (dueFilter === 'undated') return task.due_at === null;
@@ -75,8 +78,18 @@ export function HomeTaskQueue({
         role="tabpanel"
         aria-labelledby={`home-task-scope-tab-${scope}`}
       >
-        {scope === 'team' ? (
-          <p className="command-home-neutral-copy">Team task ownership is unavailable in the current internal API.</p>
+        {tasks === null ? (
+          <CommandStatePanel
+            kind="partial_capture"
+            title="Tasks unavailable"
+            message={errorMessage ?? 'The task region was not supplied.'}
+          />
+        ) : scope !== 'all' ? (
+          <CommandStatePanel
+            kind="partial_capture"
+            title={`${scope === 'personal' ? 'Personal' : 'Team'} task ownership is unavailable`}
+            message="The current internal task records do not include owner evidence. Use All to view the verified queue."
+          />
         ) : filteredTasks.length === 0 ? (
           <p className="command-home-positive-copy">No open tasks in scope.</p>
         ) : (

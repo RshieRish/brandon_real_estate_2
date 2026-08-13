@@ -56,6 +56,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const [taskPriority, setTaskPriority] = useState('normal');
   const [taskDueAt, setTaskDueAt] = useState('');
   const [taskSaving, setTaskSaving] = useState(false);
+  const [taskSaved, setTaskSaved] = useState(false);
   const [taskError, setTaskError] = useState('');
   const taskOpen = overlayState.token === createToken ? overlayState.open : createToken === 'task';
 
@@ -86,6 +87,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
 
   const openTask = useCallback(() => {
     setTaskError('');
+    setTaskSaved(false);
     setOverlayState({ token: createToken, open: true });
   }, [createToken]);
 
@@ -107,23 +109,31 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     setTaskSaving(true);
     setTaskError('');
     try {
-      const task = await commandApi.createTask({
+      await commandApi.createTask({
         title: taskTitle.trim(),
         description: taskDescription.trim(),
         priority: taskPriority,
         contact_id: null,
         due_at: taskDueAt ? new Date(taskDueAt).toISOString() : null,
       });
-      setLoadState((current) => current.kind === 'ready'
-        ? { ...current, model: { ...current.model, tasks: [task, ...current.model.tasks] } }
-        : current);
+    } catch (error) {
+      setTaskError(error instanceof Error ? error.message : 'Unable to create task.');
+      setTaskSaving(false);
+      return;
+    }
+
+    setTaskSaved(true);
+    try {
+      const refreshedModel = await loadHome();
+      setLoadState({ kind: 'ready', model: refreshedModel });
       setTaskTitle('');
       setTaskDescription('');
       setTaskPriority('normal');
       setTaskDueAt('');
       closeTask();
     } catch (error) {
-      setTaskError(error instanceof Error ? error.message : 'Unable to create task.');
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      setTaskError(`Task saved, but Home could not refresh.${detail}`);
     } finally {
       setTaskSaving(false);
     }
@@ -135,7 +145,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
           ...current,
           model: {
             ...current.model,
-            goals: current.model.goals.map((candidate) => candidate.id === goal.id ? goal : candidate),
+            goals: current.model.goals?.map((candidate) => candidate.id === goal.id ? goal : candidate) ?? null,
           },
         }
       : current);
@@ -232,6 +242,15 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
         ) : (
           <>
             <HomeShortcutStrip shortcuts={loadState.model.shortcuts} />
+            {Object.keys(loadState.model.regionErrors).length > 0 ? (
+              <CommandStatePanel
+                kind="error"
+                title="Some Home data is unavailable"
+                message="Available regions remain visible. Retry to refresh the unavailable regions."
+                actionLabel="Retry unavailable regions"
+                onAction={retryHome}
+              />
+            ) : null}
             <FollowUpReadinessHero
               readiness={loadState.model.readiness}
               nextActions={loadState.model.nextActions}
@@ -239,9 +258,17 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
             <HomeKpiStrip kpis={loadState.model.kpis} />
             <div className="command-home-columns">
               <div className="command-home-primary-column">
-                <HomeTaskQueue tasks={loadState.model.tasks} onCreateTask={openTask} />
+                <HomeTaskQueue
+                  tasks={loadState.model.tasks}
+                  errorMessage={loadState.model.regionErrors.tasks}
+                  onCreateTask={openTask}
+                />
                 {preferences.goals ? (
-                  <HomeGoals goals={loadState.model.goals} onGoalUpdated={updateGoal} />
+                  <HomeGoals
+                    goals={loadState.model.goals}
+                    errorMessage={loadState.model.regionErrors.goals}
+                    onGoalUpdated={updateGoal}
+                  />
                 ) : null}
               </div>
               {preferences.context ? <HomeContextPanels model={loadState.model} /> : null}
@@ -327,9 +354,9 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
             <button
               type="submit"
               className="command-primary-button command-touch-target"
-              disabled={taskSaving}
+              disabled={taskSaving || taskSaved}
             >
-              {taskSaving ? 'Saving…' : 'Save task'}
+              {taskSaving ? 'Saving…' : taskSaved ? 'Task saved' : 'Save task'}
             </button>
           </div>
         </form>

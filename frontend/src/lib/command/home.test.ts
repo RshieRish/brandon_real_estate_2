@@ -57,6 +57,26 @@ describe('Follow-Up Readiness', () => {
     expect(model.nextActions.some((action) => action.kind === 'uncontacted_leads')).toBe(false);
   });
 
+  it('requires every lead last-contact value to be either a string or explicit null', () => {
+    const contacts = completeHomeInput.contacts ?? [];
+    const model = buildCommandHomeModel({
+      ...completeHomeInput,
+      contacts: contacts.map((contact, index) => index === 1
+        ? { ...contact, last_contacted_at: undefined }
+        : contact),
+    }, now);
+
+    expect(model.readiness.factors.find((factor) => factor.key === 'uncontacted_leads')).toMatchObject({
+      available: false,
+      score: null,
+      affected: null,
+    });
+    expect(model.shortcuts.find((shortcut) => shortcut.key === 'never_contacted')).toMatchObject({
+      count: null,
+      evidenceState: 'partial_capture',
+    });
+  });
+
   it('never converts unavailable data into a zero count or perfect score', () => {
     const model = buildCommandHomeModel(emptyButUnavailableInput, now);
 
@@ -113,7 +133,7 @@ describe('Follow-Up Readiness', () => {
   it('sorts tasks and recent contacts only from supplied factual timestamps', () => {
     const model = buildCommandHomeModel(completeHomeInput, now);
 
-    expect(model.tasks.map((task) => task.id)).toEqual([1, 2, 3, 4]);
+    expect(model.tasks?.map((task) => task.id)).toEqual([1, 2, 3, 4]);
     expect(model.recentContacts.map((contact) => contact.id)).toEqual([3, 4]);
   });
 });
@@ -165,9 +185,24 @@ describe('loadCommandHome', () => {
     expect(model.regionErrors).toMatchObject({ celebrations: 'Celebrations unavailable' });
   });
 
-  it('records a typed per-region error map when every request fails', async () => {
+  it('preserves failed task and goal regions as unavailable instead of verified empty arrays', async () => {
+    const api = makeApi({
+      tasks: vi.fn().mockRejectedValue(new Error('Tasks unavailable')),
+      goals: vi.fn().mockRejectedValue(new Error('Goals unavailable')),
+    });
+    const model = await loadCommandHome(api, now);
+
+    expect(model.tasks).toBeNull();
+    expect(model.goals).toBeNull();
+    expect(model.regionErrors).toMatchObject({
+      tasks: 'Tasks unavailable',
+      goals: 'Goals unavailable',
+    });
+  });
+
+  it('rejects when every production region fails so the page can render a retryable error', async () => {
     const failed = vi.fn().mockRejectedValue(new Error('Offline'));
-    const model = await loadCommandHome({
+    await expect(loadCommandHome({
       overview: failed,
       contacts: failed,
       tasks: failed,
@@ -175,17 +210,6 @@ describe('loadCommandHome', () => {
       celebrations: failed,
       goals: failed,
       aiBriefing: failed,
-    }, now);
-
-    expect(model.readiness.score).toBeNull();
-    expect(model.regionErrors).toEqual({
-      overview: 'Offline',
-      contacts: 'Offline',
-      tasks: 'Offline',
-      opportunities: 'Offline',
-      celebrations: 'Offline',
-      goals: 'Offline',
-      briefing: 'Offline',
-    });
+    }, now)).rejects.toThrow('Command Home could not load any region');
   });
 });

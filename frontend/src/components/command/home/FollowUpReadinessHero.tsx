@@ -24,6 +24,8 @@ export function FollowUpReadinessHero({
 }) {
   const primaryAction = nextActions[0];
   const unavailable = readiness.factors.filter((factor) => !factor.available);
+  const verifiedClear = readiness.coverage.available === readiness.coverage.total && nextActions.length === 0;
+  const noVerifiedInputs = readiness.coverage.available === 0;
 
   return (
     <section className={`command-home-readiness is-${readiness.status}`} aria-labelledby="follow-up-readiness-heading">
@@ -37,7 +39,14 @@ export function FollowUpReadinessHero({
           <p className="command-home-readiness-coverage">{readiness.label}</p>
         </div>
         <div className="command-home-primary-action">
-          <p>{primaryAction?.title ?? 'Your follow-up queue is clear.'}</p>
+          <p>
+            {primaryAction?.title
+              ?? (verifiedClear
+                ? 'Your follow-up queue is clear.'
+                : noVerifiedInputs
+                  ? 'Readiness inputs are unavailable.'
+                  : 'Verified inputs have no ranked action; remaining inputs are unavailable.')}
+          </p>
           {primaryAction ? (
             <Link className="command-primary-button command-touch-target" href={primaryAction.href}>
               {actionLabels[primaryAction.kind]}
@@ -56,6 +65,16 @@ export function FollowUpReadinessHero({
           >
             <span>{factor.label}</span>
             <strong>{factor.score === null ? 'Unavailable' : `${factor.score}%`}</strong>
+            {factor.score === null ? (
+              <span className="command-readiness-score-unavailable" aria-hidden="true" />
+            ) : (
+              <progress
+                className="command-readiness-score-progress"
+                aria-label={`${factor.label} score`}
+                max={100}
+                value={factor.score}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -75,7 +94,11 @@ export function FollowUpReadinessHero({
               ))}
             </ol>
           ) : (
-            <p className="command-home-neutral-copy">No action is currently ranked from the verified inputs.</p>
+            <p className="command-home-neutral-copy">
+              {verifiedClear
+                ? 'No action is currently ranked because all verified queues are clear.'
+                : 'No action is currently ranked from the available inputs.'}
+            </p>
           )}
         </div>
         <details className="command-home-source-disclosure">

@@ -2,12 +2,15 @@
 
 import { useState } from 'react';
 import { commandApi, type Goal } from '@/lib/command/api';
+import { CommandStatePanel } from '../ui/CommandStatePanel';
 
 export function HomeGoals({
   goals,
+  errorMessage,
   onGoalUpdated,
 }: {
-  goals: readonly Goal[];
+  goals: readonly Goal[] | null;
+  errorMessage?: string;
   onGoalUpdated: (goal: Goal) => void;
 }) {
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -42,7 +45,13 @@ export function HomeGoals({
           <h2 id="home-goals-heading">Goals</h2>
         </div>
       </div>
-      {goals.length === 0 ? (
+      {goals === null ? (
+        <CommandStatePanel
+          kind="partial_capture"
+          title="Goals unavailable"
+          message={errorMessage ?? 'The goals region was not supplied.'}
+        />
+      ) : goals.length === 0 ? (
         <p className="command-home-neutral-copy">No goals set yet.</p>
       ) : (
         <ul className="command-home-goals">

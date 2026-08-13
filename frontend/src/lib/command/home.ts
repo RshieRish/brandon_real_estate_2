@@ -84,10 +84,10 @@ export type CommandHomeModel = Readonly<{
   shortcuts: readonly HomeShortcut[];
   kpis: readonly HomeKpi[];
   nextActions: readonly HomeNextAction[];
-  tasks: readonly Task[];
+  tasks: readonly Task[] | null;
   recentContacts: readonly Contact[];
   celebrations: Celebrations | null;
-  goals: readonly Goal[];
+  goals: readonly Goal[] | null;
   briefing: AiBriefing | null;
   bookingsState: 'partial_capture';
   regionErrors: Readonly<Partial<Record<CommandHomeRegion, string>>>;
@@ -137,6 +137,10 @@ function activeTasks(tasks: readonly Task[]): Task[] {
   return tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status.toLowerCase()));
 }
 
+function hasLastContactEvidence(contact: Contact): boolean {
+  return contact.last_contacted_at === null || typeof contact.last_contacted_at === 'string';
+}
+
 function buildFactors(input: CommandHomeInput, now: Date): readonly ReadinessFactor[] {
   const taskHref = '/admin/command/tasks?tab=todo&due=past';
   const overdueTasks = input.tasks === null
@@ -166,7 +170,7 @@ function buildFactors(input: CommandHomeInput, now: Date): readonly ReadinessFac
   const leadHref = '/admin/command/contacts?filter=never_contacted';
   const leadContacts = input.contacts?.filter((contact) => contact.stage.toLowerCase() === 'lead') ?? null;
   const hasLastContactCoverage = leadContacts !== null
-    && leadContacts.every((contact) => Object.hasOwn(contact, 'last_contacted_at'));
+    && leadContacts.every(hasLastContactEvidence);
   const uncontactedLeads = leadContacts === null || !hasLastContactCoverage
     ? unavailableFactor(
         'uncontacted_leads',
@@ -293,7 +297,7 @@ function shortcut(
 
 function buildShortcuts(input: CommandHomeInput): readonly HomeShortcut[] {
   const leads = input.contacts?.filter((contact) => contact.stage.toLowerCase() === 'lead') ?? null;
-  const neverContacted = leads !== null && leads.every((contact) => Object.hasOwn(contact, 'last_contacted_at'))
+  const neverContacted = leads !== null && leads.every(hasLastContactEvidence)
     ? leads.filter((contact) => contact.last_contacted_at === null).length
     : null;
   const recentlyActive = input.contacts !== null
@@ -406,8 +410,8 @@ function buildNextActions(factors: readonly ReadinessFactor[]): readonly HomeNex
     );
 }
 
-function sortTasks(tasks: readonly Task[] | null): readonly Task[] {
-  if (tasks === null) return [];
+function sortTasks(tasks: readonly Task[] | null): readonly Task[] | null {
+  if (tasks === null) return null;
   return activeTasks(tasks).sort((left, right) => {
     if (left.due_at === null && right.due_at === null) return left.id - right.id;
     if (left.due_at === null) return 1;
@@ -436,7 +440,7 @@ export function buildCommandHomeModel(input: CommandHomeInput, now = new Date())
     tasks: sortTasks(input.tasks),
     recentContacts: recentContacts(input.contacts),
     celebrations: input.celebrations,
-    goals: input.goals ?? [],
+    goals: input.goals,
     briefing: input.briefing,
     bookingsState: 'partial_capture',
     regionErrors: input.errors,
@@ -479,6 +483,10 @@ export async function loadCommandHome(
     if (result.status === 'fulfilled') values[region] = result.value;
     else errors[region] = errorMessage(result.reason);
   });
+
+  if (Object.keys(errors).length === regions.length) {
+    throw new Error('Command Home could not load any region.');
+  }
 
   return buildCommandHomeModel({
     overview: (values.overview as Overview | undefined) ?? null,

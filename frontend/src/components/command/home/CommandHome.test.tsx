@@ -136,17 +136,68 @@ describe('Command Home', () => {
     const shortcuts = screen.getByRole('region', { name: 'Home shortcuts' });
     expect(within(shortcuts).getAllByText('Unavailable')).toHaveLength(4);
     expect(within(shortcuts).getAllByText(/Source data is unavailable/i)).toHaveLength(4);
+    expect(screen.queryByText('Your follow-up queue is clear.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Readiness inputs are unavailable/i)).toBeInTheDocument();
   });
 
-  it('changes task scope with keyboard-operable tabs and shows the current API limitation', async () => {
+  it('renders unowned task data only in All and marks personal and team scopes unavailable', async () => {
     const user = userEvent.setup();
     render(<CommandHome loadHome={resolved()} />);
-    const myTasks = await screen.findByRole('tab', { name: 'My Tasks' });
+    const allTasks = await screen.findByRole('tab', { name: 'All' });
 
-    myTasks.focus();
-    await user.keyboard('{ArrowRight}{Enter}');
-    expect(screen.getByRole('tab', { name: 'Team Tasks' })).toHaveAttribute('aria-selected', 'true');
+    expect(allTasks).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Call Avery')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'My Tasks' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Personal' }));
+    expect(screen.getByText(/Personal task ownership is unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Call Avery')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Team' }));
     expect(screen.getByText(/Team task ownership is unavailable/i)).toBeInTheDocument();
+  });
+
+  it('renders semantic score tracks so factor scores are visually and accessibly encoded', async () => {
+    render(<CommandHome loadHome={resolved()} />);
+
+    expect(await screen.findByRole('progressbar', { name: 'Overdue tasks score' })).toHaveAttribute('value', '25');
+    expect(screen.getByRole('progressbar', { name: 'Contact health score' })).toHaveAttribute('value', '75');
+
+    render(<CommandHome loadHome={resolved(partialHomeModel)} />);
+    await screen.findAllByRole('heading', { name: 'Follow-Up Readiness' });
+    expect(screen.queryAllByRole('progressbar', { name: 'Never-contacted leads score' })).toHaveLength(1);
+  });
+
+  it('keeps failed task, goal, celebration, and briefing regions unavailable and retries the snapshot', async () => {
+    const regionFailureModel = buildCommandHomeModel({
+      ...completeHomeInput,
+      tasks: null,
+      goals: null,
+      celebrations: null,
+      briefing: null,
+      errors: {
+        tasks: 'Tasks unavailable',
+        goals: 'Goals unavailable',
+        celebrations: 'Celebrations unavailable',
+        briefing: 'Briefing unavailable',
+      },
+    }, now);
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(regionFailureModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+
+    expect(await screen.findByRole('heading', { name: 'Tasks unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Goals unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Celebrations unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Briefing unavailable' })).toBeInTheDocument();
+    expect(screen.queryByText('No open tasks in scope.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No goals set yet.')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry unavailable regions' }));
+    expect(await screen.findByText('Call Avery')).toBeInTheDocument();
+    expect(loadHome).toHaveBeenCalledTimes(2);
   });
 
   it('persists goal progress through the current internal API', async () => {
@@ -204,6 +255,48 @@ describe('Command Home', () => {
     }));
     expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
     expect(navigationMocks.replace).toHaveBeenCalledWith('/admin/command', { scroll: false });
+  });
+
+  it('reloads and swaps the whole Home model atomically after quick task creation', async () => {
+    const user = userEvent.setup();
+    let resolveRefresh!: (model: CommandHomeModel) => void;
+    const refreshedModel = buildCommandHomeModel({
+      ...completeHomeInput,
+      tasks: [
+        ...(completeHomeInput.tasks ?? []),
+        {
+          id: 20,
+          title: 'Call new lead',
+          contact_id: null,
+          description: '',
+          priority: 'normal',
+          due_at: '2026-08-08T13:00:00.000Z',
+          status: 'open',
+        },
+      ],
+    }, now);
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockImplementationOnce(() => new Promise<CommandHomeModel>((resolve) => {
+        resolveRefresh = resolve;
+      }));
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    const metrics = screen.getByRole('region', { name: 'Operational metrics' });
+    expect(within(within(metrics).getByRole('link', { name: /Open tasks/i })).getByText('4')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Call new lead');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(2));
+
+    expect(within(within(metrics).getByRole('link', { name: /Open tasks/i })).getByText('4')).toBeInTheDocument();
+    expect(screen.getByText(/3 overdue tasks need attention first/i)).toBeInTheDocument();
+
+    await act(async () => resolveRefresh(refreshedModel));
+    expect(await within(within(metrics).getByRole('link', { name: /Open tasks/i })).findByText('5')).toBeInTheDocument();
+    expect(screen.getByText(/4 overdue tasks need attention first/i)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
   });
 
   it('uses Customize only to change visible local Home panels', async () => {

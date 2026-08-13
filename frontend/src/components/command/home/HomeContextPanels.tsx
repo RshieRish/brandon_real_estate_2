@@ -21,7 +21,13 @@ export function HomeContextPanels({ model }: { model: CommandHomeModel }) {
           </div>
           <Link href="/admin/command/contacts">View contacts</Link>
         </div>
-        {recentlyActive?.count === null ? (
+        {model.regionErrors.contacts ? (
+          <CommandStatePanel
+            kind="partial_capture"
+            title="Recent contacts unavailable"
+            message={model.regionErrors.contacts}
+          />
+        ) : recentlyActive?.count === null ? (
           <CommandStatePanel
             kind="partial_capture"
             title="Recent activity unavailable"
@@ -43,7 +49,13 @@ export function HomeContextPanels({ model }: { model: CommandHomeModel }) {
         )}
 
         <h3 className="command-home-subheading">Celebrations</h3>
-        {celebrationRows === null ? (
+        {model.regionErrors.celebrations ? (
+          <CommandStatePanel
+            kind="partial_capture"
+            title="Celebrations unavailable"
+            message={model.regionErrors.celebrations}
+          />
+        ) : celebrationRows === null ? (
           <p className="command-home-neutral-copy">Birthday and anniversary records are unavailable.</p>
         ) : celebrationRows.length > 0 ? (
           <ul className="command-home-celebrations">
@@ -81,7 +93,13 @@ export function HomeContextPanels({ model }: { model: CommandHomeModel }) {
           </div>
           <span className="command-review-badge">Review only</span>
         </div>
-        {model.briefing ? (
+        {model.regionErrors.briefing ? (
+          <CommandStatePanel
+            kind="partial_capture"
+            title="Briefing unavailable"
+            message={model.regionErrors.briefing}
+          />
+        ) : model.briefing ? (
           <>
             <p className="command-home-briefing">{model.briefing.summary}</p>
             <small>Saved source: {model.briefing.source}</small>
