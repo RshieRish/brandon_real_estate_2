@@ -8,6 +8,22 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import NoReturn
 
+from sqlalchemy import (
+    Select,
+    and_,
+    case,
+    exists,
+    extract,
+    func,
+    literal,
+    not_,
+    or_,
+    select,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
+
 from models.command import (
     CRMActivity,
     CRMContact,
@@ -32,21 +48,6 @@ from models.command_contacts import (
     CRMContactTimelineEvent,
 )
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
-from sqlalchemy import (
-    Select,
-    and_,
-    case,
-    exists,
-    extract,
-    func,
-    literal,
-    not_,
-    or_,
-    select,
-)
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql.elements import ColumnElement
-
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     CaptureQualityValue,
@@ -221,8 +222,7 @@ def _never_contacted_predicate() -> ColumnElement[bool]:
         .select_from(CRMContactTimelineEvent)
         .where(
             CRMContactTimelineEvent.contact_id == CRMActivity.contact_id,
-            CRMContactTimelineEvent.source_record_id
-            == CRMActivity.source_record_id,
+            CRMContactTimelineEvent.source_record_id == CRMActivity.source_record_id,
         )
         .correlate(CRMActivity)
     )
@@ -231,9 +231,7 @@ def _never_contacted_predicate() -> ColumnElement[bool]:
         .select_from(CRMActivity)
         .where(
             CRMActivity.contact_id == CRMContact.id,
-            CRMActivity.kind.in_(
-                tuple(sorted(CONTACT_TOUCH_ACTIVITY_KINDS))
-            ),
+            CRMActivity.kind.in_(tuple(sorted(CONTACT_TOUCH_ACTIVITY_KINDS))),
             or_(
                 CRMActivity.source_record_id.is_(None),
                 not_(mirrored_activity),
@@ -275,15 +273,9 @@ def _directory_predicates(
             or_(
                 func.lower(CRMContact.first_name).like(pattern, escape="\\"),
                 func.lower(CRMContact.last_name).like(pattern, escape="\\"),
-                func.lower(CRMContact.normalized_email).like(
-                    pattern, escape="\\"
-                ),
-                func.lower(CRMContactProfile.legal_name).like(
-                    pattern, escape="\\"
-                ),
-                func.lower(CRMContactProfile.preferred_name).like(
-                    pattern, escape="\\"
-                ),
+                func.lower(CRMContact.normalized_email).like(pattern, escape="\\"),
+                func.lower(CRMContactProfile.legal_name).like(pattern, escape="\\"),
+                func.lower(CRMContactProfile.preferred_name).like(pattern, escape="\\"),
                 func.lower(CRMContactProfile.company).like(pattern, escape="\\"),
                 func.lower(CRMContactProfile.title).like(pattern, escape="\\"),
                 method_match,
@@ -299,8 +291,7 @@ def _directory_predicates(
                 .where(
                     CRMContactOwnership.contact_id == CRMContact.id,
                     CRMContactOwnership.role == "owner",
-                    CRMContactOwnership.provider_actor_id
-                    == filters.owner_actor_id,
+                    CRMContactOwnership.provider_actor_id == filters.owner_actor_id,
                 )
             )
         )
@@ -312,8 +303,7 @@ def _directory_predicates(
                 .where(
                     CRMContactOwnership.contact_id == CRMContact.id,
                     CRMContactOwnership.role == "assignee",
-                    CRMContactOwnership.provider_actor_id
-                    == filters.assignee_actor_id,
+                    CRMContactOwnership.provider_actor_id == filters.assignee_actor_id,
                 )
             )
         )
@@ -361,9 +351,7 @@ def _directory_predicates(
                 recovered_month_column=CRMContactProfile.birth_month,
                 recovered_day_column=CRMContactProfile.birth_day,
                 recovered_year_column=CRMContactProfile.birth_year,
-                recovered_year_quality_column=(
-                    CRMContactProfile.birth_year_quality
-                ),
+                recovered_year_quality_column=(CRMContactProfile.birth_year_quality),
                 month=filters.birthday_month,
             )
         )
@@ -397,9 +385,7 @@ def _directory_predicates(
                 recovered_month_column=CRMContactProfile.birth_month,
                 recovered_day_column=CRMContactProfile.birth_day,
                 recovered_year_column=CRMContactProfile.birth_year,
-                recovered_year_quality_column=(
-                    CRMContactProfile.birth_year_quality
-                ),
+                recovered_year_quality_column=(CRMContactProfile.birth_year_quality),
                 month=now.month,
             )
         )
@@ -612,9 +598,7 @@ async def _page_associations(
     return profiles, methods, ownerships, tags
 
 
-def _method_value(
-    methods: Sequence[CRMContactMethod], kind: str
-) -> str | None:
+def _method_value(methods: Sequence[CRMContactMethod], kind: str) -> str | None:
     for method in methods:
         if method.kind == kind:
             return method.raw_value or method.normalized_value
@@ -699,9 +683,7 @@ async def list_contacts(
         )
     ).all()
     contact_ids = tuple(contact.id for contact in contacts)
-    profiles, methods, ownerships, tags = await _page_associations(
-        db, contact_ids
-    )
+    profiles, methods, ownerships, tags = await _page_associations(db, contact_ids)
     recovered_ids = set(
         await db.scalars(
             select(CRMEntitySource.entity_id)
@@ -762,24 +744,52 @@ async def get_contact_detail(
         profiles, methods, ownerships, tags = await _page_associations(
             db, (contact.id,)
         )
-        recovered = bool(
-            await db.scalar(
-                select(literal(1))
-                .select_from(CRMEntitySource)
-                .join(
+        profile = profiles.get(contact.id)
+        requested_link = aliased(CRMEntitySource)
+        contributing_link = aliased(CRMEntitySource)
+        profile_link_rows = (
+            await db.execute(
+                select(requested_link, CRMSourceRecord, contributing_link)
+                .select_from(requested_link)
+                .outerjoin(
                     CRMSourceRecord,
-                    CRMSourceRecord.id == CRMEntitySource.source_record_id,
+                    CRMSourceRecord.id == requested_link.source_record_id,
+                )
+                .outerjoin(
+                    contributing_link,
+                    contributing_link.source_record_id
+                    == requested_link.source_record_id,
                 )
                 .where(
-                    CRMEntitySource.entity_type == "contact",
-                    CRMEntitySource.entity_id == contact.id,
-                    CRMSourceRecord.source_system == "kw_command",
-                    CRMSourceRecord.module == "contacts",
-                    CRMSourceRecord.record_kind == "contact_profile",
+                    requested_link.entity_type == "contact",
+                    requested_link.entity_id == contact.id,
                 )
-                .limit(1)
+                .order_by(requested_link.id, contributing_link.id)
             )
-        )
+        ).all()
+        exact_source_links: dict[int, set[int]] = defaultdict(set)
+        invalid_candidate = False
+        for link, source, contributing in profile_link_rows:
+            exact_domain = (
+                source is not None
+                and source.source_system == "kw_command"
+                and source.module == "contacts"
+                and source.record_kind == "contact_profile"
+            )
+            if exact_domain:
+                exact_source_links[link.id].add(contributing.id)
+            else:
+                invalid_candidate = True
+        recovered = bool(exact_source_links)
+        if (
+            invalid_candidate
+            or (profile is not None) != recovered
+            or any(
+                contributing_ids != {link_id}
+                for link_id, contributing_ids in exact_source_links.items()
+            )
+        ):
+            raise ContactDataIntegrityError("recovered profile ownership is invalid")
         addresses = (
             await db.scalars(
                 select(CRMContactAddress)
@@ -790,7 +800,6 @@ async def get_contact_detail(
                 )
             )
         ).all()
-    profile = profiles.get(contact.id)
     contact_ownerships = ownerships.get(contact.id, ())
     role_rank = {"owner": 0, "assignee": 1, "collaborator": 2}
     ordered_ownerships = sorted(
@@ -812,9 +821,7 @@ async def get_contact_detail(
             lead_source=profile.lead_source,
             account_name=profile.account_name,
             birthday=_recovered_celebration(profile, kind="birthday"),
-            anniversary=_recovered_celebration(
-                profile, kind="anniversary"
-            ),
+            anniversary=_recovered_celebration(profile, kind="anniversary"),
         )
     return ContactDetail(
         contact=_directory_row(
@@ -854,7 +861,6 @@ async def get_contact_detail(
 
 
 _SECTION_RECORD_KINDS = {
-    "timeline": "contact_timeline_event",
     "opportunities": "contact_opportunity",
     "smart_plans": "contact_smart_plan",
     "notes": "contact_note",
@@ -864,7 +870,6 @@ _SECTION_RECORD_KINDS = {
     "tasks_archived": "contact_task",
 }
 _SECTION_ENTITY_TYPES = {
-    "timeline": "contact_timeline_event",
     "opportunities": "opportunity",
     "smart_plans": "smart_plan",
     "notes": "note",
@@ -884,7 +889,6 @@ async def _contact_occurrence_rows(
     saved_search_ids: set[int],
     smart_plan_ids: set[int],
     opportunity_ids: set[int],
-    timeline_event_ids: set[int],
 ):
     rows = (
         await db.execute(
@@ -908,8 +912,7 @@ async def _contact_occurrence_rows(
             )
             .outerjoin(
                 CRMSourceRecord,
-                CRMSourceRecord.id
-                == CRMContactSourceOccurrence.source_record_id,
+                CRMSourceRecord.id == CRMContactSourceOccurrence.source_record_id,
             )
             .outerjoin(
                 CRMEntitySource,
@@ -918,8 +921,16 @@ async def _contact_occurrence_rows(
             )
             .where(
                 or_(
-                    CRMContactSourceOccurrence.contact_id == contact_id,
-                    CRMContactCapturePosition.contact_id == contact_id,
+                    and_(
+                        or_(
+                            CRMContactSourceOccurrence.contact_id == contact_id,
+                            CRMContactCapturePosition.contact_id == contact_id,
+                        ),
+                        or_(
+                            CRMContactSectionCapture.section_name.is_(None),
+                            CRMContactSectionCapture.section_name != "timeline",
+                        ),
+                    ),
                     and_(
                         CRMEntitySource.entity_type == "task",
                         CRMEntitySource.entity_id.in_(task_ids),
@@ -940,11 +951,6 @@ async def _contact_occurrence_rows(
                         CRMEntitySource.entity_type == "opportunity",
                         CRMEntitySource.entity_id.in_(opportunity_ids),
                     ),
-                    and_(
-                        CRMEntitySource.entity_type
-                        == "contact_timeline_event",
-                        CRMEntitySource.entity_id.in_(timeline_event_ids),
-                    ),
                 )
             )
             .order_by(CRMContactSourceOccurrence.id, CRMEntitySource.id)
@@ -964,7 +970,6 @@ async def _require_internal_links_have_occurrences(
     saved_search_ids: set[int],
     smart_plan_ids: set[int],
     opportunity_ids: set[int],
-    timeline_event_ids: set[int],
 ) -> None:
     owns_requested_entity = or_(
         and_(
@@ -987,10 +992,6 @@ async def _require_internal_links_have_occurrences(
             CRMEntitySource.entity_type == "opportunity",
             CRMEntitySource.entity_id.in_(opportunity_ids),
         ),
-        and_(
-            CRMEntitySource.entity_type == "contact_timeline_event",
-            CRMEntitySource.entity_id.in_(timeline_event_ids),
-        ),
     )
     missing_occurrence = await db.scalar(
         select(CRMEntitySource.id)
@@ -1006,9 +1007,7 @@ async def _require_internal_links_have_occurrences(
         .limit(1)
     )
     if missing_occurrence is not None:
-        raise ContactDataIntegrityError(
-            "contact occurrence ownership is invalid"
-        )
+        raise ContactDataIntegrityError("contact occurrence ownership is invalid")
 
 
 def _require_occurrence_context(
@@ -1031,12 +1030,9 @@ def _require_occurrence_context(
         or section.section_name not in _SECTION_RECORD_KINDS
         or source.source_system != "kw_command"
         or source.module != "contacts"
-        or source.record_kind
-        != _SECTION_RECORD_KINDS[section.section_name]
+        or source.record_kind != _SECTION_RECORD_KINDS[section.section_name]
     ):
-        raise ContactDataIntegrityError(
-            "contact occurrence ownership is invalid"
-        )
+        raise ContactDataIntegrityError("contact occurrence ownership is invalid")
     links = [row[4] for row in rows if row[4] is not None]
     if len(links) > 1:
         raise ContactDataIntegrityError("contact source link is invalid")
@@ -1085,29 +1081,24 @@ async def get_contact_workspace_summary(
             ).all()
         }
         notes = set(
-            await db.scalars(
-                select(CRMNote.id).where(CRMNote.contact_id == contact_id)
-            )
+            await db.scalars(select(CRMNote.id).where(CRMNote.contact_id == contact_id))
         )
         searches = set(
             await db.scalars(
-                select(CRMSavedSearch.id).where(
-                    CRMSavedSearch.contact_id == contact_id
-                )
+                select(CRMSavedSearch.id).where(CRMSavedSearch.contact_id == contact_id)
             )
         )
         enrollments = {
-            row.smart_plan_id: row.status
+            row.id: row.status
             for row in (
                 await db.execute(
                     select(
-                        CRMSmartPlanEnrollment.smart_plan_id,
+                        CRMSmartPlanEnrollment.id,
                         CRMSmartPlanEnrollment.status,
                     )
                     .join(
                         CRMSmartPlan,
-                        CRMSmartPlan.id
-                        == CRMSmartPlanEnrollment.smart_plan_id,
+                        CRMSmartPlan.id == CRMSmartPlanEnrollment.smart_plan_id,
                     )
                     .where(CRMSmartPlanEnrollment.contact_id == contact_id)
                 )
@@ -1118,17 +1109,9 @@ async def get_contact_workspace_summary(
                 select(CRMOpportunityContact.opportunity_id)
                 .join(
                     CRMOpportunity,
-                    CRMOpportunity.id
-                    == CRMOpportunityContact.opportunity_id,
+                    CRMOpportunity.id == CRMOpportunityContact.opportunity_id,
                 )
                 .where(CRMOpportunityContact.contact_id == contact_id)
-            )
-        )
-        timeline_events = set(
-            await db.scalars(
-                select(CRMContactTimelineEvent.id).where(
-                    CRMContactTimelineEvent.contact_id == contact_id
-                )
             )
         )
         await _require_internal_links_have_occurrences(
@@ -1138,7 +1121,6 @@ async def get_contact_workspace_summary(
             saved_search_ids=searches,
             smart_plan_ids=set(enrollments),
             opportunity_ids=opportunities,
-            timeline_event_ids=timeline_events,
         )
         occurrence_groups = await _contact_occurrence_rows(
             db,
@@ -1148,7 +1130,6 @@ async def get_contact_workspace_summary(
             saved_search_ids=searches,
             smart_plan_ids=set(enrollments),
             opportunity_ids=opportunities,
-            timeline_event_ids=timeline_events,
         )
 
         counts = {
@@ -1171,32 +1152,25 @@ async def get_contact_workspace_summary(
                     "saved_search": link.entity_id in searches,
                     "smart_plan": link.entity_id in enrollments,
                     "opportunity": link.entity_id in opportunities,
-                    "contact_timeline_event": link.entity_id in timeline_events,
                 }[link.entity_type]
                 if not owned:
-                    raise ContactDataIntegrityError(
-                        "contact source link is invalid"
-                    )
-                continue
-            if section.section_name == "timeline":
+                    raise ContactDataIntegrityError("contact source link is invalid")
                 continue
             if section.section_name == "smart_plans":
                 status = _occurrence_values(source).get("status")
-                if not isinstance(status, str) or status.casefold() != "active":
+                if not isinstance(status, str) or status.strip().casefold() != "active":
                     continue
             counts[section.section_name] += 1
 
         task_counts = {"open": 0, "completed": 0, "archived": 0}
         for status in tasks.values():
             if status not in task_counts:
-                raise ContactDataIntegrityError(
-                    "contact task status is invalid"
-                )
+                raise ContactDataIntegrityError("contact task status is invalid")
             task_counts[status] += 1
         active_enrollments = sum(
             1
             for status in enrollments.values()
-            if isinstance(status, str) and status.casefold() == "active"
+            if isinstance(status, str) and status.strip().casefold() == "active"
         )
         try:
             bookings = await count_contact_bookings(db, contact_id)
@@ -1209,12 +1183,8 @@ async def get_contact_workspace_summary(
 
     return ContactWorkspaceSummary(
         open_tasks=task_counts["open"] + counts["tasks_to_do"],
-        completed_tasks=(
-            task_counts["completed"] + counts["tasks_completed"]
-        ),
-        archived_tasks=(
-            task_counts["archived"] + counts["tasks_archived"]
-        ),
+        completed_tasks=(task_counts["completed"] + counts["tasks_completed"]),
+        archived_tasks=(task_counts["archived"] + counts["tasks_archived"]),
         active_smart_plans=active_enrollments + counts["smart_plans"],
         opportunities=len(opportunities) + counts["opportunities"],
         notes=len(notes) + counts["notes"],
@@ -1258,9 +1228,7 @@ async def get_contact_neighbors(
         )
     ).one_or_none()
     if row is None:
-        raise ContactNotInDirectory(
-            "contact is outside the requested directory"
-        )
+        raise ContactNotInDirectory("contact is outside the requested directory")
     return ContactNeighbors(
         previous_contact_id=row.previous_id,
         next_contact_id=row.next_id,
@@ -1345,6 +1313,7 @@ async def list_contact_celebrations(
         anniversary = _celebration_row(contact, profile, kind="anniversary")
         if anniversary is not None and anniversary.month == month:
             anniversaries.append(anniversary)
+
     def order_key(row: ContactCelebrationRow) -> tuple[int, str, int]:
         return row.day, row.display_name.casefold(), row.contact_id
 

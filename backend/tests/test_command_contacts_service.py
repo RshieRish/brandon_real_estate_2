@@ -9,6 +9,10 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from database import Base
 from models.booking import Booking
 from models.command import (
@@ -60,9 +64,6 @@ from services.command_contacts import (
     list_contact_celebrations,
     list_contacts,
 )
-from sqlalchemy import event, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
 
@@ -376,6 +377,199 @@ async def test_contact_detail_missing_and_query_count_are_bounded(
 
 
 @pytest.mark.asyncio
+async def test_contact_detail_rejects_profile_link_mismatches_and_bad_domains(
+    service_db: AsyncSession,
+):
+    profile_only = CRMContact(
+        first_name="Profile",
+        last_name="Only",
+        stage="lead",
+    )
+    link_only = CRMContact(first_name="Link", last_name="Only", stage="lead")
+    wrong_domain = CRMContact(
+        first_name="Wrong",
+        last_name="Domain",
+        stage="lead",
+    )
+    wrong_domain_without_profile = CRMContact(
+        first_name="Wrong",
+        last_name="Domain Without Profile",
+        stage="lead",
+    )
+    ambiguous = CRMContact(
+        first_name="Ambiguous",
+        last_name="Links",
+        stage="lead",
+    )
+    cross_profile = CRMContact(
+        first_name="Cross",
+        last_name="Profile",
+        stage="lead",
+    )
+    cross_link = CRMContact(
+        first_name="Cross",
+        last_name="Link",
+        stage="lead",
+    )
+    conflicting = CRMContact(
+        first_name="Conflicting",
+        last_name="Targets",
+        stage="lead",
+    )
+    service_db.add_all(
+        [
+            profile_only,
+            link_only,
+            wrong_domain,
+            wrong_domain_without_profile,
+            ambiguous,
+            cross_profile,
+            cross_link,
+            conflicting,
+        ]
+    )
+    await service_db.flush()
+    service_db.add_all(
+        CRMContactProfile(contact_id=contact.id)
+        for contact in (
+            profile_only,
+            wrong_domain,
+            ambiguous,
+            cross_profile,
+            conflicting,
+        )
+    )
+    valid_link_only = _source_record(80_101)
+    invalid_domain = _source_record(80_102)
+    invalid_domain.source_system = "synthetic_other_system"
+    invalid_domain_without_profile = _source_record(80_107)
+    invalid_domain_without_profile.module = "synthetic_other_module"
+    ambiguous_one = _source_record(80_103)
+    ambiguous_two = _source_record(80_104)
+    cross_source = _source_record(80_105)
+    conflicting_source = _source_record(80_106)
+    service_db.add_all(
+        [
+            valid_link_only,
+            invalid_domain,
+            invalid_domain_without_profile,
+            ambiguous_one,
+            ambiguous_two,
+            cross_source,
+            conflicting_source,
+        ]
+    )
+    await service_db.flush()
+    service_db.add_all(
+        [
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=link_only.id,
+                source_record_id=valid_link_only.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=wrong_domain.id,
+                source_record_id=invalid_domain.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=wrong_domain_without_profile.id,
+                source_record_id=invalid_domain_without_profile.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=ambiguous.id,
+                source_record_id=ambiguous_one.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=ambiguous.id,
+                source_record_id=ambiguous_two.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=cross_link.id,
+                source_record_id=cross_source.id,
+            ),
+            CRMEntitySource(
+                entity_type="contact",
+                entity_id=conflicting.id,
+                source_record_id=conflicting_source.id,
+            ),
+            CRMEntitySource(
+                entity_type="note",
+                entity_id=999_999,
+                source_record_id=conflicting_source.id,
+            ),
+        ]
+    )
+    await service_db.flush()
+
+    for contact in (
+        profile_only,
+        link_only,
+        wrong_domain,
+        wrong_domain_without_profile,
+        cross_profile,
+        cross_link,
+        conflicting,
+    ):
+        with pytest.raises(
+            ContactDataIntegrityError,
+            match="recovered profile ownership is invalid",
+        ) as error:
+            await get_contact_detail(service_db, contact.id)
+        assert contact.first_name not in str(error.value)
+
+    assert (await get_contact_detail(service_db, ambiguous.id)).contact.sources == (
+        "kw_command",
+    )
+
+
+@pytest.mark.asyncio
+async def test_contact_detail_profile_link_validation_is_bounded(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(
+        first_name="Bounded",
+        last_name="Profile Links",
+        stage="lead",
+    )
+    service_db.add(contact)
+    await service_db.flush()
+    service_db.add(CRMContactProfile(contact_id=contact.id))
+    sources = [_source_record(80_200 + index) for index in range(100)]
+    service_db.add_all(sources)
+    await service_db.flush()
+    service_db.add_all(
+        CRMEntitySource(
+            entity_type="contact",
+            entity_id=contact.id,
+            source_record_id=source.id,
+        )
+        for source in sources
+    )
+    await service_db.flush()
+    selects = 0
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    assert service_db.bind is not None
+    event.listen(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        assert (
+            await get_contact_detail(service_db, contact.id)
+        ).contact.id == contact.id
+    finally:
+        event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
+    assert selects <= 8
+
+
+@pytest.mark.asyncio
 async def test_workspace_summary_counts_internal_and_source_only_union_once(
     service_db: AsyncSession,
 ):
@@ -401,18 +595,22 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
     search = CRMSavedSearch(contact_id=contact.id, name="Internal search")
     service_db.add_all([*tasks, *plans, opportunity, note, search])
     await service_db.flush()
+    active_enrollment = CRMSmartPlanEnrollment(
+        id=91_001,
+        smart_plan_id=plans[0].id,
+        contact_id=contact.id,
+        status=" ACTIVE ",
+    )
+    paused_enrollment = CRMSmartPlanEnrollment(
+        id=91_002,
+        smart_plan_id=plans[1].id,
+        contact_id=contact.id,
+        status="paused",
+    )
     service_db.add_all(
         [
-            CRMSmartPlanEnrollment(
-                smart_plan_id=plans[0].id,
-                contact_id=contact.id,
-                status="ACTIVE",
-            ),
-            CRMSmartPlanEnrollment(
-                smart_plan_id=plans[1].id,
-                contact_id=contact.id,
-                status="paused",
-            ),
+            active_enrollment,
+            paused_enrollment,
             CRMOpportunityContact(
                 opportunity_id=opportunity.id,
                 contact_id=contact.id,
@@ -421,7 +619,7 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
         ]
     )
     await service_db.flush()
-    occurrence_specs = (
+    occurrence_specs: tuple[tuple[int, str, str, dict[str, object]], ...] = (
         (81_001, "tasks_to_do", "contact_task", {"title": "Recovered open"}),
         (
             81_002,
@@ -439,7 +637,7 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
             81_004,
             "smart_plans",
             "contact_smart_plan",
-            {"title": "Recovered active", "status": "ACTIVE"},
+            {"title": "Recovered active", "status": " ACTIVE "},
         ),
         (
             81_005,
@@ -484,7 +682,9 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
         values={"body": "Internal note"},
         linked_entity=("note", note.id),
     )
-    materialized = (
+    materialized: tuple[
+        tuple[int, str, str, dict[str, object], tuple[str, int]], ...
+    ] = (
         (
             81_010,
             "tasks_to_do",
@@ -497,7 +697,7 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
             "smart_plans",
             "contact_smart_plan",
             {"title": "Active Plan", "status": "active"},
-            ("smart_plan", plans[0].id),
+            ("smart_plan", active_enrollment.id),
         ),
         (
             81_012,
@@ -571,6 +771,66 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
 
 
 @pytest.mark.asyncio
+async def test_workspace_summary_smart_plan_link_targets_enrollment_id(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Plan", last_name="Owner", stage="lead")
+    plan = CRMSmartPlan(name="Synthetic linked plan", status="active")
+    service_db.add_all([contact, plan])
+    await service_db.flush()
+    enrollment = CRMSmartPlanEnrollment(
+        id=92_001,
+        smart_plan_id=plan.id,
+        contact_id=contact.id,
+        status="active",
+    )
+    service_db.add(enrollment)
+    await service_db.flush()
+    await _add_contact_occurrence(
+        service_db,
+        contact,
+        81_501,
+        section_name="smart_plans",
+        record_kind="contact_smart_plan",
+        values={"title": "Synthetic linked plan", "status": "active"},
+        linked_entity=("smart_plan", enrollment.id),
+    )
+
+    summary = await get_contact_workspace_summary(service_db, contact.id)
+    assert summary.active_smart_plans == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_strips_internal_and_source_plan_statuses(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Trimmed", last_name="Plans", stage="lead")
+    plan = CRMSmartPlan(name="Synthetic spaced plan", status="active")
+    service_db.add_all([contact, plan])
+    await service_db.flush()
+    service_db.add(
+        CRMSmartPlanEnrollment(
+            id=92_101,
+            smart_plan_id=plan.id,
+            contact_id=contact.id,
+            status=" ACTIVE ",
+        )
+    )
+    await service_db.flush()
+    await _add_contact_occurrence(
+        service_db,
+        contact,
+        81_502,
+        section_name="smart_plans",
+        record_kind="contact_smart_plan",
+        values={"title": "Recovered spaced plan", "status": " ACTIVE "},
+    )
+
+    summary = await get_contact_workspace_summary(service_db, contact.id)
+    assert summary.active_smart_plans == 2
+
+
+@pytest.mark.asyncio
 async def test_workspace_summary_fails_closed_on_unknown_state_and_bad_link(
     service_db: AsyncSession,
 ):
@@ -607,6 +867,54 @@ async def test_workspace_summary_missing_contact_is_safe(
 ):
     with pytest.raises(ContactNotFound, match="contact does not exist"):
         await get_contact_workspace_summary(service_db, 999_999)
+
+
+@pytest.mark.asyncio
+async def test_workspace_summary_ignores_valid_timeline_source_links(
+    service_db: AsyncSession,
+):
+    contact = CRMContact(
+        first_name="Timeline",
+        last_name="Isolated",
+        stage="lead",
+    )
+    source = _source_record(82_501)
+    source.record_kind = "contact_timeline_event"
+    source.evidence_level = "rendered_occurrence"
+    service_db.add_all([contact, source])
+    await service_db.flush()
+    timeline_event = CRMContactTimelineEvent(
+        contact_id=contact.id,
+        source_record_id=source.id,
+        source_system="kw_command",
+        source_event_key="synthetic-timeline-isolation",
+        kind="note",
+        title="Synthetic timeline event",
+        occurred_at=NOW,
+    )
+    service_db.add(timeline_event)
+    await service_db.flush()
+    service_db.add(
+        CRMEntitySource(
+            entity_type="contact_timeline_event",
+            entity_id=timeline_event.id,
+            source_record_id=source.id,
+        )
+    )
+    await service_db.flush()
+
+    assert await get_contact_workspace_summary(
+        service_db, contact.id
+    ) == ContactWorkspaceSummary(
+        open_tasks=0,
+        completed_tasks=0,
+        archived_tasks=0,
+        active_smart_plans=0,
+        opportunities=0,
+        notes=0,
+        saved_searches=0,
+        bookings=0,
+    )
 
 
 @pytest.mark.asyncio
@@ -886,13 +1194,19 @@ async def test_directory_exact_combined_truth_and_source_origin_filters_are_boun
     assert await total(sources=(ContactSourceFilter.KW_COMMAND,)) == 317
     assert await total(sources=(ContactSourceFilter.LEGACY_LEAD,)) == 51
     assert await total(sources=(ContactSourceFilter.INTERNAL_CRM,)) == 0
-    assert await total(
-        sources=(ContactSourceFilter.KW_COMMAND, ContactSourceFilter.LEGACY_LEAD)
-    ) == 366
-    assert await total(
-        sources=(ContactSourceFilter.KW_COMMAND,),
-        origins=(ContactOriginFilter.LEAD_BACKED,),
-    ) == 2
+    assert (
+        await total(
+            sources=(ContactSourceFilter.KW_COMMAND, ContactSourceFilter.LEGACY_LEAD)
+        )
+        == 366
+    )
+    assert (
+        await total(
+            sources=(ContactSourceFilter.KW_COMMAND,),
+            origins=(ContactOriginFilter.LEAD_BACKED,),
+        )
+        == 2
+    )
 
     overlap = first.rows[0]
     assert overlap.origins in {
@@ -1018,9 +1332,7 @@ async def test_actor_all_tags_and_health_filters_are_anded(
                     contact_id=contact.id,
                     source_key=f"synthetic:{index}:assignee",
                     role="assignee",
-                    provider_actor_id=(
-                        "assignee-2" if index == 3 else "assignee-1"
-                    ),
+                    provider_actor_id=("assignee-2" if index == 3 else "assignee-1"),
                     display_name="Assignee",
                     is_primary=True,
                 ),
@@ -1154,9 +1466,7 @@ async def test_celebration_filters_and_rows_share_exact_valid_eligibility(
         service_db, ContactDirectoryFilters(page_size=100), now=NOW
     )
     projected = {
-        row.id: row.birthday
-        for row in all_rows.rows
-        if row.birthday is not None
+        row.id: row.birthday for row in all_rows.rows if row.birthday is not None
     }
     august = await list_contacts(
         service_db,
@@ -1256,9 +1566,7 @@ async def test_smart_views_use_authoritative_contact_evidence_and_injected_now(
     await _add_timeline_capture(service_db, contacts[0], 1)
     await _add_timeline_capture(service_db, contacts[1], 2)
     await _add_timeline_capture(service_db, contacts[2], 3, quality="partial")
-    await _add_timeline_capture(
-        service_db, contacts[3], 4, is_empty=False, row_count=1
-    )
+    await _add_timeline_capture(service_db, contacts[3], 4, is_empty=False, row_count=1)
     await _add_timeline_capture(
         service_db, contacts[4], 5, limitations_json='["limited"]'
     )
@@ -1367,9 +1675,7 @@ async def test_never_contacted_distinguishes_no_capture_missing_cell_and_contrad
         for contact in contacts
     )
     await service_db.flush()
-    _position, missing_cell = await _add_timeline_capture(
-        service_db, contacts[1], 20
-    )
+    _position, missing_cell = await _add_timeline_capture(service_db, contacts[1], 20)
     await service_db.delete(missing_cell)
     await _add_timeline_capture(
         service_db,
@@ -1685,10 +1991,26 @@ async def test_leap_day_eligibility_accepts_verified_leap_and_yearless_only(
         (ContactSortKey.STAGE, SortDirection.DESC, ("Able", "Charlie", "Baker")),
         (ContactSortKey.HEALTH_SCORE, SortDirection.ASC, ("Able", "Baker", "Charlie")),
         (ContactSortKey.HEALTH_SCORE, SortDirection.DESC, ("Baker", "Able", "Charlie")),
-        (ContactSortKey.LAST_CONTACTED_AT, SortDirection.ASC, ("Able", "Baker", "Charlie")),
-        (ContactSortKey.LAST_CONTACTED_AT, SortDirection.DESC, ("Baker", "Able", "Charlie")),
-        (ContactSortKey.LAST_INTERACTION_AT, SortDirection.ASC, ("Baker", "Able", "Charlie")),
-        (ContactSortKey.LAST_INTERACTION_AT, SortDirection.DESC, ("Able", "Baker", "Charlie")),
+        (
+            ContactSortKey.LAST_CONTACTED_AT,
+            SortDirection.ASC,
+            ("Able", "Baker", "Charlie"),
+        ),
+        (
+            ContactSortKey.LAST_CONTACTED_AT,
+            SortDirection.DESC,
+            ("Baker", "Able", "Charlie"),
+        ),
+        (
+            ContactSortKey.LAST_INTERACTION_AT,
+            SortDirection.ASC,
+            ("Baker", "Able", "Charlie"),
+        ),
+        (
+            ContactSortKey.LAST_INTERACTION_AT,
+            SortDirection.DESC,
+            ("Able", "Baker", "Charlie"),
+        ),
         (ContactSortKey.CREATED_AT, SortDirection.ASC, ("Able", "Baker", "Charlie")),
         (ContactSortKey.CREATED_AT, SortDirection.DESC, ("Charlie", "Baker", "Able")),
         (ContactSortKey.UPDATED_AT, SortDirection.ASC, ("Baker", "Charlie", "Able")),
@@ -1765,9 +2087,7 @@ async def test_every_directory_sort_direction_and_null_last(
     assert tuple(row.last_name for row in all_rows.rows) == expected_names
     assert page.rows[0].last_name == expected_names[0]
     middle_id = all_rows.rows[1].id
-    neighbors = await get_contact_neighbors(
-        service_db, middle_id, filters, now=NOW
-    )
+    neighbors = await get_contact_neighbors(service_db, middle_id, filters, now=NOW)
     assert neighbors.previous_contact_id == all_rows.rows[0].id
     assert neighbors.next_contact_id == all_rows.rows[2].id
 
@@ -1777,8 +2097,7 @@ async def test_sort_ties_and_neighbor_ids_follow_requested_direction(
     service_db: AsyncSession,
 ):
     contacts = [
-        CRMContact(first_name="Same", last_name="Name", stage="lead")
-        for _ in range(3)
+        CRMContact(first_name="Same", last_name="Name", stage="lead") for _ in range(3)
     ]
     service_db.add_all(contacts)
     await service_db.flush()
@@ -1941,7 +2260,9 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
     finally:
         event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
 
-    assert tuple((row.day, row.display_name, row.contact_id) for row in result.birthdays) == (
+    assert tuple(
+        (row.day, row.display_name, row.contact_id) for row in result.birthdays
+    ) == (
         (19, "alpha same", contacts[1].id),
         (19, "Alpha Same", contacts[2].id),
         (19, "Zulu Same", contacts[0].id),
@@ -1975,9 +2296,7 @@ async def test_contact_celebrations_merge_precedence_dual_kind_and_order_read_on
         contacts[9].id,
         contacts[3].id,
     )
-    anniversary_by_id = {
-        row.contact_id: row for row in result.anniversaries
-    }
+    anniversary_by_id = {row.contact_id: row for row in result.anniversaries}
     assert anniversary_by_id[contacts[7].id].year == 2018
     assert anniversary_by_id[contacts[7].id].year_quality == "verified"
     assert anniversary_by_id[contacts[8].id].year is None
@@ -2127,12 +2446,12 @@ async def test_contact_celebrations_reject_invalid_or_unknown_and_never_fabricat
     )
     await service_db.flush()
 
-    assert await list_contact_celebrations(
-        service_db, month=8
-    ) == ContactCelebrations(birthdays=(), anniversaries=())
-    assert await list_contact_celebrations(
-        service_db, month=4
-    ) == ContactCelebrations(birthdays=(), anniversaries=())
+    assert await list_contact_celebrations(service_db, month=8) == ContactCelebrations(
+        birthdays=(), anniversaries=()
+    )
+    assert await list_contact_celebrations(service_db, month=4) == ContactCelebrations(
+        birthdays=(), anniversaries=()
+    )
 
 
 @pytest.mark.asyncio
@@ -2221,9 +2540,7 @@ async def test_neighbors_use_the_same_filtered_universe(service_db: AsyncSession
     await service_db.flush()
     filters = ContactDirectoryFilters(stage="lead", page_size=2)
 
-    middle = await get_contact_neighbors(
-        service_db, contacts[1].id, filters, now=NOW
-    )
+    middle = await get_contact_neighbors(service_db, contacts[1].id, filters, now=NOW)
     assert (middle.previous_contact_id, middle.next_contact_id) == (
         contacts[0].id,
         contacts[3].id,

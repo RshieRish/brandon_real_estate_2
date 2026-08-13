@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy import and_, case, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from models.booking import Booking
 from models.command import CRMActivity, CRMContact
 from models.command_contacts import (
@@ -16,9 +19,6 @@ from models.command_contacts import (
 )
 from models.command_provenance import CRMSourceRecord
 from models.lead import Lead
-from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from services.command_contact_contracts import (
     ContactTimelineEntry,
     ContactTimelinePage,
@@ -165,16 +165,8 @@ async def count_contact_bookings(
             raise ContactTimelineIntegrityError("linked lead is unavailable")
         _require_contact_email_integrity(contact)
         if contact.lead_id is not None:
-            await _require_lead_booking_email_integrity(
+            return await _require_lead_booking_email_integrity(
                 db, lead_id=contact.lead_id
-            )
-            return int(
-                await db.scalar(
-                    select(func.count())
-                    .select_from(Booking)
-                    .where(Booking.lead_id == contact.lead_id)
-                )
-                or 0
             )
         if not await _owns_unique_email(db, contact):
             return 0
@@ -190,20 +182,35 @@ async def _count_email_bookings_with_integrity(
     *,
     normalized_email: str,
 ) -> int:
+    last_scheduled_at: datetime | None = None
     last_id = 0
     count = 0
     batch_size = 1_000
     while True:
+        statement = select(
+            Booking.id,
+            Booking.email,
+            Booking.normalized_email,
+            Booking.scheduled_at,
+        ).where(
+            Booking.lead_id.is_(None),
+            Booking.normalized_email == normalized_email,
+        )
+        if last_scheduled_at is not None:
+            statement = statement.where(
+                or_(
+                    Booking.scheduled_at > last_scheduled_at,
+                    and_(
+                        Booking.scheduled_at == last_scheduled_at,
+                        Booking.id > last_id,
+                    ),
+                )
+            )
         rows = (
             await db.execute(
-                select(Booking.id, Booking.email, Booking.normalized_email)
-                .where(
-                    Booking.lead_id.is_(None),
-                    Booking.normalized_email == normalized_email,
-                    Booking.id > last_id,
+                statement.order_by(Booking.scheduled_at.asc(), Booking.id.asc()).limit(
+                    batch_size
                 )
-                .order_by(Booking.id)
-                .limit(batch_size)
             )
         ).all()
         if any(canonical_email(row.email) != row.normalized_email for row in rows):
@@ -213,6 +220,7 @@ async def _count_email_bookings_with_integrity(
         count += len(rows)
         if not rows or len(rows) < batch_size:
             return count
+        last_scheduled_at = rows[-1].scheduled_at
         last_id = rows[-1].id
 
 
@@ -478,8 +486,9 @@ async def _booking_candidates(
 
 async def _require_lead_booking_email_integrity(
     db: AsyncSession, *, lead_id: int
-) -> None:
+) -> int:
     last_id = 0
+    count = 0
     batch_size = 1_000
     while True:
         rows = (
@@ -494,8 +503,9 @@ async def _require_lead_booking_email_integrity(
             raise ContactTimelineIntegrityError(
                 "booking email normalization is invalid"
             )
+        count += len(rows)
         if not rows or len(rows) < batch_size:
-            return
+            return count
         last_id = rows[-1].id
 
 

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+import services.command_contact_timeline as timeline_service
 from database import Base
 from models.booking import Booking
 from models.command import CRMActivity, CRMContact
@@ -33,8 +38,6 @@ from services.command_contact_timeline import (
     count_contact_bookings,
     list_contact_timeline,
 )
-from sqlalchemy import event, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 BASE_TIME = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 TABLES = (
@@ -244,6 +247,224 @@ async def test_booking_count_rejects_drift_and_ambiguous_email_owns_none(
 
     with pytest.raises(ContactNotFound, match="contact does not exist"):
         await count_contact_bookings(timeline_db, 999_999)
+
+
+@pytest.mark.asyncio
+async def test_lead_booking_count_returns_only_the_validated_scan_snapshot(
+    timeline_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lead = Lead(id=720, name="Synthetic race lead")
+    contact = CRMContact(
+        id=721,
+        lead_id=lead.id,
+        first_name="Race",
+        last_name="Owner",
+        stage="lead",
+    )
+    booking = Booking(
+        id=722,
+        lead_id=lead.id,
+        name="Validated booking",
+        email="validated@example.test",
+        meeting_type="phone",
+        scheduled_at=BASE_TIME,
+    )
+    await _flush(timeline_db, lead, contact, booking)
+
+    original_scan = timeline_service._require_lead_booking_email_integrity
+
+    async def validated_then_insert(db: AsyncSession, *, lead_id: int) -> int:
+        assert lead_id == lead.id
+        validated_count = await original_scan(db, lead_id=lead_id)
+        await db.execute(
+            Booking.__table__.insert().values(
+                id=723,
+                lead_id=lead.id,
+                name="Between-phase booking",
+                email="between-phase@example.test",
+                normalized_email="drift@example.test",
+                meeting_type="phone",
+                context="general",
+                scheduled_at=BASE_TIME,
+                notes="",
+            )
+        )
+        return validated_count
+
+    monkeypatch.setattr(
+        "services.command_contact_timeline._require_lead_booking_email_integrity",
+        validated_then_insert,
+    )
+    booking_count_queries: list[str] = []
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        normalized = " ".join(statement.split())
+        if "FROM bookings" in normalized and "count(" in normalized.casefold():
+            booking_count_queries.append(normalized)
+
+    assert timeline_db.bind is not None
+    event.listen(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        assert await count_contact_bookings(timeline_db, contact.id) == 1
+    finally:
+        event.remove(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    assert booking_count_queries == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_count", "expected_batches"),
+    ((1_001, 2), (2_001, 3)),
+)
+async def test_leadless_booking_count_uses_scheduled_time_id_keyset_and_index(
+    timeline_db: AsyncSession,
+    row_count: int,
+    expected_batches: int,
+):
+    contact = CRMContact(
+        id=730,
+        first_name="Keyset",
+        last_name="Owner",
+        email="keyset@example.test",
+        stage="lead",
+    )
+    await _flush(timeline_db, contact)
+    await timeline_db.execute(
+        Booking.__table__.insert(),
+        [
+            {
+                "id": 10_000 + index,
+                "lead_id": None,
+                "name": f"Synthetic booking {index}",
+                "email": "KEYSET@example.test",
+                "normalized_email": "keyset@example.test",
+                "meeting_type": "phone",
+                "context": "general",
+                "scheduled_at": BASE_TIME,
+                "notes": "",
+            }
+            for index in range(1, row_count + 1)
+        ],
+    )
+    statements: list[tuple[str, Any]] = []
+
+    def capture(_connection, _cursor, statement, parameters, _context, _many):
+        normalized = " ".join(statement.split())
+        if (
+            normalized.startswith("SELECT bookings.id")
+            and "bookings.lead_id IS NULL" in normalized
+            and "LIMIT" in normalized
+        ):
+            statements.append((normalized, parameters))
+
+    assert timeline_db.bind is not None
+    event.listen(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        assert await count_contact_bookings(timeline_db, contact.id) == row_count
+    finally:
+        event.remove(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    assert len(statements) == expected_batches
+    assert all("bookings.scheduled_at" in sql for sql, _ in statements)
+    assert all(
+        "ORDER BY bookings.scheduled_at ASC, bookings.id ASC" in sql
+        for sql, _ in statements
+    )
+    assert all(1_000 in tuple(parameters) for _, parameters in statements)
+    assert "bookings.scheduled_at >" in statements[-1][0]
+    assert "bookings.scheduled_at =" in statements[-1][0]
+    assert "bookings.id >" in statements[-1][0]
+
+    query_plan = (
+        await timeline_db.execute(
+            text(
+                "EXPLAIN QUERY PLAN "
+                "SELECT id, email, normalized_email, scheduled_at "
+                "FROM bookings "
+                "WHERE normalized_email = :normalized_email "
+                "AND lead_id IS NULL "
+                "ORDER BY scheduled_at ASC, id ASC LIMIT 1000"
+            ),
+            {"normalized_email": "keyset@example.test"},
+        )
+    ).all()
+    assert any("ix_bookings_timeline_email_order" in str(row) for row in query_plan)
+
+
+@pytest.mark.asyncio
+async def test_leadless_booking_count_rejects_drift_on_final_keyset_page(
+    timeline_db: AsyncSession,
+):
+    contact = CRMContact(
+        id=740,
+        first_name="Final",
+        last_name="Page",
+        email="final-page@example.test",
+        stage="lead",
+    )
+    await _flush(timeline_db, contact)
+    await timeline_db.execute(
+        Booking.__table__.insert(),
+        [
+            {
+                "id": index + 2,
+                "lead_id": None,
+                "name": f"Synthetic booking {index}",
+                "email": "final-page@example.test",
+                "normalized_email": "final-page@example.test",
+                "meeting_type": "phone",
+                "context": "general",
+                "scheduled_at": BASE_TIME,
+                "notes": "",
+            }
+            for index in range(2_000)
+        ],
+    )
+    await timeline_db.execute(
+        Booking.__table__.insert().values(
+            id=1,
+            lead_id=None,
+            name="Synthetic final-page drift",
+            email="final-page@example.test",
+            normalized_email="final-page@example.test",
+            meeting_type="phone",
+            context="general",
+            scheduled_at=BASE_TIME + timedelta(days=1),
+            notes="",
+        )
+    )
+    await timeline_db.execute(
+        update(Booking)
+        .where(Booking.id == 1)
+        .values(email="private-drift@example.test")
+    )
+
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _params, _context, _many):
+        normalized = " ".join(statement.split())
+        if (
+            normalized.startswith("SELECT bookings.id")
+            and "bookings.lead_id IS NULL" in normalized
+            and "LIMIT" in normalized
+        ):
+            statements.append(normalized)
+
+    assert timeline_db.bind is not None
+    event.listen(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+
+    try:
+        with pytest.raises(
+            ContactTimelineIntegrityError,
+            match="booking email normalization is invalid",
+        ) as error:
+            await count_contact_bookings(timeline_db, contact.id)
+    finally:
+        event.remove(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
+    assert len(statements) == 3
+    assert "private-drift@example.test" not in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -568,8 +789,12 @@ async def test_timeline_rejects_recovered_source_corruption_without_an_activity(
     ownership = _timeline_ownership(
         source.id,
         contact_id=(second.id if corruption == "wrong_occurrence_owner" else first.id),
-        section_name=("notes" if corruption == "wrong_occurrence_section" else "timeline"),
-        position_contact_id=(second.id if corruption == "wrong_position_owner" else None),
+        section_name=(
+            "notes" if corruption == "wrong_occurrence_section" else "timeline"
+        ),
+        position_contact_id=(
+            second.id if corruption == "wrong_position_owner" else None
+        ),
     )
     if corruption == "missing_occurrence":
         ownership = ownership[:-1]
@@ -594,9 +819,7 @@ async def test_timeline_rejects_recovered_source_corruption_without_an_activity(
     await _flush(timeline_db, *rows)
 
     with pytest.raises(ContactTimelineIntegrityError) as error:
-        await list_contact_timeline(
-            timeline_db, first.id, cursor=None, page_size=10
-        )
+        await list_contact_timeline(timeline_db, first.id, cursor=None, page_size=10)
     assert "synthetic" not in str(error.value)
 
 
@@ -637,9 +860,7 @@ async def test_timeline_rejects_mirror_owned_by_null_or_another_contact(
     )
 
     with pytest.raises(ContactTimelineIntegrityError):
-        await list_contact_timeline(
-            timeline_db, first.id, cursor=None, page_size=10
-        )
+        await list_contact_timeline(timeline_db, first.id, cursor=None, page_size=10)
 
 
 @pytest.mark.asyncio
@@ -745,9 +966,7 @@ async def test_lead_booking_drift_is_rejected_before_cursor_and_beyond_page(
     )
 
     with pytest.raises(ContactTimelineIntegrityError) as error:
-        await list_contact_timeline(
-            timeline_db, 1, cursor=cursor, page_size=1
-        )
+        await list_contact_timeline(timeline_db, 1, cursor=cursor, page_size=1)
     assert "private@example.test" not in str(error.value)
 
 
@@ -780,7 +999,7 @@ async def test_lead_booking_integrity_uses_thousand_row_keyset_batches(
         ),
     )
 
-    statements: list[tuple[str, object]] = []
+    statements: list[tuple[str, Any]] = []
 
     def capture(_connection, _cursor, statement, parameters, _context, _many):
         normalized = " ".join(statement.split())
@@ -792,9 +1011,7 @@ async def test_lead_booking_integrity_uses_thousand_row_keyset_batches(
     assert timeline_db.bind is not None
     event.listen(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
     try:
-        page = await list_contact_timeline(
-            timeline_db, 1, cursor=None, page_size=1
-        )
+        page = await list_contact_timeline(timeline_db, 1, cursor=None, page_size=1)
     finally:
         event.remove(timeline_db.bind.sync_engine, "before_cursor_execute", capture)
 
