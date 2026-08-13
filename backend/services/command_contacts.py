@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import NoReturn
 
 from sqlalchemy import (
@@ -112,6 +112,8 @@ def _explicit_month_predicate(
     internal_column,
     recovered_month_column,
     recovered_day_column,
+    recovered_year_column,
+    recovered_year_quality_column,
     month: int,
 ) -> ColumnElement[bool]:
     return or_(
@@ -119,9 +121,45 @@ def _explicit_month_predicate(
         and_(
             internal_column.is_(None),
             recovered_month_column == month,
-            recovered_day_column.is_not(None),
+            _valid_recovered_celebration_predicate(
+                month_column=recovered_month_column,
+                day_column=recovered_day_column,
+                year_column=recovered_year_column,
+                quality_column=recovered_year_quality_column,
+            ),
         ),
     )
+
+
+def _valid_recovered_celebration_predicate(
+    *,
+    month_column,
+    day_column,
+    year_column,
+    quality_column,
+) -> ColumnElement[bool]:
+    max_day = case(
+        (month_column.in_((1, 3, 5, 7, 8, 10, 12)), 31),
+        (month_column.in_((4, 6, 9, 11)), 30),
+        (month_column == 2, 29),
+        else_=0,
+    )
+    leap_year = or_(
+        year_column % 400 == 0,
+        and_(year_column % 4 == 0, year_column % 100 != 0),
+    )
+    common = and_(
+        month_column.between(1, 12),
+        day_column >= 1,
+        day_column <= max_day,
+    )
+    verified = and_(
+        quality_column == "verified",
+        year_column.between(1, 9999),
+        or_(month_column != 2, day_column != 29, leap_year),
+    )
+    yearless = quality_column.in_(("yearless", "sentinel"))
+    return and_(common, or_(verified, yearless))
 
 
 def _never_contacted_predicate() -> ColumnElement[bool]:
@@ -170,7 +208,7 @@ def _never_contacted_predicate() -> ColumnElement[bool]:
         .select_from(CRMActivity)
         .where(
             CRMActivity.contact_id == CRMContact.id,
-            func.lower(func.trim(CRMActivity.kind)).in_(
+            CRMActivity.kind.in_(
                 tuple(sorted(CONTACT_TOUCH_ACTIVITY_KINDS))
             ),
             or_(
@@ -214,6 +252,9 @@ def _directory_predicates(
             or_(
                 func.lower(CRMContact.first_name).like(pattern, escape="\\"),
                 func.lower(CRMContact.last_name).like(pattern, escape="\\"),
+                func.lower(CRMContact.normalized_email).like(
+                    pattern, escape="\\"
+                ),
                 func.lower(CRMContactProfile.legal_name).like(
                     pattern, escape="\\"
                 ),
@@ -296,6 +337,10 @@ def _directory_predicates(
                 internal_column=CRMContact.birthday,
                 recovered_month_column=CRMContactProfile.birth_month,
                 recovered_day_column=CRMContactProfile.birth_day,
+                recovered_year_column=CRMContactProfile.birth_year,
+                recovered_year_quality_column=(
+                    CRMContactProfile.birth_year_quality
+                ),
                 month=filters.birthday_month,
             )
         )
@@ -305,6 +350,10 @@ def _directory_predicates(
                 internal_column=CRMContact.anniversary,
                 recovered_month_column=CRMContactProfile.anniversary_month,
                 recovered_day_column=CRMContactProfile.anniversary_day,
+                recovered_year_column=CRMContactProfile.anniversary_year,
+                recovered_year_quality_column=(
+                    CRMContactProfile.anniversary_year_quality
+                ),
                 month=filters.anniversary_month,
             )
         )
@@ -324,6 +373,10 @@ def _directory_predicates(
                 internal_column=CRMContact.birthday,
                 recovered_month_column=CRMContactProfile.birth_month,
                 recovered_day_column=CRMContactProfile.birth_day,
+                recovered_year_column=CRMContactProfile.birth_year,
+                recovered_year_quality_column=(
+                    CRMContactProfile.birth_year_quality
+                ),
                 month=now.month,
             )
         )
@@ -333,6 +386,10 @@ def _directory_predicates(
                 internal_column=CRMContact.anniversary,
                 recovered_month_column=CRMContactProfile.anniversary_month,
                 recovered_day_column=CRMContactProfile.anniversary_day,
+                recovered_year_column=CRMContactProfile.anniversary_year,
+                recovered_year_quality_column=(
+                    CRMContactProfile.anniversary_year_quality
+                ),
                 month=now.month,
             )
         )
@@ -420,9 +477,16 @@ def _celebration(
         day = profile.anniversary_day
         year = profile.anniversary_year
         quality = profile.anniversary_year_quality
-    if month is None or day is None:
+    if quality not in {"verified", "yearless", "sentinel"}:
         return None
-    if quality in {"yearless", "sentinel", "unknown"}:
+    validation_year = year if quality == "verified" else 2000
+    if validation_year is None:
+        return None
+    try:
+        date(validation_year, month, day)
+    except (TypeError, ValueError):
+        return None
+    if quality in {"yearless", "sentinel"}:
         year = None
     return ContactCelebrationValue(
         month=month,
