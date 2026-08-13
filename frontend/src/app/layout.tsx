@@ -1,4 +1,7 @@
 import type { Metadata } from 'next';
+import '@fontsource-variable/montserrat/wght.css';
+import '@fontsource-variable/montserrat/wght-italic.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
 import './globals.css';
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://soldwithsweeney.com').replace(/\/$/, '');
