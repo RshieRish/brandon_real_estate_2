@@ -1,9 +1,90 @@
+import {
+  contactsApi,
+  decodeLegacyContact,
+  type ContactCelebrationRow,
+  type ContactDirectoryPage,
+  type ContactDirectoryRequest,
+  type LegacyContact,
+} from './contacts';
+import {
+  commandBlob,
+  commandJson,
+  CommandDecodeError,
+  type Decoder,
+} from './http';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+
+export { contactsApi };
+
+export type CommandRequestOptions = Readonly<{ signal?: AbortSignal }>;
+export type TaskFilters = Readonly<{
+  status?: string;
+  due_before?: string;
+  due_after?: string;
+}>;
 
 export type Overview = { contacts: number; open_tasks: number; opportunities: number; active_smart_plans: number };
 export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null; last_contacted_at?: string | null; recently_active_at?: string | null; health_score?: number | null };
-export type Celebrations = { birthdays: Contact[]; anniversaries: Contact[] };
-export type ContactWorkspace = { contact: Contact; timeline: { id: number; kind: string; summary: string; created_at: string }[]; tasks: Task[]; notes: { id: number; body: string }[]; smart_plans: { id: number; plan_id: number; status: string }[]; opportunities: Opportunity[]; saved_searches: { id: number; name: string; criteria: string }[]; bookings: { id: number; meeting_type: string; context: string; scheduled_at: string; location: string | null; notes: string }[]; tags: { id: number; name: string }[] };
+type CompatibleCelebrationContact =
+  | (Contact & Partial<ContactCelebrationRow>)
+  | (ContactCelebrationRow & Partial<Contact>);
+export type Celebrations = Readonly<{
+  birthdays: readonly CompatibleCelebrationContact[];
+  anniversaries: readonly CompatibleCelebrationContact[];
+}>;
+export type LegacyContactWorkspace = Readonly<{
+  contact: LegacyContact;
+  timeline: readonly Readonly<{
+    id: number;
+    kind: string;
+    summary: string;
+    created_at: string;
+  }>[];
+  tasks: readonly Readonly<{
+    id: number;
+    title: string;
+    contact_id: number | null;
+    description: string;
+    priority: string;
+    due_at: string | null;
+    status: string;
+  }>[];
+  notes: readonly Readonly<{
+    id: number;
+    contact_id: number;
+    body: string;
+    created_at: string;
+    updated_at: string;
+  }>[];
+  smart_plans: readonly Readonly<{
+    id: number;
+    plan_id: number;
+    status: string;
+  }>[];
+  opportunities: readonly Readonly<{
+    id: number;
+    name: string;
+    stage: string;
+    value_cents: number | null;
+    role: string;
+  }>[];
+  saved_searches: readonly Readonly<{
+    id: number;
+    name: string;
+    criteria: string;
+  }>[];
+  bookings: readonly Readonly<{
+    id: number;
+    meeting_type: string;
+    context: string;
+    scheduled_at: string;
+    location: string | null;
+    notes: string;
+  }>[];
+  tags: readonly Readonly<{ id: number; name: string }>[];
+}>;
+export type ContactWorkspace = LegacyContactWorkspace;
 export type ReportDetails = { metric: string; rows: { id: number; title: string; detail: string; occurred_at: string | null }[] };
 export type Goal = { id: number; name: string; target_value: number; current_value: number; period: 'weekly' | 'monthly' | 'quarterly' | 'annual' };
 export type AiBriefing = { summary: string; source: string; requires_review: boolean };
@@ -33,17 +114,67 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function requestBlob(path: string): Promise<Blob> {
-  const token = localStorage.getItem('admin_token');
-  const response = await fetch(`${API_URL}/api/v1/command${path}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Unable to retrieve recovered artifact');
-  return response.blob();
+const decodeLegacyContacts: Decoder<LegacyContact[]> = (
+  input,
+  path = 'response',
+) => {
+  if (!Array.isArray(input)) {
+    throw new CommandDecodeError(path, 'array');
+  }
+  const rows: readonly unknown[] = input;
+  return Array.from(rows, (row, index) => decodeLegacyContact(row, `${path}[${index}]`));
+};
+
+function requestInteger(
+  value: number,
+  path: string,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new CommandDecodeError(path, `safe integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+async function legacyContacts(
+  limit = 50,
+  offset = 0,
+  filters: Readonly<{ query?: string; stage?: string }> = {},
+): Promise<LegacyContact[]> {
+  const params = new URLSearchParams({
+    limit: String(requestInteger(limit, 'request.limit', 1, 100)),
+    offset: String(requestInteger(offset, 'request.offset', 0)),
+  });
+  if (filters.query !== undefined) {
+    if (typeof filters.query !== 'string') {
+      throw new CommandDecodeError('request.query', 'string');
+    }
+    const query = filters.query.trim();
+    if (query.length > 0) params.set('query', query);
+  }
+  if (filters.stage !== undefined) {
+    if (typeof filters.stage !== 'string') {
+      throw new CommandDecodeError('request.stage', 'string');
+    }
+    params.set('stage', filters.stage);
+  }
+  return commandJson({
+    path: `/contacts?${params.toString()}`,
+    decode: decodeLegacyContacts,
+  });
 }
 
 export const commandApi = {
-  overview: () => request<Overview>('/overview'), contacts: (limit = 50, offset = 0, filters: { query?: string; stage?: string } = {}) => { const params = new URLSearchParams({ limit: String(Math.min(Math.max(limit, 1), 100)), offset: String(Math.max(offset, 0)) }); if (filters.query?.trim()) params.set('query', filters.query.trim()); if (filters.stage) params.set('stage', filters.stage); return request<Contact[]>(`/contacts?${params.toString()}`); }, tasks: (filters: { status?: string; due_before?: string; due_after?: string } = {}) => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`); },
-  celebrations: (month: number) => request<Celebrations>(`/celebrations?month=${Math.min(Math.max(month, 1), 12)}`),
-  contactWorkspace: (id: number) => request<ContactWorkspace>(`/contacts/${id}/workspace`),
+  overview: (options?: CommandRequestOptions) => request<Overview>('/overview', { signal: options?.signal }),
+  contacts: legacyContacts,
+  contactDirectory: (
+    directoryRequest: ContactDirectoryRequest,
+    options?: CommandRequestOptions,
+  ): Promise<ContactDirectoryPage> => contactsApi.directory(directoryRequest, options),
+  tasks: (filters: TaskFilters = {}, options?: CommandRequestOptions) => { const params = new URLSearchParams(); if (filters.status) params.set('status', filters.status); if (filters.due_before) params.set('due_before', filters.due_before); if (filters.due_after) params.set('due_after', filters.due_after); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`, { signal: options?.signal }); },
+  celebrations: (month: number, options?: CommandRequestOptions) => contactsApi.celebrations(month, options),
+  contactWorkspace: (id: number) => request<LegacyContactWorkspace>(`/contacts/${id}/workspace`),
   createContactNote: (id: number, body: string) => request<{ id: number; body: string }>(`/contacts/${id}/notes`, { method: 'POST', body: JSON.stringify({ body }) }),
   createContactSavedSearch: (id: number, name: string, criteria: Record<string, unknown>) => request<{ id: number; name: string; criteria: string }>(`/contacts/${id}/saved-searches`, { method: 'POST', body: JSON.stringify({ name, criteria }) }),
   savedSearches: () => request<SavedSearch[]>('/saved-searches'),
@@ -52,10 +183,10 @@ export const commandApi = {
   assignContactTag: (contactId: number, tagId: number) => request<{ contact_id: number; tag_id: number }>(`/contacts/${contactId}/tags/${tagId}`, { method: 'POST' }),
   removeContactTag: (contactId: number, tagId: number) => request<{ removed: boolean; contact_id: number; tag_id: number }>(`/contacts/${contactId}/tags/${tagId}`, { method: 'DELETE' }),
   deleteContactNote: (contactId: number, noteId: number) => request<{ deleted: boolean; id: number }>(`/contacts/${contactId}/notes/${noteId}`, { method: 'DELETE' }),
-  goals: () => request<Goal[]>('/goals'),
+  goals: (options?: CommandRequestOptions) => request<Goal[]>('/goals', { signal: options?.signal }),
   createGoal: (payload: Omit<Goal, 'id'>) => request<Goal>('/goals', { method: 'POST', body: JSON.stringify(payload) }),
   updateGoalProgress: (id: number, current_value: number) => request<Goal>(`/goals/${id}`, { method: 'PATCH', body: JSON.stringify({ current_value }) }),
-  aiBriefing: () => request<AiBriefing>('/ai/briefing'),
+  aiBriefing: (options?: CommandRequestOptions) => request<AiBriefing>('/ai/briefing', { signal: options?.signal }),
   generateAiBriefing: () => request<AiBriefing>('/ai/briefing/generate', { method: 'POST' }),
   createContact: (contact: Omit<Contact, 'id' | 'stage'>) => request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(contact) }),
   importContacts: (contacts: ContactImportRow[]) => request<ContactImportResult>('/contacts/import', { method: 'POST', body: JSON.stringify({ contacts }) }),
@@ -69,7 +200,7 @@ export const commandApi = {
   updateSmartPlanStep: (planId: number, stepId: number, position: number, actionType: string, payload: Record<string, unknown>) => request<{ id: number; position: number; action_type: string }>(`/smart-plans/${planId}/steps/${stepId}`, { method: 'PATCH', body: JSON.stringify({ position, action_type: actionType, payload }) }),
   enrollSmartPlanContact: (planId: number, contactId: number) => request<{ id: number; contact_id: number; status: string }>(`/smart-plans/${planId}/enrollments`, { method: 'POST', body: JSON.stringify({ contact_id: contactId }) }),
   updateSmartPlanEnrollment: (planId: number, enrollmentId: number, status: 'active' | 'paused' | 'completed') => request<{ id: number; status: string }>(`/smart-plans/${planId}/enrollments/${enrollmentId}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-  opportunities: () => request<Opportunity[]>('/opportunities'), createOpportunity: (payload: Omit<Opportunity,'id'>) => request<Opportunity>('/opportunities',{method:'POST',body:JSON.stringify(payload)}),
+  opportunities: (options?: CommandRequestOptions) => request<Opportunity[]>('/opportunities', { signal: options?.signal }), createOpportunity: (payload: Omit<Opportunity,'id'>) => request<Opportunity>('/opportunities',{method:'POST',body:JSON.stringify(payload)}),
   updateOpportunity: (id: number, stage: string) => request<Opportunity>(`/opportunities/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
   opportunityWorkspace: (id: number) => request<{opportunity: Opportunity; contacts: Relationship[]; vendors: Relationship[]; offers: Relationship[]}>(`/opportunities/${id}/workspace`),
   addOpportunityContact: (opportunityId: number, contactId: number, role = 'client') => request<Relationship>(`/opportunities/${opportunityId}/contacts`, { method: 'POST', body: JSON.stringify({ contact_id: contactId, role }) }),
@@ -92,7 +223,7 @@ export const commandApi = {
   eventBreakdown: () => request<{ events: { event_type: string; count: number }[] }>('/reports/event-breakdown'),
   reportsSummary: () => request<Record<string, number>>('/reports/summary'),
   archiveArtifacts: (domain?: string, offset = 0) => { const params = new URLSearchParams({ limit: '100', offset: String(offset) }); if (domain) params.set('domain', domain); return request<{ total: number; rows: ArchiveArtifact[] }>(`/archive/artifacts?${params}`); },
-  archiveArtifactBlob: (id: number) => requestBlob(`/archive/artifacts/${id}/content`),
+  archiveArtifactBlob: (id: number, options?: CommandRequestOptions) => commandBlob({ path: `/archive/artifacts/${id}/content`, signal: options?.signal }),
   reportDetails: (metric: string) => request<ReportDetails>(`/reports/details/${encodeURIComponent(metric)}`),
   createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   addTaskLink: (taskId: number, entityType: string, entityId: number) => request<TaskLink>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
