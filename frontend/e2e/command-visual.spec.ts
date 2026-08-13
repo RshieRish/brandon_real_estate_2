@@ -1,15 +1,46 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Page } from '@playwright/test';
-import { commandHomeFixture, expect, test } from './fixtures/command';
+import { expect, test } from './fixtures/command';
+
+export function recordCommandFontRequests(page: Page): string[] {
+  const requests: string[] = [];
+  page.on('request', (request) => {
+    if (request.resourceType() === 'font' || /\.(?:woff2?|ttf)(?:\?|$)/i.test(request.url())) requests.push(request.url());
+  });
+  return requests;
+}
+
+export async function assertCommandFonts(page: Page, requests: readonly string[]): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const result = await page.evaluate(async () => {
+    const weights = [400, 500, 600, 700, 800, 900];
+    const loaded = await Promise.all(weights.map((weight) => document.fonts.load(`${weight} 16px "Montserrat Variable"`, 'Command')));
+    return {
+      loadedCounts: loaded.map((faces) => faces.length),
+      family: getComputedStyle(document.body).fontFamily,
+      loadedFaces: [...document.fonts].filter((face) => face.family.includes('Montserrat Variable') && face.status === 'loaded').length,
+    };
+  });
+  expect(result.loadedCounts.every((count) => count > 0)).toBe(true);
+  expect(result.loadedFaces).toBeGreaterThan(0);
+  expect(result.family).toContain('Montserrat Variable');
+  expect(requests.length).toBeGreaterThan(0);
+  for (const request of requests) {
+    const url = new URL(request);
+    expect(url.origin).toBe(new URL(page.url()).origin);
+    expect(url.hostname).not.toMatch(/googleapis|gstatic/);
+  }
+}
 
 const currentDir = path.resolve(process.cwd(), 'artifacts/command-qa/current');
 
 async function loadStableHome(commandPage: Page) {
+  const fontRequests = recordCommandFontRequests(commandPage);
   await commandPage.goto('/admin/command');
   await expect(commandPage.getByRole('heading', { name: 'Follow-Up Readiness' })).toBeVisible();
   await expect(commandPage.getByRole('status', { name: 'Loading Command Home' })).toBeHidden();
-  await commandPage.evaluate(() => document.fonts.ready);
+  await assertCommandFonts(commandPage, fontRequests);
 }
 
 test.beforeAll(async () => {
@@ -78,12 +109,9 @@ test('open mobile drawer remains stable', async ({ commandPage }) => {
 });
 
 test('partial and evidence-only Home remains stable', async ({ commandPage, mockCommandEndpoint }) => {
-  const withoutEvidence = commandHomeFixture.contacts.map(({
-    last_contacted_at: _lastContact,
-    recently_active_at: _recentActivity,
-    ...contact
-  }) => contact);
-  await mockCommandEndpoint('/contacts?limit=100&offset=0', withoutEvidence);
+  await mockCommandEndpoint('/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=100', {
+    rows: [], total: 0, page: 1, page_size: 100, page_count: 0, sort: 'name', direction: 'asc',
+  });
   await mockCommandEndpoint('/celebrations?month=8', { detail: 'Celebrations unavailable' }, 503);
   await commandPage.setViewportSize({ width: 1800, height: 982 });
   await loadStableHome(commandPage);

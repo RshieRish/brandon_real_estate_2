@@ -63,3 +63,11 @@ test('the mobile page contains horizontal scrolling inside intended strips', asy
   expect(dimensions.body).toBeLessThanOrEqual(dimensions.viewport);
   expect(dimensions.shortcutsScroll).toBeGreaterThan(dimensions.shortcutsClient);
 });
+
+test('mobile shell reaches the current paged Contacts directory', async ({ commandPage }) => {
+  await commandPage.goto('/admin/command');
+  await commandPage.getByRole('button', { name: 'Open Command navigation' }).click();
+  await commandPage.getByRole('navigation', { name: 'Mobile Command modules' }).getByRole('link', { name: 'Contacts', exact: true }).click();
+  await expect(commandPage.getByText('366 contacts')).toBeVisible();
+  await expect(commandPage.getByRole('table', { name: 'Contacts directory' })).toBeVisible();
+});

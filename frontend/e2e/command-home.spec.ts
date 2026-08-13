@@ -5,10 +5,10 @@ test('Home prioritizes verified follow-up work and exactly four KPIs @critical',
 
   await expect(commandPage.getByRole('heading', { name: 'Follow-Up Readiness' })).toBeVisible();
   await expect(commandPage.getByRole('status', { name: 'Loading Command Home' })).toBeHidden();
-  await expect(commandPage.getByText('3 overdue tasks need attention first')).toBeVisible();
-  await expect(commandPage.getByRole('link', { name: 'Review overdue tasks' })).toHaveAttribute(
+  await expect(commandPage.getByText('158 leads have never been contacted')).toBeVisible();
+  await expect(commandPage.getByRole('link', { name: 'Review never-contacted leads' })).toHaveAttribute(
     'href',
-    '/admin/command/tasks?tab=todo&due=past',
+    '/admin/command/contacts?smart_view=never_contacted',
   );
   await expect(commandPage.getByTestId('home-kpi')).toHaveCount(4);
 });
@@ -50,26 +50,37 @@ test('celebration shortcuts keep their observed counts and destinations', async 
   await commandPage.goto('/admin/command');
   const shortcuts = commandPage.getByRole('region', { name: 'Home shortcuts' });
 
-  await expect(shortcuts.getByRole('link', { name: /Birthdays\s+1/ })).toHaveAttribute(
+  await expect(shortcuts.getByRole('link', { name: /Birthdays\s+2/ })).toHaveAttribute(
     'href',
-    '/admin/command/contacts?filter=birthdays',
+    '/admin/command/contacts?smart_view=birthdays_this_month',
   );
   await expect(shortcuts.getByRole('link', { name: /Anniversaries\s+1/ })).toHaveAttribute(
     'href',
-    '/admin/command/contacts?filter=anniversaries',
+    '/admin/command/contacts?smart_view=anniversaries_this_month',
   );
 });
 
-test('missing last-contact fields produce a partial score, not a favorable default', async ({
+test('an unavailable strict Contacts directory produces partial readiness, not a favorable default', async ({
   commandPage,
   mockCommandEndpoint,
 }) => {
-  const withoutLastContact = commandHomeFixture.contacts.map(({ last_contacted_at: _omitted, ...contact }) => contact);
-  await mockCommandEndpoint('/contacts?limit=100&offset=0', withoutLastContact);
+  const directoryRequests: string[] = [];
+  commandPage.on('request', (request) => {
+    if (request.url().includes('/contacts/directory')) directoryRequests.push(new URL(request.url()).pathname + new URL(request.url()).search);
+  });
+  await mockCommandEndpoint(
+    '/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=100',
+    { detail: 'Contacts directory unavailable' },
+    503,
+  );
 
   await commandPage.goto('/admin/command');
+  await expect(commandPage.getByRole('heading', { name: 'Follow-Up Readiness' })).toBeVisible();
+  await expect(commandPage.getByRole('status', { name: 'Loading Command Home' })).toBeHidden();
 
-  await expect(commandPage.getByText(/3 of 4 inputs verified/)).toBeVisible();
+  expect(directoryRequests).toContain('/api/v1/command/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=100');
+
+  await expect(commandPage.getByText(/2 of 4 inputs verified/)).toBeVisible();
   await commandPage.getByText('Readiness source coverage').click();
   await expect(commandPage.getByText('Last-contact history is unavailable.')).toBeVisible();
   await expect(commandPage.getByText('100% ready')).toHaveCount(0);
@@ -88,5 +99,5 @@ test('an unavailable region can be retried without erasing successful Home data'
   await commandPage.getByRole('button', { name: 'Retry unavailable regions' }).click();
 
   await expect(commandPage.getByRole('alert').filter({ hasText: 'Some Home data is unavailable' })).toBeHidden();
-  await expect(commandPage.getByText('3 overdue tasks need attention first')).toBeVisible();
+  await expect(commandPage.getByText('158 leads have never been contacted')).toBeVisible();
 });

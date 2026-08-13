@@ -181,12 +181,12 @@ test('keyboard-only journey reaches shell actions, live regions, and sortable re
   await expect(commandPage).toHaveURL('/admin/command/contacts');
   await expect(commandPage.getByRole('heading', { name: 'Contacts' })).toBeVisible();
 
-  const sortButton = commandPage.getByRole('button', { name: 'Sort contacts by name' });
+  const sortButton = commandPage.getByRole('button', { name: 'Sort by Name' });
   for (let index = 0; index < 32 && !(await sortButton.evaluate((element) => element === document.activeElement)); index += 1) {
     await commandPage.keyboard.press('Tab');
   }
   await expect(sortButton).toBeFocused();
-  const sortableHeader = commandPage.getByRole('columnheader', { name: 'Sort contacts by name' });
+  const sortableHeader = commandPage.getByRole('columnheader', { name: 'Name' });
   await expect(sortableHeader).toHaveAttribute('aria-sort', 'ascending');
   await commandPage.keyboard.press('Enter');
   await expect(sortableHeader).toHaveAttribute('aria-sort', 'descending');

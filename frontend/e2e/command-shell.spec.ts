@@ -25,6 +25,7 @@ test('shell persists across module navigation @critical', async ({ commandPage }
   await expect(navigation).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Contacts' })).toHaveAttribute('aria-current', 'page');
   await expect(commandPage.getByRole('main')).toHaveCount(1);
+  await expect(commandPage.getByText('366 contacts')).toBeVisible();
 });
 
 test('global search is keyboard operable @critical', async ({ commandPage }) => {
@@ -73,7 +74,7 @@ test('nested routes retain their module active state', async ({ commandPage }) =
 });
 
 test('unexpected Command fixture endpoints fail closed with a diagnostic', async ({ commandPage, routeState }) => {
-  routeState.expectedHttpFailures.add('/referrals');
+  routeState.expectedHttpFailures.add('/referrals', 'GET', 2);
   await commandPage.goto('/admin/command/referrals');
 
   await expect(commandPage.getByRole('alert').filter({ hasText: 'Unexpected Command fixture request' })).toContainText(
@@ -82,8 +83,8 @@ test('unexpected Command fixture endpoints fail closed with a diagnostic', async
 });
 
 test('known Command endpoints fail closed for methods that were not registered', async ({ commandPage, routeState }) => {
-  routeState.expectedHttpFailures.add('/contacts');
-  routeState.expectedHttpFailures.add('/agreements');
+  routeState.expectedHttpFailures.add('/contacts', 'POST');
+  routeState.expectedHttpFailures.add('/agreements', 'DELETE');
   await commandPage.goto('/admin/login');
 
   const postContacts = await fetchCommand(commandPage, '/contacts', 'POST');
@@ -102,10 +103,13 @@ test('known Command endpoints fail closed for methods that were not registered',
 test('a wrong method cannot consume a one-shot failure registered for another method', async ({
   commandPage,
   failCommandEndpointOnce,
+  routeState,
 }) => {
   await failCommandEndpointOnce('/overview', 503, 'Planned GET-only failure', 'GET');
   await commandPage.goto('/admin/login');
 
+  // The deliberately wrong request has its own exact allowance and cannot consume the GET failure.
+  routeState.expectedHttpFailures.add('/overview', 'POST');
   const wrongMethod = await fetchCommand(commandPage, '/overview', 'POST');
   expect(wrongMethod).toEqual({
     status: 500,
