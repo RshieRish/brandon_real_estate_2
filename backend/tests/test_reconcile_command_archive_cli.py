@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -20,6 +21,7 @@ from services.command_reconciliation import ReconciliationSummary
 
 
 command_db = pytest.fixture(name="command_db")(command_db_session)
+CONTACT_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "command_contacts"
 
 
 def test_cli_requires_exactly_one_mode():
@@ -130,8 +132,15 @@ async def test_apply_accepts_only_the_exact_computed_fingerprint(command_db):
         run_reconciliation,
     )
 
-    command_db.add(
-        archive_artifact_row(source_path="contacts/contact.json", content=b"contact")
+    command_db.add_all(
+        [
+            archive_artifact_row(
+                source_path=path.relative_to(CONTACT_FIXTURE_ROOT).as_posix(),
+                content=path.read_bytes(),
+            )
+            for path in sorted(CONTACT_FIXTURE_ROOT.rglob("*"))
+            if path.is_file()
+        ]
     )
     await command_db.commit()
     fingerprint = bundle_fingerprint(await load_artifacts(command_db))
@@ -149,7 +158,13 @@ async def test_apply_accepts_only_the_exact_computed_fingerprint(command_db):
 
     assert summary.status == "completed"
     assert summary.bundle_fingerprint == fingerprint
-    assert [result.module for result in summary.results] == ["archive_integrity"]
+    assert [result.module for result in summary.results] == [
+        "archive_integrity",
+        "contacts",
+    ]
+    contacts = next(result for result in summary.results if result.module == "contacts")
+    assert contacts.observed_count == 2
+    assert contacts.rendered_count == 3
 
 
 @pytest.mark.asyncio
