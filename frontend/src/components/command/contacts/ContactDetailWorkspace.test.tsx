@@ -20,6 +20,7 @@ import type {
 import { CommandToastProvider } from '../ui/CommandToastProvider';
 import { ContactDetailWorkspace } from './ContactDetailWorkspace';
 import { canonicalContactId } from '@/app/admin/command/contacts/[contactId]/page';
+import { CommandHttpError } from '@/lib/command/http';
 
 const navigation = vi.hoisted(() => ({
   pathname: '/admin/command/contacts/7',
@@ -962,6 +963,24 @@ describe('ContactDetailWorkspace', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
     expect(failedApi.detail).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders a stable not-found state for a missing contact and does not offer retry', async () => {
+    const api = fakeApi();
+    const next = deferred<ContactDetail>();
+    vi.mocked(api.detail).mockRejectedValueOnce(new CommandHttpError(404, 'private missing detail')).mockReturnValueOnce(next.promise);
+    const view = renderWorkspace(api);
+    expect(await screen.findByRole('heading', { name: 'Contact not found' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to contacts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('private missing detail');
+
+    navigation.pathname = '/admin/command/contacts/9';
+    view.rerender(workspace(api, 9));
+    expect(screen.getByRole('status', { name: 'Loading contact workspace' })).toBeInTheDocument();
+    expect(screen.queryByText('Contact not found')).not.toBeInTheDocument();
+    await act(async () => next.resolve({ ...detail, contact: { ...contact, id: 9, display_name: 'Grace Hopper' } }));
+    expect(await screen.findByRole('heading', { name: 'Grace Hopper' })).toBeInTheDocument();
   });
 
   it('invalidates a fulfilled section cache when the whole workspace retries', async () => {

@@ -237,6 +237,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const [sectionLoadMoreFailed, setSectionLoadMoreFailed] = useState<ReadonlySet<CapturedSectionName>>(new Set());
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
   const [jump, setJump] = useState('');
@@ -363,6 +364,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     baseIdRef.current = requestId;
     setLoading(true);
     setFailure(false);
+    setNotFound(false);
     setNeighborUniverseKey(null);
     setNeighbors({ previous_contact_id: null, next_contact_id: null });
     setNeighborsFailed(false);
@@ -410,7 +412,8 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
         return true;
       } catch (error) {
         if (!controller.signal.aborted && !abortError(error) && mountedRef.current && baseRecordRef.current === record) {
-          setFailure(true);
+          if (error instanceof CommandHttpError && error.status === 404) setNotFound(true);
+          else setFailure(true);
           controller.abort();
         }
         return false;
@@ -992,15 +995,15 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     : { previous_contact_id: null, next_contact_id: null };
   const currentNeighborsFailed = neighborUniverseKey === currentNeighborUniverse && neighborsFailed;
   const currentOutsideUniverse = neighborUniverseKey === currentNeighborUniverse && outsideUniverse;
-  if ((loading || detail !== currentDetail) && currentDetail === null) return <CommandStatePanel kind="loading" title="Loading contact workspace" message="Loading decoded profile and workspace data." />;
-  if (failure && currentDetail === null) return <CommandStatePanel kind="error" title="Unable to load contact workspace" message="The contact detail request did not complete. No data was changed." actionLabel="Retry" onAction={() => setAttempt((value) => value + 1)} />;
-  if (currentDetail === null) return null;
-
   const backParams = contactLocationParamsForRequest(request, rawParams);
   backParams.delete('contact_view');
   backParams.delete('task_state');
   const backQuery = backParams.toString();
   const backHref = `/admin/command/contacts${backQuery ? `?${backQuery}` : ''}`;
+  if ((loading || detail !== currentDetail) && currentDetail === null) return <CommandStatePanel kind="loading" title="Loading contact workspace" message="Loading decoded profile and workspace data." />;
+  if (notFound && currentDetail === null) return <CommandStatePanel kind="error" title="Contact not found" message="This contact is not available in the current SWS workspace." actionLabel="Back to contacts" onAction={() => router.push(backHref)} />;
+  if (failure && currentDetail === null) return <CommandStatePanel kind="error" title="Unable to load contact workspace" message="The contact detail request did not complete. No data was changed." actionLabel="Retry" onAction={() => setAttempt((value) => value + 1)} />;
+  if (currentDetail === null) return null;
 
   const sectionState = activeSection ? sections[activeSection] ?? null : null;
   const page: ContactSectionPage | null = sectionState ? {
