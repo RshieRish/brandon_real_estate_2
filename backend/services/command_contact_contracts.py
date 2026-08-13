@@ -1314,6 +1314,12 @@ class ContactImportResult:
     created: int
     skipped_duplicates: int
 
+    def __post_init__(self) -> None:
+        _exact_int(self.created, "created", minimum=0)
+        _exact_int(
+            self.skipped_duplicates, "skipped_duplicates", minimum=0
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ContactSavedSearchValue:

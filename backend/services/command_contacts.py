@@ -7,7 +7,9 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from types import MappingProxyType
 from typing import NoReturn
 
 from sqlalchemy import (
@@ -66,6 +68,7 @@ from services.command_contact_contracts import (
     ContactActorValue,
     ContactAddressValue,
     ContactArtifactMetadata,
+    ContactAuditAction,
     ContactBulkAddTag,
     ContactBulkCommand,
     ContactBulkRemoveTag,
@@ -81,6 +84,9 @@ from services.command_contact_contracts import (
     ContactDirectoryPage,
     ContactDirectoryRow,
     ContactEvidence,
+    ContactImportCommand,
+    ContactImportResult,
+    ContactImportRowCommand,
     ContactLegacySyncResult,
     ContactMaterialized,
     ContactMutationResult,
@@ -112,6 +118,7 @@ from services.command_contact_contracts import (
     canonical_contact_audit_json,
     canonical_workspace_saved_search_activity_json,
 )
+from services.command_contact_identity import canonical_email
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
 )
@@ -143,6 +150,47 @@ class ContactLinkConflict(ContactDataIntegrityError):
 
 class ContactSectionUnsupported(ValueError):
     """The requested section has a dedicated service instead."""
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _ArchiveContactIngestResult:
+    created: int
+    skipped_duplicates: int
+    owner_contact_ids_by_normalized_email: Mapping[str, int | None]
+
+    def __post_init__(self) -> None:
+        for field_name in ("created", "skipped_duplicates"):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError("archive contact ingest count is invalid")
+        if not isinstance(
+            self.owner_contact_ids_by_normalized_email, Mapping
+        ):
+            raise TypeError("archive owner map must be a mapping")
+        owners: dict[str, int | None] = {}
+        for key, value in sorted(
+            self.owner_contact_ids_by_normalized_email.items()
+        ):
+            if (
+                type(key) is not str
+                or canonical_email(key) != key
+                or (value is not None and (type(value) is not int or value <= 0))
+            ):
+                raise ValueError("archive owner map is invalid")
+            owners[key] = value
+        object.__setattr__(
+            self,
+            "owner_contact_ids_by_normalized_email",
+            MappingProxyType(owners),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            "_ArchiveContactIngestResult("
+            f"created={self.created}, "
+            f"skipped_duplicates={self.skipped_duplicates}, "
+            "owner_map=<private>)"
+        )
 
 
 _CONTACT_MUTATION_FIELDS = (
@@ -241,6 +289,147 @@ def _validated_legacy_sync_values(
     except (AttributeError, TypeError, ValueError):
         raise ContactDataIntegrityError("legacy lead cannot be synchronized") from None
     return first_name, last_name, email, phone, stage
+
+
+async def _primary_email_owner_states(
+    db: AsyncSession,
+    canonical_keys: Sequence[str],
+) -> dict[str, int | None]:
+    """Resolve requested primary emails as absent, sole-owner, or ambiguous."""
+    ordered_keys = tuple(sorted(set(canonical_keys)))
+    owners: dict[str, int | None] = {}
+    for start in range(0, len(ordered_keys), 500):
+        batch = ordered_keys[start : start + 500]
+        owner_rank = func.row_number().over(
+            partition_by=CRMContact.normalized_email,
+            order_by=CRMContact.id,
+        ).label("owner_rank")
+        ranked = (
+            select(
+                CRMContact.normalized_email.label("normalized_email"),
+                CRMContact.id.label("contact_id"),
+                owner_rank,
+            )
+            .where(CRMContact.normalized_email.in_(batch))
+            .subquery()
+        )
+        owner_rows = (
+            await db.execute(
+                select(ranked.c.normalized_email, ranked.c.contact_id)
+                .where(ranked.c.owner_rank <= 2)
+                .order_by(ranked.c.normalized_email, ranked.c.contact_id)
+            )
+        ).all()
+        grouped: dict[str, list[int]] = defaultdict(list)
+        for normalized_email, contact_id in owner_rows:
+            if normalized_email is None:
+                raise ContactDataIntegrityError(
+                    "contact email ownership is invalid"
+                )
+            grouped[normalized_email].append(contact_id)
+        sole_by_key = {
+            key: contact_ids[0]
+            for key, contact_ids in grouped.items()
+            if len(contact_ids) == 1
+        }
+        ambiguous_keys = {
+            key for key, contact_ids in grouped.items() if len(contact_ids) == 2
+        }
+        sole_ids = tuple(sorted(sole_by_key.values()))
+        sole_contacts: Sequence[CRMContact] = ()
+        if sole_ids:
+            sole_contacts = (
+                await db.scalars(
+                    select(CRMContact)
+                    .where(CRMContact.id.in_(sole_ids))
+                    .order_by(CRMContact.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+            if tuple(contact.id for contact in sole_contacts) != sole_ids:
+                raise ContactDataIntegrityError(
+                    "contact email ownership is invalid"
+                )
+        contacts_by_id = {contact.id: contact for contact in sole_contacts}
+        for key, contact_id in sole_by_key.items():
+            contact = contacts_by_id[contact_id]
+            if (
+                contact.normalized_email != key
+                or canonical_email(contact.email) != contact.normalized_email
+            ):
+                raise ContactDataIntegrityError(
+                    "contact email normalization is invalid"
+                )
+            owners[key] = contact.id
+        owners.update((key, None) for key in ambiguous_keys)
+    return owners
+
+
+async def _create_import_contacts(
+    db: AsyncSession,
+    rows: tuple[ContactImportRowCommand, ...],
+    owner_states: dict[str, int | None],
+    *,
+    actor_subject: str,
+    activity_kind: str,
+    activity_summary: str,
+    audit_action: ContactAuditAction,
+) -> tuple[int, int]:
+    created = 0
+    skipped = 0
+    for row in rows:
+        key = canonical_email(row.email)
+        if key is not None and key in owner_states:
+            skipped += 1
+            continue
+        contact = CRMContact(
+            first_name=row.first_name,
+            last_name=row.last_name,
+            email=row.email,
+            phone=row.phone,
+            stage=row.stage,
+            birthday=row.birthday,
+            anniversary=row.anniversary,
+        )
+        db.add(contact)
+        await db.flush()
+        try:
+            before_json = canonical_contact_audit_json(
+                action=audit_action,
+                phase="before",
+                payload={},
+            )
+            after_json = canonical_contact_audit_json(
+                action=audit_action,
+                phase="after",
+                payload=_contact_audit_fields(contact),
+            )
+        except (TypeError, ValueError):
+            raise ContactDataIntegrityError(
+                "contact audit state is invalid"
+            ) from None
+        db.add_all(
+            [
+                _compatibility_activity(
+                    contact_id=contact.id,
+                    kind=activity_kind,
+                    summary=activity_summary,
+                ),
+                _contact_audit_event(
+                    contact_id=contact.id,
+                    actor_subject=actor_subject,
+                    action=audit_action,
+                    before_json=before_json,
+                    after_json=after_json,
+                ),
+            ]
+        )
+        if key is not None:
+            owner_states[key] = contact.id
+        created += 1
+    await db.flush()
+    return created, skipped
 
 
 def _safe_not_found() -> NoReturn:
@@ -3335,6 +3524,108 @@ async def sync_legacy_leads(
         ) from None
 
 
+async def import_contacts(
+    db: AsyncSession,
+    payload: ContactImportCommand,
+    *,
+    actor_subject: str,
+) -> ContactImportResult:
+    """Import validated internal contacts with bounded primary-email dedupe."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactImportCommand):
+        raise TypeError("payload must be ContactImportCommand")
+    canonical_keys = tuple(
+        sorted(
+            {
+                key
+                for row in payload.contacts
+                if (key := canonical_email(row.email)) is not None
+            }
+        )
+    )
+    try:
+        async with db.begin_nested():
+            owners = await _primary_email_owner_states(db, canonical_keys)
+            created, skipped = await _create_import_contacts(
+                db,
+                payload.contacts,
+                owners,
+                actor_subject=actor,
+                activity_kind="contact_imported",
+                activity_summary="Imported through internal CRM import",
+                audit_action="contact.legacy_import_applied",
+            )
+        return ContactImportResult(
+            created=created, skipped_duplicates=skipped
+        )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact import could not be completed"
+        ) from None
+
+
+async def ingest_archive_contacts(
+    db: AsyncSession,
+    contacts: tuple[ContactImportRowCommand, ...],
+    referenced_child_emails: tuple[str | None, ...],
+    *,
+    actor_subject: str,
+) -> _ArchiveContactIngestResult:
+    """Ingest archive contacts and return a private request owner map."""
+    actor = _validated_actor_subject(actor_subject)
+    if (
+        not isinstance(contacts, tuple)
+        or len(contacts) > 10_000
+        or any(not isinstance(row, ContactImportRowCommand) for row in contacts)
+    ):
+        raise TypeError("archive contacts are invalid")
+    if not isinstance(referenced_child_emails, tuple) or any(
+        value is not None and type(value) is not str
+        for value in referenced_child_emails
+    ):
+        raise TypeError("archive contact references are invalid")
+    canonical_keys = tuple(
+        sorted(
+            {
+                key
+                for value in (
+                    *(row.email for row in contacts),
+                    *referenced_child_emails,
+                )
+                if (key := canonical_email(value)) is not None
+            }
+        )
+    )
+    try:
+        async with db.begin_nested():
+            owners = await _primary_email_owner_states(db, canonical_keys)
+            created, skipped = await _create_import_contacts(
+                db,
+                contacts,
+                owners,
+                actor_subject=actor,
+                activity_kind="archive_contact_imported",
+                activity_summary="Imported from permitted archive bundle",
+                audit_action="contact.archive_import_applied",
+            )
+            owner_map = {
+                key: owners.get(key) for key in canonical_keys
+            }
+        return _ArchiveContactIngestResult(
+            created=created,
+            skipped_duplicates=skipped,
+            owner_contact_ids_by_normalized_email=owner_map,
+        )
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "archive contact import could not be completed"
+        ) from None
+
+
 async def assign_contact_tag(
     db: AsyncSession,
     contact_id: int,
@@ -3960,6 +4251,7 @@ __all__ = [
     "get_contact_evidence",
     "get_contact_neighbors",
     "get_contact_workspace_summary",
+    "import_contacts",
     "list_contact_celebrations",
     "list_contacts",
     "list_saved_searches",
