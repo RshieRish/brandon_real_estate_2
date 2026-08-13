@@ -25,6 +25,7 @@ from services.command_contact_contracts import (
     ContactImportRowCommand,
     canonical_contact_audit_json,
 )
+from services.command_contacts import ingest_archive_contacts
 
 INVALID_ACTORS = (
     None,
@@ -292,7 +293,8 @@ async def test_archive_ingest_returns_private_immutable_request_owner_map(
         dataclasses.asdict(result)
     assert "new@example.test" not in repr(result)
     assert "_ArchiveContactIngestResult" not in contacts_service.__all__
-    assert "ingest_archive_contacts" not in contacts_service.__all__
+    assert "ingest_archive_contacts" in contacts_service.__all__
+    assert ingest_archive_contacts is contacts_service.ingest_archive_contacts
     activities = (
         await db.scalars(
             select(CRMActivity).where(

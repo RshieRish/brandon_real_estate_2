@@ -4252,6 +4252,7 @@ __all__ = [
     "get_contact_neighbors",
     "get_contact_workspace_summary",
     "import_contacts",
+    "ingest_archive_contacts",
     "list_contact_celebrations",
     "list_contacts",
     "list_saved_searches",
