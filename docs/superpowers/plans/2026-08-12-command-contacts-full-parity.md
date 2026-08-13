@@ -2135,17 +2135,40 @@ email/`normalized_email`, phone, stage, dates, and timestamps, byte-for-byte.
 For a new unlinked lead, compute parts with the legacy expression
 `(lead.name or "Unnamed contact").strip().split(maxsplit=1)`, require a nonempty
 first part, use its first item as `first_name`, its optional second item as
-`last_name` (otherwise `""`), use the raw lead email/phone, and use
-`lead.routing_status or "lead"` as stage. Pass those exact values through
-`ContactCreateCommand` and the canonical-email model invariant; never truncate,
-repair, or copy recovered values. An empty-after-strip or over-bound legacy
-value is a privacy-safe integrity error and rolls back the whole sync.
+`last_name` (otherwise `""`). Sync does **not** pass these values through
+`ContactCreateCommand`, `_bounded_text`, or `_optional_text`, because those
+contracts trim and would destroy one-to-one legacy-field preservation. A
+private sync-specific validator accepts the expression-produced first/last
+names only as exact strings of `1..120`/`0..120` Python characters. It accepts
+`Lead.email` only as `None` or an exact string of at most `255` Python
+characters and `Lead.phone` only as `None` or an exact string of at most `50`
+Python characters; empty and leading/trailing-whitespace email/phone strings
+are preserved byte-for-byte. Stage is exactly `"lead"` when
+`Lead.routing_status is None` or `Lead.routing_status == ""`; otherwise it must
+be an exact string of `1..50` Python characters, must contain at least one
+non-whitespace character, and is persisted byte-for-byte without trimming.
+The validator never truncates, repairs, or copies recovered values. An invalid
+type, empty-after-strip name, all-whitespace nonempty stage, or over-bound value
+is a privacy-safe integrity error and rolls back the whole sync.
+
+`CRMContact.email` therefore stores the validated raw legacy email unchanged;
+the existing model invariant separately derives
+`CRMContact.normalized_email = canonical_email(CRMContact.email)` at flush.
+The new-contact `contact.legacy_sync_applied` audit fingerprints the exact
+preserved `CRMContact` strings, not trimmed or otherwise normalized copies.
 
 Scan `Lead` with `WHERE id>:last_id ORDER BY id ASC LIMIT 500 FOR UPDATE`.
 For each nonempty batch, batch-load and lock linked contacts in ascending ID and
-batch-load exact markers; never query per lead/contact and retain at most one
-500-lead batch. The SELECT formula is exactly three per nonempty batch plus one
-terminal Lead query: `3 * ceil(n / 500) + 1` for `n>0`, and one for `n=0`.
+query exact markers by projecting only
+`SELECT DISTINCT CRMActivity.contact_id` for the batch's linked contact IDs and
+all five marker predicates above. The marker query never hydrates
+`CRMActivity` objects and returns at most the batch's contact count even when a
+contact has duplicate exact markers. Because PostgreSQL does not permit
+`FOR UPDATE` with `DISTINCT`, the already-held ordered `Lead` locks are the sync
+serialization point and this marker-evidence query is read-only. Never query
+per lead/contact and retain at most one 500-lead batch. The SELECT formula is
+exactly three per nonempty batch plus one terminal Lead query:
+`3 * ceil(n / 500) + 1` for `n>0`, and one for `n=0`.
 Create one contact+marker+`contact.legacy_sync_applied` audit for an unlinked
 lead. Add one marker+backfill audit for an existing linked contact missing the
 exact marker. A contact with at least one exact marker is unchanged. The result
@@ -2366,7 +2389,16 @@ implementing the service methods. The acceptance matrix is binding:
    byte-for-byte preservation, exact marker recognition, audit/activity counts,
    second-run no-op, and no recovered-field write. SQL capture for 1, 501, and
    1,001 leads must match `3 * ceil(n/500) + 1`, use `LIMIT 500`, and contain no
-   per-lead/contact query.
+   per-lead/contact query. A new-lead fixture with padded email/phone and padded
+   but non-whitespace-only routing status asserts those three fields remain
+   byte-for-byte identical in `CRMContact`, `normalized_email` equals
+   `canonical_email(raw_email)`, and the audit hashes the preserved strings.
+   `None`/exact-empty routing status falls back to `"lead"`; whitespace-only,
+   wrong-type, and each over-bound sync field fails without leaking values and
+   rolls back every batch. Seed more than 500 duplicate exact markers across a
+   small linked-contact batch and assert the marker SELECT is a scalar
+   `DISTINCT contact_id` projection returning no more IDs than linked contacts,
+   while the sync remains a no-op with the same fixed SELECT count.
 7. For normal import and archive ingest, cover sole/ambiguous/drifted persisted
    owners, more than two owners for one key, NFKC equivalents, first-input-row
    within-request winner, null canonical non-deduplication, 1,000-row normal
