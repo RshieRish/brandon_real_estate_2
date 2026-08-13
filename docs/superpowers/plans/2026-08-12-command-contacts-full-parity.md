@@ -1460,8 +1460,7 @@ class ContactMaterialized:
     captured_at: datetime | None
     value: ContactOccurrenceValue
     entity_type: Literal[
-        "contact_timeline_event", "note", "saved_search",
-        "task", "smart_plan", "opportunity",
+        "note", "saved_search", "task", "smart_plan", "opportunity",
     ]
     entity_id: int
 
@@ -1787,9 +1786,27 @@ valid recovered, profile/link mismatch in both directions, wrong-domain and
 cross-contact links, deterministic ordering, internal/recovered celebration
 separation, no autoflush/DML, and privacy-safe exceptions.
 
-`list_contact_section` accepts page `>=1` and page size `1..100`. It rejects
+Task 5C-D is the bounded section/evidence slice. `list_contact_section`
+accepts page `>=1` and page size `1..100`. It rejects
 `ContactSection.TIMELINE` with `ContactSectionUnsupported` before issuing a
-query because Task 5B is the sole timeline API. Every other section queries
+query because Task 5B is the sole timeline API. Its complete accepted tab
+matrix is exactly the seven non-timeline enum values below; those seven tabs
+project to exactly five DTO kinds:
+
+```text
+opportunities   -> ContactOpportunityOccurrence(kind="opportunity")
+smart_plans     -> ContactSmartPlanOccurrence(kind="smart_plan")
+notes           -> ContactNoteOccurrence(kind="note")
+saved_searches  -> ContactSavedSearchOccurrence(kind="saved_search")
+tasks_to_do     -> ContactTaskOccurrence(kind="task", state="to_do")
+tasks_completed -> ContactTaskOccurrence(kind="task", state="completed")
+tasks_archived  -> ContactTaskOccurrence(kind="task", state="archived")
+```
+
+Timeline plus these seven values remains the immutable eight-cell capture
+matrix; the three task states are separate captured sections but share one
+typed task DTO. No sixth occurrence DTO, generic row, unknown section, or
+timeline alias is accepted. Every accepted section queries
 `CRMContactSourceOccurrence`, never text, and first proves that occurrence,
 section capture, capture position, and requested contact all share the same
 contact ID and that the section name matches the occurrence record kind.
@@ -1808,6 +1825,23 @@ multiple targets is `ContactDataIntegrityError`, not source-only. Raw source
 keys, provider IDs, parser payloads, and archive paths are never response
 fields. Rows order by section capture time descending nulls last, capture
 ordinal ascending, occurrence ordinal ascending, then ownership ID ascending.
+Every row, including a materialized row, passes through the single strict
+source-occurrence projector defined in Step 1 before its DTO is built;
+malformed/non-object payload or `values`, missing required title, over-bound
+text, unsafe criteria, and invalid RFC3339 input follow that projector's exact
+fail/nullable rules rather than ad hoc coercion. A seven-section test matrix
+asserts all five discriminants and the three task states, source-only and
+materialized ownership for each compatible type, every strict payload rule,
+and that no private payload value reaches a DTO or exception.
+
+The section service uses a shared ownership predicate for count and page,
+loads page occurrences, all source links, and all compatible targets in
+set-based batches, and performs no per-row query. One occurrence and 101
+occurrences must execute the same number of SELECTs and no DML/autoflush; each
+call is capped at 10 SELECTs, excluding no operation because timeline and
+invalid page arguments fail before querying. SQL-capture tests assert the
+1-versus-101 invariant independently for each of the seven sections and prove
+page `2` materialization does not consult page `1` rows.
 
 `get_contact_workspace_summary` uses the same ownership validator rather than
 adding persisted and recovered counts blindly. For each non-timeline section,
@@ -1871,9 +1905,22 @@ failure returns no partial summary.
 historical `317/317/0` and `51/2/49` values are acceptance expectations, never
 constants. `provider_contact_rows` is the number of distinct capture-position
 source records. `resolved_provider_identities` is the number of distinct
-contacts reached by those positions after validating that each position's
-profile source has exactly one `CRMEntitySource(entity_type="contact")` to the
-same contact. `coalesced_aliases` is
+contacts reached by those positions after resolving each position to its
+canonical profile source as follows. Parse only
+`CRMSourceRecord(source_system="kw_command", module="contacts",
+record_kind="contact_profile").payload_json` as an object, require its
+top-level `source_contact_id` to be exactly 24 lowercase hexadecimal
+characters, and match it exactly to
+`CRMContactCapturePosition.source_contact_id`. That canonical profile source
+must have exactly one `CRMEntitySource(entity_type="contact")`, its target
+`CRMContact` must exist, and the target ID must equal the position's
+`contact_id`. Missing/duplicate profile resolution, malformed payload,
+zero/multiple contact targets, dangling target, or cross-contact target is a
+privacy-safe `ContactDataIntegrityError`. Resolution never interprets
+`CRMSourceRecord.source_key`, display label, URL, name, email, position, or
+artifact path as an identity convention, and Task 5C-D adds no profile-source
+foreign key. The provider ID is used only for this internal equality check and
+never appears in a DTO, error, audit, or log. `coalesced_aliases` is
 `provider_contact_rows - resolved_provider_identities`; any negative or
 nonzero result is integrity error because the DTO permits only literal zero.
 `lead_backed_contacts` is the distinct set of contacts with non-null `lead_id`.
@@ -1886,26 +1933,69 @@ after proving the overlap set is a subset. Tests remove/add mappings and audit
 rows to prove the aggregates change or fail integrity; no fixture can pass by
 returning literals.
 
-The evidence detail returns every requested contact capture position and
-exactly eight uniquely named section cells per position. It verifies all
-position/profile/section/source IDs and contacts agree, every section source is
-the declared Contacts record kind, `row_count >= 0`, `is_empty=true` implies
-`row_count == 0`, `row_count > 0` implies `is_empty=false`, a complete cell
-with zero rows must be explicitly empty, and the count of owned occurrences equals `row_count` for
-the same section capture. `limitations_json` must be a canonical JSON array of
-unique strings. Missing/duplicate cells, malformed limitations, cross-contact
-links, dangling artifacts, duplicate artifact links, nonpositive IDs,
-non-lowercase/non-64-hex SHA-256, or negative/mismatched byte counts are
-integrity errors. `ContactSourceMetadata` exposes only internal
-`source_record_id`, `record_kind`, `evidence_level`, `capture_quality`, nullable
-`captured_at`, and safe artifact entries. Each artifact exposes only positive
-`artifact_id`, `artifact_type`, lowercase SHA-256, nonnegative byte count, and
-the service-constructed authenticated link
+The evidence detail returns every requested-contact capture position ordered
+by `(capture_ordinal ASC, id ASC)`. Each position contains exactly eight
+uniquely named cells in this immutable `ContactSection` enum order:
+`timeline`, `opportunities`, `smart_plans`, `notes`, `saved_searches`,
+`tasks_to_do`, `tasks_completed`, `tasks_archived`. The flattened
+`section_matrix` uses the same position order and then that enum order; neither
+database insertion order nor lexical section order is observable. It verifies
+all position/profile/section/source IDs and contacts agree, every section
+source is the declared Contacts record kind, `row_count >= 0`,
+`is_empty=true` implies `row_count == 0`, `row_count > 0` implies
+`is_empty=false`, a complete cell with zero rows is explicitly empty, and the
+count of owned occurrences equals `row_count` for the same section capture.
+`limitations_json` is a canonical JSON array of unique strings.
+Missing/duplicate cells, malformed limitations, cross-contact links, or any
+strict seven-non-timeline-tab occurrence projection failure is an integrity
+error; timeline bodies remain owned by Task 5B and are never fabricated from
+cell text.
+
+`ContactEvidence.sources` is the distinct union for the requested contact of
+exactly: (1) canonical `contact_profile` sources resolved by payload
+`source_contact_id` and the same-contact entity link above, (2) every capture
+position's `source_record_id`, (3) all eight section captures'
+`source_record_id` values, and (4) all owned occurrence `source_record_id`
+values. It excludes workspace-global/unrelated entity sources and contains
+each source once, ordered by `CRMSourceRecord.id ASC`.
+`ContactSourceMetadata` exposes only internal `source_record_id`,
+`record_kind`, `evidence_level`, `capture_quality`, nullable `captured_at`, and
+safe artifact entries. Each source's artifact entries are distinct and ordered
+by `CRMArchiveArtifact.id ASC`; a duplicate source/artifact link, dangling
+artifact, nonpositive ID, invalid/empty artifact type,
+non-lowercase/non-64-hex SHA-256, or negative size is an integrity error.
+
+Artifact queries select only artifact ID/type/SHA/catalog size and the
+DB-computed `length(content_bytes)` scalar; they never select, defer-load, or
+materialize `CRMArchiveArtifact.content_bytes`. When `content_bytes IS NOT
+NULL`, its database-computed byte length must equal `size_bytes`. When the blob
+is null, retain the nonnegative ingestion-verified size and SHA from the
+immutable artifact catalog without pretending the bytes are present and
+without reopening a source/archive path. Each DTO constructs only
 `/api/v1/command/archive/artifacts/{artifact_id}/content`; filename, source
 key, provider identifier, source/archive path, preview, payload, stored URL,
-and bytes are excluded and bytes are never loaded. Aggregate quality is
-`complete` only when every required cell is complete, `partial` when there is
-at least one partial and no shell/error cell, otherwise `limitation`.
+and bytes are excluded. Tests place a sentinel secret in every forbidden
+column and in a non-null blob, prove only the DB-side length scalar is read,
+prove nullable-blob metadata remains available, and prove no secret appears in
+the DTO, exception, SQL parameter log, or serialized response.
+
+Aggregate quality is `limitation` when the requested contact has zero capture
+positions. Otherwise it is `complete` only when every required cell is
+complete, `partial` only when at least one cell is partial and no cell is
+shell/error, and `limitation` for any shell/error cell. This is not vacuous:
+zero positions can never yield `complete`.
+
+The evidence service uses set-based queries for positions, cells, occurrences,
+profile resolution, source union, source/artifact links, artifact catalog
+metadata/DB-side blob lengths, and aggregate sets; it performs no query per
+position, cell, source, or artifact and runs under `db.no_autoflush`. One
+position and 101 positions execute the same number of SELECTs and no DML; each
+call is capped at 14 SELECTs. Tests reverse fixture insertion order, use 101
+positions with all eight cells and artifacts, assert every deterministic order
+above, and independently cover zero-position limitation, profile-payload
+resolution without relying on source keys, all source-union categories,
+missing/duplicate/cross-contact links, all cell/cardinality contradictions,
+artifact mismatch/null-blob rules, query count, and privacy redaction.
 
 Celebrations merge internal and recovered observations per
 `(contact_id, kind)`. A non-null internal `CRMContact.birthday` or
