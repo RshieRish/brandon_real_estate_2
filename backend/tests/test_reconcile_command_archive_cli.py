@@ -49,6 +49,115 @@ def test_cli_apply_requires_explicit_bundle_fingerprint():
         validate_apply_args(args)
 
 
+def test_cli_apply_selecting_contacts_requires_private_manifest_before_database(
+    monkeypatch,
+):
+    import scripts.reconcile_command_archive as cli
+
+    called = False
+
+    async def fail_if_called(args):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(cli, "_run_with_database", fail_if_called)
+
+    with pytest.raises(ValueError, match="--contact-overlap-manifest"):
+        cli.main(
+            [
+                "--apply",
+                "--parser-version",
+                "contacts-v1",
+                "--module",
+                "contacts",
+                "--expect-fingerprint",
+                "a" * 64,
+            ]
+        )
+
+    assert called is False
+
+
+def test_cli_unbounded_apply_requires_private_contacts_manifest():
+    from scripts.reconcile_command_archive import parse_args, validate_apply_args
+
+    args = parse_args(
+        [
+            "--apply",
+            "--parser-version",
+            "contacts-v1",
+            "--expect-fingerprint",
+            "a" * 64,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="--contact-overlap-manifest"):
+        validate_apply_args(args)
+
+
+def test_cli_accepts_private_manifest_for_dry_apply_and_resume(tmp_path: Path):
+    from scripts.reconcile_command_archive import parse_args
+
+    path = tmp_path / "private.json"
+    for mode in ("--dry-run", "--apply"):
+        argv = [
+            mode,
+            "--parser-version",
+            "contacts-v1",
+            "--module",
+            "contacts",
+            "--contact-overlap-manifest",
+            str(path),
+        ]
+        if mode == "--apply":
+            argv += ["--expect-fingerprint", "a" * 64]
+        args = parse_args(argv)
+        assert args.contact_overlap_manifest == str(path)
+
+    resumed = parse_args(
+        [
+            "--dry-run",
+            "--parser-version",
+            "contacts-v1",
+            "--module",
+            "contacts",
+            "--contact-overlap-manifest",
+            str(path),
+            "--resume",
+            "9",
+        ]
+    )
+    assert resumed.resume == 9
+
+
+def test_verify_only_never_loads_a_contact_manifest(monkeypatch, capsys):
+    import scripts.reconcile_command_archive as cli
+
+    summary = ReconciliationSummary(
+        run_id=4,
+        status="completed",
+        bundle_fingerprint="a" * 64,
+        results=(),
+    )
+
+    async def fake_database_runner(args):
+        assert args.verify_only is True
+        return summary
+
+    monkeypatch.setattr(cli, "_run_with_database", fake_database_runner)
+    cli.main(
+        [
+            "--verify-only",
+            "--parser-version",
+            "command-v1",
+            "--contact-overlap-manifest",
+            "/private/path-that-must-not-be-opened.json",
+        ]
+    )
+
+    assert json.loads(capsys.readouterr().out)["run_id"] == 4
+
+
 def test_cli_supports_bounded_module_and_resume():
     from scripts.reconcile_command_archive import parse_args
 
@@ -104,6 +213,8 @@ async def test_apply_refuses_fingerprint_mismatch_before_creating_a_run(command_
             "--apply",
             "--parser-version",
             "command-v1",
+            "--module",
+            "archive_integrity",
             "--expect-fingerprint",
             "0" * 64,
         ]
@@ -149,6 +260,8 @@ async def test_apply_accepts_only_the_exact_computed_fingerprint(command_db):
             "--apply",
             "--parser-version",
             "command-v1",
+            "--module",
+            "archive_integrity",
             "--expect-fingerprint",
             fingerprint,
         ]
@@ -158,13 +271,7 @@ async def test_apply_accepts_only_the_exact_computed_fingerprint(command_db):
 
     assert summary.status == "completed"
     assert summary.bundle_fingerprint == fingerprint
-    assert [result.module for result in summary.results] == [
-        "archive_integrity",
-        "contacts",
-    ]
-    contacts = next(result for result in summary.results if result.module == "contacts")
-    assert contacts.observed_count == 2
-    assert contacts.rendered_count == 3
+    assert [result.module for result in summary.results] == ["archive_integrity"]
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,8 @@ import argparse
 import asyncio
 from collections.abc import Mapping, Sequence
 import json
+from pathlib import Path
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import AsyncSessionLocal
 from models.command import CRMArchiveArtifact
 from services.command_parsers import ModuleMetrics, default_parser_registry
+from services.command_contact_overlap_manifest import (
+    ContactOverlapManifest,
+    load_contact_overlap_manifest,
+)
+from services.command_materializers import default_materializer_registry
 from services.command_provenance import ArchiveArtifactInput, bundle_fingerprint
 from services.command_reconciliation import (
     ReconciliationSummary,
@@ -47,6 +54,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--module", dest="modules", action="append", default=[])
     parser.add_argument("--resume", type=_positive_integer)
     parser.add_argument("--expect-fingerprint")
+    parser.add_argument("--contact-overlap-manifest")
     return parser.parse_args(argv)
 
 
@@ -54,6 +62,29 @@ def validate_apply_args(args: argparse.Namespace) -> None:
     """Require an explicit archive identity before apply can access the DB."""
     if args.apply and not args.expect_fingerprint:
         raise ValueError("--apply requires --expect-fingerprint")
+    selects_contacts = not args.modules or "contacts" in args.modules
+    if args.apply and selects_contacts and not args.contact_overlap_manifest:
+        raise ValueError(
+            "--apply selecting contacts requires --contact-overlap-manifest"
+        )
+
+
+def _requested_contact_overlap_manifest(
+    args: argparse.Namespace,
+) -> ContactOverlapManifest | None:
+    if args.verify_only or (args.modules and "contacts" not in args.modules):
+        return None
+    cached = getattr(args, "_loaded_contact_overlap_manifest", None)
+    if isinstance(cached, ContactOverlapManifest):
+        return cached
+    if not args.contact_overlap_manifest:
+        return None
+    manifest = load_contact_overlap_manifest(
+        args.contact_overlap_manifest,
+        repository_root=Path(__file__).resolve().parents[2],
+    )
+    setattr(args, "_loaded_contact_overlap_manifest", manifest)
+    return manifest
 
 
 async def load_artifacts(db: AsyncSession) -> tuple[ArchiveArtifactInput, ...]:
@@ -80,7 +111,7 @@ async def load_artifacts(db: AsyncSession) -> tuple[ArchiveArtifactInput, ...]:
     )
 
 
-def _mode(args: argparse.Namespace) -> str:
+def _mode(args: argparse.Namespace) -> Literal["dry_run", "apply", "verify_only"]:
     if args.apply:
         return "apply"
     if args.verify_only:
@@ -94,11 +125,19 @@ async def run_reconciliation(
 ) -> ReconciliationSummary:
     """Run the selected safe mode against one database session."""
     validate_apply_args(args)
+    contact_overlap_manifest = _requested_contact_overlap_manifest(args)
     artifacts = await load_artifacts(db)
     fingerprint = bundle_fingerprint(artifacts)
     if args.apply and args.expect_fingerprint != fingerprint:
         raise ValueError(
             "--expect-fingerprint does not match the computed archive fingerprint"
+        )
+    if contact_overlap_manifest is not None and (
+        contact_overlap_manifest.bundle_fingerprint != fingerprint
+        or contact_overlap_manifest.parser_version != args.parser_version
+    ):
+        raise ValueError(
+            "contact overlap manifest does not match the computed request"
         )
 
     request = RunRequest(
@@ -112,6 +151,8 @@ async def run_reconciliation(
         default_parser_registry(),
         artifacts,
         request,
+        materializers=default_materializer_registry(),
+        contact_overlap_manifest=contact_overlap_manifest,
     )
 
 
@@ -169,6 +210,7 @@ async def _run_with_database(args: argparse.Namespace) -> ReconciliationSummary:
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     validate_apply_args(args)
+    _requested_contact_overlap_manifest(args)
     summary = asyncio.run(_run_with_database(args))
     print(summary_json(summary))
 

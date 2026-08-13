@@ -23,6 +23,15 @@ from services.command_parsers import (
     StructuredParserError,
     validate_parser_module,
 )
+from services.command_contact_overlap_manifest import (
+    ContactOverlapManifest,
+    stage_reviewed_contact_overlap_links,
+    validate_contact_overlap_manifest,
+)
+from services.command_materializers import (
+    MaterializerRegistry,
+    ModuleMaterializationResult,
+)
 from services.command_provenance import (
     ArchiveArtifactInput,
     SourceRecordDraft,
@@ -32,6 +41,7 @@ from services.command_provenance import (
 
 
 _CLAIM_LEASE = timedelta(minutes=30)
+_MANIFEST_DIGEST_MARKER = "contact_overlap_manifest_digest="
 
 
 class ReconciliationRunError(RuntimeError):
@@ -164,6 +174,28 @@ def _validate_resume(
         raise ReconciliationResumeError("resume requested module set does not match")
 
 
+def _validate_resume_manifest(
+    run: CRMReconciliationRun,
+    manifest: ContactOverlapManifest | None,
+    *,
+    contacts_selected: bool,
+) -> None:
+    if not contacts_selected:
+        return
+    stored_digest = None
+    if _MANIFEST_DIGEST_MARKER in run.error_text:
+        candidate = run.error_text.split(_MANIFEST_DIGEST_MARKER, 1)[1].split(
+            ";", 1
+        )[0]
+        if len(candidate) == 64:
+            stored_digest = candidate
+    requested_digest = manifest.canonical_digest if manifest is not None else None
+    if stored_digest != requested_digest:
+        raise ReconciliationResumeError(
+            "resume contact overlap manifest does not match the failed run"
+        )
+
+
 def _result_row(
     run_id: int,
     metrics: ModuleMetrics,
@@ -240,6 +272,68 @@ def _structured_failure_metrics(
         normalized_count=0,
         error_count=error.error_count,
         details=error.audit_details,
+    )
+
+
+def _metrics_with_details(
+    metrics: ModuleMetrics,
+    extra_details: Mapping[str, object],
+    *,
+    normalized_count: int | None = None,
+) -> ModuleMetrics:
+    details = dict(metrics.details)
+    details.update(extra_details)
+    return ModuleMetrics(
+        source_system=metrics.source_system,
+        module=metrics.module,
+        expected_count=metrics.expected_count,
+        observed_count=metrics.observed_count,
+        rendered_count=metrics.rendered_count,
+        normalized_count=(
+            metrics.normalized_count
+            if normalized_count is None
+            else normalized_count
+        ),
+        evidence_only_count=metrics.evidence_only_count,
+        unmatched_count=metrics.unmatched_count,
+        duplicate_content_count=metrics.duplicate_content_count,
+        error_count=metrics.error_count,
+        details=details,
+    )
+
+
+def _materialized_metrics(
+    metrics: ModuleMetrics,
+    materialized: ModuleMaterializationResult,
+    *,
+    staged,
+) -> ModuleMetrics:
+    details: dict[str, object] = dict(materialized.details)
+    details.update({
+        "recovered_contacts_created": materialized.created_count,
+        "source_entity_links_created_by_materializer": materialized.links_created,
+        "materialization": dict(materialized.details),
+    })
+    final_mapping_count = materialized.details.get("source_entity_links_final")
+    total_contacts = materialized.details.get("total_contacts")
+    if isinstance(final_mapping_count, int):
+        details["source_entity_links_final"] = final_mapping_count
+    if isinstance(total_contacts, int):
+        details["expected_combined_contact_total"] = total_contacts
+    if staged is not None:
+        details.update(
+            {
+                "contact_overlap_manifest": dict(
+                    staged.validation.redacted_metadata
+                ),
+                "reviewed_overlap_links_staged": staged.links_created,
+                "reviewed_overlap_audits_created": staged.audits_created,
+            }
+        )
+    return _metrics_with_details(
+        metrics,
+        details,
+        normalized_count=materialized.normalized_count,
     )
 
 
@@ -466,6 +560,9 @@ async def execute_reconciliation(
     registry: ParserRegistry,
     artifacts: Iterable[ArchiveArtifactInput],
     request: RunRequest,
+    *,
+    materializers: MaterializerRegistry | None = None,
+    contact_overlap_manifest: ContactOverlapManifest | None = None,
 ) -> ReconciliationSummary:
     """Execute selected parsers with durable, resumable module boundaries."""
     if not isinstance(request, RunRequest):
@@ -476,6 +573,23 @@ async def execute_reconciliation(
         artifact.source_path: artifact for artifact in materialized_artifacts
     }
     selected_modules = _selected_modules(registry, request)
+    selected_materializers = {}
+    if materializers is not None:
+        available_materializers = materializers.registered_modules()
+        selected_materializers = {
+            materializer.module: materializer
+            for materializer in materializers.select(
+                selected_modules.intersection(available_materializers)
+            )
+        }
+    if (
+        request.mode == "apply"
+        and "contacts" in selected_materializers
+        and contact_overlap_manifest is None
+    ):
+        raise ReconciliationRunError(
+            "contacts apply requires a reviewed overlap manifest"
+        )
     requested_modules_json = _requested_modules_json(selected_modules)
     claim_token = secrets.token_hex(32)
 
@@ -506,6 +620,11 @@ async def execute_reconciliation(
             parser_version=request.parser_version,
             mode=request.mode,
             modules=selected_modules,
+        )
+        _validate_resume_manifest(
+            run,
+            contact_overlap_manifest,
+            contacts_selected="contacts" in selected_modules,
         )
         run_id = run.id
         await _claim_resume_run(db, run_id, claim_token)
@@ -560,22 +679,82 @@ async def execute_reconciliation(
                 parser_version=request.parser_version,
                 artifacts_by_path=artifacts_by_path,
             )
+            manifest_validation = None
+            if (
+                expected_module == "contacts"
+                and contact_overlap_manifest is not None
+                and request.mode != "verify_only"
+            ):
+                manifest_validation = await validate_contact_overlap_manifest(
+                    db,
+                    contact_overlap_manifest,
+                    result.records,
+                    bundle_fingerprint=fingerprint,
+                    parser_version=request.parser_version,
+                )
             await _lock_module_claim(db, run_id, claim_token)
             normalized_count = result.metrics.normalized_count
+            result_metrics = result.metrics
             if request.mode == "apply":
                 await persist_source_records(db, result.records)
                 normalized_count = len(result.records)
+                materializer = selected_materializers.get(expected_module)
+                if materializer is not None:
+                    staged = None
+                    if expected_module == "contacts":
+                        assert contact_overlap_manifest is not None
+                        staged = await stage_reviewed_contact_overlap_links(
+                            db,
+                            contact_overlap_manifest,
+                            result.records,
+                            bundle_fingerprint=fingerprint,
+                            parser_version=request.parser_version,
+                            run_id=run_id,
+                        )
+                    materialized = await materializer.materialize(
+                        db,
+                        result.records,
+                        bundle_fingerprint=fingerprint,
+                    )
+                    if materialized.module != expected_module:
+                        raise ReconciliationRunError(
+                            "materializer result module does not match selected module"
+                        )
+                    normalized_count = materialized.normalized_count
+                    result_metrics = _materialized_metrics(
+                        result.metrics,
+                        materialized,
+                        staged=staged,
+                    )
+            elif manifest_validation is not None:
+                result_metrics = _metrics_with_details(
+                    result.metrics,
+                    {
+                        "contact_overlap_manifest": dict(
+                            manifest_validation.redacted_metadata
+                        )
+                    },
+                )
             await _persist_result_row(
                 db,
                 run_id,
-                result.metrics,
+                result_metrics,
                 normalized_count=normalized_count,
             )
             await db.commit()
 
         await _complete_claimed_run(db, run_id, claim_token)
     except Exception as exc:
-        await _mark_failed(db, run_id, claim_token, exc)
+        audit_error: Exception = exc
+        if "contacts" in selected_modules and contact_overlap_manifest is not None:
+            audit_error = ReconciliationRunError(
+                "contacts reconciliation failed; "
+                f"{_MANIFEST_DIGEST_MARKER}"
+                f"{contact_overlap_manifest.canonical_digest}"
+            )
+        await _mark_failed(db, run_id, claim_token, audit_error)
+        if audit_error is not exc:
+            raise audit_error from None
         raise
 
     return await _summary(db, run_id)
