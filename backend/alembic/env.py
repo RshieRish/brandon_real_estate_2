@@ -24,6 +24,7 @@ import models.admin_user  # noqa: F401
 import models.setting  # noqa: F401
 import models.notification_job  # noqa: F401
 import models.command  # noqa: F401
+import models.command_contacts  # noqa: F401
 import models.command_provenance  # noqa: F401
 
 config = context.config
