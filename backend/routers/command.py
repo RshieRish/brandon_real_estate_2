@@ -35,9 +35,9 @@ async def _count(db: AsyncSession, model, *where) -> int:
 
 async def _contacts_by_normalized_emails(
     db: AsyncSession, values: set[str]
-) -> dict[str, CRMContact]:
-    """Load only explicitly referenced canonical primary emails, in safe batches."""
-    contacts: dict[str, CRMContact] = {}
+) -> dict[str, CRMContact | None]:
+    """Map each referenced email to its sole owner, or ``None`` if ambiguous."""
+    contacts: dict[str, CRMContact | None] = {}
     ordered = sorted(values)
     for start in range(0, len(ordered), 500):
         batch = ordered[start : start + 500]
@@ -52,7 +52,10 @@ async def _contacts_by_normalized_emails(
             if canonical_email(contact.email) != contact.normalized_email:
                 raise RuntimeError("contact email normalization is invalid")
             assert contact.normalized_email is not None
-            contacts.setdefault(contact.normalized_email, contact)
+            if contact.normalized_email in contacts:
+                contacts[contact.normalized_email] = None
+            else:
+                contacts[contact.normalized_email] = contact
     return contacts
 
 

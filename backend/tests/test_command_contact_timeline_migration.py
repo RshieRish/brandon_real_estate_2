@@ -258,7 +258,13 @@ def test_timeline_revision_refuses_offline_upgrade_before_emitting_sql():
             opts={"as_sql": True, "output_buffer": output},
         )
     )
-    with pytest.raises(RuntimeError, match="online canonical backfill"):
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "^contact timeline query support requires an online "
+            "canonical-email backfill$"
+        ),
+    ):
         revision.upgrade()
     assert output.getvalue() == ""
 

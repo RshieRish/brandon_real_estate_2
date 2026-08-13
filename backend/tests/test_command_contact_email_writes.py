@@ -10,11 +10,23 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from database import Base
-from models.command import CRMActivity, CRMContact, CRMTask
+from models.command import (
+    CRMActivity,
+    CRMAgreement,
+    CRMContact,
+    CRMNote,
+    CRMOpportunityContact,
+    CRMReferral,
+    CRMTask,
+)
 from models.command_contacts import CRMContactMethod
 from routers.command import import_archive_bundle, import_contacts
 from schemas.command import (
+    ArchiveAgreementImportRow,
     ArchiveBundleImportRequest,
+    ArchiveNoteImportRow,
+    ArchiveOpportunityImportRow,
+    ArchiveReferralImportRow,
     ArchiveTaskImportRow,
     ContactImportRequest,
     ContactImportRow,
@@ -159,6 +171,116 @@ async def test_archive_import_queries_only_referenced_canonical_emails_and_links
     assert all("normalized_email" in query for query in contact_queries)
     assert all("lower(" not in query.casefold() for query in contact_queries)
     assert all("WHERE" in query for query in contact_queries)
+
+
+@pytest.mark.asyncio
+async def test_archive_import_never_attaches_children_to_an_ambiguous_email_owner(
+    email_write_db: AsyncSession,
+):
+    owners = [
+        CRMContact(
+            first_name="First",
+            last_name="Owner",
+            email="duplicate@example.test",
+            stage="lead",
+        ),
+        CRMContact(
+            first_name="Second",
+            last_name="Owner",
+            email=" ＤＵＰＬＩＣＡＴＥ@Example.Test ",
+            stage="lead",
+        ),
+    ]
+    email_write_db.add_all(owners)
+    await email_write_db.flush()
+
+    result = await import_archive_bundle(
+        ArchiveBundleImportRequest(
+            contacts=[_row("DUPLICATE@example.test", first_name="Third owner")],
+            tasks=[
+                ArchiveTaskImportRow(
+                    title="Ambiguous task",
+                    contact_email="duplicate@example.test",
+                )
+            ],
+            notes=[
+                ArchiveNoteImportRow(
+                    body="Ambiguous note",
+                    contact_email="duplicate@example.test",
+                )
+            ],
+            opportunities=[
+                ArchiveOpportunityImportRow(
+                    name="Ambiguous opportunity",
+                    contact_emails=["duplicate@example.test"],
+                )
+            ],
+            referrals=[
+                ArchiveReferralImportRow(
+                    name="Ambiguous referral",
+                    contact_email="duplicate@example.test",
+                )
+            ],
+            agreements=[
+                ArchiveAgreementImportRow(
+                    title="Ambiguous agreement",
+                    contact_email="duplicate@example.test",
+                )
+            ],
+        ),
+        email_write_db,
+    )
+
+    assert result["created"]["contacts"] == 0
+    assert result["skipped_duplicates"]["contacts"] == 1
+    assert result["unresolved_contact_references"] == 5
+    assert len((await email_write_db.scalars(select(CRMContact))).all()) == 2
+
+    tasks = (await email_write_db.scalars(select(CRMTask))).all()
+    referrals = (await email_write_db.scalars(select(CRMReferral))).all()
+    agreements = (await email_write_db.scalars(select(CRMAgreement))).all()
+    assert len(tasks) == len(referrals) == len(agreements) == 1
+    assert tasks[0].contact_id is None
+    assert referrals[0].contact_id is None
+    assert agreements[0].contact_id is None
+    assert (await email_write_db.scalars(select(CRMNote))).all() == []
+    assert (
+        await email_write_db.scalars(select(CRMOpportunityContact))
+    ).all() == []
+
+
+@pytest.mark.asyncio
+async def test_contact_import_skips_when_canonical_email_has_multiple_owners(
+    email_write_db: AsyncSession,
+):
+    email_write_db.add_all(
+        [
+            CRMContact(
+                first_name="First",
+                last_name="Owner",
+                email="duplicate@example.test",
+                stage="lead",
+            ),
+            CRMContact(
+                first_name="Second",
+                last_name="Owner",
+                email=" ＤＵＰＬＩＣＡＴＥ@Example.Test ",
+                stage="lead",
+            ),
+        ]
+    )
+    await email_write_db.flush()
+
+    result = await import_contacts(
+        ContactImportRequest(
+            contacts=[_row("DUPLICATE@example.test", first_name="Third owner")]
+        ),
+        email_write_db,
+    )
+
+    assert result == {"created": 0, "skipped_duplicates": 1}
+    assert len((await email_write_db.scalars(select(CRMContact))).all()) == 2
+    assert (await email_write_db.scalars(select(CRMActivity))).all() == []
 
 
 @pytest.mark.asyncio

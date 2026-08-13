@@ -88,7 +88,8 @@ def _verify_backfill(table_name: str) -> None:
 def upgrade() -> None:
     if op.get_context().as_sql:
         raise RuntimeError(
-            "normalized-email migration requires an online canonical backfill"
+            "contact timeline query support requires an online "
+            "canonical-email backfill"
         )
 
     with op.batch_alter_table("crm_contacts") as batch_op:
