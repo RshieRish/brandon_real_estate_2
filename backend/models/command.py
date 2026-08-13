@@ -146,6 +146,11 @@ class CRMTag(Base):
 
 class CRMContactTag(Base):
     __tablename__ = "crm_contact_tags"
+    __table_args__ = (
+        UniqueConstraint(
+            "contact_id", "tag_id", name="uq_crm_contact_tag"
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("crm_contacts.id"))
     tag_id: Mapped[int] = mapped_column(ForeignKey("crm_tags.id"))
