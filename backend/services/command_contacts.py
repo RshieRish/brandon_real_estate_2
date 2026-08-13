@@ -16,6 +16,7 @@ from sqlalchemy import (
     case,
     exists,
     extract,
+    false,
     func,
     literal,
     not_,
@@ -28,6 +29,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from models.command import (
     CRMActivity,
+    CRMArchiveArtifact,
     CRMContact,
     CRMContactTag,
     CRMNote,
@@ -41,6 +43,7 @@ from models.command import (
 )
 from models.command_contacts import (
     CRMContactAddress,
+    CRMContactAuditEvent,
     CRMContactCapturePosition,
     CRMContactMethod,
     CRMContactOwnership,
@@ -50,14 +53,17 @@ from models.command_contacts import (
     CRMContactTimelineEvent,
 )
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
+from models.command_provenance import CRMSourceRecordArtifact
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     CaptureQualityValue,
     ContactActorValue,
     ContactAddressValue,
+    ContactArtifactMetadata,
     ContactCelebrationRow,
     ContactCelebrations,
     ContactCelebrationValue,
+    ContactCaptureEvidence,
     ContactDetail,
     ContactDirectoryFilters,
     ContactDirectoryPage,
@@ -70,15 +76,18 @@ from services.command_contact_contracts import (
     ContactRecoveredProfile,
     ContactSavedSearchOccurrence,
     ContactSection,
+    ContactSectionEvidence,
     ContactSectionPage,
     ContactSmartPlanOccurrence,
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
     ContactSourceOnly,
+    ContactSourceMetadata,
     ContactTagValue,
     ContactTaskOccurrence,
     ContactWorkspaceSummary,
+    ContactEvidence,
     SortDirection,
 )
 from services.command_contact_timeline import (
@@ -898,6 +907,13 @@ _TASK_SECTION_STATES = {
     ContactSection.TASKS_TO_DO: "to_do",
     ContactSection.TASKS_COMPLETED: "completed",
     ContactSection.TASKS_ARCHIVED: "archived",
+}
+_CONTACT_PROVIDER_ID_RE = re.compile(r"[0-9a-f]{24}")
+_ARTIFACT_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_EVIDENCE_LEVELS = {
+    "observed_record",
+    "rendered_occurrence",
+    "displayed_aggregate",
 }
 
 
@@ -1737,6 +1753,630 @@ async def get_contact_workspace_summary(
     )
 
 
+def _evidence_error(message: str = "contact evidence graph is invalid") -> NoReturn:
+    raise ContactDataIntegrityError(message)
+
+
+def _require_evidence_source(
+    source: CRMSourceRecord | None,
+    *,
+    record_kind: str,
+) -> CRMSourceRecord:
+    if (
+        source is None
+        or type(source.id) is not int
+        or source.id <= 0
+        or source.source_system != "kw_command"
+        or source.module != "contacts"
+        or source.record_kind != record_kind
+        or source.evidence_level not in _EVIDENCE_LEVELS
+        or source.capture_quality not in {quality.value for quality in CaptureQualityValue}
+    ):
+        _evidence_error()
+    return source
+
+
+def _strict_json(value: str) -> object:
+    def reject_nonfinite(_value: str) -> NoReturn:
+        raise ValueError("non-finite JSON value")
+
+    try:
+        return json.loads(value, parse_constant=reject_nonfinite)
+    except (TypeError, ValueError):
+        _evidence_error()
+
+
+def _profile_provider_id(source: CRMSourceRecord) -> str:
+    payload = _strict_json(source.payload_json)
+    if not isinstance(payload, dict):
+        _evidence_error()
+    provider_id = payload.get("source_contact_id")
+    if (
+        not isinstance(provider_id, str)
+        or _CONTACT_PROVIDER_ID_RE.fullmatch(provider_id) is None
+    ):
+        _evidence_error()
+    return provider_id
+
+
+def _limitation_codes(value: str) -> tuple[str, ...]:
+    payload = _strict_json(value)
+    if not isinstance(payload, list):
+        _evidence_error()
+    codes: list[str] = []
+    for item in payload:
+        if (
+            not isinstance(item, str)
+            or not item
+            or item.strip() != item
+            or item in codes
+        ):
+            _evidence_error()
+        codes.append(item)
+    if json.dumps(codes, ensure_ascii=False, separators=(",", ":")) != value:
+        _evidence_error()
+    return tuple(codes)
+
+
+def _source_metadata(
+    source: CRMSourceRecord,
+    artifacts: tuple[ContactArtifactMetadata, ...],
+) -> ContactSourceMetadata:
+    try:
+        quality = CaptureQualityValue(source.capture_quality)
+    except ValueError:
+        _evidence_error()
+    return ContactSourceMetadata(
+        source_record_id=source.id,
+        record_kind=source.record_kind,
+        evidence_level=source.evidence_level,  # type: ignore[arg-type]
+        capture_quality=quality,
+        captured_at=_section_datetime(source.captured_at),
+        artifacts=artifacts,
+    )
+
+
+async def get_contact_evidence(
+    db: AsyncSession,
+    contact_id: int,
+) -> ContactEvidence:
+    """Return the lossless, validated evidence graph for one contact."""
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+
+    position_source = aliased(CRMSourceRecord)
+    profile_source = aliased(CRMSourceRecord)
+    profile_link = aliased(CRMEntitySource)
+    profile_target = aliased(CRMContact)
+    section_source = aliased(CRMSourceRecord)
+    occurrence_source = aliased(CRMSourceRecord)
+    occurrence_link = aliased(CRMEntitySource)
+    section_context = aliased(CRMContactSectionCapture)
+    position_context = aliased(CRMContactCapturePosition)
+
+    with db.no_autoflush:
+        existing_contact_id = await db.scalar(
+            select(CRMContact.id).where(CRMContact.id == contact_id).limit(1)
+        )
+        if existing_contact_id is None:
+            _safe_not_found()
+
+        position_rows = (
+            await db.execute(
+                select(
+                    CRMContactCapturePosition,
+                    position_source,
+                    CRMContact.id.label("target_contact_id"),
+                )
+                .select_from(CRMContactCapturePosition)
+                .outerjoin(
+                    position_source,
+                    position_source.id
+                    == CRMContactCapturePosition.source_record_id,
+                )
+                .outerjoin(
+                    CRMContact,
+                    CRMContact.id == CRMContactCapturePosition.contact_id,
+                )
+                .order_by(CRMContactCapturePosition.id)
+            )
+        ).all()
+
+        profile_rows = (
+            await db.execute(
+                select(
+                    profile_source,
+                    profile_link.id.label("link_id"),
+                    profile_link.entity_id.label("link_contact_id"),
+                    profile_target.id.label("target_contact_id"),
+                )
+                .select_from(profile_source)
+                .outerjoin(
+                    profile_link,
+                    and_(
+                        profile_link.source_record_id == profile_source.id,
+                        profile_link.entity_type == "contact",
+                    ),
+                )
+                .outerjoin(
+                    profile_target,
+                    profile_target.id == profile_link.entity_id,
+                )
+                .where(
+                    profile_source.source_system == "kw_command",
+                    profile_source.module == "contacts",
+                    profile_source.record_kind == "contact_profile",
+                )
+                .order_by(profile_source.id, profile_link.id)
+            )
+        ).all()
+
+        contact_rows = (
+            await db.execute(
+                select(
+                    CRMContact.id,
+                    CRMContact.lead_id,
+                    exists(
+                        select(literal(1)).where(
+                            CRMContactAuditEvent.contact_id == CRMContact.id,
+                            CRMContactAuditEvent.action
+                            == "command_contact_overlap_reviewed",
+                        )
+                    ).label("reviewed"),
+                ).order_by(CRMContact.id)
+            )
+        ).all()
+
+        requested_position_ids = tuple(
+            position.id
+            for position, _source, _target_id in position_rows
+            if position.contact_id == contact_id
+        )
+        section_rows = (
+            await db.execute(
+                select(CRMContactSectionCapture, section_source)
+                .select_from(CRMContactSectionCapture)
+                .outerjoin(
+                    section_source,
+                    section_source.id == CRMContactSectionCapture.source_record_id,
+                )
+                .where(
+                    CRMContactSectionCapture.capture_position_id.in_(
+                        requested_position_ids
+                    )
+                    if requested_position_ids
+                    else false()
+                )
+                .order_by(
+                    CRMContactSectionCapture.capture_position_id,
+                    CRMContactSectionCapture.id,
+                )
+            )
+        ).all()
+
+        requested_section_ids = tuple(section.id for section, _source in section_rows)
+        occurrence_target_owned = {
+            "task": exists(
+                select(literal(1))
+                .select_from(CRMTask)
+                .where(
+                    CRMTask.id == occurrence_link.entity_id,
+                    CRMTask.contact_id == contact_id,
+                )
+                .correlate(occurrence_link)
+            ),
+            "note": exists(
+                select(literal(1))
+                .select_from(CRMNote)
+                .where(
+                    CRMNote.id == occurrence_link.entity_id,
+                    CRMNote.contact_id == contact_id,
+                )
+                .correlate(occurrence_link)
+            ),
+            "saved_search": exists(
+                select(literal(1))
+                .select_from(CRMSavedSearch)
+                .where(
+                    CRMSavedSearch.id == occurrence_link.entity_id,
+                    CRMSavedSearch.contact_id == contact_id,
+                )
+                .correlate(occurrence_link)
+            ),
+            "smart_plan": exists(
+                select(literal(1))
+                .select_from(CRMSmartPlanEnrollment)
+                .where(
+                    CRMSmartPlanEnrollment.id == occurrence_link.entity_id,
+                    CRMSmartPlanEnrollment.contact_id == contact_id,
+                )
+                .correlate(occurrence_link)
+            ),
+            "opportunity": exists(
+                select(literal(1))
+                .select_from(CRMOpportunity)
+                .join(
+                    CRMOpportunityContact,
+                    CRMOpportunityContact.opportunity_id == CRMOpportunity.id,
+                )
+                .where(
+                    CRMOpportunity.id == occurrence_link.entity_id,
+                    CRMOpportunityContact.contact_id == contact_id,
+                )
+                .correlate(occurrence_link)
+            ),
+            "contact_timeline_event": exists(
+                select(literal(1))
+                .select_from(CRMContactTimelineEvent)
+                .where(
+                    CRMContactTimelineEvent.id == occurrence_link.entity_id,
+                    CRMContactTimelineEvent.contact_id == contact_id,
+                    CRMContactTimelineEvent.source_record_id
+                    == CRMContactSourceOccurrence.source_record_id,
+                )
+                .correlate(occurrence_link, CRMContactSourceOccurrence)
+            ),
+        }
+        occurrence_rows = (
+            await db.execute(
+                select(
+                    CRMContactSourceOccurrence,
+                    section_context,
+                    position_context,
+                    occurrence_source,
+                    occurrence_link.id.label("link_id"),
+                    occurrence_link.entity_type.label("link_entity_type"),
+                    occurrence_link.entity_id.label("link_entity_id"),
+                    *(
+                        predicate.label(f"owns_{entity_type}")
+                        for entity_type, predicate in occurrence_target_owned.items()
+                    ),
+                )
+                .select_from(CRMContactSourceOccurrence)
+                .outerjoin(
+                    section_context,
+                    section_context.id
+                    == CRMContactSourceOccurrence.section_capture_id,
+                )
+                .outerjoin(
+                    position_context,
+                    position_context.id == section_context.capture_position_id,
+                )
+                .outerjoin(
+                    occurrence_source,
+                    occurrence_source.id
+                    == CRMContactSourceOccurrence.source_record_id,
+                )
+                .outerjoin(
+                    occurrence_link,
+                    occurrence_link.source_record_id
+                    == CRMContactSourceOccurrence.source_record_id,
+                )
+                .where(
+                    or_(
+                        CRMContactSourceOccurrence.contact_id == contact_id,
+                        position_context.id.in_(requested_position_ids)
+                        if requested_position_ids
+                        else false(),
+                    )
+                )
+                .order_by(
+                    CRMContactSourceOccurrence.section_capture_id,
+                    CRMContactSourceOccurrence.occurrence_ordinal,
+                    CRMContactSourceOccurrence.id,
+                )
+            )
+        ).all()
+
+        profiles_by_provider: dict[str, list[tuple[CRMSourceRecord, list]]] = {}
+        grouped_profiles: dict[int, list] = defaultdict(list)
+        for row in profile_rows:
+            source = _require_evidence_source(
+                row[0], record_kind="contact_profile"
+            )
+            grouped_profiles[source.id].append(row)
+        for rows in grouped_profiles.values():
+            source = rows[0][0]
+            provider_id = _profile_provider_id(source)
+            profiles_by_provider.setdefault(provider_id, []).append((source, rows))
+
+        resolved_contacts: set[int] = set()
+        profile_for_position: dict[int, CRMSourceRecord] = {}
+        position_source_for_id: dict[int, CRMSourceRecord] = {}
+        provider_sources: set[int] = set()
+        for position, source, target_contact_id in position_rows:
+            source = _require_evidence_source(
+                source, record_kind="contact_capture_position"
+            )
+            if (
+                type(position.id) is not int
+                or position.id <= 0
+                or type(position.source_record_id) is not int
+                or position.source_record_id <= 0
+                or type(position.contact_id) is not int
+                or position.contact_id <= 0
+                or target_contact_id != position.contact_id
+                or type(position.capture_ordinal) is not int
+                or position.capture_ordinal <= 0
+                or _CONTACT_PROVIDER_ID_RE.fullmatch(position.source_contact_id)
+                is None
+                or position.capture_quality
+                not in {quality.value for quality in CaptureQualityValue}
+            ):
+                _evidence_error()
+            _limitation_codes(position.limitations_json)
+            if position.source_record_id in provider_sources:
+                _evidence_error()
+            provider_sources.add(position.source_record_id)
+            candidates = profiles_by_provider.get(position.source_contact_id, [])
+            if len(candidates) != 1:
+                _evidence_error()
+            profile, linked_rows = candidates[0]
+            linked = [row for row in linked_rows if row.link_id is not None]
+            if (
+                len(linked) != 1
+                or linked[0].target_contact_id != position.contact_id
+                or linked[0].link_contact_id != position.contact_id
+            ):
+                _evidence_error()
+            resolved_contacts.add(position.contact_id)
+            profile_for_position[position.id] = profile
+            position_source_for_id[position.id] = source
+
+        provider_count = len(provider_sources)
+        resolved_count = len(resolved_contacts)
+        aliases = provider_count - resolved_count
+        if aliases != 0:
+            _evidence_error()
+        lead_ids = {row.id for row in contact_rows if row.lead_id is not None}
+        reviewed_ids = {row.id for row in contact_rows if row.reviewed}
+        reviewed_overlaps = len(lead_ids & resolved_contacts & reviewed_ids)
+
+        sections_by_position: dict[int, dict[ContactSection, tuple]] = defaultdict(dict)
+        requested_sources: dict[int, CRMSourceRecord] = {}
+        for position_id in requested_position_ids:
+            requested_sources[profile_for_position[position_id].id] = (
+                profile_for_position[position_id]
+            )
+            requested_sources[position_source_for_id[position_id].id] = (
+                position_source_for_id[position_id]
+            )
+        for section, source in section_rows:
+            source = _require_evidence_source(source, record_kind="contact_section_capture")
+            if (
+                type(section.id) is not int
+                or section.id <= 0
+                or section.capture_position_id not in requested_position_ids
+                or type(section.row_count) is not int
+                or section.row_count < 0
+                or type(section.is_empty) is not bool
+                or section.capture_quality
+                not in {quality.value for quality in CaptureQualityValue}
+            ):
+                _evidence_error()
+            try:
+                section_name = ContactSection(section.section_name)
+            except ValueError:
+                _evidence_error()
+            if section_name in sections_by_position[section.capture_position_id]:
+                _evidence_error()
+            limitations = _limitation_codes(section.limitations_json)
+            if section.is_empty != (section.row_count == 0):
+                if section.capture_quality == CaptureQualityValue.COMPLETE.value:
+                    _evidence_error()
+                if section.is_empty or section.row_count > 0:
+                    _evidence_error()
+            sections_by_position[section.capture_position_id][section_name] = (
+                section,
+                source,
+                limitations,
+            )
+            requested_sources[source.id] = source
+
+        occurrence_groups: dict[int, list] = defaultdict(list)
+        for row in occurrence_rows:
+            occurrence_groups[row[0].id].append(row)
+        occurrences_by_section: dict[int, list] = defaultdict(list)
+        for rows in occurrence_groups.values():
+            occurrence, section, position, source = rows[0][:4]
+            if (
+                section is None
+                or position is None
+                or occurrence.contact_id != contact_id
+                or position.contact_id != contact_id
+                or section.id not in requested_section_ids
+                or section.capture_position_id != position.id
+                or type(occurrence.id) is not int
+                or occurrence.id <= 0
+                or type(occurrence.occurrence_ordinal) is not int
+                or occurrence.occurrence_ordinal <= 0
+            ):
+                _evidence_error()
+            try:
+                section_name = ContactSection(section.section_name)
+            except ValueError:
+                _evidence_error()
+            expected_kind = (
+                "contact_timeline_event"
+                if section_name is ContactSection.TIMELINE
+                else _SECTION_RECORD_KINDS[section_name.value]
+            )
+            source = _require_evidence_source(source, record_kind=expected_kind)
+            links = [row for row in rows if row.link_id is not None]
+            expected_entity_type = (
+                "contact_timeline_event"
+                if section_name is ContactSection.TIMELINE
+                else _SECTION_ENTITY_TYPES[section_name.value]
+            )
+            if len(links) > 1 or (
+                links
+                and (
+                    links[0].link_entity_type != expected_entity_type
+                    or type(links[0].link_entity_id) is not int
+                    or links[0].link_entity_id <= 0
+                    or not getattr(links[0], f"owns_{expected_entity_type}")
+                )
+            ):
+                _evidence_error()
+            if section_name is not ContactSection.TIMELINE:
+                _project_section_occurrence(source, section_name)
+            occurrences_by_section[section.id].append(occurrence)
+            requested_sources[source.id] = source
+
+        capture_positions: list[ContactCaptureEvidence] = []
+        section_matrix: list[ContactSectionEvidence] = []
+        requested_qualities: list[CaptureQualityValue] = []
+        positions_by_id = {
+            position.id: position
+            for position, _source, _target_id in position_rows
+            if position.contact_id == contact_id
+        }
+        for position in sorted(
+            positions_by_id.values(), key=lambda row: (row.capture_ordinal, row.id)
+        ):
+            cells = sections_by_position.get(position.id, {})
+            if set(cells) != set(ContactSection):
+                _evidence_error()
+            projected_cells: list[ContactSectionEvidence] = []
+            for section_name in ContactSection:
+                section, source, limitations = cells[section_name]
+                if len(occurrences_by_section.get(section.id, ())) != section.row_count:
+                    _evidence_error()
+                try:
+                    quality = CaptureQualityValue(section.capture_quality)
+                except ValueError:
+                    _evidence_error()
+                projected = ContactSectionEvidence(
+                    capture_position_id=position.id,
+                    section=section_name,
+                    source_record_id=source.id,
+                    capture_quality=quality,
+                    row_count=section.row_count,
+                    is_empty=section.is_empty,
+                    limitation_codes=limitations,
+                )
+                projected_cells.append(projected)
+                section_matrix.append(projected)
+                requested_qualities.append(quality)
+            try:
+                position_quality = CaptureQualityValue(position.capture_quality)
+            except ValueError:
+                _evidence_error()
+            capture_positions.append(
+                ContactCaptureEvidence(
+                    capture_position_id=position.id,
+                    capture_ordinal=position.capture_ordinal,
+                    source_record_id=position.source_record_id,
+                    capture_quality=position_quality,
+                    sections=tuple(projected_cells),
+                )
+            )
+
+        source_ids = tuple(sorted(requested_sources))
+        artifact_rows = (
+            await db.execute(
+                select(
+                    CRMSourceRecordArtifact.id.label("link_id"),
+                    CRMSourceRecordArtifact.source_record_id,
+                    CRMSourceRecordArtifact.artifact_id,
+                    CRMSourceRecordArtifact.relation,
+                    CRMArchiveArtifact.id.label("catalog_artifact_id"),
+                    CRMArchiveArtifact.artifact_type,
+                    CRMArchiveArtifact.sha256,
+                    CRMArchiveArtifact.size_bytes,
+                    func.length(CRMArchiveArtifact.content_bytes).label(
+                        "content_length"
+                    ),
+                )
+                .select_from(CRMSourceRecordArtifact)
+                .outerjoin(
+                    CRMArchiveArtifact,
+                    CRMArchiveArtifact.id == CRMSourceRecordArtifact.artifact_id,
+                )
+                .where(
+                    CRMSourceRecordArtifact.source_record_id.in_(source_ids)
+                    if source_ids
+                    else false()
+                )
+                .order_by(
+                    CRMSourceRecordArtifact.source_record_id,
+                    CRMSourceRecordArtifact.artifact_id,
+                    CRMSourceRecordArtifact.id,
+                )
+            )
+        ).all()
+
+    artifacts_by_source: dict[int, list[ContactArtifactMetadata]] = defaultdict(list)
+    artifact_links: set[tuple[int, int]] = set()
+    for row in artifact_rows:
+        key = (row.source_record_id, row.artifact_id)
+        artifact_type = row.artifact_type
+        if (
+            type(row.link_id) is not int
+            or row.link_id <= 0
+            or row.source_record_id not in requested_sources
+            or type(row.artifact_id) is not int
+            or row.artifact_id <= 0
+            or row.catalog_artifact_id != row.artifact_id
+            or row.relation != "evidence"
+            or key in artifact_links
+            or not isinstance(artifact_type, str)
+            or artifact_type.strip() != artifact_type
+            or not 1 <= len(artifact_type) <= 64
+            or not isinstance(row.sha256, str)
+            or _ARTIFACT_SHA256_RE.fullmatch(row.sha256) is None
+            or type(row.size_bytes) is not int
+            or row.size_bytes < 0
+            or (
+                row.content_length is not None
+                and row.content_length != row.size_bytes
+            )
+        ):
+            _evidence_error("contact evidence artifact is invalid")
+        artifact_links.add(key)
+        artifacts_by_source[row.source_record_id].append(
+            ContactArtifactMetadata(
+                artifact_id=row.artifact_id,
+                artifact_type=artifact_type,
+                sha256=row.sha256,
+                size_bytes=row.size_bytes,
+                content_href=(
+                    "/api/v1/command/archive/artifacts/"
+                    f"{row.artifact_id}/content"
+                ),
+            )
+        )
+
+    if not capture_positions:
+        aggregate_quality = "limitation"
+    elif any(
+        quality in {CaptureQualityValue.SHELL, CaptureQualityValue.ERROR}
+        for quality in requested_qualities
+    ):
+        aggregate_quality = "limitation"
+    elif any(quality is CaptureQualityValue.PARTIAL for quality in requested_qualities):
+        aggregate_quality = "partial"
+    else:
+        aggregate_quality = "complete"
+
+    return ContactEvidence(
+        contact_id=contact_id,
+        provider_contact_rows=provider_count,
+        resolved_provider_identities=resolved_count,
+        coalesced_aliases=0,
+        lead_backed_contacts=len(lead_ids),
+        reviewed_overlaps=reviewed_overlaps,
+        legacy_only_contacts=len(lead_ids) - reviewed_overlaps,
+        capture_positions=tuple(capture_positions),
+        section_matrix=tuple(section_matrix),
+        sources=tuple(
+            _source_metadata(source, tuple(artifacts_by_source[source_id]))
+            for source_id, source in sorted(requested_sources.items())
+        ),
+        capture_quality=aggregate_quality,  # type: ignore[arg-type]
+    )
+
+
 async def get_contact_neighbors(
     db: AsyncSession,
     contact_id: int,
@@ -1877,6 +2517,7 @@ __all__ = [
     "ContactNotInDirectory",
     "ContactSectionUnsupported",
     "get_contact_detail",
+    "get_contact_evidence",
     "get_contact_neighbors",
     "get_contact_workspace_summary",
     "list_contact_celebrations",
