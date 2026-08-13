@@ -17,6 +17,7 @@ The operator supplies the authorized archive root without committing a user-spec
 ```text
 COMMAND_ARCHIVE_ROOT=<absolute-path-to-authorized-account-archive>
 PROJECT_PYTHON=<absolute-path-to-project-venv-python>
+# PLANNED TASK 4 ONLY — NOT ACCEPTED BY THE CURRENT CLI:
 CONTACT_OVERLAP_MANIFEST=<absolute-path-to-private-reviewed-overlap-manifest>
 ```
 
@@ -101,7 +102,9 @@ The literal angle-bracket values above are documentation placeholders, not produ
 
 ### Private reviewed-overlap manifest contract
 
-The two cross-system overlaps are supplied at operation time through `--contact-overlap-manifest`; they are not fixtures, environment variables containing JSON, or values committed to the repository. The manifest is a private, access-controlled JSON file outside the checkout and outside any frontend/static path. The loader never emits its path or contents. Its canonical schema is:
+> **PLANNED TASK 4 CONTRACT — NOT AVAILABLE IN THE CURRENT CLI.** `--contact-overlap-manifest`, its loader/validator, reviewed-link staging, and the Contacts materializer do not exist yet. Until Task 4 lands and its gates pass, this section is a design contract only and every Contacts apply is blocked.
+
+The two cross-system overlaps will be supplied at operation time through `--contact-overlap-manifest`; they are not fixtures, environment variables containing JSON, or values committed to the repository. The manifest is a private, access-controlled JSON file outside the checkout and outside any frontend/static path. The loader never emits its path or contents. Its canonical v1 schema is:
 
 ```json
 {
@@ -111,19 +114,21 @@ The two cross-system overlaps are supplied at operation time through `--contact-
   "rows": [
     {
       "source_provider_identity_hash": "<64-lowercase-hex-a>",
-      "target": {"contact_id": "<positive-internal-id>"},
+      "target_contact_id": "<positive-existing-crm-contact-id>",
+      "target_contact_row_fingerprint": "<64-lowercase-hex-target-a>",
       "strong_evidence_hash": "<64-lowercase-hex-evidence-a>"
     },
     {
       "source_provider_identity_hash": "<64-lowercase-hex-b>",
-      "target": {"admin_reviewed_contact_key": "<opaque-stable-key>"},
+      "target_contact_id": "<positive-existing-crm-contact-id>",
+      "target_contact_row_fingerprint": "<64-lowercase-hex-target-b>",
       "strong_evidence_hash": "<64-lowercase-hex-evidence-b>"
     }
   ]
 }
 ```
 
-Production validation requires exactly two rows, two unique source hashes, and two unique targets. Each target supplies exactly one of a positive existing lead-backed `contact_id` or an opaque stable admin-reviewed key that resolves uniquely to such a contact. The source hash must resolve to exactly one of the 317 parsed provider identities. The service independently compares the source record and target contact using the approved strong-email rule and recomputes the domain-separated evidence hash; the manifest cannot authorize a name-only, weak, ambiguous, or conflicting match. The top-level fingerprint and parser version must exactly equal the current verified bundle and parser. Raw names, emails, phones, provider IDs, addresses, source payloads, and tokens are forbidden in the manifest schema, repository, CLI output, logs, exceptions, and acceptance evidence.
+Production validation requires exactly two rows, two unique source hashes, and two unique positive `target_contact_id` values that already exist in `crm_contacts`. V1 has no alternate target key or implicit target-resolution path. Each target must have `lead_id IS NOT NULL`. Its row fingerprint is a domain-separated SHA-256 over non-PII concurrency fields (`contact_id`, `lead_id`, and the stored row version/timestamps) and must match again immediately before link creation, preventing target substitution or time-of-check/time-of-use drift without placing contact fields in the manifest. The source hash must resolve to exactly one of the 317 parsed provider identities. The service independently compares the source record and target contact using the approved strong-email rule and recomputes the domain-separated evidence hash; the manifest cannot authorize a name-only, weak, ambiguous, or conflicting match. The top-level fingerprint and parser version must exactly equal the current verified bundle and parser. Raw names, emails, phones, provider IDs, addresses, source payloads, and tokens are forbidden in the manifest schema, repository, CLI output, logs, exceptions, and acceptance evidence.
 
 Preflight and dry-run load, canonicalize, fingerprint, and fully validate the private manifest against parsed source drafts plus the live 51 lead-backed contacts without writing source/entity links. Apply revalidates the approved manifest after the 317 source records have been persisted inside the Contacts module transaction. It then creates the two reviewed `CRMEntitySource` links and append-only contact audit events before invoking the materializer. The materializer adopts those two mappings, creates the remaining 315 source/entity links, and produces 317 final recovered mappings and 366 total contacts. A missing/malformed manifest, changed fingerprint/version, wrong row count, unresolved/non-lead-backed target, missing/ambiguous source, weak/conflicting evidence, or link conflict aborts and rolls back the whole Contacts module transaction. A resumed Contacts run must receive the same approved private file and repeat validation against the run fingerprint/version and exact source/target/evidence sets; only the canonical digest, row count, validation state, and audit/run IDs may be recorded on success.
 
@@ -229,7 +234,7 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `backend/models/command_contacts.py`: focused profile, method, address, neighborhood, ownership, relationship, preference, capture-position, section-capture, recovered timeline-event, and contact-audit models.
 - Modify `backend/models/__init__.py`: export contact-domain models.
 - Modify `backend/alembic/env.py`: register the contact model module.
-- Create `backend/alembic/versions/4a8c0d1e2f3b_add_command_contact_parity.py`: additive schema from current head `2e7f9a0b1c2d`.
+- Create `backend/alembic/versions/4a8c0d1e2f3b_add_command_contact_parity.py`: additive schema whose parent is the then-current `2e7f9a0b1c2d`; after this migration lands, `4a8c0d1e2f3b` is the sole head and operators must upgrade through it.
 - Create `backend/tests/test_command_contacts_models.py`: constraints and model defaults.
 - Create `backend/tests/test_command_contacts_migration.py`: real SQLite upgrade/downgrade plus PostgreSQL SQL compilation.
 
@@ -734,7 +739,7 @@ Snapshot all 362 pre-existing CRM rows before apply and assert every base-column
 
 - [ ] **Step 2: Write failing private-manifest and CLI tests**
 
-Test `command_contact_overlap_manifest.py` with synthetic values only. Require the exact schema/version, a 64-hex bundle fingerprint, exact parser version, exactly two unique rows, a 64-hex source provider identity hash, exactly one target selector, a 64-hex strong-evidence hash, and a canonical order-independent manifest digest. Reject raw identity fields and unknown fields. Validate each source hash against exactly one parsed draft in dry-run and exactly one persisted Contacts source record in apply; resolve each target to exactly one existing `lead_id IS NOT NULL` contact; recompute and compare the approved strong-email evidence; reject cross-links, weak/name-only matches, and existing conflicting mappings.
+Test `command_contact_overlap_manifest.py` with synthetic values only. Require the exact schema/version, a 64-hex bundle fingerprint, exact parser version, exactly two unique rows, a 64-hex source provider identity hash, one positive existing `target_contact_id`, its 64-hex non-PII row fingerprint, a 64-hex strong-evidence hash, and a canonical order-independent manifest digest. Reject alternate target keys, raw identity fields, and unknown fields. Validate each source hash against exactly one parsed draft in dry-run and exactly one persisted Contacts source record in apply; require each target ID to resolve to exactly one existing `lead_id IS NOT NULL` contact and its row fingerprint to remain unchanged at staging; recompute and compare the approved strong-email evidence; reject cross-links, weak/name-only matches, and existing conflicting mappings.
 
 CLI tests require `--contact-overlap-manifest` whenever `--apply` selects Contacts, before database writes. Dry-run and resume accept and fully validate the file. Fingerprint/parser-version drift or any changed source/target/evidence set fails preflight; no log, JSON result, exception, or captured output may contain the manifest path, contact selector, raw source/target values, or evidence input. Output may contain only schema version, canonical digest, row count `2`, validation state, staged/materializer/final mapping counts, and audit/run IDs. A failure after source persistence but before materialization must prove that source records, both staged links, their audit events, all materialized rows, and the module result roll back together.
 
@@ -1226,30 +1231,34 @@ git commit -m "test: verify Command contact parity"
 
 ### Task 11: Reconcile, migrate, deploy, and prove production Contacts
 
+> **CURRENTLY BLOCKED / NOT AVAILABLE:** Task 11 cannot be executed until Task 4 implements and deploys `--contact-overlap-manifest`, the private loader/validator, reviewed-link staging, and the Contacts materializer. The current CLI rejects the manifest flag. The manifest-aware commands below are future acceptance commands, not current operator instructions.
+
 **Files:**
 - Modify: `docs/command-reconciliation-runbook.md`
 - Create: `docs/command-contacts-production-acceptance.md`
 
 - [ ] **Step 1: Add exact Contacts operating commands to the runbook**
 
-Document and execute, substituting only the fingerprint/run ID returned by the preceding command:
+Document the future sequence below, substituting only the fingerprint/run ID returned by the preceding command once Task 4 is deployed. Today, execute only the verify-only command; do not execute the two commands explicitly marked unavailable:
 
 ```bash
 cd backend
 python -m scripts.reconcile_command_archive --verify-only --parser-version contacts-v1 > /tmp/command-contacts-verify.json
+# NOT AVAILABLE — planned Task 4 manifest validation command.
 python -m scripts.reconcile_command_archive --dry-run --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" > /tmp/command-contacts-dry-run.json
+# NOT AVAILABLE — planned Task 4 Contacts apply; do not run today.
 python -m scripts.reconcile_command_archive --apply --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" --expect-fingerprint "$VERIFIED_FINGERPRINT" > /tmp/command-contacts-apply.json
 ```
 
-`CONTACT_OVERLAP_MANIFEST` names a private file outside the checkout and acceptance-artifact directories. Contacts apply is blocked unless the flag is present, its manifest has exactly two reviewed rows, and verification plus reviewed dry-run used the exact production bundle fingerprint/parser version/manifest digest. A failed Contacts run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint/manifest; the resumed command repeats `--contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"`.
+After Task 4 is deployed, `CONTACT_OVERLAP_MANIFEST` will name a private file outside the checkout and acceptance-artifact directories. Until then, Contacts apply remains blocked because the current CLI cannot accept or validate it. The future flow additionally blocks apply unless the manifest has exactly two reviewed rows and verification plus reviewed dry-run used the exact production bundle fingerprint/parser version/manifest digest. A future failed Contacts run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint/manifest; its command repeats `--contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"`.
 
-- [ ] **Step 2: Run the real archive and database preflight**
+- [ ] **Step 2: After Task 4 is deployed, run the real archive and database preflight**
 
-Before production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Verify that the private manifest is a regular access-controlled file outside the repository, embeds the verified bundle fingerprint and `contacts-v1`, resolves exactly two source hashes to exact parsed records and two unique lead-backed targets, and passes independent strong-evidence recomputation. Store only totals, canonical manifest/evidence hashes, validation state, and run/audit IDs in the acceptance document—no manifest path, target selector, private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
+Before the future production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete manifest-aware dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Verify that the private manifest is a regular access-controlled file outside the repository, embeds the verified bundle fingerprint and `contacts-v1`, resolves exactly two source hashes to exact parsed records and two unique positive existing lead-backed contact IDs, validates both non-PII target-row fingerprints, and passes independent strong-evidence recomputation. Store only totals, canonical manifest/evidence hashes, validation state, and run/audit IDs in the acceptance document—no manifest path, target ID, private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
 
-- [ ] **Step 3: Apply migration and Contacts module in a bounded rollout**
+- [ ] **Step 3: After Task 4 is deployed, apply migration and Contacts module in a bounded rollout**
 
-Run `alembic upgrade 4a8c0d1e2f3b`, then Contacts apply. Do not run other domain modules in the same transaction or deployment checkpoint. Preserve the pre-apply database backup/restore identifier in the acceptance document.
+Run `alembic upgrade 4a8c0d1e2f3b`. Contacts apply remains blocked until Task 4 is deployed; only then run the planned bounded apply. Do not run other domain modules in the same transaction or deployment checkpoint. Preserve the pre-apply database backup/restore identifier in the acceptance document.
 
 - [ ] **Step 4: Execute production SQL count and integrity gates**
 

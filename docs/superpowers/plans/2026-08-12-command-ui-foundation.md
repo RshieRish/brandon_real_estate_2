@@ -28,7 +28,7 @@ Use these valid local references during implementation:
 - `kw_command_ui_screenshots/smartplans-live-current.png` — valid module header, notice, top tabs, dense table, and evidence-count reference, 1800×982.
 - `kw_command_ui_screenshots/opportunities-live-current.png` — valid module tabs and phase geometry reference, 1800×982.
 - `kw_command_ui_screenshots/marketing-dashboard-live.png` and `referrals-dashboard-live.png` — valid nested module tabs and dense dashboard references, 1800×982.
-- `kw_command_ui_screenshots/contact-adam-pappastergion-live-details.png` — valid split-detail canvas and sticky navigation reference, 1793×1166.
+- Local QA alias `contact-detail-redacted-reference` — valid split-detail canvas and sticky navigation reference, 1793×1166. Keep the private source-filename mapping outside committed docs and manifests.
 
 Do not use `top-home.png`, `contacts-list.png`, `opportunities-board.png`, `smartplans-my.png`, any `*-retry.png`, or a blank/error/shell image as a successful target. They are limitation evidence.
 

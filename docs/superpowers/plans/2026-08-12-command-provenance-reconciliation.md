@@ -229,15 +229,15 @@ def test_bundle_fingerprint_is_order_independent(sample_artifacts):
 def test_source_draft_uses_a_five_part_identity():
     draft = SourceRecordDraft(
         source_system="kw_command", module="contacts", record_kind="contact",
-        source_key="63ac84e09655a08ec4d5d3ef", evidence_level=EvidenceLevel.OBSERVED_RECORD,
-        display_label="Adam Pappastergion", payload={"phone": None, "name": "Adam Pappastergion"},
+        source_key="aaaaaaaaaaaaaaaaaaaaaaaa", evidence_level=EvidenceLevel.OBSERVED_RECORD,
+        display_label="Synthetic Contact", payload={"phone": None, "name": "Synthetic Contact"},
         artifact_paths=("kw_command_repaired/contacts/sections/0000001/timeline.json",),
         parser_version="command-v1",
     )
     assert draft.identity == (
-        "kw_command", "contacts", "contact", "63ac84e09655a08ec4d5d3ef", "command-v1"
+        "kw_command", "contacts", "contact", "aaaaaaaaaaaaaaaaaaaaaaaa", "command-v1"
     )
-    assert draft.payload_json == '{"name":"Adam Pappastergion","phone":null}'
+    assert draft.payload_json == '{"name":"Synthetic Contact","phone":null}'
 
 
 @pytest.mark.parametrize("mutation", ["missing", "length", "checksum"])
