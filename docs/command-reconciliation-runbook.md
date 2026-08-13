@@ -19,17 +19,21 @@ mode exactly.
 - The current default parser registry contains `archive_integrity` and
   `contacts`. `--verify-only` still selects only `archive_integrity`; an
   unbounded `--dry-run` selects both registered modules.
-- The current CLI exposes `--apply` and its `--expect-fingerprint` guard, but it
-  does not yet implement `--contact-overlap-manifest`, its loader/validator,
-  reviewed-link staging, or the Contacts materializer. Therefore **no Contacts
-  apply—and no unbounded apply that would include Contacts—is currently
-  authorized**. Passing `--contact-overlap-manifest` currently fails as an
-  unknown argument.
-- The manifest-backed apply/resume commands later in this document are the
-  planned Task 4 operating contract, clearly marked **NOT AVAILABLE**. They do
-  not become executable merely because they appear in this runbook.
-- No module apply is authorized until its parser, materializer, reconciliation
-  expectation, and reviewed dry run are all complete for the deployed revision.
+- The current CLI implements `--contact-overlap-manifest`, an exact-two-row
+  private loader/validator, reviewed-link staging, the Contacts materializer,
+  bounded apply, and manifest-bound resume. Source availability is not live
+  execution authority.
+- No Contacts apply is authorized until the exact reviewed revision is deployed,
+  the target database is at the sole required head, that database's archive is
+  freshly verified, the approved private manifest passes a reviewed
+  manifest-aware dry run, a provider snapshot is recorded, and the deployment
+  change has explicit approval. The commands below define that conditional
+  procedure; they do not grant approval by appearing here.
+- Production Contacts apply must name `--module contacts`. Unbounded apply is
+  policy-prohibited even though the CLI can select all registered modules.
+- No other module apply is authorized until its parser, materializer,
+  reconciliation expectation, and reviewed dry run are complete for the exact
+  deployed revision.
 - Never edit `crm_archive_artifacts` to make a reconciliation pass. Repair the
   ingestion source or parser under a new reviewed change instead.
 
@@ -53,19 +57,16 @@ time.
 
 ## 1. Schema and archive preflight
 
-The reconciliation/contact schema is additive. The expected and currently
-implemented single Alembic head is `5b9d1e2f3a4c`. The relevant linear chain is
+The reconciliation/contact schema is additive. The implemented single Alembic
+head is `7d1f3a5b6c8e`. The relevant linear chain is
 `f0c8a6d9e431 -> 1d6e7f8a9b10 -> 2e7f9a0b1c2d -> 4a8c0d1e2f3b ->
-5b9d1e2f3a4c`; operators must upgrade through the chain to the sole head and
-must not stop at the intermediate reconciliation-claims or base contact-parity
-revision.
+5b9d1e2f3a4c -> 6c0e2f4a5b7d -> 7d1f3a5b6c8e`; operators must upgrade through
+the chain to the sole head and must not stop at an intermediate revision.
 
-Revision `6c0e2f4a5b7d` is reserved in the approved Contacts Task 5B plan for an
-online canonical-email backfill and timeline query indexes, but it is not yet
-implemented in the committed source state covered by this runbook. Do not
-report it as the current head or try to migrate to it until that implementation
-commit lands and this runbook is advanced under the same reviewed deployment
-change.
+Revision `6c0e2f4a5b7d` performs an online, batched canonical-email backfill and
+verification before it creates timeline query indexes. Its upgrade deliberately
+refuses Alembic offline `--sql` mode before emitting any DDL. Never request or
+approve one monolithic offline `f0c8a6d9e431:7d1f3a5b6c8e` script.
 
 ```bash
 "$PYTHON" -m alembic heads
@@ -76,25 +77,34 @@ change.
 `alembic heads` must print exactly:
 
 ```text
-5b9d1e2f3a4c (head)
+7d1f3a5b6c8e (head)
 ```
 
 Before a production migration, take a provider-level database snapshot and
-render the exact SQL for review:
+review the upgrade in three stages. The path through `5b9d1e2f3a4c` and the
+index-only path from `6c0e2f4a5b7d` to the head can be rendered offline:
 
 ```bash
 "$PYTHON" -m alembic upgrade f0c8a6d9e431:5b9d1e2f3a4c --sql \
   > /tmp/command-contact-parity-upgrade.sql
+"$PYTHON" -m alembic upgrade 6c0e2f4a5b7d:7d1f3a5b6c8e --sql \
+  > /tmp/command-contact-summary-index-upgrade.sql
 ```
 
-Review the SQL and then, under the approved deployment change, migrate:
+Review both scripts plus the source and migration-test evidence for the
+online-only `6c0e2f4a5b7d` backfill. Under the approved deployment change,
+upgrade sequentially and inspect the current revision after every boundary:
 
 ```bash
 "$PYTHON" -m alembic upgrade 5b9d1e2f3a4c
 "$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 6c0e2f4a5b7d
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 7d1f3a5b6c8e
+"$PYTHON" -m alembic current
 ```
 
-`alembic current` must also report `5b9d1e2f3a4c`. Do not run the reconciliation
+The final `alembic current` must report `7d1f3a5b6c8e`. Do not run the reconciliation
 CLI if the database is below that sole deployed head or if required provenance,
 reconciliation, or contact-parity tables are absent. All CLI modes create audit
 rows, so a database at an intermediate revision is not an approved operating
@@ -177,22 +187,28 @@ SELECT count(*) AS source_records_after_verify FROM crm_source_records;
 The before and after counts must match. One new `verify_only` run and one
 `archive_integrity` result are expected.
 
-### Planned Task 4 Contacts private-overlap preflight — NOT AVAILABLE
+### Contacts private-overlap preflight
 
-The following manifest setup and validation contract is **not executable yet**.
-The current CLI has no `--contact-overlap-manifest` argument or loader, and this
-section does not authorize Contacts apply. It becomes operational only after
-Task 4 lands, its tests pass, and the deployed CLI help lists the flag.
-
-After Task 4 is deployed, provision the approved manifest for a manifest-aware
-Contacts dry-run, apply, or resume as a
-regular access-controlled file outside the repository, deployment bundle,
-frontend/static paths, and acceptance-artifact directory. Never paste its
-contents into a command, environment variable, ticket, or log. The path may be
-an environment variable, but CLI output and errors must never echo it.
+The manifest flag, loader, validator, reviewed-link staging, and materializer are
+implemented in the current source. Confirm the deployed CLI exposes the flag;
+this capability check does not authorize an apply:
 
 ```bash
-# NOT AVAILABLE — planned Task 4 preflight; do not use to authorize apply.
+"$PYTHON" -m scripts.reconcile_command_archive --help | "$PYTHON" -c '
+import sys
+assert "--contact-overlap-manifest" in sys.stdin.read()
+print("COMMAND_CONTACT_MANIFEST_FLAG_OK")
+'
+```
+
+Provision the approved manifest for a manifest-aware Contacts dry run, apply,
+or resume as a regular access-controlled file outside the repository,
+deployment bundle, frontend/static paths, and acceptance-artifact directory.
+Never paste its contents into a command, environment variable, ticket, or log.
+The path may be an environment variable, but CLI output and errors must never
+echo it.
+
+```bash
 export CONTACT_OVERLAP_MANIFEST="<absolute-private-path-outside-repository>"
 test -n "$CONTACT_OVERLAP_MANIFEST"
 test -f "$CONTACT_OVERLAP_MANIFEST"
@@ -216,9 +232,8 @@ strong-email evidence. Record only the canonical manifest digest, row count
 
 ## 3. Dry-run domain parsers
 
-The current default registry contains exactly `archive_integrity` and
-`contacts`. An unknown `--module` must fail; do not remove the module bound to
-bypass that failure.
+Use explicit module selection for bounded review. The current default registry
+contains exactly `archive_integrity` and `contacts`.
 
 Run one parser when reviewing it in isolation:
 
@@ -256,9 +271,10 @@ DRY_JSON="$(
 printf '%s\n' "$DRY_JSON" | "$PYTHON" -m json.tool
 ```
 
-The unbounded form currently selects `archive_integrity` and `contacts`; it does
-not validate the future overlap manifest. Do not use it unless both registered
-parsers are in the same approved dry-run review. Each selected module needs a signed reconciliation expectation
+The unbounded form currently selects `archive_integrity` and `contacts`. Without
+`--contact-overlap-manifest`, it is parser-only and cannot authorize Contacts
+apply. Do not use it unless both registered parsers are in the same approved
+dry-run review. Each selected module needs a signed reconciliation expectation
 containing:
 
 - source system and module name;
@@ -269,16 +285,14 @@ containing:
 - disposition for every nonzero unmatched or error total; and
 - reviewer and approval timestamp.
 
-Current Contacts dry-run validates parser/archive truth only; the future
-manifest validation is **not available** until Task 4. The dry-run fingerprint must equal
-`$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT`. `status` must be `completed`, and every
-metric must match its reviewed expectation. A dry-run creates reconciliation
-audit rows but zero semantic source records.
+A Contacts dry run without the private manifest validates parser/archive truth
+only and is useful for parser diagnosis, but it is not an apply precursor. The
+fingerprint must equal `$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT`, `status` must be
+`completed`, and every metric must match its reviewed expectation.
 
-After Task 4 is deployed, the additional manifest-aware dry-run command will be:
+The required apply precursor is the implemented bounded manifest-aware dry run:
 
 ```bash
-# NOT AVAILABLE — planned Task 4 command; the current CLI rejects this flag.
 "$PYTHON" -m scripts.reconcile_command_archive \
   --dry-run \
   --parser-version "$CONTACTS_PARSER_VERSION" \
@@ -286,35 +300,28 @@ After Task 4 is deployed, the additional manifest-aware dry-run command will be:
   --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"
 ```
 
-## 4. Planned Task 4 Contacts apply — NOT AVAILABLE; DO NOT RUN
+It must validate the same approved manifest, bundle fingerprint, parser version,
+and exact Contacts module later used by apply. Both dry-run forms create
+reconciliation audit rows but zero semantic source records, entity links,
+contact audit events, or materialized contacts.
 
-The current CLI lacks the manifest loader, reviewed-link service, and Contacts
-materializer. Although it exposes a generic `--apply`, running it for Contacts
-would persist incomplete source-only state. **Every Contacts apply and every
-unbounded apply is blocked until Task 4 is implemented, reviewed, and deployed.**
-The commands in this section are future acceptance commands, not current
-operator instructions.
+## 4. Bounded Contacts apply — implemented, conditionally authorized
+
+The exact command path is implemented, but **do not execute it merely because it
+is documented here**. Operational authorization requires all prerequisites in
+the current executable safety state: the exact reviewed deployment, sole
+`7d1f3a5b6c8e` database head, accepted target-database verification, reviewed
+manifest-aware dry run, approved private manifest, provider snapshot, and
+explicit change approval. Always select only `--module contacts`; unbounded
+apply remains policy-prohibited.
 
 Before apply, rerun verify-only if the deployment, database, archive artifact
 count, byte count, or parser revision changed. Apply must use the fingerprint
 from that database's most recent accepted verification.
 
-The mandatory production guard is:
+Once those gates are signed, capture the bounded result:
 
 ```bash
-# NOT AVAILABLE — planned Task 4 production command; do not run today.
-"$PYTHON" -m scripts.reconcile_command_archive \
-  --apply \
-  --parser-version "$CONTACTS_PARSER_VERSION" \
-  --module contacts \
-  --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
-  --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
-```
-
-For a bounded rollout, name every approved module:
-
-```bash
-# NOT AVAILABLE — planned Task 4 production command; do not run today.
 APPLY_JSON="$(
   "$PYTHON" -m scripts.reconcile_command_archive \
     --apply \
@@ -376,11 +383,9 @@ Resume a current parser-only Contacts dry run:
   --resume 42
 ```
 
-The future manifest-aware dry-run resume and Contacts apply resume are **not
-available** until Task 4 is deployed:
+The CLI implements both manifest-aware dry-run resume and Contacts apply resume:
 
 ```bash
-# NOT AVAILABLE — planned Task 4 dry-run resume; current CLI rejects the flag.
 "$PYTHON" -m scripts.reconcile_command_archive \
   --dry-run \
   --parser-version "$CONTACTS_PARSER_VERSION" \
@@ -388,7 +393,6 @@ available** until Task 4 is deployed:
   --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" \
   --resume 42
 
-# NOT AVAILABLE — planned Task 4 apply resume; do not run today.
 "$PYTHON" -m scripts.reconcile_command_archive \
   --apply \
   --parser-version "$CONTACTS_PARSER_VERSION" \
@@ -398,21 +402,24 @@ available** until Task 4 is deployed:
   --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT"
 ```
 
-Replace `42` with the recorded failed run ID. Once Task 4 exists, a
-manifest-aware Contacts resume must use the
-same approved private file and must revalidate its exact source/target/evidence
-set against the run's identical fingerprint/parser version; never substitute a
-newly reviewed mapping into an existing run. Already committed successful
-module results are skipped; the remaining selected modules continue. If a
-`running` run has no live worker, wait for the claim lease to expire and record
-the incident before resuming. Never modify claim columns directly.
+Replace `42` with the recorded failed run ID. A parser-only Contacts dry run may
+be resumed without a manifest only when the original run was also parser-only.
+A manifest-aware dry-run or apply resume must use the same approved private
+manifest and identical mode, explicit module set, parser version, bundle
+fingerprint, and canonical manifest digest. Validation repeats against the exact
+source/target/evidence set; never substitute a newly reviewed mapping into an
+existing run. The apply resume also repeats `--expect-fingerprint`. Already
+committed successful module results are skipped; the remaining selected modules
+continue. These commands remain subject to the same live operational approval
+as the original run. If a `running` run has no live worker, wait for the claim
+lease to expire and record the incident before resuming. Never modify claim
+columns directly.
 
 ## 6. Post-run reconciliation queries
 
-Run these queries after currently supported verify-only and dry-run operations.
-After Task 4 is deployed, the same general ledger queries also apply to an
-authorized apply. Archive and run totals are exact; module-specific totals must
-match the approved expectation for that parser version.
+Run these queries after verify-only and dry-run operations, and after an
+explicitly authorized apply. Archive and run totals are exact; module-specific
+totals must match the approved expectation for that parser version.
 
 Latest run and module results:
 
@@ -547,10 +554,8 @@ Entity-link counts and displayed-aggregate artifact links may legitimately be
 zero when the reviewed parser expectation says the evidence was not
 materialized as a business entity.
 
-The following Contacts-repair acceptance block is **NOT AVAILABLE** until Task
-4's manifest loader, reviewed-link service, and materializer are deployed. At
-that future checkpoint, the result details and database must agree on these
-non-private totals:
+After an authorized Contacts apply, the result details and database must agree
+on these non-private totals:
 
 ```text
 preexisting contacts                         362
@@ -564,7 +569,6 @@ lead-backed legacy-only contacts              49
 ```
 
 ```sql
--- NOT AVAILABLE — planned Task 4 post-apply acceptance queries.
 SELECT count(*) FROM crm_contacts; -- 366
 SELECT count(*), count(DISTINCT lead_id)
 FROM crm_contacts WHERE lead_id IS NOT NULL; -- 51, 51
@@ -616,10 +620,47 @@ after an apply, data rollback requires an approved provider snapshot restore or
 a separately reviewed compensating migration.
 
 If no apply has occurred and an explicitly approved schema-only rollback from
-the current sole head is required, take a fresh snapshot and render the entire
-requested downgrade chain first. The following rollback removes both the
-`4a8c0d1e2f3b` contact-parity schema and the `2e7f9a0b1c2d` worker-claim change,
-ending at `1d6e7f8a9b10`:
+the current sole head is required, take a fresh snapshot and cross each safety
+boundary separately. The `7d1f3a5b6c8e -> 6c0e2f4a5b7d` step drops only the
+five workspace-summary indexes, and the `6c0e2f4a5b7d -> 5b9d1e2f3a4c` step
+drops only its four query indexes and two recomputable `normalized_email`
+columns. Both downgrades are offline-renderable:
+
+```bash
+"$PYTHON" -m alembic downgrade 7d1f3a5b6c8e:6c0e2f4a5b7d --sql \
+  > /tmp/command-contact-summary-index-downgrade.sql
+"$PYTHON" -m alembic downgrade 6c0e2f4a5b7d:5b9d1e2f3a4c --sql \
+  > /tmp/command-contact-timeline-query-downgrade.sql
+
+"$PYTHON" -m alembic downgrade 6c0e2f4a5b7d
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic downgrade 5b9d1e2f3a4c
+"$PYTHON" -m alembic current
+```
+
+The next `5b9d1e2f3a4c -> 4a8c0d1e2f3b` downgrade is online-only. It refuses
+offline mode and refuses to restore `crm_contact_timeline_events.occurred_at`
+to non-null while any null recovered timestamp exists. Perform and record this
+losslessness preflight; a nonzero result blocks downgrade:
+
+```sql
+SELECT count(*) AS null_recovered_timestamps
+FROM crm_contact_timeline_events
+WHERE occurred_at IS NULL;
+```
+
+Only after the count is zero and the staged downgrade has separate data-loss
+approval may the operator continue:
+
+```bash
+"$PYTHON" -m alembic downgrade 4a8c0d1e2f3b
+"$PYTHON" -m alembic current
+```
+
+Never request one monolithic offline downgrade across `5b9d1e2f3a4c`; it cannot
+perform the required online losslessness check. From the now-current
+`4a8c0d1e2f3b`, a further approved rollback can remove the contact-parity schema
+and worker-claim revision, ending at `1d6e7f8a9b10`:
 
 ```bash
 "$PYTHON" -m alembic downgrade 4a8c0d1e2f3b:1d6e7f8a9b10 --sql \
@@ -628,8 +669,8 @@ ending at `1d6e7f8a9b10`:
 ```
 
 Do not treat the intermediate `2e7f9a0b1c2d` revision as a supported stopping
-point. A full pre-foundation downgrade from the sole head is destructive to the
-contact-parity schema and all semantic provenance/reconciliation audit rows:
+point. From `4a8c0d1e2f3b`, a full pre-foundation downgrade is destructive to
+the contact-parity schema and all semantic provenance/reconciliation audit rows:
 
 ```bash
 "$PYTHON" -m alembic downgrade 4a8c0d1e2f3b:f0c8a6d9e431 --sql \
@@ -637,15 +678,16 @@ contact-parity schema and all semantic provenance/reconciliation audit rows:
 "$PYTHON" -m alembic downgrade f0c8a6d9e431
 ```
 
-Run either downgrade only with explicit data-loss approval and a verified
-snapshot. The full downgrade drops the contact-parity and
+Run any schema-removing downgrade only with explicit data-loss approval and a
+verified snapshot. The full downgrade drops the contact-parity and
 provenance/reconciliation tables but does not drop or rewrite
 `crm_archive_artifacts`. After any rollback, rerun the schema and archive
 preflight queries and compare them with the stored deployment evidence.
 
-## Recorded compatibility audit: 2026-08-12
+## Historical compatibility observation — 2026-08-12
 
-A read-only transaction against the configured database found:
+On 2026-08-12, a read-only transaction against the then-configured database
+found:
 
 - current revision: `f0c8a6d9e431`;
 - `crm_archive_artifacts`: 12,580 rows, 745,060,261 declared bytes, zero rows
@@ -653,9 +695,11 @@ A read-only transaction against the configured database found:
 - the three provenance/link tables and two reconciliation tables introduced by
   this foundation were not present.
 
-Therefore verify-only was deliberately not executed during this audit. The
-normal deployment must now traverse the full chain to the sole head
-`4a8c0d1e2f3b`; operators must not stop at `2e7f9a0b1c2d`. Running verify-only
-before the full approved migration would attempt to write audit rows into an
-unsupported schema state. No migration or semantic reconciliation write was
-performed by this audit.
+Therefore verify-only was deliberately not executed during that audit. This is
+a dated observation, not evidence of the database's current revision; this
+documentation correction performed no new live audit. Under the current source
+contract, any target still at that observed revision must follow the staged
+upgrade through the sole head `7d1f3a5b6c8e` before running the reconciliation
+CLI. Running verify-only before the full approved migration would attempt to
+write audit rows into an unsupported schema state. No migration or semantic
+reconciliation write was performed by the historical audit.

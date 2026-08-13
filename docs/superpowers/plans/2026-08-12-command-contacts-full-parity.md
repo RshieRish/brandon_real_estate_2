@@ -17,7 +17,7 @@ The operator supplies the authorized archive root without committing a user-spec
 ```text
 COMMAND_ARCHIVE_ROOT=<absolute-path-to-authorized-account-archive>
 PROJECT_PYTHON=<absolute-path-to-project-venv-python>
-# PLANNED TASK 4 ONLY — NOT ACCEPTED BY THE CURRENT CLI:
+# PRIVATE OPERATOR INPUT SUPPORTED BY THE CURRENT CLI; NOT LIVE AUTHORIZATION:
 CONTACT_OVERLAP_MANIFEST=<absolute-path-to-private-reviewed-overlap-manifest>
 ```
 
@@ -102,9 +102,9 @@ The literal angle-bracket values above are documentation placeholders, not produ
 
 ### Private reviewed-overlap manifest contract
 
-> **PLANNED TASK 4 CONTRACT — NOT AVAILABLE IN THE CURRENT CLI.** `--contact-overlap-manifest`, its loader/validator, reviewed-link staging, and the Contacts materializer do not exist yet. Until Task 4 lands and its gates pass, this section is a design contract only and every Contacts apply is blocked.
+> **TASK 4 IS IMPLEMENTED IN THE CURRENT SOURCE; PRODUCTION EXECUTION REMAINS CONDITIONAL.** `--contact-overlap-manifest`, its loader/validator, reviewed-link staging, and the Contacts materializer are present. This contract is not live authorization: Contacts apply still requires the exact reviewed revision to be deployed, the target database at sole head `7d1f3a5b6c8e`, a freshly verified target archive, the approved private manifest, a reviewed manifest-aware dry run, a provider snapshot, and explicit change approval.
 
-The two cross-system overlaps will be supplied at operation time through `--contact-overlap-manifest`; they are not fixtures, environment variables containing JSON, or values committed to the repository. The manifest is a private, access-controlled JSON file outside the checkout and outside any frontend/static path. The loader never emits its path or contents. Its canonical v1 schema is:
+The two cross-system overlaps are supplied at operation time through `--contact-overlap-manifest`; they are not fixtures, environment variables containing JSON, or values committed to the repository. The manifest is a private, access-controlled JSON file outside the checkout and outside any frontend/static path. The loader never emits its path or contents. Its canonical v1 schema is:
 
 ```json
 {
@@ -1047,7 +1047,7 @@ Migration `6c0e2f4a5b7d` has parent `5b9d1e2f3a4c`. Its local canonicalizer is s
 4. Re-read `(id, email, normalized_email)` through the same ascending-ID keyset loop and refuse if any stored derived value differs from the local canonicalizer. Verification is a distinct second pass, not an assertion over the in-memory values used to update. The migration transaction/DDL lock prevents concurrent application drift; any error rolls back columns, backfill, and indexes together.
 5. Create the four named indexes above and advance the version to `6c0e2f4a5b7d`.
 
-Downgrade drops only those four indexes and two derived columns and returns to `5b9d1e2f3a4c`; losing recomputable derived values is safe. Migration tests run real SQLite upgrade/backfill/downgrade, compare the migration helper to the application helper across ASCII, NFKC, placeholder, whitespace, and invalid inputs, assert every exact index/column, and assert PostgreSQL offline upgrade raises the exact `RuntimeError("contact timeline query support requires an online canonical-email backfill")` with an empty revision output buffer before any DDL. A 2,001-row fixture plus SQL capture proves both write and verification passes use the exact keyset predicate and `LIMIT 1000`, never retain more than one batch, and cross three nonempty pages. A direct post-backfill tamper followed by the revision-local verification helper must raise before index creation, proving the second pass detects observed drift rather than merely reusing computed values. After the implementation lands, `alembic heads` must print only `6c0e2f4a5b7d (head)`; until then, the committed source-tree head remains `5b9d1e2f3a4c`.
+Downgrade drops only those four indexes and two derived columns and returns to `5b9d1e2f3a4c`; losing recomputable derived values is safe. Migration tests run real SQLite upgrade/backfill/downgrade, compare the migration helper to the application helper across ASCII, NFKC, placeholder, whitespace, and invalid inputs, assert every exact index/column, and assert PostgreSQL offline upgrade raises the exact `RuntimeError("contact timeline query support requires an online canonical-email backfill")` with an empty revision output buffer before any DDL. A 2,001-row fixture plus SQL capture proves both write and verification passes use the exact keyset predicate and `LIMIT 1000`, never retain more than one batch, and cross three nonempty pages. A direct post-backfill tamper followed by the revision-local verification helper must raise before index creation, proving the second pass detects observed drift rather than merely reusing computed values. At the Task 5B checkpoint, `alembic heads` prints only `6c0e2f4a5b7d (head)`; the current full source tree continues through Task 5C to sole head `7d1f3a5b6c8e`.
 
 All current ORM write paths must preserve the invariant in the same commit:
 
@@ -1221,9 +1221,8 @@ PostgreSQL offline `--sql` upgrade/downgrade must all compile and must not
 refuse offline mode. Migration tests assert the exact revision chain and
 index name/table/column maps, run real SQLite upgrade then downgrade around
 sentinel rows, compile both directions for PostgreSQL, and prove no column,
-constraint, or row changes. After Task 5C lands, `alembic heads` prints only
-`7d1f3a5b6c8e (head)`; until then the implemented source-tree head remains
-`6c0e2f4a5b7d`.
+constraint, or row changes. Task 5C is landed, and the current source-tree
+`alembic heads` output is exactly `7d1f3a5b6c8e (head)`.
 
 Task 5C also adds the already-deployed
 `UniqueConstraint("contact_id", "tag_id", name="uq_crm_contact_tag")` to
@@ -3601,7 +3600,7 @@ git commit -m "test: verify Command contact parity"
 
 ### Task 11: Reconcile, migrate, deploy, and prove production Contacts
 
-> **CURRENTLY BLOCKED / NOT AVAILABLE:** Task 11 cannot be executed until Task 4 implements and deploys `--contact-overlap-manifest`, the private loader/validator, reviewed-link staging, and the Contacts materializer. The current CLI rejects the manifest flag. The manifest-aware commands below are future acceptance commands, not current operator instructions.
+> **IMPLEMENTED IN SOURCE; TASK 11 IS NOT YET EXECUTED OR AUTHORIZED.** The current CLI supports `--contact-overlap-manifest`, the private loader/validator, reviewed-link staging, the Contacts materializer, bounded apply, and manifest-bound resume. Production execution remains pending until the exact reviewed revision is deployed, the target database is staged to sole head `7d1f3a5b6c8e`, its archive is freshly verified, the approved private manifest passes a reviewed manifest-aware dry run, a provider snapshot is recorded, and the live change has explicit approval. The commands below are conditional operating instructions, not evidence that those gates have occurred.
 
 **Files:**
 - Modify: `docs/command-reconciliation-runbook.md`
@@ -3609,26 +3608,35 @@ git commit -m "test: verify Command contact parity"
 
 - [ ] **Step 1: Add exact Contacts operating commands to the runbook**
 
-Document the future sequence below, substituting only the fingerprint/run ID returned by the preceding command once Task 4 is deployed. Today, execute only the verify-only command; do not execute the two commands explicitly marked unavailable:
+Document the conditional sequence below, substituting only the fingerprint or run ID returned by the preceding command. Do not execute any command against the live database during implementation or documentation work; use this sequence only after every operational prerequisite above is recorded:
 
 ```bash
 cd backend
 python -m scripts.reconcile_command_archive --verify-only --parser-version contacts-v1 > /tmp/command-contacts-verify.json
-# NOT AVAILABLE — planned Task 4 manifest validation command.
 python -m scripts.reconcile_command_archive --dry-run --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" > /tmp/command-contacts-dry-run.json
-# NOT AVAILABLE — planned Task 4 Contacts apply; do not run today.
-python -m scripts.reconcile_command_archive --apply --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" --expect-fingerprint "$VERIFIED_FINGERPRINT" > /tmp/command-contacts-apply.json
+python -m scripts.reconcile_command_archive --apply --module contacts --parser-version contacts-v1 --contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST" --expect-fingerprint "$VERIFIED_COMMAND_ARCHIVE_FINGERPRINT" > /tmp/command-contacts-apply.json
 ```
 
-After Task 4 is deployed, `CONTACT_OVERLAP_MANIFEST` will name a private file outside the checkout and acceptance-artifact directories. Until then, Contacts apply remains blocked because the current CLI cannot accept or validate it. The future flow additionally blocks apply unless the manifest has exactly two reviewed rows and verification plus reviewed dry-run used the exact production bundle fingerprint/parser version/manifest digest. A future failed Contacts run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint/manifest; its command repeats `--contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"`.
+`CONTACT_OVERLAP_MANIFEST` names a private regular non-symlink file outside the checkout, deployment bundle, frontend/static paths, and acceptance-artifact directories. The authorized flow blocks apply unless the manifest has exactly two reviewed rows and verification plus the reviewed manifest-aware dry run used the exact production bundle fingerprint, parser version, module set, and manifest digest. A failed Contacts run resumes with `--resume <run_id>` and the same mode/module/version/fingerprint/manifest; its command repeats `--contact-overlap-manifest "$CONTACT_OVERLAP_MANIFEST"`. Unbounded apply is policy-prohibited; the production command must name `--module contacts`.
 
-- [ ] **Step 2: After Task 4 is deployed, run the real archive and database preflight**
+- [ ] **Step 2: After operational authorization, run the real archive and database preflight**
 
-Before the future production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete manifest-aware dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Verify that the private manifest is a regular access-controlled file outside the repository, embeds the verified bundle fingerprint and `contacts-v1`, resolves exactly two source hashes to exact parsed records and two unique positive existing lead-backed contact IDs, validates both non-PII target-row fingerprints, and passes independent strong-evidence recomputation. Store only totals, canonical manifest/evidence hashes, validation state, and run/audit IDs in the acceptance document—no manifest path, target ID, private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
+Before the conditionally authorized production apply, assert checksums, exact parser counts, sole Alembic head `7d1f3a5b6c8e`, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete manifest-aware dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Verify that the private manifest is a regular access-controlled non-symlink file outside the repository, embeds the verified bundle fingerprint and `contacts-v1`, resolves exactly two source hashes to exact parsed records and two unique positive existing lead-backed contact IDs, validates both non-PII target-row fingerprints, and passes independent strong-evidence recomputation. Store only totals, canonical manifest/evidence hashes, validation state, and run/audit IDs in the acceptance document—no manifest path, target ID, private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
 
-- [ ] **Step 3: After Task 4 is deployed, apply migration and Contacts module in a bounded rollout**
+- [ ] **Step 3: Stage migrations and Contacts apply in a bounded rollout**
 
-Run `alembic upgrade 4a8c0d1e2f3b`. Contacts apply remains blocked until Task 4 is deployed; only then run the planned bounded apply. Do not run other domain modules in the same transaction or deployment checkpoint. Preserve the pre-apply database backup/restore identifier in the acceptance document.
+Never render one offline upgrade across `6c0e2f4a5b7d`: that revision requires its online batched canonical-email backfill. After reviewing offline SQL through `5b9d1e2f3a4c`, the online-only `6c0e2f4a5b7d` source/test evidence, and offline SQL from `6c0e2f4a5b7d` to `7d1f3a5b6c8e`, take the provider snapshot and upgrade sequentially:
+
+```bash
+python -m alembic upgrade 5b9d1e2f3a4c
+python -m alembic current
+python -m alembic upgrade 6c0e2f4a5b7d
+python -m alembic current
+python -m alembic upgrade 7d1f3a5b6c8e
+python -m alembic current
+```
+
+The final current revision must be the sole head `7d1f3a5b6c8e`. Only after every operational gate remains valid may the explicit `--module contacts` apply in Step 1 run. Do not run other domain modules in the same transaction or deployment checkpoint. Preserve the pre-apply database backup/restore identifier in the acceptance document.
 
 - [ ] **Step 4: Execute production SQL count and integrity gates**
 
