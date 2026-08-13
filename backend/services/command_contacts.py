@@ -2605,6 +2605,21 @@ def _canonical_audit(
         ) from None
 
 
+def _canonical_workspace_saved_search_audit(
+    *, actor_subject: str, search_id: int, name: str
+) -> str:
+    try:
+        return canonical_workspace_saved_search_activity_json(
+            actor_subject=actor_subject,
+            search_id=search_id,
+            name=name,
+        )
+    except (TypeError, ValueError):
+        raise ContactDataIntegrityError(
+            "saved search audit state is invalid"
+        ) from None
+
+
 def _thaw_json_value(value: object) -> object:
     if isinstance(value, Mapping):
         return {key: _thaw_json_value(item) for key, item in value.items()}
@@ -2730,6 +2745,7 @@ async def _remove_materialized_child_link(
     ):
         raise ContactDataIntegrityError("contact source link is invalid")
     await db.delete(link)
+    await db.flush()
 
 
 def _is_contact_tag_uniqueness_error(error: IntegrityError) -> bool:
@@ -3485,7 +3501,7 @@ async def delete_saved_search(
             ).all()
             if links:
                 raise ContactDataIntegrityError("contact source link is invalid")
-            metadata = canonical_workspace_saved_search_activity_json(
+            metadata = _canonical_workspace_saved_search_audit(
                 actor_subject=actor,
                 search_id=search.id,
                 name=search.name,

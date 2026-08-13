@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
@@ -10,6 +11,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import event, func, insert, select, text, update
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import services.command_contacts as contacts_service
@@ -1503,3 +1506,333 @@ async def test_global_saved_search_activity_failure_restores_search(
     assert "private global rollback" not in str(caught.value)
     assert await db.get(CRMSavedSearch, search.id) is not None
     assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "section_name", "record_kind", "child_table"),
+    (
+        ("note", "notes", "contact_note", "crm_notes"),
+        (
+            "saved_search",
+            "saved_searches",
+            "contact_saved_search",
+            "crm_saved_searches",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_materialized_child_flushes_link_delete_before_child_delete(
+    mutation_db,
+    entity_type,
+    section_name,
+    record_kind,
+    child_table,
+):
+    db, engine = mutation_db
+    contact = await _seed_contact(db)
+    child = (
+        CRMNote(contact_id=contact.id, body="private ordered child")
+        if entity_type == "note"
+        else CRMSavedSearch(
+            contact_id=contact.id,
+            name="private ordered child",
+            criteria_json='{"a":1}',
+        )
+    )
+    db.add(child)
+    await db.flush()
+    await _materialize_child_source(
+        db,
+        contact=contact,
+        entity_type=entity_type,
+        entity_id=child.id,
+        section_name=section_name,
+        record_kind=record_kind,
+    )
+    deletes: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("DELETE "):
+            deletes.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        if entity_type == "note":
+            await contacts_service.delete_contact_note(
+                db, contact.id, child.id, actor_subject="7"
+            )
+        else:
+            await contacts_service.delete_saved_search(
+                db, child.id, actor_subject="7"
+            )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    link_index = next(
+        index
+        for index, statement in enumerate(deletes)
+        if "crm_entity_sources" in statement
+    )
+    child_index = next(
+        index for index, statement in enumerate(deletes) if child_table in statement
+    )
+    assert link_index < child_index
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "section_name", "record_kind", "child_table"),
+    (
+        ("note", "notes", "contact_note", "crm_notes"),
+        (
+            "saved_search",
+            "saved_searches",
+            "contact_saved_search",
+            "crm_saved_searches",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_child_delete_failure_after_link_flush_restores_link_and_child(
+    mutation_db,
+    entity_type,
+    section_name,
+    record_kind,
+    child_table,
+):
+    db, engine = mutation_db
+    contact = await _seed_contact(db)
+    child = (
+        CRMNote(contact_id=contact.id, body="private rollback child")
+        if entity_type == "note"
+        else CRMSavedSearch(
+            contact_id=contact.id,
+            name="private rollback child",
+            criteria_json='{"a":1}',
+        )
+    )
+    db.add(child)
+    await db.flush()
+    link, _source = await _materialize_child_source(
+        db,
+        contact=contact,
+        entity_type=entity_type,
+        entity_id=child.id,
+        section_name=section_name,
+        record_kind=record_kind,
+    )
+    await db.execute(
+        text(
+            f"CREATE TRIGGER reject_ordered_child_delete BEFORE DELETE ON {child_table} "
+            "BEGIN SELECT RAISE(FAIL, 'child delete rejected'); END"
+        )
+    )
+    deletes: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("DELETE "):
+            deletes.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        with pytest.raises(contacts_service.ContactDataIntegrityError):
+            if entity_type == "note":
+                await contacts_service.delete_contact_note(
+                    db, contact.id, child.id, actor_subject="7"
+                )
+            else:
+                await contacts_service.delete_saved_search(
+                    db, child.id, actor_subject="7"
+                )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    assert any("crm_entity_sources" in statement for statement in deletes)
+    assert any(child_table in statement for statement in deletes)
+    assert await db.get(CRMEntitySource, link.id) is not None
+    assert await db.get(type(child), child.id) is not None
+
+
+@pytest.mark.parametrize("invalid_name", ("", "P" * 256))
+@pytest.mark.asyncio
+async def test_global_saved_search_invalid_stored_name_is_safe_and_rolls_back(
+    mutation_db, invalid_name
+):
+    db, _engine = mutation_db
+    search = CRMSavedSearch(
+        contact_id=None,
+        name=invalid_name,
+        criteria_json='{"a":1}',
+    )
+    db.add(search)
+    await db.flush()
+    with pytest.raises(
+        contacts_service.ContactDataIntegrityError,
+        match="saved search audit state is invalid",
+    ) as caught:
+        await contacts_service.delete_saved_search(
+            db, search.id, actor_subject="7"
+        )
+    if invalid_name:
+        assert invalid_name not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert await db.get(CRMSavedSearch, search.id) is not None
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 0
+
+
+@pytest.mark.asyncio
+async def test_two_independent_sessions_assign_same_tag_once(
+    mutation_db,
+):
+    seed_db, engine = mutation_db
+    contact = await _seed_contact(seed_db)
+    tag = CRMTag(name="Synthetic concurrent tag")
+    seed_db.add(tag)
+    await seed_db.flush()
+    contact_id, tag_id = contact.id, tag.id
+    await seed_db.commit()
+    await seed_db.execute(text("PRAGMA journal_mode=WAL"))
+    await seed_db.commit()
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    start = asyncio.Event()
+    winner_committed = asyncio.Event()
+    ready = 0
+    ready_lock = asyncio.Lock()
+
+    async def assign_once(*, replay_after_winner: bool) -> ContactMutationResult:
+        nonlocal ready
+        async with factory() as session:
+            await session.execute(text("PRAGMA busy_timeout=5000"))
+            async with ready_lock:
+                ready += 1
+                if ready == 2:
+                    start.set()
+            await start.wait()
+            if replay_after_winner:
+                await winner_committed.wait()
+            result = await contacts_service.assign_contact_tag(
+                session, contact_id, tag_id, actor_subject="7"
+            )
+            await session.commit()
+            if not replay_after_winner:
+                winner_committed.set()
+            return result
+
+    # SQLite cannot upgrade a stale concurrent read snapshot through the
+    # PostgreSQL FOR UPDATE/unique-race path. Keep two independent sessions
+    # alive together, then replay the loser immediately after the winner's
+    # externally owned commit. PostgreSQL locking is compiled below.
+    first, second = await asyncio.gather(
+        assign_once(replay_after_winner=False),
+        assign_once(replay_after_winner=True),
+    )
+    assert sorted((first.changed, second.changed)) == [False, True]
+    async with factory() as verify_db:
+        assert (
+            await verify_db.scalar(
+                select(func.count()).select_from(CRMContactTag).where(
+                    CRMContactTag.contact_id == contact_id,
+                    CRMContactTag.tag_id == tag_id,
+                )
+            )
+            == 1
+        )
+        audits = (
+            await verify_db.scalars(
+                select(CRMContactAuditEvent).where(
+                    CRMContactAuditEvent.contact_id == contact_id,
+                    CRMContactAuditEvent.action == "contact.tag_added",
+                )
+            )
+        ).all()
+        assert len(audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_tag_assignment_compiles_postgresql_row_locks_and_named_unique_gate(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic PostgreSQL tag")
+    db.add(tag)
+    await db.flush()
+    statements = []
+    original_scalars = db.scalars
+
+    async def capture_scalars(statement, *args, **kwargs):
+        statements.append(statement)
+        return await original_scalars(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "scalars", capture_scalars)
+    await contacts_service.assign_contact_tag(
+        db, contact.id, tag.id, actor_subject="7"
+    )
+    compiled = [
+        str(statement.compile(dialect=postgresql.dialect()))
+        for statement in statements
+    ]
+    assert any(
+        "FROM crm_contacts" in sql and "FOR UPDATE" in sql for sql in compiled
+    )
+    assert any(
+        "FROM crm_tags" in sql and "FOR UPDATE" in sql for sql in compiled
+    )
+    unique_constraints = {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in CRMContactTag.__table__.constraints
+        if constraint.name is not None
+    }
+    assert unique_constraints["uq_crm_contact_tag"] == ("contact_id", "tag_id")
+
+    class PostgreSQLOrigin(Exception):
+        def __init__(self, constraint_name: str):
+            self.diag = type(
+                "Diagnostic", (), {"constraint_name": constraint_name}
+            )()
+
+    exact = IntegrityError(
+        "INSERT INTO crm_contact_tags",
+        {},
+        PostgreSQLOrigin("uq_crm_contact_tag"),
+    )
+    unrelated = IntegrityError(
+        "INSERT INTO crm_contact_tags",
+        {},
+        PostgreSQLOrigin("other_constraint"),
+    )
+    assert contacts_service._is_contact_tag_uniqueness_error(exact) is True
+    assert contacts_service._is_contact_tag_uniqueness_error(unrelated) is False
+
+
+@pytest.mark.asyncio
+async def test_assign_tag_does_not_recover_unrelated_constraint_error(
+    mutation_db, monkeypatch
+):
+    db, _engine = mutation_db
+    contact = await _seed_contact(db)
+    tag = CRMTag(name="Synthetic unrelated constraint tag")
+    db.add(tag)
+    await db.flush()
+    original_flush = db.flush
+
+    class PostgreSQLOrigin(Exception):
+        def __init__(self):
+            self.diag = type(
+                "Diagnostic", (), {"constraint_name": "other_constraint"}
+            )()
+
+    async def fail_assignment_flush(*args, **kwargs):
+        if any(isinstance(row, CRMContactTag) for row in db.new):
+            raise IntegrityError(
+                "INSERT INTO crm_contact_tags",
+                {},
+                PostgreSQLOrigin(),
+            )
+        return await original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", fail_assignment_flush)
+    with pytest.raises(IntegrityError):
+        await contacts_service.assign_contact_tag(
+            db, contact.id, tag.id, actor_subject="7"
+        )
+    assert await db.scalar(select(func.count()).select_from(CRMContactTag)) == 0
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
