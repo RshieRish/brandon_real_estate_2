@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from models.command_provenance import CaptureQuality, EvidenceLevel
+from services.command_contact_identity import IdentityConflict
 from services.command_parsers.contact_extractors import (
     CONTACT_SECTIONS,
     ContactParseError,
@@ -135,7 +136,7 @@ def test_parser_emits_one_profile_one_position_and_eight_sections_per_position(
     assert kinds["contact_profile"] == 3
     assert kinds["contact_capture_position"] == 3
     assert kinds["contact_section_capture"] == 24
-    assert result.metrics.observed_count == 3
+    assert result.metrics.observed_count == 2
     assert result.metrics.rendered_count == 3
     assert result.metrics.normalized_count == 0
     assert result.metrics.details["provider_contact_rows"] == 3
@@ -144,6 +145,11 @@ def test_parser_emits_one_profile_one_position_and_eight_sections_per_position(
     assert result.metrics.details["section_counts"] == {
         section: 3 for section in CONTACT_SECTIONS
     }
+    assert result.metrics.details["identity_clusters"] == 2
+    assert result.metrics.details["identity_aliases_coalesced"] == 1
+    assert result.metrics.details["ambiguous_identities"] == 0
+    assert result.metrics.details["unmatched_provider_rows"] == 0
+    assert len(result.metrics.details["identity_cluster_hashes"]) == 2
 
 
 def test_parser_marks_1900_birth_year_as_sentinel_without_inventing_a_date(bundle):
@@ -189,6 +195,39 @@ def test_structured_profile_precedes_conflicting_html_fallback(bundle):
     first = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
     assert first.payload["primary_email"] == "avery@example.test"
     assert first.payload["profile_source"] == "structured_json"
+
+
+def test_profile_identity_candidate_uses_only_explicit_e164_phone(bundle):
+    result = ContactsParser().parse(bundle, "contacts-v1")
+    first = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    second = source_record(result, "contact:63ac84ec62224587b69e9bb4")
+    assert first.payload["identity_candidate"]["e164_phone"] == "+19785550101"
+    assert second.payload["primary_phone"] == "+1 978 555 0101"
+    assert second.payload["identity_candidate"]["e164_phone"] is None
+
+
+def test_parser_blocks_conflicting_strong_identity_instead_of_falling_back(bundle):
+    changed = []
+    path = "kw_command_repaired/contacts/details/0000002.html"
+    for artifact in bundle:
+        if artifact.source_path != path:
+            changed.append(artifact)
+            continue
+        content = (artifact.content_bytes or b"").replace(
+            b"+1 978 555 0101", b"+19785550102"
+        )
+        changed.append(
+            replace(
+                artifact,
+                content_bytes=content,
+                size_bytes=len(content),
+                sha256=hashlib.sha256(content).hexdigest(),
+            )
+        )
+
+    with pytest.raises(IdentityConflict, match="conflicting phone") as captured:
+        ContactsParser().parse(tuple(changed), "contacts-v1")
+    assert captured.value.ambiguous_identities == 1
 
 
 def test_parser_uses_accessibility_snapshot_when_visible_text_is_absent(bundle):
@@ -530,6 +569,7 @@ def test_parser_propagates_version_and_orders_output_stably(bundle):
     assert tuple(record.payload_json for record in forward.records) == tuple(
         record.payload_json for record in reverse.records
     )
+    assert forward.metrics.details == reverse.metrics.details
 
 
 def test_parser_rejects_missing_canonical_section(bundle):

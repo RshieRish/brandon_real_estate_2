@@ -9,6 +9,11 @@ import json
 import re
 
 from models.command_provenance import CaptureQuality, EvidenceLevel
+from services.command_contact_identity import (
+    ContactIdentityCandidate,
+    canonical_phone,
+    resolve_identity_clusters,
+)
 from services.command_parsers.base import ModuleMetrics, ModuleParseResult
 from services.command_parsers.contact_extractors import (
     CONTACT_SECTIONS,
@@ -75,6 +80,7 @@ class ContactsParser:
             raise ContactParseError("contact archive contains no canonical sections")
 
         records: list[SourceRecordDraft] = []
+        profiles: list[ParsedContactProfile] = []
         section_counts: Counter[str] = Counter()
         for ordinal_string in sorted(ordinal_strings):
             ordinal = int(ordinal_string)
@@ -93,6 +99,7 @@ class ContactsParser:
                     )
 
             profile = parse_contact_profile(ordinal, artifacts_by_path)
+            profiles.append(profile)
             parsed_sections = tuple(
                 parse_section_capture(
                     profile,
@@ -154,13 +161,17 @@ class ContactsParser:
 
         position_count = len(ordinal_strings)
         section_count = sum(section_counts.values())
+        identity_clusters = resolve_identity_clusters(
+            tuple(_identity_candidate(profile) for profile in profiles)
+        )
+        distinct_identity_count = len(identity_clusters)
         return ModuleParseResult(
             records=tuple(records),
             metrics=ModuleMetrics(
                 source_system="kw_command",
                 module=self.module,
                 expected_count=317,
-                observed_count=position_count,
+                observed_count=distinct_identity_count,
                 rendered_count=position_count,
                 normalized_count=0,
                 evidence_only_count=0,
@@ -175,6 +186,15 @@ class ContactsParser:
                         section: section_counts[section] for section in CONTACT_SECTIONS
                     },
                     "fabricated_celebrations": 0,
+                    "identity_clusters": distinct_identity_count,
+                    "identity_aliases_coalesced": (
+                        position_count - distinct_identity_count
+                    ),
+                    "identity_cluster_hashes": tuple(
+                        cluster.identity_hash for cluster in identity_clusters
+                    ),
+                    "ambiguous_identities": 0,
+                    "unmatched_provider_rows": 0,
                 },
             ),
         )
@@ -205,7 +225,7 @@ def _profile_draft(
             "identity_candidate": {
                 "source_contact_id": profile.source_contact_id,
                 "primary_email": profile.primary_email,
-                "e164_phone": profile.primary_phone,
+                "e164_phone": canonical_phone(profile.primary_phone),
                 "legal_name": profile.legal_name,
                 "preferred_name": profile.preferred_name,
             },
@@ -216,6 +236,16 @@ def _profile_draft(
         parser_version=parser_version,
         capture_quality=profile.capture_quality,
         captured_at=profile.captured_at,
+    )
+
+
+def _identity_candidate(profile: ParsedContactProfile) -> ContactIdentityCandidate:
+    return ContactIdentityCandidate(
+        source_contact_id=profile.source_contact_id,
+        primary_email=profile.primary_email,
+        e164_phone=profile.primary_phone,
+        legal_name=profile.legal_name,
+        preferred_name=profile.preferred_name,
     )
 
 

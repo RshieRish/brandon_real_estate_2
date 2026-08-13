@@ -90,10 +90,8 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
     if not configured_root:
         pytest.skip("COMMAND_ARCHIVE_ROOT is not configured")
 
-    result = ContactsParser().parse(
-        await _verified_archive_artifacts(Path(configured_root)),
-        "contacts-v1",
-    )
+    artifacts = await _verified_archive_artifacts(Path(configured_root))
+    result = ContactsParser().parse(artifacts, "contacts-v1")
     kinds = Counter(record.record_kind for record in result.records)
     assert kinds == {
         "contact_profile": 317,
@@ -125,6 +123,39 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
     assert result.metrics.observed_count == 317
     assert result.metrics.rendered_count == 317
     assert result.metrics.unmatched_count == 0
+    assert result.metrics.details["identity_clusters"] == 317
+    assert result.metrics.details["identity_aliases_coalesced"] == 0
+    assert result.metrics.details["ambiguous_identities"] == 0
+    assert result.metrics.details["unmatched_provider_rows"] == 0
+    identity_hashes = result.metrics.details["identity_cluster_hashes"]
+    assert len(identity_hashes) == 317
+    assert len(set(identity_hashes)) == 317
+    assert (
+        hashlib.sha256("\n".join(identity_hashes).encode("utf-8")).hexdigest()
+        == "3bb6bc7754da2bb17d58162ef0af72b602316230f9c3b2e3fac4c73341eb6474"
+    )
+    reversed_result = ContactsParser().parse(
+        tuple(reversed(artifacts)),
+        "contacts-v1",
+    )
+    assert reversed_result.metrics.details["identity_cluster_hashes"] == identity_hashes
+    assert tuple(record.identity for record in reversed_result.records) == tuple(
+        record.identity for record in result.records
+    )
+    profile_source_ids = {
+        record.payload["source_contact_id"]
+        for record in result.records
+        if record.record_kind == "contact_profile"
+    }
+    position_source_ids = [
+        record.payload["source_contact_id"]
+        for record in result.records
+        if record.record_kind == "contact_capture_position"
+    ]
+    assert len(profile_source_ids) == 317
+    assert Counter(position_source_ids) == Counter(
+        {source_contact_id: 1 for source_contact_id in profile_source_ids}
+    )
     assert result.metrics.details["section_artifacts"] == 2_536
     assert result.metrics.details["section_counts"] == {
         section: 317 for section in CONTACT_SECTIONS
