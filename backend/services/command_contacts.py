@@ -23,6 +23,7 @@ from sqlalchemy import (
     or_,
     select,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
@@ -59,6 +60,7 @@ from models.command_provenance import (
 )
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
+    UNSET,
     CaptureQualityValue,
     ContactActorValue,
     ContactAddressValue,
@@ -67,6 +69,7 @@ from services.command_contact_contracts import (
     ContactCelebrationRow,
     ContactCelebrations,
     ContactCelebrationValue,
+    ContactCreateCommand,
     ContactDetail,
     ContactDirectoryFilters,
     ContactDirectoryPage,
@@ -90,8 +93,10 @@ from services.command_contact_contracts import (
     ContactSourceOnly,
     ContactTagValue,
     ContactTaskOccurrence,
+    ContactUpdateCommand,
     ContactWorkspaceSummary,
     SortDirection,
+    canonical_contact_audit_json,
 )
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
@@ -124,6 +129,66 @@ class ContactLinkConflict(ContactDataIntegrityError):
 
 class ContactSectionUnsupported(ValueError):
     """The requested section has a dedicated service instead."""
+
+
+_CONTACT_MUTATION_FIELDS = (
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "stage",
+    "birthday",
+    "anniversary",
+)
+
+
+def _validated_actor_subject(actor_subject: object) -> str:
+    if (
+        type(actor_subject) is not str
+        or not 1 <= len(actor_subject) <= 255
+        or not actor_subject.isascii()
+        or not actor_subject.isdigit()
+        or int(actor_subject) <= 0
+        or actor_subject != str(int(actor_subject))
+    ):
+        raise ValueError("administrator subject is invalid")
+    return actor_subject
+
+
+def _contact_audit_fields(contact: CRMContact) -> dict[str, object]:
+    return {
+        field_name: getattr(contact, field_name)
+        for field_name in _CONTACT_MUTATION_FIELDS
+    }
+
+
+def _compatibility_activity(
+    *, contact_id: int, kind: str, summary: str
+) -> CRMActivity:
+    return CRMActivity(
+        contact_id=contact_id,
+        kind=kind,
+        summary=summary,
+        source_record_id=None,
+        metadata_json="{}",
+    )
+
+
+def _contact_audit_event(
+    *,
+    contact_id: int,
+    actor_subject: str,
+    action: str,
+    before_json: str,
+    after_json: str,
+) -> CRMContactAuditEvent:
+    return CRMContactAuditEvent(
+        contact_id=contact_id,
+        actor_subject=actor_subject,
+        action=action,
+        before_json=before_json,
+        after_json=after_json,
+    )
 
 
 def _safe_not_found() -> NoReturn:
@@ -2504,6 +2569,172 @@ async def list_contact_celebrations(
     )
 
 
+async def create_contact(
+    db: AsyncSession,
+    payload: ContactCreateCommand,
+    *,
+    actor_subject: str,
+) -> ContactDetail:
+    """Create one internal contact with its compatibility activity and audit."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactCreateCommand):
+        raise TypeError("payload must be ContactCreateCommand")
+    before_json = canonical_contact_audit_json(
+        action="contact.created",
+        phase="before",
+        payload={},
+    )
+    try:
+        async with db.begin_nested():
+            contact = CRMContact(
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                email=payload.email,
+                phone=payload.phone,
+                stage=payload.stage,
+                birthday=payload.birthday,
+                anniversary=payload.anniversary,
+            )
+            db.add(contact)
+            await db.flush()
+            try:
+                after_json = canonical_contact_audit_json(
+                    action="contact.created",
+                    phase="after",
+                    payload=_contact_audit_fields(contact),
+                )
+            except (TypeError, ValueError):
+                raise ContactDataIntegrityError(
+                    "contact audit state is invalid"
+                ) from None
+            db.add_all(
+                [
+                    _compatibility_activity(
+                        contact_id=contact.id,
+                        kind="contact_created",
+                        summary="Contact created in Command workspace",
+                    ),
+                    _contact_audit_event(
+                        contact_id=contact.id,
+                        actor_subject=actor,
+                        action="contact.created",
+                        before_json=before_json,
+                        after_json=after_json,
+                    ),
+                ]
+            )
+            await db.flush()
+            detail = await get_contact_detail(db, contact.id)
+        return detail
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
+async def update_contact(
+    db: AsyncSession,
+    contact_id: int,
+    payload: ContactUpdateCommand,
+    *,
+    actor_subject: str,
+) -> ContactDetail:
+    """Apply one effective internal contact update and its exact audit."""
+    actor = _validated_actor_subject(actor_subject)
+    if not isinstance(payload, ContactUpdateCommand):
+        raise TypeError("payload must be ContactUpdateCommand")
+    if type(contact_id) is not int or contact_id <= 0:
+        _safe_not_found()
+    try:
+        async with db.begin_nested():
+            contact = (
+                await db.scalars(
+                    select(CRMContact)
+                    .where(CRMContact.id == contact_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).one_or_none()
+            if contact is None:
+                _safe_not_found()
+            changed_fields: list[str] = []
+            old_values: dict[str, object] = {}
+            new_values: dict[str, object] = {}
+            for field_name in _CONTACT_MUTATION_FIELDS:
+                requested = getattr(payload, field_name)
+                if requested is UNSET:
+                    continue
+                current = getattr(contact, field_name)
+                if requested == current:
+                    continue
+                changed_fields.append(field_name)
+                old_values[field_name] = current
+                new_values[field_name] = requested
+
+            for field_name in changed_fields:
+                setattr(contact, field_name, new_values[field_name])
+
+            if changed_fields:
+                ordered_fields = tuple(sorted(changed_fields))
+                try:
+                    before_json = canonical_contact_audit_json(
+                        action="contact.updated",
+                        phase="before",
+                        payload={
+                            "changed_fields": ordered_fields,
+                            **old_values,
+                        },
+                    )
+                    after_json = canonical_contact_audit_json(
+                        action="contact.updated",
+                        phase="after",
+                        payload={
+                            "changed_fields": ordered_fields,
+                            **new_values,
+                        },
+                    )
+                except (TypeError, ValueError):
+                    raise ContactDataIntegrityError(
+                        "contact audit state is invalid"
+                    ) from None
+                stage_only = ordered_fields == ("stage",)
+                db.add_all(
+                    [
+                        _compatibility_activity(
+                            contact_id=contact.id,
+                            kind=(
+                                "stage_changed"
+                                if stage_only
+                                else "contact_updated"
+                            ),
+                            summary=(
+                                "Contact stage changed"
+                                if stage_only
+                                else "Updated contact profile"
+                            ),
+                        ),
+                        _contact_audit_event(
+                            contact_id=contact.id,
+                            actor_subject=actor,
+                            action="contact.updated",
+                            before_json=before_json,
+                            after_json=after_json,
+                        ),
+                    ]
+                )
+            await db.flush()
+            detail = await get_contact_detail(db, contact.id)
+        return detail
+    except ContactDirectoryError:
+        raise
+    except SQLAlchemyError:
+        raise ContactDataIntegrityError(
+            "contact mutation could not be completed"
+        ) from None
+
+
 __all__ = [
     "ContactDataIntegrityError",
     "ContactDirectoryError",
@@ -2511,10 +2742,12 @@ __all__ = [
     "ContactNotFound",
     "ContactNotInDirectory",
     "ContactSectionUnsupported",
+    "create_contact",
     "get_contact_detail",
     "get_contact_evidence",
     "get_contact_neighbors",
     "get_contact_workspace_summary",
     "list_contact_celebrations",
     "list_contacts",
+    "update_contact",
 ]

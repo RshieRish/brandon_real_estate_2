@@ -92,6 +92,31 @@ CelebrationYearQuality: TypeAlias = Literal[
     "verified", "yearless", "sentinel", "unknown"
 ]
 ContactAuditScalar: TypeAlias = str | int | bool | None
+ContactAuditDomain: TypeAlias = Literal[
+    "command-contact-audit-v1:first_name",
+    "command-contact-audit-v1:last_name",
+    "command-contact-audit-v1:email",
+    "command-contact-audit-v1:phone",
+    "command-contact-audit-v1:note_body",
+    "command-contact-audit-v1:saved_search_name",
+    "command-contact-audit-v1:saved_search_criteria",
+]
+ContactAuditAction: TypeAlias = Literal[
+    "contact.created",
+    "contact.updated",
+    "contact.legacy_sync_applied",
+    "contact.legacy_import_applied",
+    "contact.archive_import_applied",
+    "contact.bulk_stage_set",
+    "contact.bulk_tag_added",
+    "contact.bulk_tag_removed",
+    "contact.tag_added",
+    "contact.tag_removed",
+    "contact.note_created",
+    "contact.note_deleted",
+    "contact.saved_search_created",
+    "contact.saved_search_deleted",
+]
 JsonValue: TypeAlias = (
     None
     | bool
@@ -129,6 +154,14 @@ def _optional_text(value: object, field_name: str, maximum: int) -> str | None:
     if value is None:
         return None
     return _bounded_text(value, field_name, minimum=0, maximum=maximum) or None
+
+
+def _optional_exact_date(value: object, field_name: str) -> date | None:
+    if value is None:
+        return None
+    if type(value) is not date:
+        raise TypeError(f"{field_name} must be an exact date or null")
+    return value
 
 
 def _positive_id(value: object, field_name: str = "id") -> int:
@@ -172,118 +205,360 @@ def _canonical_json(value: object) -> str:
     )
 
 
+_CONTACT_AUDIT_DOMAINS = frozenset(
+    {
+        "command-contact-audit-v1:first_name",
+        "command-contact-audit-v1:last_name",
+        "command-contact-audit-v1:email",
+        "command-contact-audit-v1:phone",
+        "command-contact-audit-v1:note_body",
+        "command-contact-audit-v1:saved_search_name",
+        "command-contact-audit-v1:saved_search_criteria",
+    }
+)
+_CONTACT_AUDIT_ACTIONS = frozenset(
+    {
+        "contact.created",
+        "contact.updated",
+        "contact.legacy_sync_applied",
+        "contact.legacy_import_applied",
+        "contact.archive_import_applied",
+        "contact.bulk_stage_set",
+        "contact.bulk_tag_added",
+        "contact.bulk_tag_removed",
+        "contact.tag_added",
+        "contact.tag_removed",
+        "contact.note_created",
+        "contact.note_deleted",
+        "contact.saved_search_created",
+        "contact.saved_search_deleted",
+    }
+)
+_CREATE_AUDIT_FIELDS = frozenset(
+    {
+        "anniversary",
+        "birthday",
+        "email",
+        "first_name",
+        "last_name",
+        "phone",
+        "stage",
+    }
+)
+_SYNC_CREATE_AUDIT_FIELDS = frozenset(
+    {"email", "first_name", "last_name", "phone", "stage", "lead_id"}
+)
+_CONTACT_UPDATE_FIELDS = frozenset(_CREATE_AUDIT_FIELDS)
+_TEXT_AUDIT_DOMAINS: dict[str, ContactAuditDomain] = {
+    "first_name": "command-contact-audit-v1:first_name",
+    "last_name": "command-contact-audit-v1:last_name",
+    "email": "command-contact-audit-v1:email",
+    "phone": "command-contact-audit-v1:phone",
+}
+
+
 def redact_contact_audit_value(
-    value: object,
+    value: str | None,
     *,
-    domain: str,
+    domain: ContactAuditDomain,
 ) -> dict[str, ContactAuditScalar]:
-    """Return a stable, domain-separated fingerprint without retaining input."""
-    normalized_domain = _bounded_text(domain, "domain", minimum=1, maximum=120)
+    """Return the exact Task 5C-E domain-separated UTF-8 fingerprint."""
+    if type(domain) is not str or domain not in _CONTACT_AUDIT_DOMAINS:
+        raise ValueError("contact audit domain is invalid")
     if value is None:
-        material = b""
-        length = 0
+        raw_utf8 = b""
         present = False
-    elif isinstance(value, str):
-        material = value.encode("utf-8")
-        length = len(value)
+    elif type(value) is str:
+        raw_utf8 = value.encode("utf-8")
         present = True
     else:
-        canonical = _canonical_json(value)
-        material = canonical.encode("utf-8")
-        length = len(canonical)
-        present = True
-    digest = hashlib.sha256(
-        normalized_domain.encode("utf-8") + b"\0" + material
-    ).hexdigest()
-    return {"present": present, "length": length, "sha256": digest}
+        raise TypeError("contact audit value must be a string or null")
+    return {
+        "present": present,
+        "length": len(raw_utf8),
+        "sha256": hashlib.sha256(
+            domain.encode("ascii") + b"\0" + raw_utf8
+        ).hexdigest(),
+    }
 
 
-def canonical_contact_audit_json(value: Mapping[str, object]) -> str:
-    """Serialize an already allowlisted/redacted audit payload canonically."""
-    if not isinstance(value, Mapping):
-        raise TypeError("audit payload must be a mapping")
-    _validate_contact_audit_payload(value)
+def _require_exact_keys(payload: Mapping[str, object], expected: set[str]) -> None:
+    if set(payload) != expected or any(type(key) is not str for key in payload):
+        raise ValueError("contact audit payload shape is invalid")
+
+
+def _audit_date(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not date:
+        raise TypeError(f"{field_name} must be an exact date or null")
+    return value.isoformat()
+
+
+def _audit_text(
+    value: object,
+    field_name: str,
+    *,
+    minimum: int,
+    maximum: int,
+    nullable: bool = False,
+) -> str | None:
+    if value is None and nullable:
+        return None
+    if type(value) is not str:
+        raise TypeError(f"{field_name} must be a string")
+    if not minimum <= len(value) <= maximum:
+        raise ValueError(f"{field_name} length is outside the allowed range")
+    return value
+
+
+def _audit_contact_field(field_name: str, value: object) -> object:
+    if field_name == "first_name":
+        text = _audit_text(value, field_name, minimum=1, maximum=120)
+        return redact_contact_audit_value(
+            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
+        )
+    if field_name == "last_name":
+        text = _audit_text(value, field_name, minimum=0, maximum=120)
+        return redact_contact_audit_value(
+            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
+        )
+    if field_name == "email":
+        text = _audit_text(
+            value, field_name, minimum=0, maximum=255, nullable=True
+        )
+        return redact_contact_audit_value(
+            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
+        )
+    if field_name == "phone":
+        text = _audit_text(
+            value, field_name, minimum=0, maximum=50, nullable=True
+        )
+        return redact_contact_audit_value(
+            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
+        )
+    if field_name == "stage":
+        return _audit_text(value, field_name, minimum=1, maximum=50)
+    if field_name in {"birthday", "anniversary"}:
+        return _audit_date(value, field_name)
+    if field_name == "lead_id":
+        return _positive_id(value, field_name)
+    raise ValueError("contact audit field is invalid")
+
+
+def _contact_snapshot(
+    action: ContactAuditAction,
+    fields: set[str],
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    _require_exact_keys(payload, fields)
+    encoded: dict[str, object] = {
+        "action": action,
+        "changed_fields": sorted(fields),
+    }
+    encoded.update(
+        (field_name, _audit_contact_field(field_name, payload[field_name]))
+        for field_name in fields
+    )
+    return encoded
+
+
+def _updated_contact_snapshot(
+    action: ContactAuditAction,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    changed = payload.get("changed_fields")
+    if not isinstance(changed, (tuple, list)) or not changed:
+        raise ValueError("contact audit changed fields are invalid")
+    if any(type(field) is not str for field in changed):
+        raise ValueError("contact audit changed fields are invalid")
+    fields = set(changed)
+    if (
+        len(fields) != len(changed)
+        or tuple(changed) != tuple(sorted(changed))
+        or not fields <= _CONTACT_UPDATE_FIELDS
+    ):
+        raise ValueError("contact audit changed fields are invalid")
+    _require_exact_keys(payload, fields | {"changed_fields"})
+    values = {field: payload[field] for field in fields}
+    return _contact_snapshot(action, fields, values)
+
+
+def _special_contact_audit_payload(
+    action: ContactAuditAction,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    if action == "contact.bulk_stage_set":
+        _require_exact_keys(payload, {"stage"})
+        return {
+            "action": action,
+            "stage": _bounded_text(
+                payload["stage"], "stage", minimum=1, maximum=50
+            ),
+        }
+    if action in {
+        "contact.bulk_tag_added",
+        "contact.bulk_tag_removed",
+        "contact.tag_added",
+        "contact.tag_removed",
+    }:
+        _require_exact_keys(payload, {"present", "tag_id"})
+        if type(payload["present"]) is not bool:
+            raise TypeError("contact audit presence is invalid")
+        return {
+            "action": action,
+            "present": payload["present"],
+            "tag_id": _positive_id(payload["tag_id"], "tag_id"),
+        }
+    if action in {"contact.note_created", "contact.note_deleted"}:
+        _require_exact_keys(payload, {"body", "note_id", "present"})
+        body = _audit_text(
+            payload["body"], "body", minimum=1, maximum=20_000
+        )
+        if type(payload["present"]) is not bool:
+            raise TypeError("contact audit presence is invalid")
+        return {
+            "action": action,
+            "body": redact_contact_audit_value(
+                body, domain="command-contact-audit-v1:note_body"
+            ),
+            "note_id": _positive_id(payload["note_id"], "note_id"),
+            "present": payload["present"],
+        }
+    if action in {
+        "contact.saved_search_created",
+        "contact.saved_search_deleted",
+    }:
+        _require_exact_keys(
+            payload, {"criteria", "name", "present", "search_id"}
+        )
+        criteria = _audit_text(
+            payload["criteria"], "criteria", minimum=1, maximum=65_536
+        )
+        name = _audit_text(
+            payload["name"], "name", minimum=1, maximum=255
+        )
+        if type(payload["present"]) is not bool:
+            raise TypeError("contact audit presence is invalid")
+        return {
+            "action": action,
+            "criteria": redact_contact_audit_value(
+                criteria,
+                domain="command-contact-audit-v1:saved_search_criteria",
+            ),
+            "name": redact_contact_audit_value(
+                name, domain="command-contact-audit-v1:saved_search_name"
+            ),
+            "present": payload["present"],
+            "search_id": _positive_id(payload["search_id"], "search_id"),
+        }
+    raise ValueError("contact audit action is invalid")
+
+
+def canonical_contact_audit_json(
+    *,
+    action: ContactAuditAction,
+    phase: Literal["before", "after"],
+    payload: Mapping[str, object],
+) -> str:
+    """Build one exact action-aware, canonical Task 5C-E audit mapping."""
+    if type(action) is not str or action not in _CONTACT_AUDIT_ACTIONS:
+        raise ValueError("contact audit action is invalid")
+    if phase not in {"before", "after"}:
+        raise ValueError("contact audit phase is invalid")
+    if not isinstance(payload, Mapping):
+        raise TypeError("contact audit payload must be a mapping")
+
+    if action == "contact.created":
+        value = (
+            {}
+            if phase == "before" and not payload
+            else _contact_snapshot(action, set(_CREATE_AUDIT_FIELDS), payload)
+            if phase == "after"
+            else None
+        )
+    elif action == "contact.updated":
+        value = _updated_contact_snapshot(action, payload)
+    elif action in {
+        "contact.legacy_import_applied",
+        "contact.archive_import_applied",
+    }:
+        value = (
+            {}
+            if phase == "before" and not payload
+            else _contact_snapshot(action, set(_CREATE_AUDIT_FIELDS), payload)
+            if phase == "after"
+            else None
+        )
+    elif action == "contact.legacy_sync_applied":
+        if not payload and phase == "before":
+            value = {}
+        elif "activity_present" not in payload:
+            value = (
+                _contact_snapshot(
+                    action, set(_SYNC_CREATE_AUDIT_FIELDS), payload
+                )
+                if phase == "after"
+                else None
+            )
+        else:
+            expected = (
+                {"activity_present", "lead_id"}
+                if phase == "before"
+                else {"activity_present", "activity_id", "lead_id"}
+            )
+            _require_exact_keys(payload, expected)
+            expected_presence = phase == "after"
+            if payload["activity_present"] is not expected_presence:
+                raise ValueError("contact audit activity state is invalid")
+            value = {
+                "action": action,
+                "activity_present": expected_presence,
+                "lead_id": _positive_id(payload["lead_id"], "lead_id"),
+            }
+            if phase == "after":
+                value["activity_id"] = _positive_id(
+                    payload["activity_id"], "activity_id"
+                )
+    else:
+        value = _special_contact_audit_payload(action, payload)
+    if value is None:
+        raise ValueError("contact audit phase payload is invalid")
     return _canonical_json(value)
 
 
-_FORBIDDEN_AUDIT_KEYS = frozenset(
-    {
-        "actor_subject",
-        "artifact_id",
-        "artifact_path",
-        "artifact_bytes",
-        "bearer_token",
-        "lead_id",
-        "manifest",
-        "parser_payload",
-        "provider_actor_id",
-        "provider_id",
-        "source_key",
-        "source_record_id",
-        "timeline_text",
-        "token",
-    }
-)
-_RAW_AUDIT_TEXT_KEYS = frozenset({"action", "stage"})
-_AUDIT_DATE_KEYS = frozenset({"birthday", "anniversary", "date"})
-_SAFE_CHANGED_FIELD_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_HEX64_RE = re.compile(r"[0-9a-f]{64}")
+def _validate_audit_actor_subject(actor_subject: object) -> str:
+    if (
+        type(actor_subject) is not str
+        or not 1 <= len(actor_subject) <= 255
+        or not actor_subject.isascii()
+        or not actor_subject.isdigit()
+        or int(actor_subject) <= 0
+        or actor_subject != str(int(actor_subject))
+    ):
+        raise ValueError("administrator subject is invalid")
+    return actor_subject
 
 
-def _validate_contact_audit_payload(value: Mapping[str, object]) -> None:
-    for key, item in value.items():
-        if not isinstance(key, str) or key in _FORBIDDEN_AUDIT_KEYS:
-            raise ValueError("audit payload contains a forbidden field")
-        if _is_redacted_fingerprint(item):
-            continue
-        if type(item) is bool:
-            continue
-        if item is None and (
-            key in _RAW_AUDIT_TEXT_KEYS
-            or key in _AUDIT_DATE_KEYS
-            or key.endswith("_id")
-        ):
-            continue
-        if key.endswith("_id"):
-            _positive_id(item, key)
-            continue
-        if key in _RAW_AUDIT_TEXT_KEYS:
-            _bounded_text(item, key, minimum=1, maximum=120)
-            continue
-        if key in _AUDIT_DATE_KEYS:
-            if not isinstance(item, str):
-                raise ValueError("audit calendar date is invalid")
-            try:
-                parsed = date.fromisoformat(item)
-            except ValueError as exc:
-                raise ValueError("audit calendar date is invalid") from exc
-            if parsed.isoformat() != item:
-                raise ValueError("audit calendar date is invalid")
-            continue
-        if key == "changed_fields" and isinstance(item, (tuple, list)):
-            if not item or any(
-                not isinstance(field, str)
-                or _SAFE_CHANGED_FIELD_RE.fullmatch(field) is None
-                for field in item
-            ):
-                raise ValueError("audit changed fields are invalid")
-            continue
-        raise ValueError("audit payload contains a non-redacted value")
-
-
-def _is_redacted_fingerprint(value: object) -> bool:
-    if not isinstance(value, Mapping) or set(value) != {
-        "present",
-        "length",
-        "sha256",
-    }:
-        return False
-    return (
-        type(value["present"]) is bool
-        and type(value["length"]) is int
-        and value["length"] >= 0
-        and isinstance(value["sha256"], str)
-        and _HEX64_RE.fullmatch(value["sha256"]) is not None
+def canonical_workspace_saved_search_activity_json(
+    *,
+    actor_subject: str,
+    search_id: int,
+    name: str,
+) -> str:
+    """Build the sole actor-attributed workspace activity metadata mapping."""
+    actor = _validate_audit_actor_subject(actor_subject)
+    normalized_name = _audit_text(name, "name", minimum=1, maximum=255)
+    return _canonical_json(
+        {
+            "action": "workspace.saved_search_deleted",
+            "actor_subject": actor,
+            "saved_search": redact_contact_audit_value(
+                normalized_name,
+                domain="command-contact-audit-v1:saved_search_name",
+            ),
+            "search_id": _positive_id(search_id, "search_id"),
+        }
     )
 
 
@@ -773,6 +1048,14 @@ class ContactCreateCommand:
         object.__setattr__(self, "email", _optional_text(self.email, "email", 255))
         object.__setattr__(self, "phone", _optional_text(self.phone, "phone", 50))
         object.__setattr__(self, "stage", _bounded_text(self.stage, "stage", minimum=1, maximum=50))
+        object.__setattr__(
+            self, "birthday", _optional_exact_date(self.birthday, "birthday")
+        )
+        object.__setattr__(
+            self,
+            "anniversary",
+            _optional_exact_date(self.anniversary, "anniversary"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,6 +1083,12 @@ class ContactUpdateCommand:
             value = getattr(self, field_name)
             if value is not UNSET:
                 object.__setattr__(self, field_name, _optional_text(value, field_name, maximum))
+        for field_name in ("birthday", "anniversary"):
+            value = getattr(self, field_name)
+            if value is not UNSET:
+                object.__setattr__(
+                    self, field_name, _optional_exact_date(value, field_name)
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -859,6 +1148,33 @@ class ContactBulkResult:
     requested_contact_ids: tuple[int, ...]
     actioned_contact_ids: tuple[int, ...]
     action: Literal["set_stage", "add_tag", "remove_tag"]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.requested_contact_ids, tuple)
+            or not self.requested_contact_ids
+            or len(self.requested_contact_ids) > 200
+            or any(
+                type(value) is not int or value <= 0
+                for value in self.requested_contact_ids
+            )
+            or tuple(sorted(set(self.requested_contact_ids)))
+            != self.requested_contact_ids
+        ):
+            raise ValueError("requested contact ids are invalid")
+        if (
+            not isinstance(self.actioned_contact_ids, tuple)
+            or any(
+                type(value) is not int or value <= 0
+                for value in self.actioned_contact_ids
+            )
+            or tuple(sorted(set(self.actioned_contact_ids)))
+            != self.actioned_contact_ids
+            or not set(self.actioned_contact_ids) <= set(self.requested_contact_ids)
+        ):
+            raise ValueError("actioned contact ids are invalid")
+        if self.action not in {"set_stage", "add_tag", "remove_tag"}:
+            raise ValueError("bulk result action is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -922,6 +1238,21 @@ class ContactMutationResult:
     audit_entity_type: Literal["contact_audit"] | None
     audit_event_id: int | None
 
+    def __post_init__(self) -> None:
+        _positive_id(self.contact_id, "contact_id")
+        if self.record_id is not None:
+            _positive_id(self.record_id, "record_id")
+        if type(self.changed) is not bool:
+            raise TypeError("changed must be a boolean")
+        if self.changed:
+            if self.record_id is None:
+                raise ValueError("changed contact mutation requires a record id")
+            if self.audit_entity_type != "contact_audit":
+                raise ValueError("changed contact mutation requires contact audit")
+            _positive_id(self.audit_event_id, "audit_event_id")
+        elif self.audit_entity_type is not None or self.audit_event_id is not None:
+            raise ValueError("no-op contact mutation cannot contain audit data")
+
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceMutationResult:
@@ -929,6 +1260,14 @@ class WorkspaceMutationResult:
     changed: bool
     audit_entity_type: Literal["workspace_activity"]
     audit_event_id: int | None
+
+    def __post_init__(self) -> None:
+        _positive_id(self.record_id, "record_id")
+        if self.changed is not True:
+            raise ValueError("workspace mutation must be changed")
+        if self.audit_entity_type != "workspace_activity":
+            raise ValueError("workspace mutation requires workspace activity")
+        _positive_id(self.audit_event_id, "audit_event_id")
 
 
 SavedSearchDeletionResult: TypeAlias = ContactMutationResult | WorkspaceMutationResult
@@ -991,4 +1330,5 @@ __all__ = [name for name in globals() if name.startswith("Contact") or name in {
     "encode_timeline_cursor", "decode_timeline_cursor",
     "timeline_position_is_after", "redact_contact_audit_value",
     "canonical_contact_audit_json",
+    "canonical_workspace_saved_search_activity_json",
 }]

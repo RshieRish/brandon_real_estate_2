@@ -9,17 +9,20 @@ from typing import get_args, get_type_hints
 
 import pytest
 
+import services.command_contact_contracts as contact_contracts
 from services.command_contact_contracts import (
     UNSET,
     CaptureQualityValue,
     ContactBulkAddTag,
     ContactBulkCommand,
+    ContactBulkResult,
     ContactBulkSetStage,
     ContactCreateCommand,
     ContactDirectoryFilters,
     ContactImportCommand,
     ContactImportRowCommand,
     ContactMaterialized,
+    ContactMutationResult,
     ContactNoteCreateCommand,
     ContactOriginFilter,
     ContactSavedSearchCreateCommand,
@@ -32,6 +35,7 @@ from services.command_contact_contracts import (
     SortDirection,
     TimelineCursorV1,
     TimelineOrigin,
+    WorkspaceMutationResult,
     canonical_contact_audit_json,
     decode_timeline_cursor,
     encode_timeline_cursor,
@@ -200,28 +204,341 @@ def test_import_rows_are_immutable_validated_and_limited():
     )
 
 
-def test_audit_redaction_is_canonical_domain_separated_and_never_raw():
-    first = redact_contact_audit_value("Private Name", domain="contact.name")
-    second = redact_contact_audit_value("Private Name", domain="contact.email")
-    assert first == {
-        "present": True,
-        "length": 12,
-        "sha256": first["sha256"],
-    }
-    assert first["sha256"] != second["sha256"]
-    rendered = canonical_contact_audit_json(
-        {"stage": "lead", "name": first, "changed": True, "record_id": 7}
+AUDIT_DOMAINS = {
+    "first_name": "command-contact-audit-v1:first_name",
+    "last_name": "command-contact-audit-v1:last_name",
+    "email": "command-contact-audit-v1:email",
+    "phone": "command-contact-audit-v1:phone",
+    "note_body": "command-contact-audit-v1:note_body",
+    "saved_search_name": "command-contact-audit-v1:saved_search_name",
+    "saved_search_criteria": "command-contact-audit-v1:saved_search_criteria",
+}
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     )
-    assert rendered == json.dumps(json.loads(rendered), sort_keys=True, separators=(",", ":"))
-    assert "Private Name" not in rendered
-    with pytest.raises(ValueError):
-        canonical_contact_audit_json({"bad": float("inf")})
-    for forbidden in (
-        {"email": "private@example.test"},
-        {"source_record_id": 9},
-        {"provider_id": "private"},
-        {"token": "secret"},
-        {"actor_subject": "admin:private"},
+
+
+def _fingerprint(field: str, value: str | None) -> dict[str, object]:
+    material = b"" if value is None else value.encode("utf-8")
+    return {
+        "length": len(material),
+        "present": value is not None,
+        "sha256": __import__("hashlib").sha256(
+            AUDIT_DOMAINS[field].encode("ascii") + b"\0" + material
+        ).hexdigest(),
+    }
+
+
+def _encoded_contact_fields(
+    action: str,
+    fields: tuple[str, ...],
+    raw: dict[str, object],
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "action": action,
+        "changed_fields": sorted(fields),
+    }
+    for field in fields:
+        value = raw[field]
+        if field in {"first_name", "last_name", "email", "phone"}:
+            result[field] = _fingerprint(field, value)  # type: ignore[arg-type]
+        elif field in {"birthday", "anniversary"}:
+            result[field] = value.isoformat() if value is not None else None
+        else:
+            result[field] = value
+    return result
+
+
+def test_audit_redaction_pins_ascii_domain_nul_and_utf8_byte_length():
+    value = "Privaté"
+    rendered = redact_contact_audit_value(value, domain=AUDIT_DOMAINS["first_name"])
+    assert rendered == _fingerprint("first_name", value)
+    assert rendered["length"] == len(value.encode("utf-8"))
+    assert redact_contact_audit_value(
+        None, domain=AUDIT_DOMAINS["email"]
+    ) == _fingerprint("email", None)
+
+
+@pytest.mark.parametrize(
+    ("value", "domain"),
+    [
+        (b"private", AUDIT_DOMAINS["email"]),
+        ({"private": True}, AUDIT_DOMAINS["email"]),
+        (True, AUDIT_DOMAINS["email"]),
+        (7, AUDIT_DOMAINS["email"]),
+        ("private", "contact.email"),
+        ("private", f" {AUDIT_DOMAINS['email']}"),
+        ("private", f"{AUDIT_DOMAINS['email']} "),
+        ("private", "command-contact-audit-v1:unknown"),
+    ],
+)
+def test_audit_redaction_rejects_non_string_values_and_unlisted_domains(
+    value, domain
+):
+    with pytest.raises((TypeError, ValueError)):
+        redact_contact_audit_value(value, domain=domain)
+
+
+CONTACT_AUDIT_CASES = (
+    (
+        "contact.created",
+        {},
+        {
+            "anniversary": date(2020, 1, 2),
+            "birthday": date(1990, 3, 4),
+            "email": "private@example.test",
+            "first_name": "Private",
+            "last_name": "Person",
+            "phone": "+15550000000",
+            "stage": "lead",
+        },
+    ),
+    (
+        "contact.updated",
+        {"changed_fields": ("first_name", "stage"), "stage": "lead", "first_name": "Old"},
+        {"changed_fields": ("first_name", "stage"), "stage": "active", "first_name": "New"},
+    ),
+    (
+        "contact.legacy_sync_applied",
+        {},
+        {
+            "email": "private@example.test",
+            "first_name": "Private",
+            "last_name": "Lead",
+            "phone": None,
+            "stage": "lead",
+            "lead_id": 17,
+        },
+    ),
+    (
+        "contact.legacy_sync_applied",
+        {"activity_present": False, "lead_id": 17},
+        {"activity_present": True, "activity_id": 31, "lead_id": 17},
+    ),
+    (
+        "contact.legacy_import_applied",
+        {},
+        {
+            "anniversary": None,
+            "birthday": None,
+            "email": "private@example.test",
+            "first_name": "Private",
+            "last_name": "Import",
+            "phone": None,
+            "stage": "lead",
+        },
+    ),
+    (
+        "contact.archive_import_applied",
+        {},
+        {
+            "anniversary": None,
+            "birthday": None,
+            "email": "private@example.test",
+            "first_name": "Private",
+            "last_name": "Archive",
+            "phone": None,
+            "stage": "lead",
+        },
+    ),
+    ("contact.bulk_stage_set", {"stage": "lead"}, {"stage": "active"}),
+    ("contact.bulk_tag_added", {"present": False, "tag_id": 5}, {"present": True, "tag_id": 5}),
+    ("contact.bulk_tag_removed", {"present": True, "tag_id": 5}, {"present": False, "tag_id": 5}),
+    ("contact.tag_added", {"present": False, "tag_id": 5}, {"present": True, "tag_id": 5}),
+    ("contact.tag_removed", {"present": True, "tag_id": 5}, {"present": False, "tag_id": 5}),
+    ("contact.note_created", {"body": "private body", "note_id": 9, "present": False}, {"body": "private body", "note_id": 9, "present": True}),
+    ("contact.note_deleted", {"body": "private body", "note_id": 9, "present": True}, {"body": "private body", "note_id": 9, "present": False}),
+    ("contact.saved_search_created", {"criteria": '{"private":true}', "name": "Private search", "present": False, "search_id": 11}, {"criteria": '{"private":true}', "name": "Private search", "present": True, "search_id": 11}),
+    ("contact.saved_search_deleted", {"criteria": '{"private":true}', "name": "Private search", "present": True, "search_id": 11}, {"criteria": '{"private":true}', "name": "Private search", "present": False, "search_id": 11}),
+)
+
+
+def _expected_audit_payload(action: str, payload: dict[str, object]) -> dict[str, object]:
+    if not payload:
+        return {}
+    if action in {
+        "contact.created",
+        "contact.updated",
+        "contact.legacy_import_applied",
+        "contact.archive_import_applied",
+    } or (
+        action == "contact.legacy_sync_applied"
+        and "activity_present" not in payload
     ):
-        with pytest.raises(ValueError):
-            canonical_contact_audit_json(forbidden)
+        fields = tuple(payload.get("changed_fields", tuple(payload)))
+        raw = {key: value for key, value in payload.items() if key != "changed_fields"}
+        return _encoded_contact_fields(action, fields, raw)
+    if action.startswith("contact.note_"):
+        return {
+            "action": action,
+            "body": _fingerprint("note_body", payload["body"]),  # type: ignore[arg-type]
+            "note_id": payload["note_id"],
+            "present": payload["present"],
+        }
+    if action.startswith("contact.saved_search_"):
+        return {
+            "action": action,
+            "criteria": _fingerprint("saved_search_criteria", payload["criteria"]),  # type: ignore[arg-type]
+            "name": _fingerprint("saved_search_name", payload["name"]),  # type: ignore[arg-type]
+            "present": payload["present"],
+            "search_id": payload["search_id"],
+        }
+    return {"action": action, **payload}
+
+
+@pytest.mark.parametrize(("action", "before", "after"), CONTACT_AUDIT_CASES)
+def test_contact_audit_builder_snapshots_all_fifteen_action_shapes(
+    action, before, after
+):
+    rendered_before = canonical_contact_audit_json(
+        action=action, phase="before", payload=before
+    )
+    rendered_after = canonical_contact_audit_json(
+        action=action, phase="after", payload=after
+    )
+    assert rendered_before == _canonical(_expected_audit_payload(action, before))
+    assert rendered_after == _canonical(_expected_audit_payload(action, after))
+    private_values = (
+        "private@example.test",
+        "+15550000000",
+        "private body",
+        "Private search",
+        '{"private":true}',
+    )
+    assert all(value not in rendered_before + rendered_after for value in private_values)
+
+
+@pytest.mark.parametrize(
+    ("action", "phase", "payload"),
+    [
+        ("contact.created", "before", {"actor_subject": "7"}),
+        ("contact.created", "after", {"first_name": "Private"}),
+        ("contact.updated", "before", {"changed_fields": ("stage", "stage"), "stage": "lead"}),
+        ("contact.updated", "before", {"changed_fields": ("stage", "first_name"), "stage": "lead", "first_name": "Private"}),
+        ("contact.updated", "after", {"changed_fields": ("stage",), "stage": "lead", "email": "private"}),
+        ("contact.tag_added", "before", {"present": False, "tag_id": 1, "lead_id": 2}),
+        ("contact.bulk_stage_set", "before", {"stage": None}),
+        ("contact.note_created", "before", {"body": b"private", "note_id": 1, "present": False}),
+        ("command_contact_overlap_reviewed", "before", {}),
+    ],
+)
+def test_contact_audit_builder_rejects_wrong_phase_shape_and_key_smuggling(
+    action, phase, payload
+):
+    with pytest.raises((TypeError, ValueError)):
+        canonical_contact_audit_json(action=action, phase=phase, payload=payload)
+
+
+def test_workspace_saved_search_activity_builder_is_exact_and_actor_attributed():
+    rendered = contact_contracts.canonical_workspace_saved_search_activity_json(
+        actor_subject="7",
+        search_id=11,
+        name="Private search",
+    )
+    assert rendered == _canonical(
+        {
+            "action": "workspace.saved_search_deleted",
+            "actor_subject": "7",
+            "saved_search": _fingerprint("saved_search_name", "Private search"),
+            "search_id": 11,
+        }
+    )
+    assert "Private search" not in rendered
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ContactCreateCommand(
+            "A", birthday=datetime(2000, 1, 1, tzinfo=UTC)
+        ),
+        lambda: ContactCreateCommand("A", anniversary="2000-01-01"),
+        lambda: ContactUpdateCommand(
+            birthday=datetime(2000, 1, 1, tzinfo=UTC)
+        ),
+        lambda: ContactUpdateCommand(anniversary="2000-01-01"),
+        lambda: ContactImportRowCommand(
+            "A",
+            "",
+            None,
+            None,
+            "lead",
+            datetime(2000, 1, 1, tzinfo=UTC),
+            None,
+        ),
+    ],
+)
+def test_mutation_date_commands_require_exact_date_instances(factory):
+    with pytest.raises((TypeError, ValueError)):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ContactMutationResult(1, 2, True, None, None),
+        lambda: ContactMutationResult(1, 2, False, "contact_audit", 3),
+        lambda: ContactMutationResult(True, 2, False, None, None),
+        lambda: ContactMutationResult(1, 0, False, None, None),
+        lambda: WorkspaceMutationResult(1, False, "workspace_activity", 2),
+        lambda: WorkspaceMutationResult(1, True, "workspace_activity", None),
+        lambda: WorkspaceMutationResult(0, True, "workspace_activity", 2),
+    ],
+)
+def test_mutation_result_dtos_reject_contradictory_or_invalid_states(factory):
+    with pytest.raises((TypeError, ValueError)):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ContactBulkResult((2, 1), (1,), "set_stage"),
+        lambda: ContactBulkResult((1, 1), (1,), "set_stage"),
+        lambda: ContactBulkResult((1,), (2,), "set_stage"),
+        lambda: ContactBulkResult((1,), (1, 1), "set_stage"),
+        lambda: ContactBulkResult((True,), (), "set_stage"),
+        lambda: ContactBulkResult(tuple(range(1, 202)), (), "set_stage"),
+        lambda: ContactBulkResult((1,), (), "unknown"),
+    ],
+)
+def test_bulk_result_rejects_unsorted_duplicate_or_inconsistent_ids(factory):
+    with pytest.raises((TypeError, ValueError)):
+        factory()
+
+
+@pytest.mark.parametrize("domain", tuple(AUDIT_DOMAINS.values()))
+def test_each_exact_contact_audit_domain_is_accepted(domain):
+    rendered = redact_contact_audit_value("private", domain=domain)
+    assert rendered["length"] == 7
+
+
+def test_contact_audit_fingerprint_rejects_string_subclasses():
+    class StringSubclass(str):
+        pass
+
+    with pytest.raises(TypeError):
+        redact_contact_audit_value(
+            StringSubclass("private"), domain=AUDIT_DOMAINS["email"]
+        )
+
+
+def test_contact_audit_builder_fingerprints_exact_raw_text_without_trimming():
+    rendered = canonical_contact_audit_json(
+        action="contact.updated",
+        phase="before",
+        payload={
+            "changed_fields": ("first_name",),
+            "first_name": " Private ",
+        },
+    )
+    assert json.loads(rendered)["first_name"] == _fingerprint(
+        "first_name", " Private "
+    )
