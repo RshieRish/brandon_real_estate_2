@@ -1,4 +1,4 @@
-"""Read-only HTTP boundary for the focused Command Contacts workspace."""
+"""Typed HTTP boundary for the focused Command Contacts workspace."""
 
 from __future__ import annotations
 
@@ -26,18 +26,34 @@ from models.command import (
 from models.lead import Lead
 from pydantic import BeforeValidator, TypeAdapter
 from schemas.command_contacts import (
+    ContactBulkRequest,
+    ContactBulkResultOut,
     ContactCelebrationsOut,
+    ContactCreateIn,
+    ContactDeletedOut,
     ContactDetailOut,
     ContactDirectoryPageOut,
     ContactDirectoryQueryIn,
     ContactEvidenceOut,
+    ContactImportIn,
+    ContactImportResultOut,
+    ContactLegacySyncResultOut,
     ContactNeighborsOut,
+    ContactNoteCreatedOut,
+    ContactNoteCreateIn,
+    ContactSavedSearchCreatedOut,
+    ContactSavedSearchCreateIn,
     ContactSectionPageOut,
+    ContactTagAssignmentOut,
+    ContactTagRemovalOut,
     ContactTimelinePageOut,
+    ContactUpdateIn,
     ContactWorkspaceSummaryOut,
     LegacyContactOut,
     LegacyContactWorkspaceOut,
+    canonical_saved_search_criteria,
 )
+from services import command_contacts as contact_service
 from services.command_contact_contracts import (
     ContactDirectoryFilters,
     ContactSection,
@@ -130,6 +146,15 @@ _LEGACY_WORKSPACE_ADAPTER = TypeAdapter(LegacyContactWorkspaceOut)
 _TIMELINE_ADAPTER = TypeAdapter(ContactTimelinePageOut)
 _SECTION_PAGE_ADAPTER = TypeAdapter(ContactSectionPageOut)
 _EVIDENCE_ADAPTER = TypeAdapter(ContactEvidenceOut)
+_SYNC_RESULT_ADAPTER = TypeAdapter(ContactLegacySyncResultOut)
+_IMPORT_RESULT_ADAPTER = TypeAdapter(ContactImportResultOut)
+_BULK_RESULT_ADAPTER = TypeAdapter(ContactBulkResultOut)
+_LEGACY_CONTACT_ADAPTER = TypeAdapter(LegacyContactOut)
+_NOTE_CREATED_ADAPTER = TypeAdapter(ContactNoteCreatedOut)
+_DELETED_ADAPTER = TypeAdapter(ContactDeletedOut)
+_SEARCH_CREATED_ADAPTER = TypeAdapter(ContactSavedSearchCreatedOut)
+_TAG_ASSIGNMENT_ADAPTER = TypeAdapter(ContactTagAssignmentOut)
+_TAG_REMOVAL_ADAPTER = TypeAdapter(ContactTagRemovalOut)
 
 
 async def _run_read(
@@ -161,8 +186,6 @@ async def _run_read(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Contact section is unsupported",
         ) from None
-    except HTTPException:
-        raise
     # The HTTP boundary must redact all unexpected service and response-validation
     # failures; callers never receive exception text or values.
     except Exception:  # noqa: BLE001
@@ -184,6 +207,72 @@ def _request_filters(filters: ContactDirectoryQueryIn) -> ContactDirectoryFilter
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Contact filters are invalid",
         ) from None
+
+
+def _request_command(factory: Callable[[], _Result]) -> _Result:
+    try:
+        return factory()
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Contact request is invalid",
+        ) from None
+    # Command construction is still part of the HTTP boundary. Unexpected
+    # adapter failures must never escape with request or exception values.
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update contact data",
+        ) from None
+
+
+async def _run_mutation(
+    operation: Callable[[], Awaitable[_Result]],
+    adapter: TypeAdapter,
+) -> object:
+    try:
+        value = await operation()
+        return adapter.validate_python(value)
+    except (ContactNotFound, TimelineContactNotFound):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contact not found",
+        ) from None
+    except (
+        ContactNotInDirectory,
+        ContactDataIntegrityError,
+        ContactLinkConflict,
+        ContactTimelineIntegrityError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Contact data is unavailable",
+        ) from None
+    except ContactSectionUnsupported:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Contact section is unsupported",
+        ) from None
+    # The outer HTTP boundary intentionally redacts service programming errors
+    # and response-validation failures without exposing exception values.
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update contact data",
+        ) from None
+
+
+def _require_mutation_identity(
+    *,
+    actual_contact_id: int,
+    expected_contact_id: int,
+    actual_record_id: int | None = None,
+    expected_record_id: int | None = None,
+) -> None:
+    if actual_contact_id != expected_contact_id or (
+        expected_record_id is not None and actual_record_id != expected_record_id
+    ):
+        raise ContactDataIntegrityError("contact mutation identity is invalid")
 
 
 async def _list_legacy_contacts(
@@ -213,6 +302,47 @@ async def _list_legacy_contacts(
         .limit(limit)
     )
     return list(await db.scalars(statement))
+
+
+async def _load_legacy_contact(
+    db: AsyncSession,
+    contact_id: int,
+) -> CRMContact | None:
+    return (
+        await db.scalars(
+            select(CRMContact)
+            .where(CRMContact.id == contact_id)
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+
+
+async def _legacy_contact_after_detail(
+    db: AsyncSession,
+    *,
+    detail: object,
+    expected_contact_id: int | None,
+) -> CRMContact:
+    try:
+        returned_contact_id = detail.contact.id  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        raise ContactDataIntegrityError(
+            "contact mutation identity is invalid"
+        ) from None
+    if (
+        type(returned_contact_id) is not int
+        or returned_contact_id <= 0
+        or (
+            expected_contact_id is not None
+            and returned_contact_id != expected_contact_id
+        )
+    ):
+        raise ContactDataIntegrityError("contact mutation identity is invalid")
+    contact = await _load_legacy_contact(db, returned_contact_id)
+    if contact is None or contact.id != returned_contact_id:
+        raise ContactDataIntegrityError("contact mutation identity is invalid")
+    return contact
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,8 +574,7 @@ async def _legacy_contact_workspace(
     }
 
 
-# Static reads are declared before every dynamic contact path. Slice C inserts
-# the three static mutations between directory and the legacy compatibility read.
+# Static routes are declared before every dynamic contact path.
 @router.get("/contacts/directory", response_model=ContactDirectoryPageOut)
 async def contact_directory(
     filters: Annotated[ContactDirectoryQueryIn, Query()],
@@ -461,7 +590,65 @@ async def contact_directory(
     )
 
 
-# Slice C inserts POST /contacts after this compatibility read.
+@router.post(
+    "/contacts/sync-leads",
+    response_model=ContactLegacySyncResultOut,
+)
+async def sync_legacy_leads(
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    return await _run_mutation(
+        lambda: contact_service.sync_legacy_leads(
+            db,
+            actor_subject=actor_subject,
+        ),
+        _SYNC_RESULT_ADAPTER,
+    )
+
+
+@router.post("/contacts/import", response_model=ContactImportResultOut)
+async def import_contacts(
+    payload: ContactImportIn,
+    db: DatabaseDependency,
+    *,
+    actor_subject: AdminSubject,
+) -> object:
+    command = _request_command(payload.to_command)
+    return await _run_mutation(
+        lambda: contact_service.import_contacts(
+            db,
+            command,
+            actor_subject=actor_subject,
+        ),
+        _IMPORT_RESULT_ADAPTER,
+    )
+
+
+@router.post("/contacts/bulk", response_model=ContactBulkResultOut)
+async def bulk_contacts(
+    payload: ContactBulkRequest,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    command = _request_command(payload.to_command)
+
+    async def operation() -> object:
+        result = await contact_service.apply_contact_bulk_action(
+            db,
+            command,
+            actor_subject=actor_subject,
+        )
+        if (
+            result.requested_contact_ids != tuple(sorted(command.contact_ids))
+            or result.action != command.action.action
+        ):
+            raise ContactDataIntegrityError("contact mutation identity is invalid")
+        return result
+
+    return await _run_mutation(operation, _BULK_RESULT_ADAPTER)
+
+
 @router.get("/contacts", response_model=list[LegacyContactOut])
 async def legacy_contacts(
     actor_subject: AdminSubject,
@@ -485,6 +672,29 @@ async def legacy_contacts(
     )
 
 
+@router.post("/contacts", response_model=LegacyContactOut)
+async def create_contact(
+    payload: ContactCreateIn,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    command = _request_command(payload.to_command)
+
+    async def operation() -> CRMContact:
+        detail = await contact_service.create_contact(
+            db,
+            command,
+            actor_subject=actor_subject,
+        )
+        return await _legacy_contact_after_detail(
+            db,
+            detail=detail,
+            expected_contact_id=None,
+        )
+
+    return await _run_mutation(operation, _LEGACY_CONTACT_ADAPTER)
+
+
 @router.get("/celebrations", response_model=ContactCelebrationsOut)
 async def celebrations(
     actor_subject: AdminSubject,
@@ -499,7 +709,6 @@ async def celebrations(
     )
 
 
-# Slice C inserts PATCH /contacts/{contact_id} immediately after this detail read.
 @router.get("/contacts/{contact_id}", response_model=ContactDetailOut)
 async def contact_detail(
     contact_id: ContactId,
@@ -512,6 +721,31 @@ async def contact_detail(
         lambda: get_contact_detail(db, contact_id),
         _DETAIL_ADAPTER,
     )
+
+
+@router.patch("/contacts/{contact_id}", response_model=LegacyContactOut)
+async def update_contact(
+    contact_id: ContactId,
+    payload: ContactUpdateIn,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    command = _request_command(payload.to_command)
+
+    async def operation() -> CRMContact:
+        detail = await contact_service.update_contact(
+            db,
+            contact_id,
+            command,
+            actor_subject=actor_subject,
+        )
+        return await _legacy_contact_after_detail(
+            db,
+            detail=detail,
+            expected_contact_id=contact_id,
+        )
+
+    return await _run_mutation(operation, _LEGACY_CONTACT_ADAPTER)
 
 
 @router.get("/contacts/{contact_id}/neighbors", response_model=ContactNeighborsOut)
@@ -714,6 +948,66 @@ async def contact_notes(
     )
 
 
+@router.post(
+    "/contacts/{contact_id}/notes",
+    response_model=ContactNoteCreatedOut,
+)
+async def create_contact_note(
+    contact_id: ContactId,
+    payload: ContactNoteCreateIn,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    command = _request_command(payload.to_command)
+
+    async def operation() -> dict[str, object]:
+        result = await contact_service.create_contact_note(
+            db,
+            contact_id,
+            command,
+            actor_subject=actor_subject,
+        )
+        _require_mutation_identity(
+            actual_contact_id=result.contact_id,
+            expected_contact_id=contact_id,
+        )
+        if result.changed is not True:
+            raise ContactDataIntegrityError("contact mutation identity is invalid")
+        return {"id": result.record_id, "body": command.body}
+
+    return await _run_mutation(operation, _NOTE_CREATED_ADAPTER)
+
+
+@router.delete(
+    "/contacts/{contact_id}/notes/{note_id}",
+    response_model=ContactDeletedOut,
+)
+async def delete_contact_note(
+    contact_id: ContactId,
+    note_id: ContactId,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    async def operation() -> dict[str, object]:
+        result = await contact_service.delete_contact_note(
+            db,
+            contact_id,
+            note_id,
+            actor_subject=actor_subject,
+        )
+        _require_mutation_identity(
+            actual_contact_id=result.contact_id,
+            expected_contact_id=contact_id,
+            actual_record_id=result.record_id,
+            expected_record_id=note_id,
+        )
+        if result.changed is not True:
+            raise ContactDataIntegrityError("contact mutation identity is invalid")
+        return {"deleted": True, "id": note_id}
+
+    return await _run_mutation(operation, _DELETED_ADAPTER)
+
+
 @router.get(
     "/contacts/{contact_id}/saved-searches",
     response_model=ContactSectionPageOut,
@@ -735,6 +1029,40 @@ async def contact_saved_searches(
     )
 
 
+@router.post(
+    "/contacts/{contact_id}/saved-searches",
+    response_model=ContactSavedSearchCreatedOut,
+)
+async def create_saved_search(
+    contact_id: ContactId,
+    payload: ContactSavedSearchCreateIn,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    command = _request_command(payload.to_command)
+
+    async def operation() -> dict[str, object]:
+        result = await contact_service.create_contact_saved_search(
+            db,
+            contact_id,
+            command,
+            actor_subject=actor_subject,
+        )
+        _require_mutation_identity(
+            actual_contact_id=result.contact_id,
+            expected_contact_id=contact_id,
+        )
+        if result.changed is not True:
+            raise ContactDataIntegrityError("contact mutation identity is invalid")
+        return {
+            "id": result.record_id,
+            "name": command.name,
+            "criteria": canonical_saved_search_criteria(command.criteria),
+        }
+
+    return await _run_mutation(operation, _SEARCH_CREATED_ADAPTER)
+
+
 @router.get("/contacts/{contact_id}/evidence", response_model=ContactEvidenceOut)
 async def contact_evidence(
     contact_id: ContactId,
@@ -749,4 +1077,60 @@ async def contact_evidence(
     )
 
 
-__all__ = ["router"]
+@router.post(
+    "/contacts/{contact_id}/tags/{tag_id}",
+    response_model=ContactTagAssignmentOut,
+)
+async def assign_tag(
+    contact_id: ContactId,
+    tag_id: ContactId,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    async def operation() -> dict[str, int]:
+        result = await contact_service.assign_contact_tag(
+            db,
+            contact_id,
+            tag_id,
+            actor_subject=actor_subject,
+        )
+        _require_mutation_identity(
+            actual_contact_id=result.contact_id,
+            expected_contact_id=contact_id,
+        )
+        return {"contact_id": contact_id, "tag_id": tag_id}
+
+    return await _run_mutation(operation, _TAG_ASSIGNMENT_ADAPTER)
+
+
+@router.delete(
+    "/contacts/{contact_id}/tags/{tag_id}",
+    response_model=ContactTagRemovalOut,
+)
+async def remove_tag(
+    contact_id: ContactId,
+    tag_id: ContactId,
+    actor_subject: AdminSubject,
+    db: DatabaseDependency,
+) -> object:
+    async def operation() -> dict[str, object]:
+        result = await contact_service.remove_contact_tag(
+            db,
+            contact_id,
+            tag_id,
+            actor_subject=actor_subject,
+        )
+        _require_mutation_identity(
+            actual_contact_id=result.contact_id,
+            expected_contact_id=contact_id,
+        )
+        return {
+            "removed": result.changed,
+            "contact_id": contact_id,
+            "tag_id": tag_id,
+        }
+
+    return await _run_mutation(operation, _TAG_REMOVAL_ADAPTER)
+
+
+__all__ = ["import_contacts", "router"]

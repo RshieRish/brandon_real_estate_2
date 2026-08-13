@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -56,19 +57,28 @@ from services.command_contact_contracts import (
     ContactActorValue,
     ContactAddressValue,
     ContactArtifactMetadata,
+    ContactBulkCommand,
+    ContactBulkResult,
     ContactCaptureEvidence,
     ContactCelebrationRow,
     ContactCelebrations,
     ContactCelebrationValue,
+    ContactCreateCommand,
     ContactDetail,
     ContactDirectoryFilters,
     ContactDirectoryPage,
     ContactDirectoryRow,
     ContactEvidence,
+    ContactImportCommand,
+    ContactImportResult,
     ContactImportRowCommand,
+    ContactLegacySyncResult,
+    ContactMutationResult,
     ContactNeighbors,
+    ContactNoteCreateCommand,
     ContactOriginFilter,
     ContactRecoveredProfile,
+    ContactSavedSearchCreateCommand,
     ContactSection,
     ContactSectionEvidence,
     ContactSectionPage,
@@ -79,6 +89,7 @@ from services.command_contact_contracts import (
     ContactTagValue,
     ContactTimelineEntry,
     ContactTimelinePage,
+    ContactUpdateCommand,
     ContactWorkspaceSummary,
     SortDirection,
     TimelineCursorV1,
@@ -105,6 +116,33 @@ READ_ROUTE_INVENTORY = (
     ("GET", "/contacts/{contact_id}/notes"),
     ("GET", "/contacts/{contact_id}/saved-searches"),
     ("GET", "/contacts/{contact_id}/evidence"),
+)
+
+FULL_ROUTE_INVENTORY = (
+    ("GET", "/contacts/directory"),
+    ("POST", "/contacts/sync-leads"),
+    ("POST", "/contacts/import"),
+    ("POST", "/contacts/bulk"),
+    ("GET", "/contacts"),
+    ("POST", "/contacts"),
+    ("GET", "/celebrations"),
+    ("GET", "/contacts/{contact_id}"),
+    ("PATCH", "/contacts/{contact_id}"),
+    ("GET", "/contacts/{contact_id}/neighbors"),
+    ("GET", "/contacts/{contact_id}/workspace/summary"),
+    ("GET", "/contacts/{contact_id}/workspace"),
+    ("GET", "/contacts/{contact_id}/timeline"),
+    ("GET", "/contacts/{contact_id}/opportunities"),
+    ("GET", "/contacts/{contact_id}/smart-plans"),
+    ("GET", "/contacts/{contact_id}/tasks"),
+    ("GET", "/contacts/{contact_id}/notes"),
+    ("POST", "/contacts/{contact_id}/notes"),
+    ("DELETE", "/contacts/{contact_id}/notes/{note_id}"),
+    ("GET", "/contacts/{contact_id}/saved-searches"),
+    ("POST", "/contacts/{contact_id}/saved-searches"),
+    ("GET", "/contacts/{contact_id}/evidence"),
+    ("POST", "/contacts/{contact_id}/tags/{tag_id}"),
+    ("DELETE", "/contacts/{contact_id}/tags/{tag_id}"),
 )
 
 
@@ -1064,6 +1102,12 @@ class _ReadOnlyBoundaryDB:
     async def commit(self):
         raise AssertionError("read route attempted a commit")
 
+    async def rollback(self):
+        raise AssertionError("route attempted a rollback")
+
+    def begin(self):
+        raise AssertionError("route attempted a transaction")
+
 
 def _focused_read_client() -> TestClient:
     app = FastAPI()
@@ -1083,9 +1127,9 @@ def _route_inventory(router) -> tuple[tuple[str, str], ...]:
     )
 
 
-def test_focused_router_declares_only_the_ordered_read_subset_without_global_auth():
+def test_focused_router_declares_exact_ordered_inventory_without_global_auth():
     assert contact_router.router.dependencies == []
-    assert _route_inventory(contact_router.router) == READ_ROUTE_INVENTORY
+    assert _route_inventory(contact_router.router) == FULL_ROUTE_INVENTORY
     for route in contact_router.router.routes:
         assert isinstance(route, APIRoute)
         assert require_admin_subject in {
@@ -1461,6 +1505,42 @@ def test_task_read_requires_exactly_one_known_state(monkeypatch, params):
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "/contacts/7/notes/01",
+        "/contacts/7/notes/%2B1",
+        "/contacts/7/notes/0",
+        "/contacts/7/tags/01",
+        "/contacts/7/tags/%2B1",
+        "/contacts/7/tags/0",
+    ],
+)
+def test_nested_mutation_path_ids_reject_noncanonical_values_before_service(
+    monkeypatch, path
+):
+    called = False
+
+    async def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(
+            delete_contact_note=fail_if_called,
+            assign_contact_tag=fail_if_called,
+        ),
+    )
+    response = _focused_read_client().request(
+        "DELETE" if "/notes/" in path else "POST", path
+    )
+
+    assert response.status_code == 422
+    assert called is False
+
+
+@pytest.mark.parametrize(
     ("error", "expected_status"),
     [
         (contact_router.ContactNotFound("private-provider-id"), 404),
@@ -1470,6 +1550,10 @@ def test_task_read_requires_exactly_one_known_state(monkeypatch, params):
         (contact_router.ContactLinkConflict("private-provider-id"), 409),
         (contact_router.ContactTimelineIntegrityError("private-provider-id"), 409),
         (contact_router.ContactSectionUnsupported("private-provider-id"), 422),
+        (
+            contact_router.HTTPException(418, detail="private-provider-id"),
+            500,
+        ),
         (RuntimeError("private-provider-id"), 500),
     ],
 )
@@ -1924,3 +2008,633 @@ async def test_legacy_workspace_revalidates_unique_owner_after_same_count(
     with pytest.raises(contact_router.ContactTimelineIntegrityError) as error:
         await contact_router._legacy_contact_workspace(contact_router_db, contact_id=1)
     assert "Private" not in str(error.value)
+
+
+def _mutation_detail(contact_id: int = 7) -> ContactDetail:
+    return ContactDetail(
+        contact=replace(_directory_row(), id=contact_id),
+        lead_id=91,
+        recovered_profile=None,
+        addresses=(),
+        ownership=(),
+        tags=(),
+    )
+
+
+def _raw_contact(contact_id: int = 7) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=contact_id,
+        first_name="Raw",
+        last_name="Contact",
+        email=None,
+        phone=" raw phone ",
+        lead_id=91,
+        birthday=date(1990, 8, 13),
+        anniversary=None,
+        stage=" internal ",
+    )
+
+
+def _install_successful_mutation_services(monkeypatch, calls):
+    async def sync(_db, *, actor_subject):
+        calls.append(("sync", actor_subject, None))
+        return ContactLegacySyncResult(
+            created=2,
+            timeline_backfilled=1,
+            total_legacy_leads=3,
+        )
+
+    async def import_rows(_db, payload, *, actor_subject):
+        assert isinstance(payload, ContactImportCommand)
+        calls.append(("import", actor_subject, payload))
+        return ContactImportResult(created=1, skipped_duplicates=1)
+
+    async def bulk(_db, payload, *, actor_subject):
+        assert isinstance(payload, ContactBulkCommand)
+        calls.append(("bulk", actor_subject, payload))
+        return ContactBulkResult(
+            requested_contact_ids=(7,),
+            actioned_contact_ids=(7,),
+            action="set_stage",
+        )
+
+    async def create(_db, payload, *, actor_subject):
+        assert isinstance(payload, ContactCreateCommand)
+        calls.append(("create", actor_subject, payload))
+        return _mutation_detail()
+
+    async def update(_db, contact_id, payload, *, actor_subject):
+        assert contact_id == 7
+        assert isinstance(payload, ContactUpdateCommand)
+        calls.append(("update", actor_subject, payload))
+        return _mutation_detail(contact_id)
+
+    async def create_note(_db, contact_id, payload, *, actor_subject):
+        assert contact_id == 7
+        assert isinstance(payload, ContactNoteCreateCommand)
+        calls.append(("note_create", actor_subject, payload))
+        return ContactMutationResult(7, 31, True, "contact_audit", 101)
+
+    async def delete_note(_db, contact_id, note_id, *, actor_subject):
+        assert (contact_id, note_id) == (7, 31)
+        calls.append(("note_delete", actor_subject, note_id))
+        return ContactMutationResult(7, 31, True, "contact_audit", 102)
+
+    async def create_search(_db, contact_id, payload, *, actor_subject):
+        assert contact_id == 7
+        assert isinstance(payload, ContactSavedSearchCreateCommand)
+        calls.append(("search_create", actor_subject, payload))
+        return ContactMutationResult(7, 41, True, "contact_audit", 103)
+
+    async def assign_tag(_db, contact_id, tag_id, *, actor_subject):
+        assert (contact_id, tag_id) == (7, 4)
+        calls.append(("tag_assign", actor_subject, tag_id))
+        return ContactMutationResult(7, 51, False, None, None)
+
+    async def remove_tag(_db, contact_id, tag_id, *, actor_subject):
+        assert (contact_id, tag_id) == (7, 4)
+        calls.append(("tag_remove", actor_subject, tag_id))
+        return ContactMutationResult(7, None, False, None, None)
+
+    service = SimpleNamespace(
+        sync_legacy_leads=sync,
+        import_contacts=import_rows,
+        apply_contact_bulk_action=bulk,
+        create_contact=create,
+        update_contact=update,
+        create_contact_note=create_note,
+        delete_contact_note=delete_note,
+        create_contact_saved_search=create_search,
+        assign_contact_tag=assign_tag,
+        remove_contact_tag=remove_tag,
+    )
+    monkeypatch.setattr(contact_router, "contact_service", service, raising=False)
+
+    async def load_raw(_db, contact_id):
+        return _raw_contact(contact_id)
+
+    monkeypatch.setattr(contact_router, "_load_legacy_contact", load_raw, raising=False)
+
+
+def _valid_import_body() -> dict[str, object]:
+    return {
+        "contacts": [
+            {
+                "first_name": "Imported",
+                "last_name": "Contact",
+                "email": "imported@example.test",
+                "stage": "lead",
+            }
+        ]
+    }
+
+
+def test_mutation_routes_are_interleaved_and_static_paths_never_hit_contact_id(
+    monkeypatch,
+):
+    calls: list[tuple[str, str, object]] = []
+    _install_successful_mutation_services(monkeypatch, calls)
+    client = _focused_read_client()
+
+    assert _route_inventory(contact_router.router) == FULL_ROUTE_INVENTORY
+    responses = (
+        client.post("/contacts/sync-leads"),
+        client.post("/contacts/import", json=_valid_import_body()),
+        client.post(
+            "/contacts/bulk",
+            json={
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+        ),
+    )
+    assert [response.status_code for response in responses] == [200, 200, 200]
+    assert all(response.status_code != 422 for response in responses)
+
+
+def test_all_ten_mutations_forward_actor_and_return_exact_compatibility_shapes(
+    monkeypatch,
+):
+    calls: list[tuple[str, str, object]] = []
+    _install_successful_mutation_services(monkeypatch, calls)
+    client = _focused_read_client()
+
+    responses = {
+        "sync": client.post("/contacts/sync-leads"),
+        "import": client.post("/contacts/import", json=_valid_import_body()),
+        "bulk": client.post(
+            "/contacts/bulk",
+            json={
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+        ),
+        "create": client.post(
+            "/contacts",
+            json={"first_name": "Created", "email": "created@example.test"},
+        ),
+        "update": client.patch("/contacts/7", json={"stage": "active"}),
+        "note_create": client.post("/contacts/7/notes", json={"body": " Note body "}),
+        "note_delete": client.delete("/contacts/7/notes/31"),
+        "search_create": client.post(
+            "/contacts/7/saved-searches",
+            json={"name": " Search ", "criteria": {"z": 1, "a": {"b": 2}}},
+        ),
+        "tag_assign": client.post("/contacts/7/tags/4"),
+        "tag_remove": client.delete("/contacts/7/tags/4"),
+    }
+
+    assert all(response.status_code == 200 for response in responses.values())
+    assert responses["sync"].json() == {
+        "created": 2,
+        "timeline_backfilled": 1,
+        "total_legacy_leads": 3,
+    }
+    assert responses["import"].json() == {
+        "created": 1,
+        "skipped_duplicates": 1,
+    }
+    assert responses["bulk"].json() == {
+        "requested_contact_ids": [7],
+        "actioned_contact_ids": [7],
+        "action": "set_stage",
+    }
+    expected_raw = {
+        "id": 7,
+        "first_name": "Raw",
+        "last_name": "Contact",
+        "email": None,
+        "phone": " raw phone ",
+        "lead_id": 91,
+        "birthday": "1990-08-13",
+        "anniversary": None,
+        "stage": " internal ",
+    }
+    assert responses["create"].json() == expected_raw
+    assert responses["update"].json() == expected_raw
+    assert responses["note_create"].json() == {"id": 31, "body": "Note body"}
+    assert responses["note_delete"].json() == {"deleted": True, "id": 31}
+    assert responses["search_create"].json() == {
+        "id": 41,
+        "name": "Search",
+        "criteria": '{"a":{"b":2},"z":1}',
+    }
+    assert responses["tag_assign"].json() == {"contact_id": 7, "tag_id": 4}
+    assert responses["tag_remove"].json() == {
+        "removed": False,
+        "contact_id": 7,
+        "tag_id": 4,
+    }
+    assert [name for name, _actor, _payload in calls] == [
+        "sync",
+        "import",
+        "bulk",
+        "create",
+        "update",
+        "note_create",
+        "note_delete",
+        "search_create",
+        "tag_assign",
+        "tag_remove",
+    ]
+    assert all(actor == "17" for _name, actor, _payload in calls)
+    assert all(
+        "audit" not in key for response in responses.values() for key in response.json()
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "schema_type"),
+    [
+        ("post", "/contacts/import", _valid_import_body(), ContactImportIn),
+        (
+            "post",
+            "/contacts/bulk",
+            {
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+            ContactBulkRequest,
+        ),
+        ("post", "/contacts", {"first_name": "Created"}, ContactCreateIn),
+        ("patch", "/contacts/7", {"stage": "active"}, ContactUpdateIn),
+        ("post", "/contacts/7/notes", {"body": "Body"}, ContactNoteCreateIn),
+        (
+            "post",
+            "/contacts/7/saved-searches",
+            {"name": "Search", "criteria": {}},
+            ContactSavedSearchCreateIn,
+        ),
+    ],
+)
+@pytest.mark.parametrize("error_type", [TypeError, ValueError])
+def test_every_mutation_command_adapter_error_is_safe_422_before_service(
+    monkeypatch, method, path, body, schema_type, error_type
+):
+    called = False
+
+    def invalid_command(_self):
+        raise error_type("private-adapter-value")
+
+    async def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(schema_type, "to_command", invalid_command)
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(
+            import_contacts=fail_if_called,
+            apply_contact_bulk_action=fail_if_called,
+            create_contact=fail_if_called,
+            update_contact=fail_if_called,
+            create_contact_note=fail_if_called,
+            create_contact_saved_search=fail_if_called,
+        ),
+        raising=False,
+    )
+    response = _focused_read_client().request(method, path, json=body)
+
+    assert response.status_code == 422
+    assert called is False
+    assert "private-adapter-value" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_name"),
+    [
+        ("post", "/contacts/sync-leads", None, "sync_legacy_leads"),
+        ("post", "/contacts/import", _valid_import_body(), "import_contacts"),
+        (
+            "post",
+            "/contacts/bulk",
+            {
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+            "apply_contact_bulk_action",
+        ),
+        ("post", "/contacts", {"first_name": "Created"}, "create_contact"),
+        ("patch", "/contacts/7", {"stage": "active"}, "update_contact"),
+        (
+            "post",
+            "/contacts/7/notes",
+            {"body": "Body"},
+            "create_contact_note",
+        ),
+        ("delete", "/contacts/7/notes/31", None, "delete_contact_note"),
+        (
+            "post",
+            "/contacts/7/saved-searches",
+            {"name": "Search", "criteria": {}},
+            "create_contact_saved_search",
+        ),
+        ("post", "/contacts/7/tags/4", None, "assign_contact_tag"),
+        ("delete", "/contacts/7/tags/4", None, "remove_contact_tag"),
+    ],
+)
+@pytest.mark.parametrize("error_type", [TypeError, ValueError])
+def test_every_mutation_service_type_error_is_private_generic_500(
+    monkeypatch, method, path, body, service_name, error_type
+):
+    async def fail(*_args, **_kwargs):
+        raise error_type("private-service-value")
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(**{service_name: fail}),
+        raising=False,
+    )
+    response = _focused_read_client().request(method, path, json=body)
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Unable to update contact data"}
+    assert "private-service-value" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (contact_router.ContactNotFound("private-mutation-value"), 404),
+        (contact_router.TimelineContactNotFound("private-mutation-value"), 404),
+        (contact_router.ContactNotInDirectory("private-mutation-value"), 409),
+        (contact_router.ContactDataIntegrityError("private-mutation-value"), 409),
+        (contact_router.ContactLinkConflict("private-mutation-value"), 409),
+        (
+            contact_router.ContactTimelineIntegrityError("private-mutation-value"),
+            409,
+        ),
+        (contact_router.ContactSectionUnsupported("private-mutation-value"), 422),
+        (
+            contact_router.HTTPException(418, detail="private-mutation-value"),
+            500,
+        ),
+    ],
+)
+def test_mutation_domain_errors_map_exactly_without_private_values(
+    monkeypatch, error, expected_status
+):
+    async def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(sync_legacy_leads=fail),
+    )
+    response = _focused_read_client().post("/contacts/sync-leads")
+
+    assert response.status_code == expected_status
+    assert "private-mutation-value" not in response.text
+
+
+def test_mutation_response_validation_is_inside_private_boundary(monkeypatch, caplog):
+    async def invalid_result(_db, *, actor_subject):
+        assert actor_subject == "17"
+        return {"created": True, "private": "private-result-value"}
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(sync_legacy_leads=invalid_result),
+        raising=False,
+    )
+    response = _focused_read_client().post("/contacts/sync-leads")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Unable to update contact data"}
+    assert "private-result-value" not in response.text
+    assert "private-result-value" not in caplog.text
+
+
+def test_unexpected_command_adapter_error_is_private_generic_500(monkeypatch, caplog):
+    def unexpected_command(_self):
+        raise RuntimeError("private-command-value")
+
+    monkeypatch.setattr(ContactCreateIn, "to_command", unexpected_command)
+    response = _focused_read_client().post("/contacts", json={"first_name": "Created"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Unable to update contact data"}
+    assert "private-command-value" not in response.text
+    assert "private-command-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_name", "result"),
+    [
+        (
+            "patch",
+            "/contacts/7",
+            {"stage": "active"},
+            "update_contact",
+            _mutation_detail(8),
+        ),
+        (
+            "post",
+            "/contacts/7/notes",
+            {"body": "Body"},
+            "create_contact_note",
+            ContactMutationResult(8, 31, True, "contact_audit", 101),
+        ),
+        (
+            "delete",
+            "/contacts/7/notes/31",
+            None,
+            "delete_contact_note",
+            ContactMutationResult(7, 32, True, "contact_audit", 102),
+        ),
+        (
+            "post",
+            "/contacts/7/saved-searches",
+            {"name": "Search", "criteria": {}},
+            "create_contact_saved_search",
+            ContactMutationResult(8, 41, True, "contact_audit", 103),
+        ),
+        (
+            "post",
+            "/contacts/7/tags/4",
+            None,
+            "assign_contact_tag",
+            ContactMutationResult(8, 51, False, None, None),
+        ),
+        (
+            "delete",
+            "/contacts/7/tags/4",
+            None,
+            "remove_contact_tag",
+            ContactMutationResult(8, None, False, None, None),
+        ),
+    ],
+)
+def test_mutation_result_identity_mismatch_is_safe_409(
+    monkeypatch, method, path, body, service_name, result
+):
+    async def wrong_result(*_args, **_kwargs):
+        return result
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(**{service_name: wrong_result}),
+        raising=False,
+    )
+    response = _focused_read_client().request(method, path, json=body)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Contact data is unavailable"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_name", "result"),
+    [
+        (
+            "post",
+            "/contacts/7/notes",
+            {"body": "Body"},
+            "create_contact_note",
+            ContactMutationResult(7, 31, False, None, None),
+        ),
+        (
+            "delete",
+            "/contacts/7/notes/31",
+            None,
+            "delete_contact_note",
+            ContactMutationResult(7, 31, False, None, None),
+        ),
+        (
+            "post",
+            "/contacts/7/saved-searches",
+            {"name": "Search", "criteria": {}},
+            "create_contact_saved_search",
+            ContactMutationResult(7, 41, False, None, None),
+        ),
+        (
+            "post",
+            "/contacts/bulk",
+            {
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+            "apply_contact_bulk_action",
+            ContactBulkResult((8,), (), "set_stage"),
+        ),
+        (
+            "post",
+            "/contacts/bulk",
+            {
+                "contact_ids": [7],
+                "action": {"action": "set_stage", "stage": "active"},
+            },
+            "apply_contact_bulk_action",
+            ContactBulkResult((7,), (), "add_tag"),
+        ),
+    ],
+)
+def test_mutation_result_semantic_mismatch_is_safe_409(
+    monkeypatch, method, path, body, service_name, result
+):
+    async def wrong_result(*_args, **_kwargs):
+        return result
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(**{service_name: wrong_result}),
+        raising=False,
+    )
+    response = _focused_read_client().request(method, path, json=body)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Contact data is unavailable"}
+
+
+def test_import_handler_keeps_direct_callable_signature():
+    import inspect
+
+    signature = inspect.signature(contact_router.import_contacts)
+    assert tuple(signature.parameters) == ("payload", "db", "actor_subject")
+    assert signature.parameters["actor_subject"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.parametrize("mode", ["missing", "create_mismatch", "update_mismatch"])
+def test_create_update_raw_contact_missing_or_mismatched_is_safe_409(monkeypatch, mode):
+    async def create(_db, _payload, *, actor_subject):
+        assert actor_subject == "17"
+        return _mutation_detail(7)
+
+    async def update(_db, _contact_id, _payload, *, actor_subject):
+        assert actor_subject == "17"
+        return _mutation_detail(8 if mode == "update_mismatch" else 7)
+
+    async def load(_db, contact_id):
+        if mode == "missing":
+            return None
+        return _raw_contact(8 if mode == "create_mismatch" else contact_id)
+
+    monkeypatch.setattr(
+        contact_router,
+        "contact_service",
+        SimpleNamespace(create_contact=create, update_contact=update),
+        raising=False,
+    )
+    monkeypatch.setattr(contact_router, "_load_legacy_contact", load, raising=False)
+    client = _focused_read_client()
+    response = (
+        client.patch("/contacts/7", json={"stage": "active"})
+        if mode == "update_mismatch"
+        else client.post("/contacts", json={"first_name": "Created"})
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Contact data is unavailable"}
+
+
+async def test_mutation_raw_contact_loader_is_one_exact_row_without_method_fallback(
+    contact_router_db,
+):
+    contact_router_db.add(
+        CRMContact(
+            id=7,
+            first_name="Raw",
+            last_name="Contact",
+            email=None,
+            phone=None,
+            stage="lead",
+        )
+    )
+    await contact_router_db.flush()
+    contact_router_db.add(
+        CRMContactMethod(
+            contact_id=7,
+            source_record_id=None,
+            source_key="synthetic-method",
+            kind="email",
+            label="Email",
+            raw_value="recovered@example.test",
+            normalized_value="recovered@example.test",
+            is_primary=True,
+        )
+    )
+    await contact_router_db.flush()
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(contact_router_db.bind.sync_engine, "before_cursor_execute", capture)
+    try:
+        raw = await contact_router._load_legacy_contact(contact_router_db, 7)
+    finally:
+        event.remove(
+            contact_router_db.bind.sync_engine, "before_cursor_execute", capture
+        )
+
+    assert raw is not None
+    assert raw.id == 7
+    assert raw.email is None
+    assert len(statements) == 1
+    assert "crm_contact_methods" not in statements[0]
