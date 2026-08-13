@@ -181,12 +181,13 @@ async def test_sync_creates_new_contact_and_backfills_exact_missing_marker(
     ) == (
         "Private",
         "New Lead",
-        "private.new@example.test",
-        "+15550000001",
-        "qualified",
+        " private.new@example.test ",
+        " +15550000001 ",
+        " qualified ",
         None,
         None,
     )
+    assert created.normalized_email == "private.new@example.test"
     await db.refresh(linked)
     await db.refresh(profile)
     assert {
@@ -236,6 +237,10 @@ async def test_sync_creates_new_contact_and_backfills_exact_missing_marker(
             "lead_id": created.lead_id,
         },
     )
+    created_after = json.loads(created_audit.after_json)
+    assert created_after["email"]["length"] == len(b" private.new@example.test ")
+    assert created_after["phone"]["length"] == len(b" +15550000001 ")
+    assert created_after["stage"] == " qualified "
     backfill_marker = next(row for row in markers if row.contact_id == linked.id)
     backfill_audit = next(row for row in audits if row.contact_id == linked.id)
     assert json.loads(backfill_audit.before_json) == {
@@ -307,6 +312,58 @@ async def test_sync_recognizes_only_all_five_exact_marker_fields_and_replays_noo
     ).all()
     assert len(exact_markers) == 5
     assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 4
+
+
+@pytest.mark.asyncio
+async def test_sync_marker_query_projects_distinct_contact_ids_without_hydration(
+    sync_db, monkeypatch
+):
+    db, _engine = sync_db
+    contacts: list[CRMContact] = []
+    for index in range(4):
+        lead = await _lead(db, index)
+        contact = CRMContact(
+            lead_id=lead.id,
+            first_name=f"Duplicate{index}",
+            last_name="Marker",
+            stage="lead",
+        )
+        db.add(contact)
+        await db.flush()
+        contacts.append(contact)
+        db.add_all([_marker(contact.id) for _ in range(40)])
+    await db.flush()
+    marker_row_counts: list[int] = []
+    marker_statements: list[object] = []
+    original_scalars = db.scalars
+
+    async def capture_scalars(statement, *args, **kwargs):
+        result = await original_scalars(statement, *args, **kwargs)
+        compiled = str(statement.compile(dialect=postgresql.dialect()))
+        if "FROM crm_activities" not in compiled:
+            return result
+
+        class ResultProxy:
+            def all(self):
+                rows = result.all()
+                marker_row_counts.append(len(rows))
+                return rows
+
+        marker_statements.append(statement)
+        return ResultProxy()
+
+    monkeypatch.setattr(db, "scalars", capture_scalars)
+    result = await contacts_service.sync_legacy_leads(db, actor_subject="7")
+
+    assert result == ContactLegacySyncResult(0, 0, 4)
+    assert marker_row_counts == [4]
+    assert len(marker_statements) == 1
+    sql = str(marker_statements[0].compile(dialect=postgresql.dialect()))
+    assert sql.startswith("SELECT DISTINCT crm_activities.contact_id")
+    assert "crm_activities.contact_id IN" in sql
+    assert "FOR UPDATE" not in sql
+    assert await db.scalar(select(func.count()).select_from(CRMActivity)) == 160
+    assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
 
 
 @pytest.mark.parametrize("lead_count", (1, 501, 1001))
@@ -483,8 +540,17 @@ async def test_sync_backfill_failure_restores_existing_contact_and_marker(
     assert await db.scalar(select(func.count()).select_from(CRMContactAuditEvent)) == 0
 
 
+@pytest.mark.parametrize(
+    "invalid_values",
+    (
+        {"name": "Private" * 30},
+        {"routing_status": "   "},
+    ),
+)
 @pytest.mark.asyncio
-async def test_sync_invalid_lead_in_second_batch_rolls_back_first_batch(sync_db):
+async def test_sync_invalid_lead_in_second_batch_rolls_back_first_batch(
+    sync_db, invalid_values
+):
     db, _engine = sync_db
     await db.execute(
         insert(Lead),
@@ -503,7 +569,7 @@ async def test_sync_invalid_lead_in_second_batch_rolls_back_first_batch(sync_db)
         ]
         + [
             {
-                "name": "Private" * 30,
+                "name": "Invalid Person",
                 "email": None,
                 "phone": None,
                 "source": "synthetic",
@@ -511,6 +577,7 @@ async def test_sync_invalid_lead_in_second_batch_rolls_back_first_batch(sync_db)
                 "routing_status": "lead",
                 "notes": "",
                 "metadata_json": "{}",
+                **invalid_values,
             }
         ],
     )
@@ -540,6 +607,60 @@ async def test_sync_invalid_lead_in_second_batch_rolls_back_first_batch(sync_db)
 def test_legacy_sync_result_rejects_invalid_or_contradictory_counts(factory):
     with pytest.raises((TypeError, ValueError)):
         factory()
+
+
+@pytest.mark.parametrize(
+    ("email", "phone", "stage", "expected_stage"),
+    (
+        ("e" * 255, "p" * 50, "s" * 50, "s" * 50),
+        ("", "", "", "lead"),
+        (None, None, None, "lead"),
+        (" padded@example.test ", " padded phone ", " padded stage ", " padded stage "),
+    ),
+)
+def test_sync_specific_validator_preserves_exact_bounded_legacy_values(
+    email, phone, stage, expected_stage
+):
+    values = contacts_service._validated_legacy_sync_values(
+        name=" Private   Person ",
+        email=email,
+        phone=phone,
+        routing_status=stage,
+    )
+    assert values == (
+        "Private",
+        "Person",
+        email,
+        phone,
+        expected_stage,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("name", "   "),
+        ("name", "N" * 121),
+        ("email", "e" * 256),
+        ("email", 7),
+        ("phone", "p" * 51),
+        ("phone", False),
+        ("routing_status", "s" * 51),
+        ("routing_status", "   "),
+        ("routing_status", 7),
+    ),
+)
+def test_sync_specific_validator_rejects_invalid_values_without_echo(field_name, value):
+    payload = {
+        "name": "Private Person",
+        "email": None,
+        "phone": None,
+        "routing_status": "lead",
+    }
+    payload[field_name] = value
+    with pytest.raises(contacts_service.ContactDataIntegrityError) as caught:
+        contacts_service._validated_legacy_sync_values(**payload)
+    assert str(caught.value) == "legacy lead cannot be synchronized"
 
 
 @pytest.mark.asyncio
@@ -609,8 +730,9 @@ async def test_sync_queries_compile_exact_postgresql_keyset_and_locks(
     assert "FROM crm_contacts" in compiled[1]
     assert "ORDER BY crm_contacts.id FOR UPDATE" in compiled[1]
     assert "FROM crm_activities" in compiled[2]
+    assert compiled[2].startswith("SELECT DISTINCT crm_activities.contact_id")
     assert "crm_activities.contact_id IN" in compiled[2]
-    assert compiled[2].endswith("FOR UPDATE")
+    assert "FOR UPDATE" not in compiled[2]
     assert "WHERE leads.id >" in compiled[3]
 
 

@@ -205,6 +205,44 @@ def _contact_audit_event(
     )
 
 
+def _validated_legacy_sync_values(
+    *,
+    name: object,
+    email: object,
+    phone: object,
+    routing_status: object,
+) -> tuple[str, str, str | None, str | None, str]:
+    """Validate legacy projection values without normalizing stored strings."""
+    try:
+        legacy_name = name or "Unnamed contact"
+        if type(legacy_name) is not str:
+            raise TypeError
+        parts = legacy_name.strip().split(maxsplit=1)
+        if not parts:
+            raise ValueError
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ""
+        if not 1 <= len(first_name) <= 120 or len(last_name) > 120:
+            raise ValueError
+        if email is not None and (type(email) is not str or len(email) > 255):
+            raise ValueError
+        if phone is not None and (type(phone) is not str or len(phone) > 50):
+            raise ValueError
+        if routing_status is None or routing_status == "":
+            stage = "lead"
+        elif (
+            type(routing_status) is not str
+            or len(routing_status) > 50
+            or not routing_status.strip()
+        ):
+            raise ValueError
+        else:
+            stage = routing_status
+    except (AttributeError, TypeError, ValueError):
+        raise ContactDataIntegrityError("legacy lead cannot be synchronized") from None
+    return first_name, last_name, email, phone, stage
+
+
 def _safe_not_found() -> NoReturn:
     raise ContactNotFound("contact does not exist")
 
@@ -3166,60 +3204,57 @@ async def sync_legacy_leads(
                     contact.lead_id: contact for contact in linked_contacts
                 }
                 linked_contact_ids = tuple(contact.id for contact in linked_contacts)
-                exact_markers = (
-                    await db.scalars(
-                        select(CRMActivity)
-                        .where(
-                            CRMActivity.contact_id.in_(linked_contact_ids),
-                            CRMActivity.kind == "lead_imported",
-                            CRMActivity.summary == "Imported from internal lead source",
-                            CRMActivity.source_record_id.is_(None),
-                            CRMActivity.metadata_json == "{}",
+                marker_contact_ids = set(
+                    (
+                        await db.scalars(
+                            select(CRMActivity.contact_id)
+                            .distinct()
+                            .where(
+                                CRMActivity.contact_id.in_(linked_contact_ids),
+                                CRMActivity.kind == "lead_imported",
+                                CRMActivity.summary
+                                == "Imported from internal lead source",
+                                CRMActivity.source_record_id.is_(None),
+                                CRMActivity.metadata_json == "{}",
+                            )
+                            .order_by(CRMActivity.contact_id)
                         )
-                        .order_by(CRMActivity.contact_id, CRMActivity.id)
-                        .with_for_update()
-                    )
-                ).all()
-                marker_contact_ids = {marker.contact_id for marker in exact_markers}
+                    ).all()
+                )
 
-                pending_new: list[tuple[Lead, ContactCreateCommand, CRMContact]] = []
+                pending_new: list[tuple[Lead, CRMContact]] = []
                 for lead in leads:
                     if lead.id in contacts_by_lead_id:
                         continue
-                    parts = (lead.name or "Unnamed contact").strip().split(maxsplit=1)
-                    if not parts:
-                        raise ContactDataIntegrityError(
-                            "legacy lead cannot be synchronized"
-                        )
-                    try:
-                        command = ContactCreateCommand(
-                            first_name=parts[0],
-                            last_name=parts[1] if len(parts) > 1 else "",
-                            email=lead.email,
-                            phone=lead.phone,
-                            stage=lead.routing_status or "lead",
-                        )
-                    except (TypeError, ValueError):
-                        raise ContactDataIntegrityError(
-                            "legacy lead cannot be synchronized"
-                        ) from None
+                    (
+                        first_name,
+                        last_name,
+                        email,
+                        phone,
+                        stage,
+                    ) = _validated_legacy_sync_values(
+                        name=lead.name,
+                        email=lead.email,
+                        phone=lead.phone,
+                        routing_status=lead.routing_status,
+                    )
                     contact = CRMContact(
                         lead_id=lead.id,
-                        first_name=command.first_name,
-                        last_name=command.last_name,
-                        email=command.email,
-                        phone=command.phone,
-                        stage=command.stage,
+                        first_name=first_name,
+                        last_name=last_name,
+                        email=email,
+                        phone=phone,
+                        stage=stage,
                         birthday=None,
                         anniversary=None,
                     )
-                    pending_new.append((lead, command, contact))
+                    pending_new.append((lead, contact))
                     contacts_by_lead_id[lead.id] = contact
-                db.add_all([row[2] for row in pending_new])
+                db.add_all([row[1] for row in pending_new])
                 await db.flush()
 
                 pending_markers: list[tuple[Lead, CRMContact, CRMActivity, bool]] = []
-                new_lead_ids = {lead.id for lead, _command, _contact in pending_new}
+                new_lead_ids = {lead.id for lead, _contact in pending_new}
                 for lead in leads:
                     contact = contacts_by_lead_id[lead.id]
                     is_new = lead.id in new_lead_ids
