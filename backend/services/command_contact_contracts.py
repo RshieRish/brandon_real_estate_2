@@ -386,15 +386,19 @@ def _updated_contact_snapshot(
 
 def _special_contact_audit_payload(
     action: ContactAuditAction,
+    phase: Literal["before", "after"],
     payload: Mapping[str, object],
 ) -> dict[str, object]:
     if action == "contact.bulk_stage_set":
         _require_exact_keys(payload, {"stage"})
+        stage = _audit_text(
+            payload["stage"], "stage", minimum=1, maximum=50
+        )
+        if stage is None or stage != stage.strip():
+            raise ValueError("contact audit stage is invalid")
         return {
             "action": action,
-            "stage": _bounded_text(
-                payload["stage"], "stage", minimum=1, maximum=50
-            ),
+            "stage": stage,
         }
     if action in {
         "contact.bulk_tag_added",
@@ -405,6 +409,11 @@ def _special_contact_audit_payload(
         _require_exact_keys(payload, {"present", "tag_id"})
         if type(payload["present"]) is not bool:
             raise TypeError("contact audit presence is invalid")
+        expected_presence = (
+            action in {"contact.bulk_tag_added", "contact.tag_added"}
+        ) == (phase == "after")
+        if payload["present"] is not expected_presence:
+            raise ValueError("contact audit presence is invalid")
         return {
             "action": action,
             "present": payload["present"],
@@ -417,6 +426,11 @@ def _special_contact_audit_payload(
         )
         if type(payload["present"]) is not bool:
             raise TypeError("contact audit presence is invalid")
+        expected_presence = (action == "contact.note_created") == (
+            phase == "after"
+        )
+        if payload["present"] is not expected_presence:
+            raise ValueError("contact audit presence is invalid")
         return {
             "action": action,
             "body": redact_contact_audit_value(
@@ -440,6 +454,11 @@ def _special_contact_audit_payload(
         )
         if type(payload["present"]) is not bool:
             raise TypeError("contact audit presence is invalid")
+        expected_presence = (
+            action == "contact.saved_search_created"
+        ) == (phase == "after")
+        if payload["present"] is not expected_presence:
+            raise ValueError("contact audit presence is invalid")
         return {
             "action": action,
             "criteria": redact_contact_audit_value(
@@ -521,7 +540,7 @@ def canonical_contact_audit_json(
                     payload["activity_id"], "activity_id"
                 )
     else:
-        value = _special_contact_audit_payload(action, payload)
+        value = _special_contact_audit_payload(action, phase, payload)
     if value is None:
         raise ValueError("contact audit phase payload is invalid")
     return _canonical_json(value)

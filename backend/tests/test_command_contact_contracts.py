@@ -436,6 +436,91 @@ def test_contact_audit_builder_rejects_wrong_phase_shape_and_key_smuggling(
         canonical_contact_audit_json(action=action, phase=phase, payload=payload)
 
 
+@pytest.mark.parametrize(
+    ("action", "phase", "present"),
+    [
+        (action, phase, present)
+        for action, before_present, after_present in (
+            ("contact.bulk_tag_added", False, True),
+            ("contact.bulk_tag_removed", True, False),
+            ("contact.tag_added", False, True),
+            ("contact.tag_removed", True, False),
+        )
+        for phase, present in (
+            ("before", not before_present),
+            ("after", not after_present),
+        )
+    ],
+)
+def test_tag_audit_builder_rejects_every_inverted_presence_transition(
+    action, phase, present
+):
+    with pytest.raises(ValueError, match="presence"):
+        canonical_contact_audit_json(
+            action=action,
+            phase=phase,
+            payload={"present": present, "tag_id": 5},
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "phase", "present", "payload"),
+    [
+        (
+            action,
+            phase,
+            present,
+            {
+                id_key: 9,
+                "present": present,
+                **(
+                    {"body": "private body"}
+                    if id_key == "note_id"
+                    else {
+                        "criteria": '{"private":true}',
+                        "name": "Private search",
+                    }
+                ),
+            },
+        )
+        for action, id_key, before_present, after_present in (
+            ("contact.note_created", "note_id", False, True),
+            ("contact.note_deleted", "note_id", True, False),
+            ("contact.saved_search_created", "search_id", False, True),
+            ("contact.saved_search_deleted", "search_id", True, False),
+        )
+        for phase, present in (
+            ("before", not before_present),
+            ("after", not after_present),
+        )
+    ],
+)
+def test_child_audit_builder_rejects_every_inverted_presence_transition(
+    action, phase, present, payload
+):
+    assert payload["present"] is present
+    with pytest.raises(ValueError, match="presence"):
+        canonical_contact_audit_json(
+            action=action,
+            phase=phase,
+            payload=payload,
+        )
+
+
+def test_bulk_stage_audit_rejects_noncanonical_whitespace_without_trimming():
+    with pytest.raises(ValueError, match="stage"):
+        canonical_contact_audit_json(
+            action="contact.bulk_stage_set",
+            phase="before",
+            payload={"stage": " lead "},
+        )
+    assert canonical_contact_audit_json(
+        action="contact.bulk_stage_set",
+        phase="after",
+        payload={"stage": "lead"},
+    ) == '{"action":"contact.bulk_stage_set","stage":"lead"}'
+
+
 def test_workspace_saved_search_activity_builder_is_exact_and_actor_attributed():
     rendered = contact_contracts.canonical_workspace_saved_search_activity_json(
         actor_subject="7",
