@@ -14,14 +14,14 @@ type FailureResponse = MockResponse & {
 };
 
 type RouteState = {
-  responses: Map<string, MockResponse>;
+  responses: Map<string, Map<string, MockResponse>>;
   failures: Map<string, FailureResponse>;
   expectedHttpFailures: Set<string>;
 };
 
 type CommandFixtures = {
   commandPage: Page;
-  mockCommandEndpoint: (path: string, response: unknown, status?: number) => Promise<void>;
+  mockCommandEndpoint: (path: string, response: unknown, status?: number, method?: string) => Promise<void>;
   failCommandEndpointOnce: (path: string, status: number, detail: string) => Promise<void>;
   routeState: RouteState;
 };
@@ -80,7 +80,13 @@ function defaultCommandResponse(url: URL, method: string): MockResponse {
       },
     };
   }
-  return { status: 200, body: [] };
+  const requestIdentity = `${method} ${path}${url.search}`;
+  return {
+    status: 500,
+    body: {
+      detail: `Unexpected Command fixture request: ${requestIdentity}. Add an explicit deterministic response or mock the endpoint in this test.`,
+    },
+  };
 }
 
 function responseFor(state: RouteState, url: URL, method: string): MockResponse {
@@ -92,7 +98,8 @@ function responseFor(state: RouteState, url: URL, method: string): MockResponse 
     return failure;
   }
   return state.responses.get(normalized)
-    ?? state.responses.get(pathOnly)
+    ?.get(method)
+    ?? state.responses.get(pathOnly)?.get(method)
     ?? defaultCommandResponse(url, method);
 }
 
@@ -124,9 +131,11 @@ export const test = base.extend<CommandFixtures>({
   },
 
   mockCommandEndpoint: async ({ routeState }, use) => {
-    await use(async (path, response, status = 200) => {
+    await use(async (path, response, status = 200, method = status === 201 ? 'POST' : 'GET') => {
       const normalized = normalizeCommandPath(path);
-      routeState.responses.set(normalized, { status, body: structuredClone(response) });
+      const responsesByMethod = routeState.responses.get(normalized) ?? new Map<string, MockResponse>();
+      responsesByMethod.set(method.toUpperCase(), { status, body: structuredClone(response) });
+      routeState.responses.set(normalized, responsesByMethod);
       if (status >= 400) routeState.expectedHttpFailures.add(normalized.split('?')[0]);
     });
   },

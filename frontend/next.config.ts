@@ -1,6 +1,9 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Keep deterministic keyboard order in local browser gates; the dev indicator
+  // injects a shadow-DOM control ahead of the application's skip link.
+  devIndicators: false,
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**.cdninstagram.com' },

@@ -47,10 +47,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     context: true,
     evidence: true,
   });
-  const [overlayState, setOverlayState] = useState(() => ({
-    token: createToken,
-    open: createToken === 'task',
-  }));
+  const [taskOpen, setTaskOpen] = useState(createToken === 'task');
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
   const [taskPriority, setTaskPriority] = useState('normal');
@@ -58,7 +55,10 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskSaved, setTaskSaved] = useState(false);
   const [taskError, setTaskError] = useState('');
-  const taskOpen = overlayState.token === createToken ? overlayState.open : createToken === 'task';
+
+  useEffect(() => {
+    if (createToken === 'task') setTaskOpen(true);
+  }, [createToken]);
 
   useEffect(() => {
     let active = true;
@@ -88,14 +88,14 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const openTask = useCallback(() => {
     setTaskError('');
     setTaskSaved(false);
-    setOverlayState({ token: createToken, open: true });
-  }, [createToken]);
+    setTaskOpen(true);
+  }, []);
 
   const closeTask = useCallback(() => {
-    setOverlayState({ token: createToken, open: false });
+    setTaskOpen(false);
     setTaskError('');
     replace('/admin/command', { scroll: false });
-  }, [createToken, replace]);
+  }, [replace]);
 
   const changeTaskOpen = useCallback((open: boolean) => {
     if (!open) closeTask();
@@ -215,6 +215,17 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
         description="Your next best actions across contacts, tasks, pipeline, and agreements."
         actions={headerActions}
       />
+      {taskSaved && !taskOpen ? (
+        <p
+          className="command-sr-only"
+          role="status"
+          aria-label="Task creation status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          Task saved
+        </p>
+      ) : null}
 
       <div className="command-home-body command-content-gutters">
         {loadState.kind === 'loading' ? (
@@ -346,7 +357,11 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
               />
             </label>
           </div>
-          {taskError ? <p role="alert" className="command-home-error-copy">{taskError}</p> : null}
+          {taskError ? (
+            <p role="alert" aria-live="assertive" aria-atomic="true" className="command-home-error-copy">
+              {taskError}
+            </p>
+          ) : null}
           <div className="command-home-form-actions">
             <button type="button" className="command-secondary-button command-touch-target" onClick={closeTask}>
               Cancel

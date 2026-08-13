@@ -49,7 +49,9 @@
 
 - In the Codex in-app Browser, global search returned Agreements for `agreement`; Personal, Team, and All task tabs each selected correctly; and the primary action navigated to `/admin/command/tasks?tab=todo&due=past`.
 - At 390×844, the mobile drawer opened, measured 320×844, closed with Escape, and restored the undisturbed page.
-- Global search, rail expansion, mobile drawer, quick-task dialog, retry, focus trapping/restoration, keyboard navigation, axe WCAG A/AA, forced colors, and reduced motion are covered by deterministic browser gates.
+- A keyboard-only browser gate begins with the browser's first Tab and reaches the skip link, SWS brand, rail expansion, active Home module, global search, and contextual Create action. It then exercises the quick-task assertive error and polite success announcements before reaching and operating the Contacts table's `aria-sort` header.
+- Global search, the mobile drawer, and the quick-task dialog each have exact first-to-last `Shift+Tab` and last-to-first `Tab` containment assertions, Escape focus restoration, and axe WCAG A/AA coverage.
+- Command API fixtures fail closed with a diagnostic for any endpoint or method that was not intentionally registered. Retry behavior, forced colors, and reduced motion remain covered by deterministic browser gates.
 - Linux Playwright baseline candidates were generated in `mcr.microsoft.com/playwright:v1.62.1-noble`, inspected individually, and retained only after this comparison.
 
 ## Remaining P3 notes

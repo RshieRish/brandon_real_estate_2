@@ -56,3 +56,12 @@ test('nested routes retain their module active state', async ({ commandPage }) =
     commandPage.getByRole('navigation', { name: 'Command modules' }).getByRole('link', { name: 'Contacts' }),
   ).toHaveAttribute('aria-current', 'page');
 });
+
+test('unexpected Command fixture endpoints fail closed with a diagnostic', async ({ commandPage, routeState }) => {
+  routeState.expectedHttpFailures.add('/referrals');
+  await commandPage.goto('/admin/command/referrals');
+
+  await expect(commandPage.getByRole('alert').filter({ hasText: 'Unexpected Command fixture request' })).toContainText(
+    'Unexpected Command fixture request: GET /referrals',
+  );
+});

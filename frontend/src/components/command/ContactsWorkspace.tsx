@@ -29,6 +29,7 @@ export function ContactsWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [nameSort, setNameSort] = useState<'ascending' | 'descending'>('ascending');
   const [draft, setDraft] = useState({ first_name: '', last_name: '', email: '', phone: '' });
 
   useEffect(() => {
@@ -66,6 +67,12 @@ export function ContactsWorkspace({
   }
 
   const viewResult = applyContactWorkspaceView(items, { kind: view }, new Date());
+  const sortedRows = [...viewResult.rows].sort((left, right) => {
+    const leftName = `${left.first_name} ${left.last_name}`.trim().toLocaleLowerCase('en-US');
+    const rightName = `${right.first_name} ${right.last_name}`.trim().toLocaleLowerCase('en-US');
+    const comparison = leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+    return nameSort === 'ascending' ? comparison : -comparison;
+  });
 
   return (
     <div className="min-h-[100dvh] bg-[#080807] p-6 text-white">
@@ -119,12 +126,26 @@ export function ContactsWorkspace({
           </p>
         ) : null}
         <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-white/[.035]">
-          <table className="w-full text-left text-sm">
+          <table aria-label="Contacts" className="w-full text-left text-sm">
             <thead className="bg-white/5 text-xs uppercase tracking-widest text-white/45">
-              <tr><th className="p-4">Contact</th><th className="p-4">Email</th><th className="p-4">Phone</th><th className="p-4">Stage</th></tr>
+              <tr>
+                <th scope="col" aria-sort={nameSort} className="p-4">
+                  <button
+                    type="button"
+                    aria-label="Sort contacts by name"
+                    className="inline-flex min-h-11 items-center font-inherit uppercase tracking-inherit"
+                    onClick={() => setNameSort((current) => current === 'ascending' ? 'descending' : 'ascending')}
+                  >
+                    Contact
+                  </button>
+                </th>
+                <th scope="col" className="p-4">Email</th>
+                <th scope="col" className="p-4">Phone</th>
+                <th scope="col" className="p-4">Stage</th>
+              </tr>
             </thead>
             <tbody>
-              {viewResult.rows.map((contact) => (
+              {sortedRows.map((contact) => (
                 <tr key={contact.id} className="border-t border-white/10">
                   <td className="p-4 font-semibold">
                     <Link className="hover:text-[#eac469]" href={`/admin/command/contacts/${contact.id}`}>

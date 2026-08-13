@@ -36,7 +36,9 @@ test('utility Create task opens one dialog, clears the query, and restores trigg
 
   await headerAction.click();
   await expect(commandPage).toHaveURL('/admin/command?create=task');
-  await expect(commandPage.getByRole('dialog', { name: 'Create task' })).toBeVisible();
+  const dialog = commandPage.getByRole('dialog', { name: 'Create task' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close detail' })).toBeFocused();
   await commandPage.keyboard.press('Escape');
 
   await expect(commandPage).toHaveURL('/admin/command');

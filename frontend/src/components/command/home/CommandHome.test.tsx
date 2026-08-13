@@ -257,6 +257,35 @@ describe('Command Home', () => {
     expect(navigationMocks.replace).toHaveBeenCalledWith('/admin/command', { scroll: false });
   });
 
+  it('announces a quick-created task through a polite live region', async () => {
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={resolved()} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Call new lead');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+    const status = await screen.findByRole('status', { name: 'Task creation status' });
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveTextContent('Task saved');
+  });
+
+  it('announces quick-task failures through an assertive live region', async () => {
+    apiMocks.createTask.mockRejectedValueOnce(new Error('Synthetic task rejection'));
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={resolved()} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Rejected task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveAttribute('aria-live', 'assertive');
+    expect(alert).toHaveTextContent('Synthetic task rejection');
+  });
+
   it('reloads and swaps the whole Home model atomically after quick task creation', async () => {
     const user = userEvent.setup();
     let resolveRefresh!: (model: CommandHomeModel) => void;
