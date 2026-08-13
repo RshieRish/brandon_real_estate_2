@@ -267,6 +267,7 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Modify `backend/models/command_contacts.py`: add contact/source-occurrence ownership and permit recovered timeline rows with no exposed timestamp.
 - Create `backend/alembic/versions/5b9d1e2f3a4c_add_contact_occurrence_context.py`: additive occurrence/activity/timeline migration whose parent is `4a8c0d1e2f3b`.
 - Create `backend/alembic/versions/6c0e2f4a5b7d_add_timeline_query_support.py`: online canonical-email backfill plus additive timeline query indexes whose parent is `5b9d1e2f3a4c`.
+- Create `backend/alembic/versions/7d1f3a5b6c8e_add_contact_workspace_summary_indexes.py`: index-only Contacts workspace-summary support whose parent is `6c0e2f4a5b7d`; it creates and owns only the five missing contact-first summary indexes.
 - Create `backend/services/command_contact_contracts.py`: framework-neutral directory, detail, section, evidence, timeline, celebration, bulk, audit, filter, and sort contracts shared by query services.
 - Create `backend/services/command_contact_occurrences.py`: validate and idempotently persist child-occurrence ownership from parser payload context.
 - Create `backend/services/command_contact_timeline.py`: typed merge of recovered timeline events, `CRMActivity`, leads, and bookings with source-key dedupe.
@@ -285,6 +286,7 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `backend/tests/test_command_contact_email_writes.py`: all current Command contact write and canonical duplicate-detection paths.
 - Create `backend/tests/test_command_contact_timeline.py`: deterministic bounded aggregation, integrity preflight, non-duplication, exact ordering, and positional cursor behavior.
 - Create `backend/tests/test_command_contact_timeline_migration.py`: online-only bounded canonical backfill, exact indexes, helper parity, and safe downgrade coverage for revision `6c0e2f4a5b7d`.
+- Create `backend/tests/test_command_contact_summary_migration.py`: ORM/migration index parity, real SQLite upgrade/downgrade with row preservation, and PostgreSQL online/offline upgrade/downgrade SQL compilation for revision `7d1f3a5b6c8e`.
 - Modify `backend/tests/test_booking_calendar.py`: synchronized booking email and UTC database timestamp regressions.
 - Modify `backend/tests/test_command_contact_materializer.py`: normalized contact email and UTC recovered-event persistence regressions.
 - Create `backend/tests/test_command_contacts_service.py`: directory/detail/section/evidence/celebration/mutation query tests.
@@ -1182,14 +1184,46 @@ git commit -m "feat: aggregate Command contact timelines"
 
 **Files:**
 - Modify: `backend/models/command.py`
+- Create: `backend/alembic/versions/7d1f3a5b6c8e_add_contact_workspace_summary_indexes.py`
 - Modify: `backend/services/command_contact_contracts.py`
 - Modify: `backend/services/command_contact_timeline.py`
 - Create: `backend/services/command_contacts.py`
 - Modify: `backend/tests/test_command_contacts_models.py`
+- Create: `backend/tests/test_command_contact_summary_migration.py`
 - Modify: `backend/tests/test_command_contact_timeline.py`
 - Create: `backend/tests/test_command_contacts_service.py`
 
-Task 5C adds no Alembic revision. It adds the already-deployed
+Task 5C adds revision `7d1f3a5b6c8e`, with parent `6c0e2f4a5b7d`, and adds
+only these indexes that are absent at its parent:
+
+```text
+ix_crm_tasks_contact_status_id
+  ON crm_tasks(contact_id, status, id)
+ix_crm_notes_contact_id
+  ON crm_notes(contact_id, id)
+ix_crm_saved_searches_contact_id
+  ON crm_saved_searches(contact_id, id)
+ix_crm_smart_plan_enrollments_contact_status_id
+  ON crm_smart_plan_enrollments(contact_id, status, id)
+ix_crm_opportunity_contacts_contact_opportunity
+  ON crm_opportunity_contacts(contact_id, opportunity_id)
+```
+
+Declare the same exact names and column order in the five models'
+`__table_args__`; do not add another index where the parent metadata/database
+already supplies the same ordered columns. Upgrade creates only these five
+indexes. Downgrade drops only these five indexes in reverse order, preserves
+every table/row/constraint, and returns to `6c0e2f4a5b7d`. There is no data
+backfill or application-code import, so online upgrade/downgrade and
+PostgreSQL offline `--sql` upgrade/downgrade must all compile and must not
+refuse offline mode. Migration tests assert the exact revision chain and
+index name/table/column maps, run real SQLite upgrade then downgrade around
+sentinel rows, compile both directions for PostgreSQL, and prove no column,
+constraint, or row changes. After Task 5C lands, `alembic heads` prints only
+`7d1f3a5b6c8e (head)`; until then the implemented source-tree head remains
+`6c0e2f4a5b7d`.
+
+Task 5C also adds the already-deployed
 `UniqueConstraint("contact_id", "tag_id", name="uq_crm_contact_tag")` to
 `CRMContactTag.__table_args__` so ORM metadata exactly matches revision
 `fa4c19d2e3b7`; it must not attempt to create, rename, or replace that database
@@ -1705,7 +1739,53 @@ async delete_saved_search(db, search_id: int, *, actor_subject: str) -> SavedSea
 Task 5C also exposes exactly
 `async count_contact_bookings(db, contact_id: int) -> int` from
 `command_contact_timeline.py`; it is the shared, framework-neutral Task 5B
-booking ownership/count helper used by `get_contact_workspace_summary`.
+booking ownership/count helper used by `get_contact_workspace_summary`. It
+validates a positive exact integer contact ID, loads `CRMContact` and its
+optional `Lead` together, applies `_require_contact_email_integrity`, raises
+`ContactNotFound` for an absent contact, and raises
+`ContactTimelineIntegrityError` for a non-null missing lead. For a lead-backed
+contact it reuses the exact Task 5B linked-booking drift scan: PK keyset pages
+of at most 1,000 for that single `lead_id`, ordered by ID, validating
+`canonical_email(Booking.email) == Booking.normalized_email`; the helper
+returns the number of validated rows rather than issuing an unvalidated
+count. For a leadless contact, null canonical email or a canonical primary
+email with zero/multiple `CRMContact` owners returns zero. Exactly one owner
+must be this contact; then matching `lead_id IS NULL` bookings are scanned by
+the indexed `(scheduled_at ASC, id ASC)` keyset in pages of at most 1,000,
+each raw/derived email pair is validated, and the validated row count is
+returned. `CRMContactMethod` never participates. Both scans are
+`O(ceil(n/1000))`, retain at most one batch, use no float timestamp conversion,
+and emit no raw email in errors/logs. The existing page-sized Task 5B timeline
+fetch remains unchanged; only this whole-domain count helper may issue a
+row-dependent number of integrity queries. Tests cover 0, 1, 1,001, and 2,001
+rows, equal scheduled timestamps across a page boundary, lead/leadless paths,
+ambiguous owners, raw/derived drift on the final page, missing lead, constant
+1,000 batch size, and no `CRMContactMethod` fallback.
+
+`get_contact_detail` accepts only a positive exact integer and otherwise uses
+the same privacy-safe `ContactNotFound("contact does not exist")` as an absent
+row. Under `db.no_autoflush`, it loads the contact directly (never by walking
+directory pages) and batch-loads profile, methods, addresses, ownerships,
+tags, and all candidate recovered contact-profile links. A recovered link is
+valid only when its source exists with
+`source_system="kw_command", module="contacts",
+record_kind="contact_profile"` and targets this exact contact. Profile and at
+least one valid recovered link must either both exist or both be absent;
+missing/wrong-domain/dangling/other-contact or ambiguous target links fail as
+`ContactDataIntegrityError`, with no partial DTO. `ContactDetail.contact` is
+built by the same directory-row projector. Its merged celebrations retain
+internal-date precedence, while `ContactRecoveredProfile.birthday` and
+`.anniversary` independently expose only the recovered observation (verified,
+yearless, or sentinel), even when the contact row has an internal date.
+Addresses order `is_primary DESC, id ASC`; ownership orders role
+`owner, assignee, collaborator`, then `is_primary DESC, id ASC`; tags order
+case-folded name then ID. Only DTO fields are projected: never `source_key`,
+raw celebration text, parser payload, provider contact ID, or archive path.
+One-row and 100-child fixtures execute the same bounded number of SELECTs
+(at most eight), and tests cover empty optional associations, internal-only,
+valid recovered, profile/link mismatch in both directions, wrong-domain and
+cross-contact links, deterministic ordering, internal/recovered celebration
+separation, no autoflush/DML, and privacy-safe exceptions.
 
 `list_contact_section` accepts page `>=1` and page size `1..100`. It rejects
 `ContactSection.TIMELINE` with `ContactSectionUnsupported` before issuing a
@@ -1747,6 +1827,45 @@ collection; this service must not repeat a raw/lower-email lookup. Tests cover
 zero/one/many source-only rows, materialized de-duplication, cross-contact and
 dangling links, unknown task state, inactive/null Smart Plans, and both Task
 5B booking linkage paths.
+
+The summary validator begins with all occurrences owned by the requested
+contact and batch-joins each occurrence through its section capture, capture
+position, and source record. Every joined row must share that contact ID; the
+source must be `kw_command/contacts`, and the only accepted record-kind/section
+pairs are `contact_opportunity/opportunities`,
+`contact_smart_plan/smart_plans`, `contact_note/notes`,
+`contact_saved_search/saved_searches`, and `contact_task` with exactly one of
+`tasks_to_do|tasks_completed|tasks_archived`. Timeline occurrences are not in
+the summary domain. Load *all* `CRMEntitySource` rows for those source IDs in
+one batch, not just expected entity types. Zero links means source-only.
+Exactly one compatible link is materialized only after its target exists and
+is owned by this contact: `CRMTask.contact_id`, `CRMNote.contact_id`,
+`CRMSavedSearch.contact_id`, `CRMSmartPlanEnrollment.contact_id`, or an
+existing `CRMOpportunity` joined to this contact by
+`CRMOpportunityContact`. Any extra/wrong-type link, missing target,
+cross-contact target, source reused by two occurrences, or disagreement among
+occurrence/section/position/source fails closed before constructing a result.
+
+Internal task counts accept only exact statuses `open|completed|archived`;
+source-only task state comes only from its owning section. Internal active
+Smart Plans use `status.strip().casefold() == "active"`; source-only rows use
+the safe projected status with the same comparison, and null/other status is
+inactive. Opportunities count distinct contact-owned opportunity IDs (so two
+roles do not double count); notes and contact-owned saved searches count rows.
+Each compatible materialized target is already in the internal set and adds
+zero; each source-only occurrence adds exactly one to its domain. Global saved
+searches never count. Booking failures are translated to the Task 5C
+privacy-safe not-found/integrity taxonomy without exposing an email or lead
+value. Normalized counts, occurrence/link preflight, and target ownership use
+set-based aggregate/`IN` queries with the five revision `7d1f3a5b6c8e`
+indexes and never `db.get()` per occurrence. SQL-capture tests compare one
+row with 101 rows and require the same non-booking SELECT count; only the
+documented 1,000-row booking integrity scan may scale with data. The matrix
+tests independently cover every internal-only, source-only, materialized, and
+mixed union; duplicate opportunity roles; all task states; active casing;
+global searches; every wrong/multiple/dangling/cross-contact link; source and
+section mismatch; booking ambiguity/drift/missing lead; and prove an integrity
+failure returns no partial summary.
 
 `get_contact_evidence` computes every aggregate from live normalized rows; the
 historical `317/317/0` and `51/2/49` values are acceptance expectations, never
@@ -1914,12 +2033,16 @@ cd backend
 "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_contracts.py \
   tests/test_command_contacts_models.py \
+  tests/test_command_contact_summary_migration.py \
   tests/test_command_contacts_service.py \
   tests/test_command_contact_timeline.py \
   tests/test_command_contact_occurrences.py
+"$PROJECT_PYTHON" -m alembic heads
 git add models/command.py services/command_contact_contracts.py \
+  alembic/versions/7d1f3a5b6c8e_add_contact_workspace_summary_indexes.py \
   services/command_contact_timeline.py services/command_contacts.py \
   tests/test_command_contact_contracts.py tests/test_command_contacts_models.py \
+  tests/test_command_contact_summary_migration.py \
   tests/test_command_contact_timeline.py tests/test_command_contacts_service.py
 git commit -m "feat: query Command contact workspaces"
 ```
