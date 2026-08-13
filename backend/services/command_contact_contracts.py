@@ -659,8 +659,7 @@ class ContactMaterialized:
     captured_at: datetime | None
     value: ContactOccurrenceValue
     entity_type: Literal[
-        "contact_timeline_event", "note", "saved_search", "task",
-        "smart_plan", "opportunity",
+        "note", "saved_search", "task", "smart_plan", "opportunity",
     ]
     entity_id: int
 

@@ -5,6 +5,7 @@ import json
 from dataclasses import FrozenInstanceError, fields
 from datetime import UTC, date, datetime
 from types import MappingProxyType
+from typing import get_args, get_type_hints
 
 import pytest
 
@@ -18,6 +19,7 @@ from services.command_contact_contracts import (
     ContactDirectoryFilters,
     ContactImportCommand,
     ContactImportRowCommand,
+    ContactMaterialized,
     ContactNoteCreateCommand,
     ContactOriginFilter,
     ContactSavedSearchCreateCommand,
@@ -36,6 +38,17 @@ from services.command_contact_contracts import (
     redact_contact_audit_value,
     timeline_position_is_after,
 )
+
+
+def test_materialized_section_entity_types_exclude_timeline():
+    entity_type = get_type_hints(ContactMaterialized)["entity_type"]
+    assert get_args(entity_type) == (
+        "note",
+        "saved_search",
+        "task",
+        "smart_plan",
+        "opportunity",
+    )
 
 
 def test_exact_enum_values_are_stable():

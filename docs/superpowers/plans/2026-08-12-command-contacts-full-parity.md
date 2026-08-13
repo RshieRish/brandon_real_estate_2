@@ -1692,7 +1692,7 @@ projection rules are:
   empty scalars are omitted.
 
 Every `source_key_hash` is exactly
-`sha256(b"command-contact-source-key-v1\0" + source_key.encode("utf-8")).hexdigest()`.
+`sha256(b"command.contact.section-source-key.v1\0" + source_key.encode("utf-8")).hexdigest()`.
 Tests pin the byte domain and lowercase 64-hex output and prove neither the raw
 key nor any unlisted payload field reaches a DTO, error, audit row, or log.
 
@@ -1824,12 +1824,21 @@ target row, incompatible entity type, target owned by another contact, or
 multiple targets is `ContactDataIntegrityError`, not source-only. Raw source
 keys, provider IDs, parser payloads, and archive paths are never response
 fields. Rows order by section capture time descending nulls last, capture
-ordinal ascending, occurrence ordinal ascending, then ownership ID ascending.
-Every row, including a materialized row, passes through the single strict
-source-occurrence projector defined in Step 1 before its DTO is built;
+ordinal ascending, occurrence ordinal ascending, then
+`CRMContactSourceOccurrence.id ASC`.
+
+The global integrity preflight over the requested section's full occurrence
+universe is structural/link/ownership-only: it validates section/position/
+contact agreement, source-link cardinality, compatible target existence and
+same-contact ownership, but it does not parse every occurrence's payload JSON.
+The single strict source-occurrence projector defined in Step 1 applies only
+to rows emitted by the requested page after pagination. Every emitted row,
+including a materialized row, passes through it before its DTO is built;
 malformed/non-object payload or `values`, missing required title, over-bound
 text, unsafe criteria, and invalid RFC3339 input follow that projector's exact
-fail/nullable rules rather than ad hoc coercion. A seven-section test matrix
+fail/nullable rules rather than ad hoc coercion. This split avoids an
+unbounded full-payload scan while preserving fail-closed global ownership and
+link integrity. A seven-section test matrix
 asserts all five discriminants and the three task states, source-only and
 materialized ownership for each compatible type, every strict payload rule,
 and that no private payload value reaches a DTO or exception.
