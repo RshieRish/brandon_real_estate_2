@@ -40,7 +40,7 @@ The current production archive contains **12,580 checksum-valid artifacts** tota
 
 ### Recoverable Command baseline
 
-- **Contacts:** 317 captured contact positions with the required eight-view matrix: Timeline, Opportunities, SmartPlans, Notes, Saved Searches, and Tasks in To Do/Completed/Archived states. The archive resolves 313 distinct names/identities; capture positions and business identities remain separate concepts.
+- **Contacts:** 317 captured contact positions with 317 unique upstream provider IDs and the required eight-view matrix: Timeline, Opportunities, SmartPlans, Notes, Saved Searches, and Tasks in To Do/Completed/Archived states. The immutable identity audit resolves 317 recovered identities and coalesces zero aliases. The existing 313 source-normalized/311 leadless database rows are stale legacy-import audit history that must be repaired in place; they are not the recovered source target and must not be deleted blindly. The database also contains 51 lead-backed contacts, including two strong verified overlaps with recovered identities, leaving 49 legacy-only contacts and an expected combined directory total of 366.
 - **Tasks:** 2,173 stable task IDs with expanded panels: 1,506 To Do, 44 Completed, and 623 Archived.
 - **SmartPlans:** 25 rendered plan rows, 14 unique expanded plan names, zero Published rows, and a displayed badge of 31. The difference is evidence-only, not six invented plans.
 - **Opportunities:** 23 exposed opportunity IDs with four captured secondary tabs each (92 tab captures): Documents, Notes, Timeline, and Offers & Commissions. Vendors has representative UI coverage, not bulk vendor coverage.
@@ -105,7 +105,7 @@ The dashboard's one job is to answer: **“What needs Brandon’s attention next
 - Previous/next contact navigation and searchable contact jump.
 - Preserve source, account, owner, assignee, collaborators, neighborhoods, addresses, preferences, legal name, birthday/anniversary month/day, relationships, company/title, tags, and captured activity fields.
 - Merge first-class CRM activity with linked legacy lead/booking/funnel activity without duplicating events.
-- Show capture-position evidence separately when multiple captured positions resolve to one identity.
+- Show each capture position and upstream provider identity separately; show verified internal-contact overlap evidence without collapsing or hiding either source record.
 
 ### Tasks
 

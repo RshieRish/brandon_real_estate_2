@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reconstruct every recoverable Command contact and all eight captured contact views as a truthful, usable Sold With Sweeney CRM workspace while preserving 317 capture positions, resolving 313 recovered business identities, retaining 49 legacy-only contacts and every `lead_id`, and never inventing birthday or anniversary data.
+**Goal:** Reconstruct every recoverable Command contact and all eight captured contact views as a truthful, usable Sold With Sweeney CRM workspace while preserving 317 capture positions and 317 unique upstream provider identities, retaining all 51 lead-backed contacts and every `lead_id`, recognizing the two strong verified overlaps, preserving 49 legacy-only contacts, repairing rather than blindly deleting stale normalized rows, and never inventing birthday or anniversary data.
 
 **Architecture:** A pure `ContactsParser` converts the immutable, checksum-verified archive into provenance records for provider contact rows, capture positions, the eight-view matrix, and exposed child occurrences. A transactional contact materializer resolves strong source identities into additive contact/profile tables and source links; focused FastAPI services then aggregate recovered evidence with internal CRM, lead, booking, task, SmartPlan, opportunity, note, and saved-search records without text-based duplication. The Next.js contact directory and split detail workspace consume typed paginated APIs, show materialized rows and source-only occurrences distinctly, and expose capture quality and original artifacts through the shared Command evidence components.
 
@@ -26,11 +26,15 @@ The contacts import is accepted only when one apply run records all of these val
 {
   "capture_positions": 317,
   "provider_contact_rows": 317,
-  "distinct_recovered_identities": 313,
-  "normalized_recovered_contacts": 313,
+  "unique_upstream_provider_ids": 317,
+  "distinct_recovered_identities": 317,
+  "normalized_recovered_contacts": 317,
+  "identity_aliases_coalesced": 0,
+  "lead_backed_contacts": 51,
+  "strong_verified_overlaps": 2,
   "legacy_only_contacts": 49,
-  "legacy_lead_ids_preserved": 49,
-  "final_contact_total": 362,
+  "legacy_lead_ids_preserved": 51,
+  "expected_combined_contact_total": 366,
   "section_artifacts": 2536,
   "section_counts": {
     "timeline": 317,
@@ -48,7 +52,43 @@ The contacts import is accepted only when one apply run records all of these val
 }
 ```
 
-`final_contact_total == 362` is specific to the recovered production dataset: `313 recovered + 49 legacy-only`. The service itself computes `existing_internal_or_legacy + newly materialized recovered` and never deletes an unrelated internal contact to force that number.
+`expected_combined_contact_total == 366` is specific to the recovered production dataset: `317 recovered identities + 49 legacy-only`, with the two strong verified overlaps contained in both the 317 recovered and 51 lead-backed populations and therefore counted once in the combined directory. The service computes the union from source mappings and verified overlap links; it never deletes, rewrites, or invents a contact merely to force that number.
+
+The existing database history is deliberately not an acceptance target: the prior import left 313 source-normalized rows, of which 311 are leadless, beside 51 lead-backed contacts. Those stale 313/311 rows remain auditable repair inputs. A repair run must map, adopt, split, or supersede them transactionally from immutable provenance; it must never delete them blindly. Every one of the 51 nonnull `lead_id` values and its contact row remains unchanged.
+
+### Redacted identity-audit provenance
+
+The production identity audit may be recorded only through counts, capture ordinals, and one-way hashes. It must not store raw names, emails, phone numbers, provider IDs, addresses, or timeline text in documentation or test fixtures.
+
+- Archive truth: 317 capture positions, 317 unique upstream provider IDs, 317 resolved identities, zero aliases coalesced, and 2,536 canonical section captures.
+- Internal overlap truth: 51 lead-backed contacts; exactly two recovered identities have separately verified strong email overlaps with that population; 49 lead-backed contacts are legacy-only.
+- The five-placeholder evidence group is represented only as five capture ordinals or hashed provider/evidence-bundle references plus per-record field-presence categories. It is evidence for repairing the stale normalized history, never a reason to collapse five upstream IDs.
+- The two verified overlaps are represented only as counts and salted/one-way evidence hashes. No private matching value appears in source control.
+- Any acceptance artifact containing private values fails review and must be regenerated in redacted form.
+
+A permissible production evidence shape is:
+
+```json
+{
+  "placeholder_group": {
+    "count": 5,
+    "references": [
+      {"capture_ordinal": "<redacted-ordinal-1>", "evidence_hash": "<sha256-1>", "present_fields": ["email"]},
+      {"capture_ordinal": "<redacted-ordinal-2>", "evidence_hash": "<sha256-2>", "present_fields": []},
+      {"capture_ordinal": "<redacted-ordinal-3>", "evidence_hash": "<sha256-3>", "present_fields": ["legal_name"]},
+      {"capture_ordinal": "<redacted-ordinal-4>", "evidence_hash": "<sha256-4>", "present_fields": ["legal_name"]},
+      {"capture_ordinal": "<redacted-ordinal-5>", "evidence_hash": "<sha256-5>", "present_fields": ["email"]}
+    ]
+  },
+  "verified_overlaps": {
+    "count": 2,
+    "match_type": "strong_email",
+    "evidence_hashes": ["<sha256-a>", "<sha256-b>"]
+  }
+}
+```
+
+The literal angle-bracket values above are documentation placeholders, not production evidence. The acceptance run substitutes only capture ordinals and nonreversible hashes generated from the immutable bundle; private identity values never enter the file.
 
 The second apply of the same fingerprint/parser version must add zero rows to every contact-domain table, zero `crm_entity_sources` rows, zero source-artifact links, and must produce the identical reconciliation detail object.
 
@@ -81,8 +121,8 @@ Contacts materializes profiles, addresses, methods, ownership, neighborhoods, re
 Provider record identity and normalized business identity are separate:
 
 - `source_contact_id` is the 24-character lowercase ID extracted from the captured contact URL. Every one of the 317 provider rows gets its own `contact_profile` source record.
-- `capture_ordinal` is the seven-digit directory position (`0000001` through `0000317`). Every position gets its own `contact_capture_position` rendered occurrence even when multiple positions resolve to one business identity.
-- A normalized `CRMContact` may have multiple provider rows only after deterministic strong-identifier resolution.
+- `capture_ordinal` is the seven-digit directory position (`0000001` through `0000317`). Every position gets its own `contact_capture_position` rendered occurrence, and the audited production bundle has a one-to-one position/provider-ID relationship.
+- A normalized `CRMContact` may have multiple provider rows only after deterministic strong-identifier resolution, but the audited production source has zero such coalesced aliases. Cross-system overlap with a lead-backed internal contact is recorded as a source link, not as a provider-row alias.
 
 `resolve_identity_clusters()` applies this order:
 
@@ -169,7 +209,7 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `backend/tests/test_command_contacts_parser.py`: parser/source-record/matrix/date tests.
 - Create `backend/tests/test_command_contact_identity.py`: strong-identity and conflict tests.
 - Create `backend/tests/test_command_contact_materializer.py`: real async SQLite import/idempotency/legacy-preservation tests.
-- Create `backend/tests/test_command_contacts_archive_gate.py`: opt-in real-archive 317-position/2,536-section gate, extended to the 313-identity gate when the resolver is integrated.
+- Create `backend/tests/test_command_contacts_archive_gate.py`: opt-in real-archive gate for 317 positions, 317 unique provider IDs, 317 resolved identities, zero coalesced aliases, and 2,536 sections.
 - Modify `backend/tests/test_command_reconciliation.py`: materializer transaction, failure, resume, and no-materializer regression cases.
 
 ### Backend query/API boundary
@@ -504,7 +544,7 @@ The parser emits deterministic identity-candidate payloads but performs no clust
 
 - [ ] **Step 6: Add the opt-in real-archive gate**
 
-The test must skip only when `COMMAND_ARCHIVE_ROOT` is absent. When present, load the immutable artifact inventory, run checksum verification, parse Contacts, and assert 317 provider rows, 317 capture positions, 2,536 section records, 317 records for every section, zero unmatched rows, and zero fabricated celebrations. Task 3 adds the 313-identity assertion after the identity resolver exists.
+The test must skip only when `COMMAND_ARCHIVE_ROOT` is absent. When present, load the immutable artifact inventory, run checksum verification, parse Contacts, and assert 317 provider rows, 317 unique provider IDs, 317 capture positions, 2,536 section records, 317 records for every section, zero unmatched rows, zero coalesced aliases, and zero fabricated celebrations. Task 3 adds the deterministic 317-identity assertion after the identity resolver exists.
 
 Run:
 
@@ -597,7 +637,7 @@ Resolve the emitted candidates after all provider rows have parsed. Set `observe
 
 - [ ] **Step 5: Extend the real-archive gate to identity truth**
 
-With `COMMAND_ARCHIVE_ROOT` set, assert exactly 313 identity clusters, exactly four aliases coalesced across the 317 provider rows, zero ambiguous identities, and deterministic cluster hashes after reversing the artifact inventory. This converts the Task 2 archive test into the complete parser-side truth gate.
+With `COMMAND_ARCHIVE_ROOT` set, assert exactly 317 identity clusters, zero aliases coalesced across the 317 unique provider IDs, zero ambiguous identities, and deterministic cluster hashes after reversing the artifact inventory. Record the five-placeholder evidence group only through capture ordinals or one-way evidence hashes and field-presence categories; record the two cross-system verified email overlaps only through counts/hashes. This converts the Task 2 archive test into the complete parser-side truth gate without checking private values into source control.
 
 - [ ] **Step 6: Run tests and commit**
 
@@ -625,13 +665,13 @@ git commit -m "feat: resolve Command contact identities"
 
 - [ ] **Step 1: Write failing materializer tests against real async SQLite**
 
-Seed 49 `Lead` rows and 49 `CRMContact` rows whose `lead_id` values point to those exact Lead rows, then apply a synthetic 313-identity/317-position source set. Assert:
+Seed 51 `Lead` rows and 51 `CRMContact` rows whose `lead_id` values point to those exact Lead rows. Give exactly two source identities strong verified email overlap links to two of those lead-backed contacts; leave 49 legacy-only. Seed a separate stale normalized-history fixture representing the repair boundary, then apply a synthetic 317-identity/317-position source set. Assert:
 
 ```python
-assert result.normalized_count == 313
-assert await count(CRMContact) == 362
-assert await count(CRMContact, CRMContact.lead_id.is_not(None)) == 49
-assert set(await scalar_list(select(CRMContact.lead_id).where(CRMContact.lead_id.is_not(None)))) == set(range(1, 50))
+assert result.normalized_count == 317
+assert await count(CRMContact) == 366
+assert await count(CRMContact, CRMContact.lead_id.is_not(None)) == 51
+assert set(await scalar_list(select(CRMContact.lead_id).where(CRMContact.lead_id.is_not(None)))) == set(range(1, 52))
 assert await count(CRMContactCapturePosition) == 317
 assert await count(CRMContactSectionCapture) == 2536
 assert await count(CRMEntitySource, CRMEntitySource.entity_type == "contact") == 317
@@ -803,7 +843,7 @@ GET    /api/v1/command/contacts/{id}/evidence
 GET    /api/v1/command/celebrations?month=8
 ```
 
-The existing `GET /contacts?limit=&offset=&query=&stage=` route remains array-shaped for compatibility; `GET /contacts/directory` owns the paginated response. Directory tests cover query, stage, owner, assignee, tag, source, origin, health range, birthday, anniversary, SmartView, sort, direction, page `>=1`, page size `1..100`, totals, and stable ties. Bulk requests max at 200 IDs, are atomic, and emit actor-attributed audits. Evidence tests assert 317/313 semantics and artifact links without archive bytes.
+The existing `GET /contacts?limit=&offset=&query=&stage=` route remains array-shaped for compatibility; `GET /contacts/directory` owns the paginated response. Directory tests cover query, stage, owner, assignee, tag, source, origin, health range, birthday, anniversary, SmartView, sort, direction, page `>=1`, page size `1..100`, totals, and stable ties. Bulk requests max at 200 IDs, are atomic, and emit actor-attributed audits. Evidence tests assert 317 provider/317 identity/zero-alias semantics, the 51/2/49 internal-overlap partition, and artifact links without archive bytes or private identity values.
 
 - [ ] **Step 2: Run router tests and confirm RED**
 
@@ -960,7 +1000,7 @@ Expected: FAIL because the current dark four-column table does not use the share
 
 - [ ] **Step 3: Implement the directory from shared primitives**
 
-Compose `CommandModuleHeader`, `CommandDataTable`, `CommandStatePanel`, `CommandEvidencePanel`, `CommandOverlay`, and toast context. Use an abortable/debounced server request; discard stale responses by request ID. Store filter/sort/page in `URLSearchParams`, reset page to 1 when filters change, and never load all 362 rows into the browser just to filter.
+Compose `CommandModuleHeader`, `CommandDataTable`, `CommandStatePanel`, `CommandEvidencePanel`, `CommandOverlay`, and toast context. Use an abortable/debounced server request; discard stale responses by request ID. Store filter/sort/page in `URLSearchParams`, reset page to 1 when filters change, and never load all 366 rows into the browser just to filter.
 
 Desktop geometry follows `contacts-live-current.png` at 1800×982 with SWS tokens; mobile collapses low-priority columns and preserves a horizontally scrollable table region. All icons come from Phosphor and every interactive target is at least 44×44px.
 
@@ -1009,7 +1049,7 @@ const taskStates = ['To Do', 'Completed', 'Archived'] as const;
 
 Tasks is one ARIA tab with three nested state tabs, producing the required eight captured source views. Bookings appears as an explicitly `SWS internal` auxiliary view and does not count toward the archive matrix.
 
-Assert previous/next navigation preserves current filters; contact jump search; profile/map fields; owner/assignee/collaborators; tags; yearless and sentinel birthday display; explicit anniversary year; actual timeline event bodies; empty notes/searches; source-only opportunity/plan/task rows; materialized links; per-view evidence quality; 317/313 position evidence; artifact downloads; loading/error/retry; and no vendor marks/copy.
+Assert previous/next navigation preserves current filters; contact jump search; profile/map fields; owner/assignee/collaborators; tags; yearless and sentinel birthday display; explicit anniversary year; actual timeline event bodies; empty notes/searches; source-only opportunity/plan/task rows; materialized links; per-view evidence quality; 317 provider/317 identity/zero-alias evidence; the redacted 51/2/49 overlap partition; artifact downloads; loading/error/retry; and no vendor marks/copy.
 
 - [ ] **Step 2: Run and confirm RED**
 
@@ -1063,7 +1103,7 @@ git commit -m "feat: add full Command contact detail workspace"
 
 - [ ] **Step 1: Add deterministic browser fixtures/routes**
 
-Use synthetic names/data and intercept every contact endpoint. Include 313 recovered/317 position counts, 49 legacy-only contacts, one two-position identity, every view state, one materialized and one source-only cross-domain row, one sentinel birthday, one yearless birthday, and one verified anniversary.
+Use synthetic names/data and intercept every contact endpoint. Include 317 recovered identities/317 positions/zero aliases, 51 lead-backed contacts partitioned into two verified overlaps and 49 legacy-only contacts, five redacted placeholder-evidence fixtures identified only by fake ordinals/hashes and field categories, every view state, one materialized and one source-only cross-domain row, one sentinel birthday, one yearless birthday, and one verified anniversary.
 
 - [ ] **Step 2: Write Playwright journeys**
 
@@ -1132,7 +1172,7 @@ Apply is blocked unless verification and reviewed dry-run used the exact product
 
 - [ ] **Step 2: Run the real archive and database preflight**
 
-Before production apply, assert checksums, exact parser counts, current Alembic head, 49 legacy-only rows, all 49 distinct nonnull `lead_id` values, zero ambiguous identity candidates, and a complete dry-run result. Store only totals/hashes/run IDs in the acceptance document—no private names, emails, phones, addresses, timeline bodies, or tokens.
+Before production apply, assert checksums, exact parser counts, current Alembic head, all 51 lead-backed rows and 51 distinct nonnull `lead_id` values, exactly two strong verified cross-system overlaps, 49 legacy-only rows, zero aliases coalesced, zero ambiguous identity candidates, and a complete dry-run result. Inventory the stale 313 source-normalized/311 leadless history for repair without deleting it. Store only totals/hashes/run IDs in the acceptance document—no private names, emails, phones, provider IDs, addresses, timeline bodies, or tokens.
 
 - [ ] **Step 3: Apply migration and Contacts module in a bounded rollout**
 
@@ -1146,9 +1186,12 @@ Record queries/results proving:
 SELECT count(*) FROM crm_contact_capture_positions;              -- 317
 SELECT count(*) FROM crm_contact_section_captures;                -- 2536
 SELECT section_name, count(*) FROM crm_contact_section_captures GROUP BY section_name ORDER BY section_name; -- each 317
-SELECT count(DISTINCT contact_id) FROM crm_contact_capture_positions; -- 313
-SELECT count(*) FROM crm_contacts;                                -- 362
-SELECT count(*), count(DISTINCT lead_id) FROM crm_contacts WHERE lead_id IS NOT NULL; -- 49, 49
+SELECT count(DISTINCT source_contact_id) FROM crm_contact_capture_positions; -- 317
+SELECT count(DISTINCT contact_id) FROM crm_contact_capture_positions; -- 317
+SELECT count(*) FROM crm_contacts;                                -- 366
+SELECT count(*), count(DISTINCT lead_id) FROM crm_contacts WHERE lead_id IS NOT NULL; -- 51, 51
+-- Verified overlap query uses private canonical identifiers in the operator session but records only the aggregate: 2
+-- Lead-backed contacts without a recovered source link: 49
 SELECT count(*) FROM crm_entity_sources WHERE entity_type='contact'; -- 317
 ```
 
@@ -1156,7 +1199,7 @@ Also prove every capture position has eight section rows, every source record ha
 
 - [ ] **Step 5: Run authenticated production smoke tests**
 
-Using an admin session, verify directory totals/pagination/search, one recovered contact with multiple positions, one legacy-only contact retaining `lead_id`, all eight views, one empty section, one source-only occurrence, one materialized occurrence if the dependent domain is deployed, source artifact metadata/download, celebration sentinel/yearless rendering, map limitation, mobile navigation, and 401/403 behavior for non-admin tokens.
+Using an admin session, verify directory totals/pagination/search, one recovered contact linked to one capture position, one of the two verified recovered/lead-backed overlaps, one of the 49 legacy-only contacts retaining `lead_id`, all eight views, one empty section, one source-only occurrence, one materialized occurrence if the dependent domain is deployed, source artifact metadata/download, celebration sentinel/yearless rendering, map limitation, mobile navigation, and 401/403 behavior for non-admin tokens.
 
 - [ ] **Step 6: Populate acceptance evidence, run full suites, and commit docs**
 
@@ -1177,9 +1220,10 @@ Production is not declared complete until the acceptance document contains the d
 
 - The raw archive remains immutable and downloadable only to authenticated admins.
 - 317 provider rows and 317 capture positions remain individually traceable.
-- Exactly 313 recovered identities are normalized; the four coalesced aliases remain visible.
+- Exactly 317 recovered identities are normalized from 317 unique upstream provider IDs; zero aliases are coalesced.
 - All 2,536 section records exist, eight per position and 317 per section.
-- All 49 legacy-only contacts and all 49 `lead_id` values are unchanged.
+- All 51 lead-backed contacts and all 51 `lead_id` values are unchanged; two verified overlaps are linked and the other 49 remain legacy-only.
+- The stale 313 source-normalized/311 leadless rows remain auditable throughout repair and are never deleted blindly.
 - No name-only merge, title-only merge, first-row-wins conflict, or email/phone assumption exists.
 - Birthday/anniversary month/day/year quality is explicit; sentinel/missing years are never presented as verified.
 - Timeline aggregation uses typed source/entity keys, not text/time similarity.
