@@ -52,22 +52,26 @@ from models.command_contacts import (
     CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
 )
-from models.command_provenance import CRMEntitySource, CRMSourceRecord
-from models.command_provenance import CRMSourceRecordArtifact
+from models.command_provenance import (
+    CRMEntitySource,
+    CRMSourceRecord,
+    CRMSourceRecordArtifact,
+)
 from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     CaptureQualityValue,
     ContactActorValue,
     ContactAddressValue,
     ContactArtifactMetadata,
+    ContactCaptureEvidence,
     ContactCelebrationRow,
     ContactCelebrations,
     ContactCelebrationValue,
-    ContactCaptureEvidence,
     ContactDetail,
     ContactDirectoryFilters,
     ContactDirectoryPage,
     ContactDirectoryRow,
+    ContactEvidence,
     ContactMaterialized,
     ContactNeighbors,
     ContactNoteOccurrence,
@@ -82,12 +86,11 @@ from services.command_contact_contracts import (
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
-    ContactSourceOnly,
     ContactSourceMetadata,
+    ContactSourceOnly,
     ContactTagValue,
     ContactTaskOccurrence,
     ContactWorkspaceSummary,
-    ContactEvidence,
     SortDirection,
 )
 from services.command_contact_timeline import (
@@ -1770,7 +1773,8 @@ def _require_evidence_source(
         or source.module != "contacts"
         or source.record_kind != record_kind
         or source.evidence_level not in _EVIDENCE_LEVELS
-        or source.capture_quality not in {quality.value for quality in CaptureQualityValue}
+        or source.capture_quality
+        not in {quality.value for quality in CaptureQualityValue}
     ):
         _evidence_error()
     return source
@@ -1871,8 +1875,7 @@ async def get_contact_evidence(
                 .select_from(CRMContactCapturePosition)
                 .outerjoin(
                     position_source,
-                    position_source.id
-                    == CRMContactCapturePosition.source_record_id,
+                    position_source.id == CRMContactCapturePosition.source_record_id,
                 )
                 .outerjoin(
                     CRMContact,
@@ -2011,6 +2014,7 @@ async def get_contact_evidence(
                 .where(
                     CRMContactTimelineEvent.id == occurrence_link.entity_id,
                     CRMContactTimelineEvent.contact_id == contact_id,
+                    CRMContactTimelineEvent.source_system == "kw_command",
                     CRMContactTimelineEvent.source_record_id
                     == CRMContactSourceOccurrence.source_record_id,
                 )
@@ -2035,8 +2039,7 @@ async def get_contact_evidence(
                 .select_from(CRMContactSourceOccurrence)
                 .outerjoin(
                     section_context,
-                    section_context.id
-                    == CRMContactSourceOccurrence.section_capture_id,
+                    section_context.id == CRMContactSourceOccurrence.section_capture_id,
                 )
                 .outerjoin(
                     position_context,
@@ -2044,8 +2047,7 @@ async def get_contact_evidence(
                 )
                 .outerjoin(
                     occurrence_source,
-                    occurrence_source.id
-                    == CRMContactSourceOccurrence.source_record_id,
+                    occurrence_source.id == CRMContactSourceOccurrence.source_record_id,
                 )
                 .outerjoin(
                     occurrence_link,
@@ -2071,9 +2073,7 @@ async def get_contact_evidence(
         profiles_by_provider: dict[str, list[tuple[CRMSourceRecord, list]]] = {}
         grouped_profiles: dict[int, list] = defaultdict(list)
         for row in profile_rows:
-            source = _require_evidence_source(
-                row[0], record_kind="contact_profile"
-            )
+            source = _require_evidence_source(row[0], record_kind="contact_profile")
             grouped_profiles[source.id].append(row)
         for rows in grouped_profiles.values():
             source = rows[0][0]
@@ -2098,8 +2098,7 @@ async def get_contact_evidence(
                 or target_contact_id != position.contact_id
                 or type(position.capture_ordinal) is not int
                 or position.capture_ordinal <= 0
-                or _CONTACT_PROVIDER_ID_RE.fullmatch(position.source_contact_id)
-                is None
+                or _CONTACT_PROVIDER_ID_RE.fullmatch(position.source_contact_id) is None
                 or position.capture_quality
                 not in {quality.value for quality in CaptureQualityValue}
             ):
@@ -2142,7 +2141,9 @@ async def get_contact_evidence(
                 position_source_for_id[position_id]
             )
         for section, source in section_rows:
-            source = _require_evidence_source(source, record_kind="contact_section_capture")
+            source = _require_evidence_source(
+                source, record_kind="contact_section_capture"
+            )
             if (
                 type(section.id) is not int
                 or section.id <= 0
@@ -2327,10 +2328,7 @@ async def get_contact_evidence(
             or _ARTIFACT_SHA256_RE.fullmatch(row.sha256) is None
             or type(row.size_bytes) is not int
             or row.size_bytes < 0
-            or (
-                row.content_length is not None
-                and row.content_length != row.size_bytes
-            )
+            or (row.content_length is not None and row.content_length != row.size_bytes)
         ):
             _evidence_error("contact evidence artifact is invalid")
         artifact_links.add(key)
@@ -2341,15 +2339,12 @@ async def get_contact_evidence(
                 sha256=row.sha256,
                 size_bytes=row.size_bytes,
                 content_href=(
-                    "/api/v1/command/archive/artifacts/"
-                    f"{row.artifact_id}/content"
+                    f"/api/v1/command/archive/artifacts/{row.artifact_id}/content"
                 ),
             )
         )
 
-    if not capture_positions:
-        aggregate_quality = "limitation"
-    elif any(
+    if not capture_positions or any(
         quality in {CaptureQualityValue.SHELL, CaptureQualityValue.ERROR}
         for quality in requested_qualities
     ):

@@ -761,7 +761,9 @@ async def test_zero_row_nonempty_is_preserved_for_incomplete_capture_quality(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mismatch", ["occurrence", "position_source", "section_source"])
+@pytest.mark.parametrize(
+    "mismatch", ["occurrence", "position_source", "section_source"]
+)
 async def test_evidence_rejects_cross_contact_or_wrong_domain_context(
     evidence_db: AsyncSession,
     mismatch: str,
@@ -877,6 +879,44 @@ async def test_evidence_validates_timeline_event_link_without_parsing_body(
 
     assert source.id in {metadata.source_record_id for metadata in result.sources}
     assert SECRET not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_evidence_rejects_wrong_system_timeline_target_without_private_echo(
+    evidence_db: AsyncSession,
+):
+    graph = await _add_graph(
+        evidence_db, 1, occurrence_sections=(ContactSection.TIMELINE,)
+    )
+    source = graph.occurrence_sources[ContactSection.TIMELINE]
+    source.payload_json = json.dumps({"private_timeline_body": SECRET})
+    timeline = CRMContactTimelineEvent(
+        contact_id=graph.contact.id,
+        source_record_id=source.id,
+        source_system="wrong_private_system",
+        source_event_key="synthetic-wrong-system-event",
+        kind="note",
+        title="Synthetic timeline event",
+        body=SECRET,
+        occurred_at=NOW,
+        attributes_json=json.dumps({"private": SECRET}),
+    )
+    evidence_db.add(timeline)
+    await evidence_db.flush()
+    evidence_db.add(
+        CRMEntitySource(
+            entity_type="contact_timeline_event",
+            entity_id=timeline.id,
+            source_record_id=source.id,
+        )
+    )
+    await evidence_db.flush()
+
+    with pytest.raises(ContactDataIntegrityError) as captured:
+        await _get_evidence(evidence_db, graph.contact.id)
+
+    assert SECRET not in str(captured.value)
+    assert SECRET not in repr(captured.value)
 
 
 @pytest.mark.asyncio
