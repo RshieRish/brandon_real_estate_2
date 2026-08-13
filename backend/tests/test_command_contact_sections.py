@@ -503,6 +503,8 @@ async def test_section_projection_rejects_an_overbound_fallback_label(
         ("2026-08-13T12:00:00", None),
         ("2026-08-13", None),
         ("Tomorrow", None),
+        ("9999-12-31T23:59:59-23:59", None),
+        ("0001-01-01T00:00:00+23:59", None),
         (1_786_622_400, None),
         (True, None),
     ),
@@ -630,6 +632,47 @@ async def test_materialized_projection_uses_the_same_strict_payload_validator(
     ) as error:
         await _list_section(section_db, contact.id, ContactSection.NOTES)
     assert "Private linked title" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nonfinite", ("NaN", "Infinity", "-Infinity"))
+@pytest.mark.parametrize("materialized", (False, True))
+async def test_section_projection_rejects_nonfinite_json_constants_everywhere(
+    section_db: AsyncSession,
+    nonfinite: str,
+    materialized: bool,
+):
+    contact = CRMContact(first_name="Finite", last_name="Only", stage="lead")
+    section_db.add(contact)
+    await section_db.flush()
+    linked_entity = None
+    if materialized:
+        linked_entity = await _materialized_target(
+            section_db, contact, ContactSection.NOTES, 23_003
+        )
+    _occurrence, source = await _add_occurrence(
+        section_db,
+        contact,
+        23_003,
+        section=ContactSection.NOTES,
+        values={"title": "Private nonfinite title"},
+        linked_entity=linked_entity,
+    )
+    source.payload_json = (
+        '{"private_nested":{"unsafe":'
+        + nonfinite
+        + '},"values":{"title":"Safe label"}}'
+    )
+    await section_db.flush()
+
+    with pytest.raises(
+        ContactDataIntegrityError,
+        match="contact occurrence payload is invalid",
+    ) as error:
+        await _list_section(section_db, contact.id, ContactSection.NOTES)
+    rendered = str(error.value)
+    assert nonfinite not in rendered
+    assert "Private nonfinite title" not in rendered
 
 
 async def _materialized_target(

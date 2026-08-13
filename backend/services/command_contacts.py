@@ -1067,8 +1067,11 @@ def _require_occurrence_context(
 
 
 def _occurrence_values(source: CRMSourceRecord) -> dict[str, object]:
+    def reject_nonfinite(_value: str) -> NoReturn:
+        raise ValueError("non-finite JSON value")
+
     try:
-        payload = json.loads(source.payload_json)
+        payload = json.loads(source.payload_json, parse_constant=reject_nonfinite)
     except (TypeError, ValueError):
         raise ContactDataIntegrityError(
             "contact occurrence payload is invalid"
@@ -1130,7 +1133,10 @@ def _explicit_due_at(value: object) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError):
+        return None
 
 
 def _saved_search_criterion(value: object) -> str | None:
