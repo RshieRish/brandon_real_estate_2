@@ -2888,11 +2888,23 @@ union into an untyped record or reuse `ContactCaptureQuality` for the distinct
 aggregate `ContactEvidenceQuality` contract.
 
 Task 6 serializes `Decimal` coordinates as JSON strings. The address decoder
-therefore accepts `latitude`/`longitude` only as `null` or finite base-10
-strings with no whitespace, leading `+`, exponent, `NaN`, or `Infinity`, at
-most seven fractional digits, and a value inside `-90..90` or `-180..180`
-respectively. It rejects JSON numbers. No client decoder parses, rounds, or
-re-serializes an accepted coordinate.
+therefore accepts `latitude`/`longitude` only as `null` or a Pydantic Decimal
+JSON **string**, including fixed-point and exponent notation such as `"1E-7"`.
+Parse the sign, significand, fractional length, and optional signed `e|E`
+exponent as text, then derive an exact integer scaled by `10^7` with string and
+`BigInt` arithmetic. Do not use `Number`, `parseFloat`, unary `+`, or any
+floating-point comparison. Acceptance requires that the mathematical value is
+finite, exactly representable at `Numeric(10, 7)` scale/precision without
+rounding, and inside `-90..90` for latitude or `-180..180` for longitude.
+Leading/trailing zeroes and exponent spelling do not change the mathematical
+test; return the original accepted string unchanged.
+
+The decoder rejects JSON numbers, empty/whitespace-padded strings, malformed
+exponents, `NaN`, `Infinity`, out-of-range values, and any value requiring more
+than seven fractional decimal places. Tests explicitly accept `"1E-7"` and
+fixed-point equivalents, and reject numeric JSON `1e-7`, string `"NaN"`,
+latitude `"90.0000001"`, longitude `"180.0000001"`, and excess-precision
+`"1E-8"`. Task 7 does not change or recanonicalize the Task 6 backend wire.
 
 Define named readonly types/decoders for actor/tag/celebration values,
 directory rows/pages, recovered profile, address, detail, neighbors, workspace
@@ -2974,7 +2986,7 @@ Tests pin the full canonical URL, repeated filters, reserved characters, stable 
 
 - [ ] **Step 3: Preserve legacy consumers through a decoded adapter**
 
-`api.ts` imports `commandJson`, `commandBlob`, and the Contacts decoders. Delete only private `requestBlob`; retain the existing private `request<T>` unchanged for non-Contacts JSON methods until those domains receive named decoders in their own plans. The new `contactsApi`, `commandApi.contacts`, and `commandApi.celebrations` use `commandJson`; `archiveArtifactBlob(id, options?)` uses `commandBlob({path,signal:options?.signal})` without changing its default call shape. No overview, task, goal, SmartPlan, opportunity, agreement, listing, referral, marketing, website, report, archive-index, tag, or other legacy method is migrated to `commandJson` or given a decoder in this task. The existing Home methods may add only an optional `{signal}` argument and forward it through the retained `request<T>` `RequestInit`; their URL, body, error, and unchecked response behavior remain unchanged. An `api.test.ts` inventory snapshots those unrelated method URLs/results before and after this change and proves they still traverse the retained `request<T>`; the HTTP tests do not claim those responses are decoded.
+`api.ts` imports `commandJson`, `commandBlob`, and the Contacts decoders. Delete only private `requestBlob`; retain the existing private `request<T>` unchanged for non-Contacts JSON methods until those domains receive named decoders in their own plans. The new `contactsApi`, `commandApi.contacts`, and `commandApi.celebrations` use `commandJson`; `archiveArtifactBlob(id, options?)` uses `commandBlob({path,signal:options?.signal})` without changing its default call shape. No overview, task, goal, SmartPlan, opportunity, agreement, listing, referral, marketing, website, report, archive-index, tag, or other legacy method is migrated to `commandJson` or given a decoder in this task. The existing Home methods may add only the optional `CommandRequestOptions` parameter in the exact positions bound in Step 4 and forward its signal through the retained `request<T>` `RequestInit`; their URL, body, filters, error, and unchecked response behavior remain unchanged. An `api.test.ts` inventory snapshots those unrelated method URLs/results before and after this change and proves they still traverse the retained `request<T>`; the HTTP tests do not claim those responses are decoded.
 
 `commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts`
 and resolves `readonly LegacyContact[]` through `decodeLegacyContacts`. Its
@@ -3062,35 +3074,50 @@ on `request<T>`; and `archiveArtifactBlob` alone moves from `requestBlob` to
 Change `CommandHomeApi` to expose `contactDirectory(request, options?)`, not the
 legacy offset method. Every Home method receives the same optional request
 shape so a complete Home attempt is abortable without migrating unrelated
-responses to the decoded transport:
+responses to the decoded transport. Export the shared options and existing
+task-filter shapes from `api.ts`:
 
 ```ts
-export type CommandHomeRequestOptions = Readonly<{ signal?: AbortSignal }>;
+export type CommandRequestOptions = Readonly<{ signal?: AbortSignal }>;
+export type TaskFilters = Readonly<{
+  status?: string;
+  due_before?: string;
+  due_after?: string;
+}>;
 
 export type CommandHomeApi = Readonly<{
-  overview: (options?: CommandHomeRequestOptions) => Promise<Overview>;
+  overview: (options?: CommandRequestOptions) => Promise<Overview>;
   contactDirectory: (
     request: ContactDirectoryRequest,
-    options?: CommandHomeRequestOptions,
+    options?: CommandRequestOptions,
   ) => Promise<ContactDirectoryPage>;
-  tasks: (options?: CommandHomeRequestOptions) => Promise<readonly Task[]>;
+  tasks: (
+    filters?: TaskFilters,
+    options?: CommandRequestOptions,
+  ) => Promise<readonly Task[]>;
   opportunities: (
-    options?: CommandHomeRequestOptions,
+    options?: CommandRequestOptions,
   ) => Promise<readonly Opportunity[]>;
   celebrations: (
     month: number,
-    options?: CommandHomeRequestOptions,
+    options?: CommandRequestOptions,
   ) => Promise<ContactCelebrations>;
-  goals: (options?: CommandHomeRequestOptions) => Promise<readonly Goal[]>;
-  aiBriefing: (options?: CommandHomeRequestOptions) => Promise<AiBriefing>;
+  goals: (options?: CommandRequestOptions) => Promise<readonly Goal[]>;
+  aiBriefing: (options?: CommandRequestOptions) => Promise<AiBriefing>;
 }>;
 ```
 
 The default `commandApi` implementation forwards `options?.signal` unchanged
 to every Home fetch. Contacts and celebrations use `commandJson`; the other
 Home methods continue through the retained `request<T>` with `{signal}` added
-to its existing `RequestInit`. Supplying no options preserves every existing
-call shape.
+to its existing `RequestInit`. Preserve `commandApi.tasks` exactly as a
+filter-first API by changing its signature only to
+`tasks(filters: TaskFilters = {}, options?: CommandRequestOptions)`; build the
+same `status`, `due_before`, and `due_after` URL from `filters`, and pass only
+`options?.signal` to `request<T>`. Supplying no second argument preserves every
+existing filtered and unfiltered call shape. Never interpret a
+`CommandRequestOptions` object as task filters and never serialize `signal`
+into the query string.
 
 Add:
 
@@ -3149,6 +3176,14 @@ score may use the complete mapped directory rows. Recently active, birthday,
 and anniversary shortcut totals never use `recently_active_at` or celebration
 array-length heuristics. Recent-contact ordering may still use the explicit
 mapped `last_interaction_at` timestamp because it is not a SmartView count.
+
+Inside `loadCommandHome`, task loading is exactly
+`tasks: api.tasks({}, { signal })`. The empty first argument means “no task
+filters”; the second argument carries cancellation. `home.test.ts` asserts both
+argument positions and signal identity. `api.test.ts` separately calls
+`commandApi.tasks({status:'open',due_before:'2026-08-31T23:59:59Z'},
+{signal})`, pins the unchanged filtered URL, and proves the identical signal is
+forwarded in `RequestInit` but never appears in query parameters.
 
 Replace the old `Celebrations = {birthdays: Contact[]; anniversaries: Contact[]}` assumption. `CommandHomeApi.celebrations(month, options?)` returns the decoded `ContactCelebrations` wire contract from `contacts.ts`; `CommandHomeInput` and `CommandHomeModel` hold the UI-only shape below after `adaptHomeCelebrations()` runs inside `loadCommandHome`:
 
