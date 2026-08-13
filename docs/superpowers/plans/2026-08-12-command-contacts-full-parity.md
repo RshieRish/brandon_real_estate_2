@@ -12,10 +12,11 @@
 
 ## Scope and non-negotiable truth gates
 
-The authorized archive root used by the operator is:
+The operator supplies the authorized archive root without committing a user-specific local path:
 
 ```text
-/Users/rishabnandi/Documents/Codex/2026-07-27/realtime-voice-chat/outputs/authorized-account-archive
+COMMAND_ARCHIVE_ROOT=<absolute-path-to-authorized-account-archive>
+PROJECT_PYTHON=<absolute-path-to-project-venv-python>
 ```
 
 It is an operator input, not an application runtime dependency and not a frontend asset. Tests use synthetic fixtures; the real-archive gate receives `COMMAND_ARCHIVE_ROOT` explicitly.
@@ -30,10 +31,16 @@ The contacts import is accepted only when one apply run records all of these val
   "distinct_recovered_identities": 317,
   "normalized_recovered_contacts": 317,
   "identity_aliases_coalesced": 0,
+  "preexisting_contact_rows": 362,
+  "stale_source_normalized_rows": 313,
+  "stale_source_normalized_leadless_rows": 311,
   "lead_backed_contacts": 51,
   "strong_verified_overlaps": 2,
   "legacy_only_contacts": 49,
   "legacy_lead_ids_preserved": 51,
+  "recovered_contacts_created": 4,
+  "source_entity_links_created": 315,
+  "source_entity_links_final": 317,
   "expected_combined_contact_total": 366,
   "section_artifacts": 2536,
   "section_counts": {
@@ -54,7 +61,7 @@ The contacts import is accepted only when one apply run records all of these val
 
 `expected_combined_contact_total == 366` is specific to the recovered production dataset: `317 recovered identities + 49 legacy-only`, with the two strong verified overlaps contained in both the 317 recovered and 51 lead-backed populations and therefore counted once in the combined directory. The service computes the union from source mappings and verified overlap links; it never deletes, rewrites, or invents a contact merely to force that number.
 
-The existing database history is deliberately not an acceptance target: the prior import left 313 source-normalized rows, of which 311 are leadless, beside 51 lead-backed contacts. Those stale 313/311 rows remain auditable repair inputs. A repair run must map, adopt, split, or supersede them transactionally from immutable provenance; it must never delete them blindly. Every one of the 51 nonnull `lead_id` values and its contact row remains unchanged.
+The existing database history is deliberately not an acceptance target: its 362 unique rows comprise 313 source-normalized rows and 51 lead-backed rows with two rows shared by both populations; 311 of the source-normalized rows are leadless. Those stale 313/311 rows remain auditable repair inputs. A repair run must map, adopt, split, or supersede them transactionally from immutable provenance; it must never delete them blindly. Every one of the 51 nonnull `lead_id` values and its contact row remains unchanged.
 
 ### Redacted identity-audit provenance
 
@@ -136,11 +143,12 @@ Names are confirmation signals, never merge keys. Local/national phone numbers t
 
 To attach to pre-existing rows without duplication:
 
-- a current source mapping wins;
+- a current, unambiguous source/entity mapping wins;
+- an operator-reviewed overlap manifest may pre-create exactly one source/entity link for each identity backed by the redacted strong-evidence audit; the audited production manifest contains exactly two such links to lead-backed contacts;
 - otherwise one `lead_id IS NULL` contact with the exact recovered identity hash and compatible fields may be adopted;
 - zero matches creates a recovered contact;
 - multiple matches block apply;
-- a `lead_id IS NOT NULL` contact is never auto-merged with a recovered provider row. It remains legacy-only and can be shown as a probable duplicate for manual review.
+- an unreviewed or unmapped `lead_id IS NOT NULL` contact is never auto-merged from raw email, phone, or name. Only the explicit pre-verified source/entity link above may attach a recovered source to a lead-backed contact; adoption does not change `lead_id` or any legacy contact field. The other 49 lead-backed contacts remain legacy-only and may be shown as probable duplicates for manual review.
 
 The identity hash is SHA-256 over a versioned canonical tuple such as `contacts-v1\0email\0avery@example.com`; raw email/phone values remain only in private contact tables and provenance payloads.
 
@@ -250,7 +258,7 @@ An occurrence hash is SHA-256 over canonical parsed values plus the ordinal-with
 - Create `frontend/src/components/command/contacts/ContactTasksTab.tsx`.
 - Create `frontend/src/components/command/contacts/ContactNotesTab.tsx`.
 - Create `frontend/src/components/command/contacts/ContactSavedSearchesTab.tsx`.
-- Create `frontend/src/components/command/contacts/ContactCaptureEvidence.tsx`: position aliases, section matrix, limitations, and authenticated artifact links.
+- Create `frontend/src/components/command/contacts/ContactCaptureEvidence.tsx`: capture positions, upstream provider identities, internal verified-overlap evidence, zero-alias status, section matrix, limitations, and authenticated artifact links.
 - Modify `frontend/src/components/command/ContactActions.tsx`: render in the shared light workspace and refresh only the affected tab.
 - Modify `frontend/src/components/command/ContactProfileEditor.tsx`: edit SWS-owned fields without overwriting recovered observations.
 - Replace `frontend/src/app/admin/command/contacts/[contactId]/page.tsx`: route-only detail wrapper.
@@ -334,7 +342,7 @@ Run:
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_models.py \
   tests/test_command_contacts_migration.py
 ```
@@ -408,12 +416,12 @@ Run:
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_models.py \
   tests/test_command_contacts_migration.py \
   tests/test_command_provenance_models.py \
   tests/test_command_provenance_migration.py
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/alembic heads
+"$PROJECT_PYTHON" -m alembic heads
 ```
 
 Expected: PASS; Alembic prints only `4a8c0d1e2f3b (head)`.
@@ -458,7 +466,7 @@ CONTACT_SECTIONS = (
 )
 
 def test_extract_source_contact_id_requires_canonical_contact_url():
-    assert extract_source_contact_id("https://console.command.kw.com/command/contacts/63ac84e09655a08ec4d5d3ef?page=2") == "63ac84e09655a08ec4d5d3ef"
+    assert extract_source_contact_id("https://console.command.kw.com/command/contacts/deadbeefdeadbeefdeadbeef?page=2") == "deadbeefdeadbeefdeadbeef"
     with pytest.raises(ContactParseError):
         extract_source_contact_id("https://example.com/contacts/not-an-id")
 
@@ -470,7 +478,7 @@ def test_parser_emits_one_profile_one_position_and_eight_sections_per_position(b
     assert kinds["contact_section_capture"] == 24
 
 def test_parser_marks_1900_birth_year_as_sentinel_without_inventing_a_date(bundle):
-    profile = source_record(result, "contact:63ac84e09655a08ec4d5d3ef")
+    profile = source_record(result, "contact:deadbeefdeadbeefdeadbeef")
     assert profile.payload["birthday"] == {
         "month": 8, "day": 30, "year": None,
         "year_quality": "sentinel", "raw": "1900-08-30",
@@ -488,7 +496,7 @@ Run:
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q tests/test_command_contacts_parser.py
+"$PROJECT_PYTHON" -m pytest -q tests/test_command_contacts_parser.py
 ```
 
 Expected: FAIL because the Contacts parser modules do not exist.
@@ -550,8 +558,8 @@ Run:
 
 ```bash
 cd backend
-COMMAND_ARCHIVE_ROOT="/Users/rishabnandi/Documents/Codex/2026-07-27/realtime-voice-chat/outputs/authorized-account-archive" \
-  /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+COMMAND_ARCHIVE_ROOT="$COMMAND_ARCHIVE_ROOT" \
+  "$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_archive_gate.py
 ```
 
@@ -561,7 +569,7 @@ Expected: PASS with 317 provider rows/positions, 2,536 section records, and 317 
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_parser.py \
   tests/test_command_parser_registry.py \
   tests/test_command_provenance_service.py
@@ -604,7 +612,7 @@ Also test placeholder stripping, Unicode/case normalization, compatible missing 
 
 - [ ] **Step 2: Run tests and confirm RED**
 
-Run: `cd backend && /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q tests/test_command_contact_identity.py`
+Run: `cd backend && "$PROJECT_PYTHON" -m pytest -q tests/test_command_contact_identity.py`
 
 Expected: FAIL because the resolver is missing.
 
@@ -643,7 +651,7 @@ With `COMMAND_ARCHIVE_ROOT` set, assert exactly 317 identity clusters, zero alia
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_identity.py \
   tests/test_command_contacts_parser.py \
   tests/test_command_contacts_archive_gate.py
@@ -665,10 +673,17 @@ git commit -m "feat: resolve Command contact identities"
 
 - [ ] **Step 1: Write failing materializer tests against real async SQLite**
 
-Seed 51 `Lead` rows and 51 `CRMContact` rows whose `lead_id` values point to those exact Lead rows. Give exactly two source identities strong verified email overlap links to two of those lead-backed contacts; leave 49 legacy-only. Seed a separate stale normalized-history fixture representing the repair boundary, then apply a synthetic 317-identity/317-position source set. Assert:
+Preseed the full stale repair boundary as exactly 362 unique `CRMContact` rows:
+
+- 313 stale source-normalized rows, consisting of 311 `lead_id IS NULL` rows plus the same two lead-backed overlap rows below;
+- 51 lead-backed rows with 51 distinct `lead_id` values, consisting of two rows already included in the 313 stale source-normalized population plus 49 legacy-only rows; and
+- therefore `313 + 51 - 2 == 362` unique rows before apply, not 364.
+
+Before materialization, create exactly two reviewed `CRMEntitySource` links from recovered source records to those two shared lead-backed/source-normalized rows, matching a synthetic redacted strong-evidence manifest. Give 311 stale leadless rows exact recoverable identity hashes, leave four recovered identities absent from the database, and leave the other 49 lead-backed contacts unmapped and legacy-only. Apply a synthetic 317-identity/317-position source set. The materializer must honor the two pre-verified links, adopt the 311 compatible leadless rows without mutating their base contact fields, create exactly four missing recovered contacts, and never derive another lead-backed adoption from raw identity fields. Assert:
 
 ```python
 assert result.normalized_count == 317
+assert result.created_count == 4
 assert await count(CRMContact) == 366
 assert await count(CRMContact, CRMContact.lead_id.is_not(None)) == 51
 assert set(await scalar_list(select(CRMContact.lead_id).where(CRMContact.lead_id.is_not(None)))) == set(range(1, 52))
@@ -677,7 +692,7 @@ assert await count(CRMContactSectionCapture) == 2536
 assert await count(CRMEntitySource, CRMEntitySource.entity_type == "contact") == 317
 ```
 
-Snapshot every legacy contact before apply and assert all values, including `lead_id`, are byte-for-byte equal after apply. Apply the same drafts again and assert all create/link counts are zero. Add conflict tests for two adoptable contacts, a provider source mapped to two normalized contacts, and a missing source record.
+Snapshot all 362 pre-existing CRM rows before apply and assert every base-column value is byte-for-byte equal after apply; recovered child/provenance rows are additive and do not count as base-row mutation. Assert four and only four new `CRMContact` IDs, the two prelinked contacts each owning exactly one recovered mapping, 311 adopted leadless rows each owning one recovered mapping, the other 49 lead-backed rows owning none, and all 317 recovered source records mapping exactly once. The first apply creates 315 source/entity links because two reviewed links were preseeded; the final mapping count is 317. Apply the same drafts again and assert all create/link counts are zero. Add conflict tests for two adoptable leadless contacts, a provider source mapped to two normalized contacts, an attempted raw-identifier auto-merge into an unlinked lead-backed contact, an invalid/unreviewed overlap manifest entry, and a missing source record.
 
 - [ ] **Step 2: Run tests and confirm RED**
 
@@ -685,7 +700,7 @@ Run:
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_materializer.py \
   tests/test_command_reconciliation.py
 ```
@@ -719,15 +734,15 @@ The registry enforces one materializer per module and deterministic selection, m
 Materialize in this order inside the caller transaction:
 
 1. Load persisted contact source rows and identity clusters.
-2. Resolve existing source/entity mappings.
-3. Adopt exactly one compatible `lead_id IS NULL` contact or create one.
+2. Resolve existing source/entity mappings, including the two operator-reviewed pre-verified overlap links. Reject ambiguous, missing, or unreviewed lead-backed links.
+3. For every unmapped identity, adopt exactly one compatible `lead_id IS NULL` contact or create one; never auto-adopt a `lead_id IS NOT NULL` contact from raw identity fields.
 4. Upsert profile and child values by `(contact_id, source_key)`.
 5. Insert all 317 capture positions and 2,536 section captures.
 6. Materialize timeline/note/saved-search records only from their stable/occurrence source keys.
 7. Insert `CRMEntitySource` links for contacts and materialized child entities.
 8. Return counts without committing.
 
-Never change `CRMContact.lead_id`, delete a contact, write `CRMContact.birthday/anniversary`, or create Tasks/SmartPlans/Opportunities here.
+Never change a lead-backed contact field (including `CRMContact.lead_id`), delete a contact, write `CRMContact.birthday/anniversary`, or create Tasks/SmartPlans/Opportunities here. A pre-verified overlap adds provenance/source links and recovered child observations only; it does not copy recovered profile values onto the lead-backed row.
 
 - [ ] **Step 5: Integrate materializers into reconciliation**
 
@@ -737,7 +752,7 @@ Add the keyword-only `materializers: MaterializerRegistry | None = None` paramet
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_materializer.py \
   tests/test_command_reconciliation.py \
   tests/test_command_provenance_service.py
@@ -777,7 +792,7 @@ Tests must prove recovered event + mirrored CRM activity with the same `source_r
 
 - [ ] **Step 2: Run and confirm RED**
 
-Run: `cd backend && /Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q tests/test_command_contact_timeline.py`
+Run: `cd backend && "$PROJECT_PYTHON" -m pytest -q tests/test_command_contact_timeline.py`
 
 Expected: FAIL because the aggregation services do not exist.
 
@@ -799,7 +814,7 @@ Every list has deterministic secondary ordering by primary key. Source-only rows
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contact_timeline.py tests/test_command_contact_materializer.py
 git add services/command_contact_timeline.py services/command_contacts.py \
   tests/test_command_contact_timeline.py
@@ -851,7 +866,7 @@ Run:
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q tests/test_command_contacts_router.py
+"$PROJECT_PYTHON" -m pytest -q tests/test_command_contacts_router.py
 ```
 
 Expected: FAIL because focused schemas/router and the new directory endpoint do not exist.
@@ -887,7 +902,7 @@ Create `command_contacts.router = APIRouter(dependencies=[Depends(require_admin)
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q \
+"$PROJECT_PYTHON" -m pytest -q \
   tests/test_command_contacts_router.py \
   tests/test_command_provenance_router.py \
   tests/test_command_models.py
@@ -1113,14 +1128,16 @@ Run axe on directory, detail Timeline, source-only Tasks, and evidence drawer. V
 
 - [ ] **Step 3: Add only valid visual references**
 
-Use:
+Use logical reference aliases resolved through the operator-only private QA manifest:
 
 ```text
 kw_command_ui_screenshots/contacts-live-current.png              1800×982
-kw_command_ui_screenshots/contact-adam-pappastergion-live-details.png 1793×1166
-kw_command_ui_screenshots/contact-adam-opportunities-live.png     observed detail tab
-kw_command_ui_screenshots/contact-adam-notes-live.png             observed detail tab
+contact-detail-live                                                1793×1166
+contact-opportunities-live                                         observed detail tab
+contact-notes-live                                                 observed detail tab
 ```
+
+The private QA manifest maps those three logical aliases to the recovered files at runtime. Do not copy a contact name, provider ID, email, phone, or other private filename component into source-controlled test names, snapshots, or documentation.
 
 Do not treat `contacts-list.png`, retry images, blank shells, redirects, or error captures as success targets. Brand-mask only vendor marks/colors and dynamic private text; do not mask geometry, row density, tabs, toolbar, split layout, or drawer bounds.
 
@@ -1205,7 +1222,7 @@ Using an admin session, verify directory totals/pagination/search, one recovered
 
 ```bash
 cd backend
-/Users/rishabnandi/brandon-real-estate/backend/.venv/bin/pytest -q
+"$PROJECT_PYTHON" -m pytest -q
 cd ../frontend
 npm test
 npm run typecheck
