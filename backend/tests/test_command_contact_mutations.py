@@ -1808,6 +1808,24 @@ async def test_tag_assignment_compiles_postgresql_row_locks_and_named_unique_gat
     assert contacts_service._is_contact_tag_uniqueness_error(unrelated) is False
 
 
+@pytest.mark.parametrize(
+    ("constraint_name", "expected"),
+    (("uq_crm_contact_tag", True), ("other_constraint", False)),
+)
+def test_tag_uniqueness_gate_reads_exact_asyncpg_wrapped_constraint(
+    constraint_name, expected
+):
+    class AsyncpgDriverOrigin(Exception):
+        def __init__(self, name: str):
+            self.constraint_name = name
+
+    wrapper = Exception("uq_crm_contact_tag text must not classify a race")
+    wrapper.__cause__ = AsyncpgDriverOrigin(constraint_name)
+    error = IntegrityError("INSERT INTO crm_contact_tags", {}, wrapper)
+
+    assert contacts_service._is_contact_tag_uniqueness_error(error) is expected
+
+
 @pytest.mark.asyncio
 async def test_assign_tag_does_not_recover_unrelated_constraint_error(
     mutation_db, monkeypatch
@@ -2264,8 +2282,17 @@ async def test_bulk_tag_writes_and_audits_follow_ascending_contact_order(
             ]
         )
         await db.flush()
+        assignment_id_to_contact = {
+            assignment.id: assignment.contact_id
+            for assignment in (
+                await db.scalars(
+                    select(CRMContactTag).where(CRMContactTag.tag_id == tag.id)
+                )
+            ).all()
+        }
         action = ContactBulkRemoveTag("remove_tag", tag.id)
     else:
+        assignment_id_to_contact = {}
         action = ContactBulkAddTag("add_tag", tag.id)
 
     tag_write_contact_ids: list[int] = []
@@ -2281,7 +2308,9 @@ async def test_bulk_tag_writes_and_audits_follow_ascending_contact_order(
             "delete from crm_contact_tags"
         ):
             rows = parameters if executemany else [parameters]
-            tag_write_contact_ids.extend(int(row[0]) for row in rows)
+            tag_write_contact_ids.extend(
+                assignment_id_to_contact[int(row[0])] for row in rows
+            )
 
     event.listen(engine.sync_engine, "before_cursor_execute", capture)
     try:
@@ -2298,6 +2327,64 @@ async def test_bulk_tag_writes_and_audits_follow_ascending_contact_order(
     expected = [contact.id for contact in contacts]
     assert result.actioned_contact_ids == tuple(expected)
     assert tag_write_contact_ids == expected
+    audits = (
+        await db.scalars(select(CRMContactAuditEvent).order_by(CRMContactAuditEvent.id))
+    ).all()
+    assert [row.contact_id for row in audits] == expected
+
+
+@pytest.mark.asyncio
+async def test_bulk_remove_deletes_in_contact_order_when_link_ids_are_scrambled(
+    mutation_db,
+):
+    db, engine = mutation_db
+    contacts = [
+        await _seed_contact(db, first_name=f"Scrambled{index}") for index in range(3)
+    ]
+    tag = CRMTag(name="Synthetic scrambled removal")
+    db.add(tag)
+    await db.flush()
+    db.add_all(
+        [
+            CRMContactTag(contact_id=contact.id, tag_id=tag.id)
+            for contact in reversed(contacts)
+        ]
+    )
+    await db.flush()
+    assignments = (
+        await db.scalars(select(CRMContactTag).order_by(CRMContactTag.id))
+    ).all()
+    assert [assignment.contact_id for assignment in assignments] == [
+        contact.id for contact in reversed(contacts)
+    ]
+    assignment_id_to_contact = {
+        assignment.id: assignment.contact_id for assignment in assignments
+    }
+
+    deleted_contact_ids: list[int] = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, executemany):
+        if statement.casefold().startswith("delete from crm_contact_tags"):
+            rows = parameters if executemany else [parameters]
+            deleted_contact_ids.extend(
+                assignment_id_to_contact[int(row[0])] for row in rows
+            )
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        await contacts_service.apply_contact_bulk_action(
+            db,
+            ContactBulkCommand(
+                tuple(contact.id for contact in reversed(contacts)),
+                ContactBulkRemoveTag("remove_tag", tag.id),
+            ),
+            actor_subject="7",
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+
+    expected = [contact.id for contact in contacts]
+    assert deleted_contact_ids == expected
     audits = (
         await db.scalars(select(CRMContactAuditEvent).order_by(CRMContactAuditEvent.id))
     ).all()

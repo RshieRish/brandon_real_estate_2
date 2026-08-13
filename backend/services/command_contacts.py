@@ -2757,9 +2757,11 @@ def _is_contact_tag_uniqueness_error(error: IntegrityError) -> bool:
     diagnostic = getattr(error.orig, "diag", None)
     if getattr(diagnostic, "constraint_name", None) == "uq_crm_contact_tag":
         return True
+    driver_origin = getattr(error.orig, "__cause__", None)
+    if getattr(driver_origin, "constraint_name", None) == "uq_crm_contact_tag":
+        return True
     return (
-        "UNIQUE constraint failed: crm_contact_tags.contact_id, "
-        "crm_contact_tags.tag_id"
+        "UNIQUE constraint failed: crm_contact_tags.contact_id, crm_contact_tags.tag_id"
     ) in str(error.orig)
 
 
@@ -3071,6 +3073,7 @@ async def apply_contact_bulk_action(
                         if assignment is None:
                             continue
                         await db.delete(assignment)
+                        await db.flush()
                         actioned_ids.append(contact.id)
                         audits.append(
                             _contact_audit_event(
