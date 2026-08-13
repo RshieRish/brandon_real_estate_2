@@ -1,4 +1,19 @@
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures/command';
+
+async function fetchCommand(
+  commandPage: Page,
+  path: string,
+  method: string,
+) {
+  return commandPage.evaluate(async ({ requestPath, requestMethod }) => {
+    const response = await fetch(`/api/v1/command${requestPath}`, {
+      method: requestMethod,
+      headers: { Authorization: 'Bearer test-admin-token' },
+    });
+    return { status: response.status, body: await response.json() as { detail?: string } };
+  }, { requestPath: path, requestMethod: method });
+}
 
 test('shell persists across module navigation @critical', async ({ commandPage }) => {
   await commandPage.goto('/admin/command');
@@ -64,4 +79,42 @@ test('unexpected Command fixture endpoints fail closed with a diagnostic', async
   await expect(commandPage.getByRole('alert').filter({ hasText: 'Unexpected Command fixture request' })).toContainText(
     'Unexpected Command fixture request: GET /referrals',
   );
+});
+
+test('known Command endpoints fail closed for methods that were not registered', async ({ commandPage, routeState }) => {
+  routeState.expectedHttpFailures.add('/contacts');
+  routeState.expectedHttpFailures.add('/agreements');
+  await commandPage.goto('/admin/login');
+
+  const postContacts = await fetchCommand(commandPage, '/contacts', 'POST');
+  expect(postContacts).toEqual({
+    status: 500,
+    body: expect.objectContaining({ detail: expect.stringContaining('Unexpected Command fixture request: POST /contacts') }),
+  });
+
+  const deleteAgreements = await fetchCommand(commandPage, '/agreements', 'DELETE');
+  expect(deleteAgreements).toEqual({
+    status: 500,
+    body: expect.objectContaining({ detail: expect.stringContaining('Unexpected Command fixture request: DELETE /agreements') }),
+  });
+});
+
+test('a wrong method cannot consume a one-shot failure registered for another method', async ({
+  commandPage,
+  failCommandEndpointOnce,
+}) => {
+  await failCommandEndpointOnce('/overview', 503, 'Planned GET-only failure', 'GET');
+  await commandPage.goto('/admin/login');
+
+  const wrongMethod = await fetchCommand(commandPage, '/overview', 'POST');
+  expect(wrongMethod).toEqual({
+    status: 500,
+    body: expect.objectContaining({ detail: expect.stringContaining('Unexpected Command fixture request: POST /overview') }),
+  });
+
+  const intendedFailure = await fetchCommand(commandPage, '/overview', 'GET');
+  expect(intendedFailure).toEqual({ status: 503, body: { detail: 'Planned GET-only failure' } });
+
+  const recovered = await fetchCommand(commandPage, '/overview', 'GET');
+  expect(recovered).toEqual({ status: 200, body: expect.any(Object) });
 });

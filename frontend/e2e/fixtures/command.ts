@@ -13,16 +13,22 @@ type FailureResponse = MockResponse & {
   remaining: number;
 };
 
+type BuiltInCommandMock = Readonly<{
+  method: string;
+  path: string | RegExp;
+  respond: (url: URL) => MockResponse;
+}>;
+
 type RouteState = {
   responses: Map<string, Map<string, MockResponse>>;
-  failures: Map<string, FailureResponse>;
+  failures: Map<string, Map<string, FailureResponse>>;
   expectedHttpFailures: Set<string>;
 };
 
 type CommandFixtures = {
   commandPage: Page;
   mockCommandEndpoint: (path: string, response: unknown, status?: number, method?: string) => Promise<void>;
-  failCommandEndpointOnce: (path: string, status: number, detail: string) => Promise<void>;
+  failCommandEndpointOnce: (path: string, status: number, detail: string, method?: string) => Promise<void>;
   routeState: RouteState;
 };
 
@@ -35,17 +41,21 @@ function normalizeCommandPath(path: string): string {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
-function defaultCommandResponse(url: URL, method: string): MockResponse {
-  const path = url.pathname.slice(COMMAND_PREFIX.length) || '/';
-
-  if (path === '/overview') return { status: 200, body: home.overview };
-  if (path === '/contacts') {
-    const offset = Number(url.searchParams.get('offset') ?? '0');
-    return { status: 200, body: offset === 0 ? home.contacts : [] };
-  }
-  if (path === '/tasks' && method === 'GET') return { status: 200, body: home.tasks };
-  if (path === '/tasks' && method === 'POST') {
-    return {
+const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
+  { method: 'GET', path: '/overview', respond: () => ({ status: 200, body: home.overview }) },
+  {
+    method: 'GET',
+    path: '/contacts',
+    respond: (url) => ({
+      status: 200,
+      body: Number(url.searchParams.get('offset') ?? '0') === 0 ? home.contacts : [],
+    }),
+  },
+  { method: 'GET', path: '/tasks', respond: () => ({ status: 200, body: home.tasks }) },
+  {
+    method: 'POST',
+    path: '/tasks',
+    respond: () => ({
       status: 201,
       body: {
         id: 99,
@@ -56,16 +66,19 @@ function defaultCommandResponse(url: URL, method: string): MockResponse {
         due_at: null,
         status: 'open',
       },
-    };
-  }
-  if (path === '/opportunities') return { status: 200, body: home.opportunities };
-  if (path === '/celebrations') return { status: 200, body: home.celebrations };
-  if (path === '/goals') return { status: 200, body: home.goals };
-  if (/^\/goals\/\d+$/.test(path) && method === 'PATCH') return { status: 200, body: home.goals[0] };
-  if (path === '/ai/briefing') return { status: 200, body: home.briefing };
-  if (path === '/agreements' || path === '/agreement-templates') return { status: 200, body: [] };
-  if (path === '/contacts/1/workspace') {
-    return {
+    }),
+  },
+  { method: 'GET', path: '/opportunities', respond: () => ({ status: 200, body: home.opportunities }) },
+  { method: 'GET', path: '/celebrations', respond: () => ({ status: 200, body: home.celebrations }) },
+  { method: 'GET', path: '/goals', respond: () => ({ status: 200, body: home.goals }) },
+  { method: 'PATCH', path: /^\/goals\/\d+$/, respond: () => ({ status: 200, body: home.goals[0] }) },
+  { method: 'GET', path: '/ai/briefing', respond: () => ({ status: 200, body: home.briefing }) },
+  { method: 'GET', path: '/agreements', respond: () => ({ status: 200, body: [] }) },
+  { method: 'GET', path: '/agreement-templates', respond: () => ({ status: 200, body: [] }) },
+  {
+    method: 'GET',
+    path: '/contacts/1/workspace',
+    respond: () => ({
       status: 200,
       body: {
         contact: home.contacts[0],
@@ -78,8 +91,18 @@ function defaultCommandResponse(url: URL, method: string): MockResponse {
         bookings: [],
         tags: [],
       },
-    };
-  }
+    }),
+  },
+];
+
+function defaultCommandResponse(url: URL, method: string): MockResponse {
+  const path = url.pathname.slice(COMMAND_PREFIX.length) || '/';
+  const builtIn = BUILT_IN_COMMAND_MOCKS.find((candidate) => (
+    candidate.method === method
+    && (typeof candidate.path === 'string' ? candidate.path === path : candidate.path.test(path))
+  ));
+  if (builtIn) return builtIn.respond(url);
+
   const requestIdentity = `${method} ${path}${url.search}`;
   return {
     status: 500,
@@ -92,7 +115,7 @@ function defaultCommandResponse(url: URL, method: string): MockResponse {
 function responseFor(state: RouteState, url: URL, method: string): MockResponse {
   const normalized = `${url.pathname.slice(COMMAND_PREFIX.length) || '/'}${url.search}`;
   const pathOnly = url.pathname.slice(COMMAND_PREFIX.length) || '/';
-  const failure = state.failures.get(normalized) ?? state.failures.get(pathOnly);
+  const failure = state.failures.get(normalized)?.get(method) ?? state.failures.get(pathOnly)?.get(method);
   if (failure?.remaining) {
     failure.remaining -= 1;
     return failure;
@@ -131,7 +154,7 @@ export const test = base.extend<CommandFixtures>({
   },
 
   mockCommandEndpoint: async ({ routeState }, use) => {
-    await use(async (path, response, status = 200, method = status === 201 ? 'POST' : 'GET') => {
+    await use(async (path, response, status = 200, method = 'GET') => {
       const normalized = normalizeCommandPath(path);
       const responsesByMethod = routeState.responses.get(normalized) ?? new Map<string, MockResponse>();
       responsesByMethod.set(method.toUpperCase(), { status, body: structuredClone(response) });
@@ -141,13 +164,15 @@ export const test = base.extend<CommandFixtures>({
   },
 
   failCommandEndpointOnce: async ({ routeState }, use) => {
-    await use(async (path, status, detail) => {
+    await use(async (path, status, detail, method = 'GET') => {
       const normalized = normalizeCommandPath(path);
-      routeState.failures.set(normalized, {
+      const failuresByMethod = routeState.failures.get(normalized) ?? new Map<string, FailureResponse>();
+      failuresByMethod.set(method.toUpperCase(), {
         status,
         body: { detail },
         remaining: 1,
       });
+      routeState.failures.set(normalized, failuresByMethod);
       routeState.expectedHttpFailures.add(normalized.split('?')[0]);
     });
   },
