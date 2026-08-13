@@ -249,6 +249,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const [mutationVerification, setMutationVerification] = useState<PendingMutationVerification | null>(null);
   const [mutationVerificationRetrying, setMutationVerificationRetrying] = useState(false);
   const [outsideUniverse, setOutsideUniverse] = useState(false);
+  const profileDisclosureRef = useRef<HTMLButtonElement>(null);
 
   const mountedRef = useRef(true);
   const mountCountRef = useRef(0);
@@ -1043,9 +1044,34 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
       />
       <div className="command-contact-detail-grid command-content-gutters">
         <div className="command-contact-profile-disclosure">
-          <button type="button" className="command-secondary-button command-touch-target" disabled={mutationPending} aria-expanded={profileOpen} aria-controls="command-contact-profile-region" onClick={() => setProfileOpen((value) => !value)}>Profile details<CaretDown aria-hidden="true" size={15} /></button>
+          <button
+            ref={profileDisclosureRef}
+            type="button"
+            className="command-secondary-button command-touch-target"
+            disabled={mutationPending}
+            aria-expanded={profileOpen}
+            aria-controls="command-contact-profile-region"
+            onClick={() => setProfileOpen((value) => !value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && profileOpen) {
+                event.preventDefault();
+                setProfileOpen(false);
+                profileDisclosureRef.current?.focus();
+              }
+            }}
+          >Profile details<CaretDown aria-hidden="true" size={15} /></button>
         </div>
-        <div id="command-contact-profile-region" className={profileOpen ? 'is-mobile-open' : ''}>
+        <div
+          id="command-contact-profile-region"
+          className={profileOpen ? 'is-mobile-open' : ''}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && profileOpen) {
+              event.preventDefault();
+              setProfileOpen(false);
+              profileDisclosureRef.current?.focus();
+            }
+          }}
+        >
           <ContactProfilePanel
             detail={currentDetail}
             rawContact={currentInternal?.contact ?? null}

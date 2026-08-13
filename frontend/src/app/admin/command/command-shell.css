@@ -2711,6 +2711,12 @@
 }
 
 @media (max-width: 767px) {
+  .command-root .command-breadcrumbs a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+  }
+
   .command-root .command-contact-detail-grid {
     display: block;
     padding-top: 14px;

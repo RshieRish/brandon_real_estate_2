@@ -1489,6 +1489,19 @@ describe('ContactDetailWorkspace', () => {
     expect(document.querySelector('[class*="kw-red"], [style*="#b40101"]')).toBeNull();
   });
 
+  it('closes the mobile profile disclosure with Escape and restores its trigger', async () => {
+    renderWorkspace(fakeApi());
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    const disclosure = screen.getByRole('button', { name: 'Profile details' });
+    await userEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    const editProfile = screen.getByRole('button', { name: 'Edit profile' });
+    editProfile.focus();
+    fireEvent.keyDown(editProfile, { key: 'Escape' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(disclosure).toHaveFocus();
+  });
+
   it('binds detail mobile targets, responsive disclosure, wrapping, and print controls in scoped CSS', () => {
     const css = readFileSync('src/app/admin/command/command-shell.css', 'utf8');
     expect(css).toMatch(/\.command-root \.command-contact-detail-grid\s*\{[^}]*grid-template-columns:\s*minmax\(320px, 352px\) minmax\(0, 1fr\)/);
