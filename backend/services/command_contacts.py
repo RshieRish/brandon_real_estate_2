@@ -41,6 +41,8 @@ from services.command_contact_contracts import (
     CONTACT_TOUCH_ACTIVITY_KINDS,
     CaptureQualityValue,
     ContactActorValue,
+    ContactCelebrationRow,
+    ContactCelebrations,
     ContactCelebrationValue,
     ContactDirectoryFilters,
     ContactDirectoryPage,
@@ -758,6 +760,94 @@ async def get_contact_neighbors(
     )
 
 
+def _celebration_row(
+    contact: CRMContact,
+    profile: CRMContactProfile | None,
+    *,
+    kind: str,
+) -> ContactCelebrationRow | None:
+    value = _celebration(contact, profile, kind=kind)
+    if value is None:
+        return None
+    return ContactCelebrationRow(
+        contact_id=contact.id,
+        display_name=f"{contact.first_name} {contact.last_name}".strip(),
+        kind=kind,  # type: ignore[arg-type]
+        month=value.month,
+        day=value.day,
+        year=value.year,
+        year_quality=value.year_quality,
+        origin=value.origin,
+    )
+
+
+async def list_contact_celebrations(
+    db: AsyncSession,
+    *,
+    month: int,
+) -> ContactCelebrations:
+    """Return explicit internal/recovered celebrations without inferring dates."""
+    if type(month) is not int:
+        raise TypeError("month must be an integer")
+    if not 1 <= month <= 12:
+        raise ValueError("month must be between 1 and 12")
+    recovered_birthday = and_(
+        CRMContact.birthday.is_(None),
+        CRMContactProfile.birth_month == month,
+        _valid_recovered_celebration_predicate(
+            month_column=CRMContactProfile.birth_month,
+            day_column=CRMContactProfile.birth_day,
+            year_column=CRMContactProfile.birth_year,
+            quality_column=CRMContactProfile.birth_year_quality,
+        ),
+    )
+    recovered_anniversary = and_(
+        CRMContact.anniversary.is_(None),
+        CRMContactProfile.anniversary_month == month,
+        _valid_recovered_celebration_predicate(
+            month_column=CRMContactProfile.anniversary_month,
+            day_column=CRMContactProfile.anniversary_day,
+            year_column=CRMContactProfile.anniversary_year,
+            quality_column=CRMContactProfile.anniversary_year_quality,
+        ),
+    )
+    rows = (
+        await db.execute(
+            select(CRMContact, CRMContactProfile)
+            .outerjoin(
+                CRMContactProfile,
+                CRMContactProfile.contact_id == CRMContact.id,
+            )
+            .where(
+                or_(
+                    extract("month", CRMContact.birthday) == month,
+                    extract("month", CRMContact.anniversary) == month,
+                    recovered_birthday,
+                    recovered_anniversary,
+                )
+            )
+        )
+    ).all()
+    birthdays: list[ContactCelebrationRow] = []
+    anniversaries: list[ContactCelebrationRow] = []
+    for contact, profile in rows:
+        birthday = _celebration_row(contact, profile, kind="birthday")
+        if birthday is not None and birthday.month == month:
+            birthdays.append(birthday)
+        anniversary = _celebration_row(contact, profile, kind="anniversary")
+        if anniversary is not None and anniversary.month == month:
+            anniversaries.append(anniversary)
+    def order_key(row: ContactCelebrationRow) -> tuple[int, str, int]:
+        return row.day, row.display_name.casefold(), row.contact_id
+
+    birthdays.sort(key=order_key)
+    anniversaries.sort(key=order_key)
+    return ContactCelebrations(
+        birthdays=tuple(birthdays),
+        anniversaries=tuple(anniversaries),
+    )
+
+
 __all__ = [
     "ContactDirectoryError",
     "ContactDataIntegrityError",
@@ -766,5 +856,6 @@ __all__ = [
     "ContactNotInDirectory",
     "ContactSectionUnsupported",
     "get_contact_neighbors",
+    "list_contact_celebrations",
     "list_contacts",
 ]
