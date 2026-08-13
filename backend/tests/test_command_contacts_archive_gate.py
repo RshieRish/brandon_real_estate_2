@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from models.command_provenance import CaptureQuality
 from services.command_parsers.contact_extractors import CONTACT_SECTIONS
 from services.command_parsers.contacts import ContactsParser
 from services.command_provenance import ArchiveArtifactInput
@@ -129,3 +130,59 @@ async def test_recovered_contacts_have_complete_eight_view_matrix():
         section: 317 for section in CONTACT_SECTIONS
     }
     assert result.metrics.details["fabricated_celebrations"] == 0
+
+    section_records = [
+        record
+        for record in result.records
+        if record.record_kind == "contact_section_capture"
+    ]
+    assert Counter(record.capture_quality for record in section_records) == {
+        CaptureQuality.COMPLETE: 2_535,
+        CaptureQuality.PARTIAL: 1,
+    }
+    assert Counter(
+        (
+            record.payload["section_name"],
+            record.payload["is_empty"],
+            record.capture_quality,
+        )
+        for record in section_records
+    ) == {
+        ("timeline", False, CaptureQuality.COMPLETE): 317,
+        ("opportunities", False, CaptureQuality.COMPLETE): 100,
+        ("opportunities", True, CaptureQuality.COMPLETE): 217,
+        ("smart_plans", False, CaptureQuality.COMPLETE): 197,
+        ("smart_plans", False, CaptureQuality.PARTIAL): 1,
+        ("smart_plans", True, CaptureQuality.COMPLETE): 119,
+        ("notes", False, CaptureQuality.COMPLETE): 154,
+        ("notes", True, CaptureQuality.COMPLETE): 163,
+        ("saved_searches", False, CaptureQuality.COMPLETE): 3,
+        ("saved_searches", True, CaptureQuality.COMPLETE): 314,
+        ("tasks_to_do", False, CaptureQuality.COMPLETE): 190,
+        ("tasks_to_do", True, CaptureQuality.COMPLETE): 127,
+        ("tasks_completed", False, CaptureQuality.COMPLETE): 22,
+        ("tasks_completed", True, CaptureQuality.COMPLETE): 295,
+        ("tasks_archived", False, CaptureQuality.COMPLETE): 138,
+        ("tasks_archived", True, CaptureQuality.COMPLETE): 179,
+    }
+
+    partial_sections = [
+        record
+        for record in section_records
+        if record.capture_quality is not CaptureQuality.COMPLETE
+    ]
+    assert len(partial_sections) == 1
+    partial = partial_sections[0]
+    assert partial.source_key == "position:0000246:section:smart_plans"
+    assert partial.payload["capture_ordinal"] == "0000246"
+    assert partial.payload["source_contact_id"] == "63ac84e3b32c9750b2ab694f"
+    assert partial.payload["section_name"] == "smart_plans"
+    assert partial.payload["is_empty"] is False
+    assert partial.payload["row_count"] == 0
+    assert partial.payload["limitations"] == (
+        "rendered rows were not structurally distinguishable",
+    )
+    assert partial.artifact_paths == (
+        "kw_command_repaired/contacts/sections/0000246/smartplans.json",
+        "kw_command_repaired/contacts/sections/0000246/smartplans.snapshot.txt",
+    )
