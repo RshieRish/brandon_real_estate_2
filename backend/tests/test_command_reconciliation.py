@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 import hashlib
+import json
 from pathlib import Path
 import asyncio
 
@@ -82,6 +83,7 @@ def parse_result(
     records: tuple[SourceRecordDraft, ...] = (),
     source_system: str = "kw_command",
     normalized_count: int = 0,
+    error_count: int = 6,
     details: dict[str, object] | None = None,
 ) -> ModuleParseResult:
     return ModuleParseResult(
@@ -96,7 +98,7 @@ def parse_result(
             evidence_only_count=3,
             unmatched_count=4,
             duplicate_content_count=5,
-            error_count=6,
+            error_count=error_count,
             details=details or {"zeta": 2, "alpha": {"beta": [1, 2]}},
         ),
     )
@@ -567,8 +569,9 @@ async def test_identity_conflict_failure_persists_only_redacted_audit_details(
         "contacts",
         [
             IdentityConflict(
-                "conflicting phone",
-                (first_source_id, second_source_id),
+                reason="conflicting_phone",
+                resolution_method="email",
+                source_contact_ids=(first_source_id, second_source_id),
             )
         ],
     )
@@ -592,11 +595,98 @@ async def test_identity_conflict_failure_persists_only_redacted_audit_details(
     assert "evidence_hashes=" in run.error_text
     assert first_source_id not in run.error_text
     assert second_source_id not in run.error_text
+    result = await command_db.scalar(select(CRMReconciliationResult))
+    assert result is not None
+    assert result.source_system == "kw_command"
+    assert result.module == "contacts"
+    assert result.expected_count == 317
+    assert result.observed_count == 0
+    assert result.normalized_count == 0
+    assert result.error_count == 1
+    details = json.loads(result.details_json)
+    assert details["status"] == "failed"
+    assert details["ambiguous_identities"] == 1
+    assert details["identity_conflict_reason"] == "conflicting_phone"
+    assert details["identity_resolution_method"] == "email"
+    assert len(details["evidence_hashes"]) == 2
+    assert first_source_id not in result.details_json
+    assert second_source_id not in result.details_json
+
+
+async def test_resume_retries_and_replaces_structured_failed_module_result(command_db):
+    from services.command_contact_identity import IdentityConflict
+    from services.command_reconciliation import RunRequest, execute_reconciliation
+
+    artifact = artifact_for()
+    await seed_artifacts(command_db, artifact)
+    conflict = IdentityConflict(
+        reason="conflicting_phone",
+        resolution_method="email",
+        source_contact_ids=(
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+    )
+    contacts = FakeParser(
+        "contacts",
+        [
+            conflict,
+            parse_result(
+                module="contacts",
+                records=(source_draft(parser_version="contacts-v1"),),
+                error_count=0,
+            ),
+        ],
+    )
+    registry = registry_for(contacts)
+    request = RunRequest(
+        mode="apply",
+        parser_version="contacts-v1",
+        modules=frozenset({"contacts"}),
+    )
+
+    with pytest.raises(IdentityConflict):
+        await execute_reconciliation(command_db, registry, (artifact,), request)
+
+    failed_run = await command_db.scalar(select(CRMReconciliationRun))
+    failed_result = await command_db.scalar(select(CRMReconciliationResult))
+    assert failed_run is not None
+    assert failed_result is not None
+    assert failed_result.error_count == 1
+    failed_result_id = failed_result.id
+
+    summary = await execute_reconciliation(
+        command_db,
+        registry,
+        (artifact,),
+        RunRequest(
+            mode="apply",
+            parser_version="contacts-v1",
+            modules=frozenset({"contacts"}),
+            resume_run_id=failed_run.id,
+        ),
+    )
+
+    assert summary.run_id == failed_run.id
+    assert summary.status == "completed"
+    assert contacts.parse_calls == 2
+    assert len(summary.results) == 1
+    assert summary.results[0].module == "contacts"
+    assert summary.results[0].error_count == 0
+    assert summary.results[0].normalized_count == 1
+    replaced_result = await command_db.scalar(select(CRMReconciliationResult))
+    assert replaced_result is not None
+    assert replaced_result.id == failed_result_id
+    assert replaced_result.error_count == 0
+    assert json.loads(replaced_result.details_json) == {
+        "alpha": {"beta": [1, 2]},
+        "zeta": 2,
+    }
     assert (
         await command_db.scalar(
             select(func.count()).select_from(CRMReconciliationResult)
         )
-        == 0
+        == 1
     )
 
 

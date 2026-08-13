@@ -168,6 +168,21 @@ class CommandArchiveParser(Protocol):
         ...
 
 
+@runtime_checkable
+class StructuredParserError(Protocol):
+    """Safe parser failure details that reconciliation may persist and retry."""
+
+    source_system: str
+    module: str
+    expected_count: int | None
+    error_count: int
+
+    @property
+    def audit_details(self) -> Mapping[str, object]:
+        """Return canonical, privacy-safe structured failure details."""
+        ...
+
+
 class ParserRegistry:
     """Register one parser per module and select them deterministically."""
 

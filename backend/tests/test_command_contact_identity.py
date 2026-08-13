@@ -80,7 +80,8 @@ def test_shared_email_with_conflicting_phone_blocks_apply():
         )
 
     assert captured.value.ambiguous_identities == 1
-    assert captured.value.source_contact_ids == ("a", "b")
+    assert len(captured.value.evidence_hashes) == 2
+    assert not hasattr(captured.value, "source_contact_ids")
 
 
 def test_identity_conflict_text_is_redacted_and_keeps_auditable_count():
@@ -105,10 +106,26 @@ def test_identity_conflict_text_is_redacted_and_keeps_auditable_count():
 
     message = str(captured.value)
     assert captured.value.ambiguous_identities == 1
+    assert captured.value.reason == "conflicting_phone"
+    assert captured.value.resolution_method == "email"
     assert "ambiguous_identities=1" in message
     assert "evidence_hashes=" in message
-    assert first_source_id not in message
-    assert second_source_id not in message
+    non_callable_attributes = {
+        name: value
+        for name in dir(captured.value)
+        if not callable(value := getattr(captured.value, name))
+    }
+    retained_state = repr(
+        (
+            captured.value,
+            captured.value.args,
+            vars(captured.value),
+            non_callable_attributes,
+        )
+    )
+    assert first_source_id not in retained_state
+    assert second_source_id not in retained_state
+    assert not hasattr(captured.value, "source_contact_ids")
 
 
 def test_non_e164_phone_is_preserved_but_not_used_as_merge_key():

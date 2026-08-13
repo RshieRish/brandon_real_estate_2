@@ -20,6 +20,7 @@ from models.command_provenance import (
 from services.command_parsers import (
     ModuleMetrics,
     ParserRegistry,
+    StructuredParserError,
     validate_parser_module,
 )
 from services.command_provenance import (
@@ -183,6 +184,73 @@ def _result_row(
         error_count=metrics.error_count,
         details_json=_canonical_json(metrics.details),
     )
+
+
+async def _persist_result_row(
+    db: AsyncSession,
+    run_id: int,
+    metrics: ModuleMetrics,
+    *,
+    normalized_count: int,
+) -> None:
+    """Insert a module result or atomically replace its retryable failed state."""
+    row = await db.scalar(
+        select(CRMReconciliationResult).where(
+            CRMReconciliationResult.run_id == run_id,
+            CRMReconciliationResult.source_system == metrics.source_system,
+            CRMReconciliationResult.module == metrics.module,
+        )
+    )
+    replacement = _result_row(
+        run_id,
+        metrics,
+        normalized_count=normalized_count,
+    )
+    if row is None:
+        db.add(replacement)
+        return
+    row.expected_count = replacement.expected_count
+    row.observed_count = replacement.observed_count
+    row.rendered_count = replacement.rendered_count
+    row.normalized_count = replacement.normalized_count
+    row.evidence_only_count = replacement.evidence_only_count
+    row.unmatched_count = replacement.unmatched_count
+    row.duplicate_content_count = replacement.duplicate_content_count
+    row.error_count = replacement.error_count
+    row.details_json = replacement.details_json
+
+
+def _structured_failure_metrics(
+    error: Exception,
+    *,
+    expected_module: str,
+) -> ModuleMetrics | None:
+    if not isinstance(error, StructuredParserError):
+        return None
+    if error.module != expected_module:
+        raise ReconciliationRunError(
+            "structured parser error module does not match selected module: "
+            f"expected {expected_module!r}, got {error.module!r}"
+        ) from error
+    return ModuleMetrics(
+        source_system=error.source_system,
+        module=error.module,
+        expected_count=error.expected_count,
+        observed_count=0,
+        normalized_count=0,
+        error_count=error.error_count,
+        details=error.audit_details,
+    )
+
+
+def _is_retryable_failed_result(result: CRMReconciliationResult) -> bool:
+    try:
+        details = json.loads(result.details_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ReconciliationResumeError(
+            f"stored reconciliation details are invalid for module {result.module!r}"
+        ) from exc
+    return isinstance(details, dict) and details.get("status") == "failed"
 
 
 def _owned_run_update(run_id: int, claim_token: str):
@@ -446,21 +514,42 @@ async def execute_reconciliation(
         await _validate_bundle_catalog(db, artifacts_by_path)
         parsers = registry.select(selected_modules)
         selected = tuple((parser.module, parser) for parser in parsers)
-        completed_modules = set(
+        result_rows = (
             await db.scalars(
-                select(CRMReconciliationResult.module).where(
-                    CRMReconciliationResult.run_id == run_id
+                select(CRMReconciliationResult).where(
+                    CRMReconciliationResult.run_id == run_id,
                 )
             )
-        )
+        ).all()
+        completed_modules = {
+            result.module
+            for result in result_rows
+            if not _is_retryable_failed_result(result)
+        }
         for expected_module, parser in selected:
             if expected_module in completed_modules:
                 continue
             validate_parser_module(parser, expected_module)
-            result = parser.parse(
-                materialized_artifacts,
-                request.parser_version,
-            )
+            try:
+                result = parser.parse(
+                    materialized_artifacts,
+                    request.parser_version,
+                )
+            except Exception as parser_error:
+                failure_metrics = _structured_failure_metrics(
+                    parser_error,
+                    expected_module=expected_module,
+                )
+                if failure_metrics is not None:
+                    await _lock_module_claim(db, run_id, claim_token)
+                    await _persist_result_row(
+                        db,
+                        run_id,
+                        failure_metrics,
+                        normalized_count=0,
+                    )
+                    await db.commit()
+                raise
             if result.metrics.module != expected_module:
                 raise ReconciliationRunError(
                     "parser result module does not match selected module: "
@@ -476,12 +565,11 @@ async def execute_reconciliation(
             if request.mode == "apply":
                 await persist_source_records(db, result.records)
                 normalized_count = len(result.records)
-            db.add(
-                _result_row(
-                    run_id,
-                    result.metrics,
-                    normalized_count=normalized_count,
-                )
+            await _persist_result_row(
+                db,
+                run_id,
+                result.metrics,
+                normalized_count=normalized_count,
             )
             await db.commit()
 

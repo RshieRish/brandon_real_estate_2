@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import re
@@ -16,25 +16,78 @@ _SOURCE_HASH_VERSION = "contacts-v1"
 _E164_PATTERN = re.compile(r"\+[1-9][0-9]{7,14}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
+IdentityConflictReason = Literal[
+    "duplicate_provider_id",
+    "conflicting_phone",
+    "conflicting_email",
+    "conflicting_name",
+]
+IdentityResolutionMethod = Literal["email", "phone", "provider_id"]
+_IDENTITY_CONFLICT_REASONS = frozenset(
+    {
+        "duplicate_provider_id",
+        "conflicting_phone",
+        "conflicting_email",
+        "conflicting_name",
+    }
+)
+_IDENTITY_RESOLUTION_METHODS = frozenset({"email", "phone", "provider_id"})
+
 
 class IdentityConflict(ValueError):
     """Raised when strong identity evidence conflicts across source contacts."""
 
-    def __init__(self, reason: str, source_contact_ids: Sequence[str]) -> None:
-        self.source_contact_ids = tuple(sorted(source_contact_ids))
+    source_system = "kw_command"
+    module = "contacts"
+    expected_count = 317
+    error_count = 1
+
+    def __init__(
+        self,
+        *,
+        reason: IdentityConflictReason,
+        resolution_method: IdentityResolutionMethod,
+        source_contact_ids: Sequence[str],
+    ) -> None:
+        if reason not in _IDENTITY_CONFLICT_REASONS:
+            raise ValueError("identity conflict reason is invalid")
+        if resolution_method not in _IDENTITY_RESOLUTION_METHODS:
+            raise ValueError("identity conflict resolution_method is invalid")
+        if isinstance(source_contact_ids, str | bytes):
+            raise TypeError("source_contact_ids must be a sequence")
+        source_ids = tuple(sorted(source_contact_ids))
+        if not source_ids or any(
+            not isinstance(source_contact_id, str) or not source_contact_id.strip()
+            for source_contact_id in source_ids
+        ):
+            raise ValueError("source_contact_ids must contain nonblank strings")
+        self.reason = reason
+        self.resolution_method = resolution_method
         self.ambiguous_identities = 1
         self.evidence_hashes = tuple(
             _provider_evidence_hash(source_contact_id)
-            for source_contact_id in self.source_contact_ids
+            for source_contact_id in source_ids
         )
         evidence_digest = hashlib.sha256(
             "\n".join(self.evidence_hashes).encode("utf-8")
         ).hexdigest()
         super().__init__(
-            f"identity conflict: {reason}; ambiguous_identities=1; "
+            f"identity conflict: {reason.replace('_', ' ')}; "
+            f"resolution_method={resolution_method}; ambiguous_identities=1; "
             f"evidence_count={len(self.evidence_hashes)}; "
             f"evidence_hashes={evidence_digest}"
         )
+
+    @property
+    def audit_details(self) -> Mapping[str, object]:
+        """Return the complete redacted failure payload for reconciliation."""
+        return {
+            "status": "failed",
+            "ambiguous_identities": self.ambiguous_identities,
+            "identity_conflict_reason": self.reason,
+            "identity_resolution_method": self.resolution_method,
+            "evidence_hashes": self.evidence_hashes,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,8 +187,9 @@ def resolve_identity_clusters(
         source_contact_id = candidate.source_contact_id.strip()
         if source_contact_id in by_source:
             raise IdentityConflict(
-                "duplicate provider contact ID",
-                (source_contact_id,),
+                reason="duplicate_provider_id",
+                resolution_method="provider_id",
+                source_contact_ids=(source_contact_id,),
             )
         by_source[source_contact_id] = candidate
 
@@ -154,20 +208,20 @@ def resolve_identity_clusters(
             phone_groups[canonical_candidate.phone].append(index)
 
     for indexes in email_groups.values():
-        _require_compatible_names(canonical, indexes)
+        _require_compatible_names(canonical, indexes, "email")
         phones = {canonical[index].phone for index in indexes} - {None}
         if len(phones) > 1:
-            _raise_conflict("conflicting phone", canonical, indexes)
+            _raise_conflict("conflicting_phone", "email", canonical, indexes)
         _union_group(parents, indexes)
 
     for indexes in phone_groups.values():
         emails = {canonical[index].email for index in indexes} - {None}
         if len(emails) > 1:
-            _raise_conflict("conflicting email", canonical, indexes)
+            _raise_conflict("conflicting_email", "phone", canonical, indexes)
         email_less_indexes = tuple(
             index for index in indexes if canonical[index].email is None
         )
-        _require_compatible_names(canonical, email_less_indexes)
+        _require_compatible_names(canonical, email_less_indexes, "phone")
         _union_group(parents, email_less_indexes)
 
     resolved_groups: dict[int, list[int]] = defaultdict(list)
@@ -181,7 +235,7 @@ def resolve_identity_clusters(
         emails = {canonical[index].email for index in indexes} - {None}
         phones = {canonical[index].phone for index in indexes} - {None}
         if len(emails) > 1:
-            _raise_conflict("conflicting email", canonical, indexes)
+            _raise_conflict("conflicting_email", "phone", canonical, indexes)
         if emails:
             method: Literal["email", "phone", "provider_id"] = "email"
             identity_value = next(iter(emails))
@@ -255,6 +309,7 @@ def _canonical_name(value: str | None) -> str | None:
 def _require_compatible_names(
     candidates: tuple[_CanonicalCandidate, ...],
     indexes: Sequence[int],
+    resolution_method: Literal["email", "phone"],
 ) -> None:
     for offset, left_index in enumerate(indexes):
         left_names = candidates[left_index].names
@@ -264,19 +319,25 @@ def _require_compatible_names(
             right_names = candidates[right_index].names
             if right_names and left_names.isdisjoint(right_names):
                 _raise_conflict(
-                    "conflicting name",
+                    "conflicting_name",
+                    resolution_method,
                     candidates,
                     (left_index, right_index),
                 )
 
 
 def _raise_conflict(
-    reason: str,
+    reason: Literal["conflicting_phone", "conflicting_email", "conflicting_name"],
+    resolution_method: Literal["email", "phone"],
     candidates: tuple[_CanonicalCandidate, ...],
     indexes: Sequence[int],
 ) -> None:
     source_ids = tuple(candidates[index].source_contact_id for index in indexes)
-    raise IdentityConflict(reason, source_ids)
+    raise IdentityConflict(
+        reason=reason,
+        resolution_method=resolution_method,
+        source_contact_ids=source_ids,
+    )
 
 
 def _provider_evidence_hash(source_contact_id: str) -> str:
