@@ -2703,6 +2703,9 @@ git commit -m "feat: expose Command contact parity APIs"
 - Modify: `frontend/src/lib/command/api.test.ts`
 - Modify: `frontend/src/lib/command/home.ts`
 - Modify: `frontend/src/lib/command/home.test.ts`
+- Modify: `frontend/src/test/fixtures/commandHome.ts`
+- Modify: `frontend/src/components/command/home/CommandHome.tsx`
+- Modify: `frontend/src/components/command/home/CommandHome.test.tsx`
 - Modify: `frontend/src/components/command/home/HomeContextPanels.tsx`
 - Create: `frontend/src/components/command/home/HomeContextPanels.test.tsx`
 
@@ -2723,6 +2726,8 @@ export class CommandDecodeError extends Error {
   }
 }
 
+export const COMMAND_HTTP_ERROR_DETAIL_MAX_LENGTH = 512;
+
 export type CommandJsonRequest<T> = Readonly<{
   path: string;
   decode: Decoder<T>;
@@ -2741,9 +2746,20 @@ export type CommandBlobRequest = Readonly<{
 export async function commandBlob(request: CommandBlobRequest): Promise<Blob>;
 ```
 
-Both functions use one private `authenticatedFetch(path, init)` that validates `admin_token`, prepends the Command API base, supplies the bearer header, forwards the identical signal, and applies the same bounded non-2xx detail parsing. `commandJson` additionally sends `Content-Type: application/json`, serializes `body` exactly once, passes `null` to the decoder for 204, parses success JSON as `unknown`, and requires the supplied decoder. `commandBlob` sends no JSON content-type/body and returns `response.blob()` only after the shared status gate. A missing/blank token throws `CommandHttpError(401, "Administrator session required")` before fetch. A non-2xx response uses only a bounded string `detail` or `Command request failed (<status>)`; success schema/blob parsing never runs. JSON parse/schema failures throw `CommandDecodeError`; they may identify a field path and expected type but never include response values. Native abort rejection is rethrown unchanged so callers can recognize `AbortError`.
+Both functions use one private `authenticatedFetch(path, init)` that validates `admin_token`, prepends the Command API base, supplies the bearer header, forwards the identical signal, and applies the same bounded non-2xx detail parsing. `commandJson` additionally sends `Content-Type: application/json`, serializes `body` exactly once, passes `null` to the decoder for 204, parses success JSON as `unknown`, and requires the supplied decoder. `commandBlob` sends no JSON content-type/body and returns `response.blob()` only after the shared status gate. A missing/blank token throws `CommandHttpError(401, "Administrator session required")` before fetch.
 
-Tests assert JSON and blob bearer behavior, JSON-only content type/body, exact blob bytes/type, missing token for both paths, 204, 401/404/409/422/500 messages for JSON and blob, invalid JSON, nested decoder paths, signal identity, and aborted JSON/blob fetches. Run:
+The error-detail boundary is exact. Parse a non-2xx body as JSON once and accept
+only an object whose `detail` is a string with a trimmed length of `1..512`;
+the surfaced detail is that trimmed string. Invalid JSON, a non-object body, a
+non-string/blank detail, or a detail longer than
+`COMMAND_HTTP_ERROR_DETAIL_MAX_LENGTH` uses exactly
+`Command request failed (<status>)`. Do not truncate or stringify rejected
+values. Success schema/blob parsing never runs after this gate. JSON
+parse/schema failures throw `CommandDecodeError`; they may identify a field
+path and expected type but never include response values. Native abort
+rejection is rethrown unchanged so callers can recognize `AbortError`.
+
+Tests assert JSON and blob bearer behavior, JSON-only content type/body, exact blob bytes/type, missing token for both paths, 204, 401/404/409/422/500 messages for JSON and blob, accepted 1- and 512-character trimmed details, rejected blank/513-character/non-string/non-object/invalid-JSON details with the exact status fallback, invalid success JSON, nested decoder paths, signal identity, and aborted JSON/blob fetches. Run:
 
 ```bash
 cd frontend
@@ -2757,19 +2773,85 @@ Expected: FAIL because `commandJson` and decoder errors do not exist.
 `contacts.ts` uses snake_case wire fields exactly as returned by Task 6 and exports no `any` or unchecked `as` cast. Build decoder combinators `object`, `array`, `string`, `number`, `nullable`, `literal`, and `optional` locally or from `http.ts`; every response below has a named decoder.
 
 ```ts
-export type CaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
+export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
+export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
 export type ContactSectionName =
   | 'timeline' | 'opportunities' | 'smart_plans' | 'notes' | 'saved_searches'
   | 'tasks_to_do' | 'tasks_completed' | 'tasks_archived';
+export type ContactOrigin =
+  | 'recovered' | 'lead_backed' | 'legacy_only' | 'internal_only';
+export type ContactSource = 'kw_command' | 'internal_crm' | 'legacy_lead';
 export type ContactSmartView =
   | 'all' | 'never_contacted' | 'recently_active'
   | 'birthdays_this_month' | 'anniversaries_this_month';
 export type ContactSortKey =
   | 'name' | 'stage' | 'health_score' | 'last_contacted_at'
   | 'last_interaction_at' | 'created_at' | 'updated_at';
+
+export type ContactOccurrence =
+  | Readonly<{
+      kind: 'opportunity'; title: string; stage: string | null;
+      value_cents: number | null;
+    }>
+  | Readonly<{ kind: 'smart_plan'; title: string; status: string | null }>
+  | Readonly<{
+      kind: 'task'; title: string; description: string | null;
+      state: 'to_do' | 'completed' | 'archived'; due_at: string | null;
+    }>
+  | Readonly<{ kind: 'note'; title: string; body: string | null }>
+  | Readonly<{
+      kind: 'saved_search'; title: string; criteria_summary: readonly string[];
+    }>;
+
+type ContactMaterializationCommon = Readonly<{
+  source_record_id: number;
+  source_key_hash: string;
+  section: ContactSectionName;
+  occurrence_ordinal: number;
+  capture_quality: ContactCaptureQuality;
+  captured_at: string | null;
+  value: ContactOccurrence;
+}>;
+
 export type ContactMaterialization =
-  | Readonly<{ status: 'materialized'; source_record_id: number; entity_type: string; entity_id: number }>
-  | Readonly<{ status: 'source_only'; source_record_id: number; capture_quality: CaptureQuality }>;
+  | (ContactMaterializationCommon & Readonly<{ status: 'source_only' }>)
+  | (ContactMaterializationCommon & Readonly<{
+      status: 'materialized';
+      entity_type: 'note' | 'saved_search' | 'task' | 'smart_plan' | 'opportunity';
+      entity_id: number;
+    }>);
+
+export type ContactAddress = Readonly<{
+  id: number;
+  address_type: string | null;
+  formatted: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  source_record_id: number | null;
+}>;
+
+export type ContactDirectoryRow = Readonly<{
+  id: number;
+  first_name: string;
+  last_name: string;
+  display_name: string;
+  primary_email: string | null;
+  primary_phone: string | null;
+  stage: string;
+  lead_backed: boolean;
+  origins: readonly ContactOrigin[];
+  sources: readonly ContactSource[];
+  health_score: number | null;
+  last_contacted_at: string | null;
+  last_interaction_at: string | null;
+  owner: ContactActor | null;
+  assignee: ContactActor | null;
+  tags: readonly ContactTag[];
+  birthday: ContactCelebrationValue | null;
+  anniversary: ContactCelebrationValue | null;
+  evidence_quality: ContactEvidenceQuality | null;
+}>;
+
 export type ContactDirectoryPage = Readonly<{
   rows: readonly ContactDirectoryRow[];
   total: number;
@@ -2780,20 +2862,51 @@ export type ContactDirectoryPage = Readonly<{
   direction: 'asc' | 'desc';
 }>;
 
-export type ContactCreated = Readonly<{
+export type LegacyContact = Readonly<{
   id: number;
-  lead_id: number | null;
   first_name: string;
   last_name: string;
   email: string | null;
   phone: string | null;
-  stage: string;
+  lead_id: number | null;
   birthday: string | null;
   anniversary: string | null;
+  stage: string;
 }>;
+
+export type ContactCreated = LegacyContact;
 ```
 
-Define named readonly types/decoders for directory rows/pages, detail, neighbors, workspace summary, timeline entry/page, each section union/page, evidence matrix, celebrations, create/update requests, and bulk action/result. The section decoder dispatches on `status` and rejects unknown discriminants. The evidence decoder requires `coalesced_aliases === 0`; it never accepts raw source payloads as an alternative schema. Nullable recovered timeline timestamps remain nullable. Datetimes are validated RFC3339 strings, positive IDs are integral, and `health_score` is nullable `0..100`.
+`ContactActor`, `ContactTag`, and `ContactCelebrationValue` are named readonly
+types with the exact Task 6 keys. The occurrence decoder first discriminates on
+`kind`; the section-row decoder then discriminates on `status`. Both reject
+unknown discriminants and all extra/missing fields. Validate
+`source_key_hash` as lowercase 64-hex, occurrence ordinals/entity/source IDs as
+positive integers, `value_cents` as a nullable nonnegative integer, and every
+non-null `captured_at`/`due_at` as RFC3339. Do not collapse the nested `value`
+union into an untyped record or reuse `ContactCaptureQuality` for the distinct
+aggregate `ContactEvidenceQuality` contract.
+
+Task 6 serializes `Decimal` coordinates as JSON strings. The address decoder
+therefore accepts `latitude`/`longitude` only as `null` or finite base-10
+strings with no whitespace, leading `+`, exponent, `NaN`, or `Infinity`, at
+most seven fractional digits, and a value inside `-90..90` or `-180..180`
+respectively. It rejects JSON numbers. No client decoder parses, rounds, or
+re-serializes an accepted coordinate.
+
+Define named readonly types/decoders for actor/tag/celebration values,
+directory rows/pages, recovered profile, address, detail, neighbors, workspace
+summary, timeline entry/page, every nested occurrence and section row/page,
+artifact/source/position/section evidence, aggregate evidence, celebrations,
+the exact legacy contact, create/update requests, and bulk action/result. The
+evidence decoder requires `coalesced_aliases === 0`; it never accepts raw source
+payloads as an alternative schema. `ContactEvidence.capture_quality` uses
+`ContactEvidenceQuality`, while source, position, and section rows use
+`ContactCaptureQuality`. Nullable recovered timeline timestamps remain
+nullable. All dates are exact `YYYY-MM-DD`, datetimes are RFC3339 strings,
+positive IDs and counts are integral with their Task 6 bounds, `health_score`
+is nullable `0..100`, content links are derived exactly from `artifact_id`, and
+decoders reject extra fields rather than silently retaining them.
 
 `serializeDirectoryRequest()` starts with a fresh `URLSearchParams`, emits keys in this canonical order, and sorts/deduplicates set-valued IDs/enums before repeating them:
 
@@ -2821,11 +2934,38 @@ export type ContactsApi = Readonly<{
 }>;
 ```
 
+The method/transport/decoder mapping is fixed and separately table-tested:
+
+```text
+directory     GET    /contacts/directory?<canonical directory query>       decodeContactDirectoryPage
+detail        GET    /contacts/{id}                                        decodeContactDetail
+neighbors     GET    /contacts/{id}/neighbors?<canonical directory query>  decodeContactNeighbors
+workspace     GET    /contacts/{id}/workspace/summary                      decodeContactWorkspaceSummary
+timeline      GET    /contacts/{id}/timeline?cursor=...&page_size=...       decodeContactTimelinePage
+section       GET    /contacts/{id}/{segment}?page=...&page_size=...        decodeContactSectionPage
+tasks section GET    /contacts/{id}/tasks?state=...&page=...&page_size=...  decodeContactSectionPage
+evidence      GET    /contacts/{id}/evidence                               decodeContactEvidence
+celebrations  GET    /celebrations?month=...                               decodeContactCelebrations
+create        POST   /contacts                                             decodeLegacyContact
+update        PATCH  /contacts/{id}                                        decodeLegacyContact
+bulk          POST   /contacts/bulk                                        decodeContactBulkResult
+```
+
+The timeline serializer omits `cursor` when null and otherwise emits `cursor`
+before `page_size`; section segments are exactly `opportunities`,
+`smart-plans`, `notes`, and `saved-searches`, while task state is exactly
+`to_do|completed|archived`. JSON mutation bodies are their validated input
+objects, serialized exactly once by `commandJson`. The create/update decoder
+requires the raw result's `lead_id`, `birthday`, and `anniversary` keys even
+when their values are null; it never decodes a mutation result as expanded
+detail.
+
 `contactsApi.workspace(id)` calls
 `/contacts/${id}/workspace/summary`; it never calls the retained rich legacy
 `/contacts/${id}/workspace`. Existing `commandApi.contactWorkspace(id)` keeps
 calling the rich legacy URL through its retained unchecked legacy transport
-until Task 8 removes that consumer. `contactsApi.detail(id)` calls
+through all of Task 8; replacing the current detail page in Task 9 removes its
+final consumer. `contactsApi.detail(id)` calls
 `/contacts/${id}` and decodes the intentional `ContactDetailOut` upgrade.
 
 `section()` maps `opportunities`, `smart_plans`, `notes`, and `saved_searches` to their route segment; task sections map to `/tasks?state=to_do|completed|archived`. Timeline forwards the opaque cursor unchanged through `URLSearchParams`. Every method validates positive IDs and page bounds before fetch.
@@ -2834,9 +2974,65 @@ Tests pin the full canonical URL, repeated filters, reserved characters, stable 
 
 - [ ] **Step 3: Preserve legacy consumers through a decoded adapter**
 
-`api.ts` imports `commandJson`, `commandBlob`, and the Contacts decoders. Delete only private `requestBlob`; retain the existing private `request<T>` unchanged for non-Contacts JSON methods until those domains receive named decoders in their own plans. The new `contactsApi`, `commandApi.contacts`, and `commandApi.celebrations` use `commandJson`; `archiveArtifactBlob(id, options?)` uses `commandBlob({path,signal:options?.signal})` without changing its default call shape. No overview, task, goal, SmartPlan, opportunity, agreement, listing, referral, marketing, website, report, archive-index, tag, or other legacy method is migrated or behaviorally changed in this task. An `api.test.ts` inventory snapshots those unrelated method URLs/results before and after this change and proves they still traverse the retained `request<T>`; the HTTP tests do not claim those responses are decoded.
+`api.ts` imports `commandJson`, `commandBlob`, and the Contacts decoders. Delete only private `requestBlob`; retain the existing private `request<T>` unchanged for non-Contacts JSON methods until those domains receive named decoders in their own plans. The new `contactsApi`, `commandApi.contacts`, and `commandApi.celebrations` use `commandJson`; `archiveArtifactBlob(id, options?)` uses `commandBlob({path,signal:options?.signal})` without changing its default call shape. No overview, task, goal, SmartPlan, opportunity, agreement, listing, referral, marketing, website, report, archive-index, tag, or other legacy method is migrated to `commandJson` or given a decoder in this task. The existing Home methods may add only an optional `{signal}` argument and forward it through the retained `request<T>` `RequestInit`; their URL, body, error, and unchecked response behavior remain unchanged. An `api.test.ts` inventory snapshots those unrelated method URLs/results before and after this change and proves they still traverse the retained `request<T>`; the HTTP tests do not claim those responses are decoded.
 
-`commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts` and resolving the legacy array shape, now through `decodeLegacyContacts`. It remains available to Tasks and other legacy consumers; do not redirect it to `/directory` and do not synthesize a page. Legacy contact mutation/workspace helpers not replaced by an exact `contactsApi` method also remain on `request<T>` in this task; Task 8 rewires the new Contacts workspace only to the decoded client without silently changing those compatibility responses.
+`commandApi.contacts(limit, offset, filters)` continues calling `GET /contacts`
+and resolves `readonly LegacyContact[]` through `decodeLegacyContacts`. Its
+serializer retains exactly `limit`, `offset`, then optional trimmed `query`
+and exact `stage`; Task 6 now rejects rather than clamps invalid limit/offset,
+so the client validates `limit=1..100` and `offset>=0` before fetch. It remains
+available to Tasks and other legacy consumers; do not redirect it to
+`/directory` and do not synthesize a page. `LegacyContact` is the strict raw
+wire type above, with required nullable `lead_id`, `birthday`, and
+`anniversary`. Keep the existing looser UI `Contact` type in `api.ts` for
+legacy component/model consumers through Tasks 8-9; do not add
+`last_contacted_at`, `recently_active_at`, or `health_score` to the raw decoder,
+because `GET /contacts` does not return those fields.
+
+Replace the current abbreviated rich-workspace type with these exact readonly
+wire types while retaining its unchecked compatibility transport:
+
+```ts
+export type LegacyContactWorkspace = Readonly<{
+  contact: LegacyContact;
+  timeline: readonly Readonly<{
+    id: number; kind: string; summary: string; created_at: string;
+  }>[];
+  tasks: readonly Readonly<{
+    id: number; title: string; contact_id: number | null; description: string;
+    priority: string; due_at: string | null; status: string;
+  }>[];
+  notes: readonly Readonly<{
+    id: number; contact_id: number; body: string;
+    created_at: string; updated_at: string;
+  }>[];
+  smart_plans: readonly Readonly<{
+    id: number; plan_id: number; status: string;
+  }>[];
+  opportunities: readonly Readonly<{
+    id: number; name: string; stage: string;
+    value_cents: number | null; role: string;
+  }>[];
+  saved_searches: readonly Readonly<{
+    id: number; name: string; criteria: string;
+  }>[];
+  bookings: readonly Readonly<{
+    id: number; meeting_type: string; context: string; scheduled_at: string;
+    location: string | null; notes: string;
+  }>[];
+  tags: readonly Readonly<{ id: number; name: string }>[];
+}>;
+```
+
+Every ID is positive and every listed timestamp is RFC3339; birthday and
+anniversary remain exact nullable date strings. This type includes the fields
+the old frontend omitted (`contact.lead_id`, task/note `contact_id`, note
+timestamps, and opportunity `role`). `commandApi.contactWorkspace(id)` remains
+at `/contacts/${id}/workspace` through Task 8. Legacy contact
+mutation/workspace helpers not replaced by an exact `contactsApi` method also
+remain on `request<T>` in this task; Task 8 rewires only its new directory
+workspace to the decoded client without silently changing these compatibility
+responses.
 
 Add a separate `commandApi.contactDirectory(request, options)` delegate to `contactsApi.directory` for gradual compatibility. Tests assert:
 
@@ -2852,20 +3048,107 @@ it('keeps the legacy contacts URL and decoded array shape', async () => {
 
 Malformed legacy rows now fail closed with `CommandDecodeError`; no caller receives partially decoded data.
 
+`api.test.ts` pins the remaining adapters exactly: `commandApi.contacts` uses
+`decodeLegacyContacts`; `commandApi.celebrations` delegates to
+`contactsApi.celebrations`/`decodeContactCelebrations`;
+`commandApi.contactDirectory` delegates to `contactsApi.directory`;
+`contactsApi.create` and `contactsApi.update` require `decodeLegacyContact`
+including `lead_id`; `commandApi.contactWorkspace` remains the rich legacy URL
+on `request<T>`; and `archiveArtifactBlob` alone moves from `requestBlob` to
+`commandBlob`. No mapping is inferred from a generic type assertion.
+
 - [ ] **Step 4: Make Home page-aware, abortable, and complete**
 
-Change `CommandHomeApi` to expose `contactDirectory(request, options?)`, not the legacy offset method. Add:
+Change `CommandHomeApi` to expose `contactDirectory(request, options?)`, not the
+legacy offset method. Every Home method receives the same optional request
+shape so a complete Home attempt is abortable without migrating unrelated
+responses to the decoded transport:
+
+```ts
+export type CommandHomeRequestOptions = Readonly<{ signal?: AbortSignal }>;
+
+export type CommandHomeApi = Readonly<{
+  overview: (options?: CommandHomeRequestOptions) => Promise<Overview>;
+  contactDirectory: (
+    request: ContactDirectoryRequest,
+    options?: CommandHomeRequestOptions,
+  ) => Promise<ContactDirectoryPage>;
+  tasks: (options?: CommandHomeRequestOptions) => Promise<readonly Task[]>;
+  opportunities: (
+    options?: CommandHomeRequestOptions,
+  ) => Promise<readonly Opportunity[]>;
+  celebrations: (
+    month: number,
+    options?: CommandHomeRequestOptions,
+  ) => Promise<ContactCelebrations>;
+  goals: (options?: CommandHomeRequestOptions) => Promise<readonly Goal[]>;
+  aiBriefing: (options?: CommandHomeRequestOptions) => Promise<AiBriefing>;
+}>;
+```
+
+The default `commandApi` implementation forwards `options?.signal` unchanged
+to every Home fetch. Contacts and celebrations use `commandJson`; the other
+Home methods continue through the retained `request<T>` with `{signal}` added
+to its existing `RequestInit`. Supplying no options preserves every existing
+call shape.
+
+Add:
 
 ```ts
 export async function loadAllContacts(
   api: Pick<CommandHomeApi, 'contactDirectory'>,
   signal?: AbortSignal,
 ): Promise<readonly ContactDirectoryRow[]>;
+
+export type HomeSmartViewCounts = Readonly<{
+  never_contacted: number;
+  recently_active: number;
+  birthdays_this_month: number;
+  anniversaries_this_month: number;
+}>;
+
+export async function loadHomeSmartViewCounts(
+  api: Pick<CommandHomeApi, 'contactDirectory'>,
+  signal?: AbortSignal,
+): Promise<HomeSmartViewCounts>;
 ```
 
 It requests pages `1..page_count` at `page_size=100`, with `smart_view='all'`, `sort='name'`, and `direction='asc'`, forwards one signal to every request, and checks these invariants on every page: stable `total/page_count/page_size/sort/direction`, response page equals request, no duplicate contact ID, no page beyond the first is empty, collected length never exceeds total, and final length equals total. `total=0,page_count=0,rows=[]` returns immediately. Drift throws `CommandDecodeError("contacts", "stable complete pagination")`; abort propagates unchanged. Tests prove all 366 contacts are loaded across four pages, not truncated at 100, and cover zero, duplicate IDs, total drift, early empty page, final-count mismatch, and abort.
 
-Home maps the decoded directory row into its existing `Contact` view explicitly and retains region-isolated error handling: a Contacts failure marks only `errors.contacts`; it does not erase tasks, opportunities, celebrations, goals, or briefing.
+`loadHomeSmartViewCounts()` issues exactly four count probes, one for each
+non-`all` SmartView, using `page=1`, `page_size=1`, `sort='name'`, and
+`direction='asc'`, with no additional filter. It takes only each decoded
+page's `total` and discards its row; it never reconstructs SmartView semantics
+from loaded rows. The four requests share the same signal. Tests pin the exact
+requests and prove never-contacted completeness rules, the 30-day activity
+window, and recovered/sentinel celebration precedence are represented by
+server totals rather than divergent client heuristics.
+
+Load complete rows and these four totals as one `contacts` region. Add
+`smartViewCounts: HomeSmartViewCounts | null` to `CommandHomeInput`; a failed
+row page or count probe sets `contacts=null`, `smartViewCounts=null`, and only
+`errors.contacts`. It does not erase tasks, opportunities, celebrations,
+goals, or briefing. Validate that the server's `never_contacted` total cannot
+exceed the number of loaded rows whose normalized stage is `lead`; impossible
+cross-response drift raises
+`CommandDecodeError("contacts", "consistent SmartView totals")`.
+
+Home maps every decoded directory row into the existing loose UI `Contact`
+view explicitly: `primary_email -> email`, `primary_phone -> phone`,
+`last_contacted_at -> last_contacted_at`,
+`last_interaction_at -> recently_active_at`, and `health_score -> health_score`.
+The two timestamp keys are always present with their nullable values on a
+successful directory load. It does not synthesize raw date strings from
+`ContactCelebrationValue`. Remove obsolete fixtures/tests that treated a
+successful raw `GET /contacts` response with optional readiness keys as the
+Home source; only a failed Contacts region makes contact readiness unavailable.
+
+Never-contacted readiness affected-count, its KPI, and all four contact
+shortcuts use `HomeSmartViewCounts`; the lead denominator and contactability
+score may use the complete mapped directory rows. Recently active, birthday,
+and anniversary shortcut totals never use `recently_active_at` or celebration
+array-length heuristics. Recent-contact ordering may still use the explicit
+mapped `last_interaction_at` timestamp because it is not a SmartView count.
 
 Replace the old `Celebrations = {birthdays: Contact[]; anniversaries: Contact[]}` assumption. `CommandHomeApi.celebrations(month, options?)` returns the decoded `ContactCelebrations` wire contract from `contacts.ts`; `CommandHomeInput` and `CommandHomeModel` hold the UI-only shape below after `adaptHomeCelebrations()` runs inside `loadCommandHome`:
 
@@ -2891,9 +3174,65 @@ export function adaptHomeCelebrations(value: ContactCelebrations): HomeCelebrati
 
 The adapter copies `contact_id`/`display_name` to the camel-case UI fields, validates each row's `kind` agrees with its containing array, preserves month/day/origin and every year-quality value, and never converts `yearless` or `sentinel` into a fabricated year. `yearless` and `sentinel` must both retain `year=null`; a non-null year is accepted only with `year_quality='verified'`; `unknown` also requires null. A mismatch throws `CommandDecodeError` without including the row value. `HomeContextPanels` renders `displayName`, uses `contactId` for the canonical `/admin/command/contacts/{id}` link/key, labels birthday versus anniversary from `kind`, and may display month/day but never prints `1900` or substitutes the current year. Remove the obsolete `Celebrations` alias from `api.ts`; no celebration row is coerced into `Contact` or given fake first/last names.
 
-`home.test.ts` pins `CommandHomeApi`, `CommandHomeInput`, and `CommandHomeModel` types/behavior, adapter mapping, array-kind mismatch rejection, verified/yearless/sentinel/unknown invariants, abort forwarding, and celebrations-only error isolation. `HomeContextPanels.test.tsx` renders verified, yearless, and sentinel rows, asserts their names and contact links, and proves neither `1900` nor the current year is fabricated. `api.test.ts` proves malformed snake_case celebration rows fail closed before the Home adapter runs.
+Bind the adapter inside the celebrations request promise before regional
+settlement:
 
-Replace the four Home contact shortcut URLs with canonical server-view links in this task: `?smart_view=never_contacted`, `?smart_view=recently_active`, `?smart_view=birthdays_this_month`, and `?smart_view=anniversaries_this_month`. Remove the Home-emitted `filter=never_contacted|birthdays|anniversaries` and `sort=recent_activity` forms; Task 8 retains those forms only as inbound compatibility aliases. `home.test.ts` asserts all four exact canonical URLs.
+```ts
+celebrations: api
+  .celebrations(now.getMonth() + 1, { signal })
+  .then(adaptHomeCelebrations),
+```
+
+`Promise.allSettled` therefore receives `Promise<HomeCelebrations>` for that
+region. A wire-valid but Home-inconsistent celebration rejects only the
+celebrations region; do not store a snake_case `ContactCelebrations` in the
+generic values map and cast/adapt it after settlement.
+
+The public loader signature is exactly:
+
+```ts
+export async function loadCommandHome(
+  api: CommandHomeApi = commandApi,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<CommandHomeModel>;
+```
+
+Pass that identical signal to the combined Contacts loader and every other
+Home API call. If it is already aborted, or becomes aborted before the model is
+returned, rethrow the platform abort reason (or a new `DOMException('The
+operation was aborted.', 'AbortError')` when no reason exists) instead of
+turning cancellation into a regional/global failure.
+
+`CommandHomeProps.loadHome` becomes `(signal?: AbortSignal) =>
+Promise<CommandHomeModel>`. `CommandHome` creates one fresh `AbortController`
+for each load/retry effect, passes `controller.signal` to `loadHome`, and calls
+`controller.abort()` in that exact effect's cleanup. A fulfillment or
+rejection may update state only while its signal is not aborted; an
+`AbortError`/aborted signal never renders the global error panel. Retrying
+cleans up and aborts the prior controller before the new attempt begins, and
+unmounting aborts the current controller. Retain the stale-result guard even
+for test loaders that ignore the signal.
+
+`home.test.ts` pins `CommandHomeApi`, `CommandHomeInput`, and `CommandHomeModel` types/behavior, complete pagination, all four count probes, server-count consumption, directory-to-UI mapping, adapter mapping, array-kind mismatch rejection, verified/yearless/sentinel/unknown invariants, identical abort forwarding, and celebrations-only error isolation. `frontend/src/test/fixtures/commandHome.ts` moves to the new `HomeCelebrations` rows and explicit `smartViewCounts`; it removes the obsolete successful-raw-contact missing-readiness fixtures. `HomeContextPanels.test.tsx` renders verified, yearless, and sentinel rows, asserts their names and contact links, and proves neither `1900` nor the current year is fabricated. `CommandHome.test.tsx` pins one controller per attempt, identical signal delivery, retry/unmount abort, stale fulfillment suppression, and no error UI for `AbortError`. `api.test.ts` proves malformed snake_case celebration rows fail closed before the Home adapter runs.
+
+Replace every Home-emitted Contacts URL, not only the shortcut strip. Use
+exactly these absolute application paths:
+
+```text
+/admin/command/contacts?smart_view=never_contacted
+/admin/command/contacts?smart_view=recently_active
+/admin/command/contacts?smart_view=birthdays_this_month
+/admin/command/contacts?smart_view=anniversaries_this_month
+```
+
+The never-contacted URL is shared by its readiness factor, derived next action,
+shortcut, and KPI. The other three are their shortcut URLs. Remove every
+Home-emitted `filter=never_contacted|birthdays|anniversaries` and
+`sort=recent_activity` form; Task 8 retains those forms only as inbound
+compatibility aliases. `home.test.ts`, the shared `commandHome.ts` fixture, and
+`CommandHome.test.tsx` assert the exact canonical links at each rendered/model
+emission site and assert no old query form is emitted.
 
 - [ ] **Step 5: Run frontend contracts and commit**
 
@@ -2904,12 +3243,16 @@ npm test -- \
   src/lib/command/contacts.test.ts \
   src/lib/command/api.test.ts \
   src/lib/command/home.test.ts \
+  src/components/command/home/CommandHome.test.tsx \
   src/components/command/home/HomeContextPanels.test.tsx
 npm run typecheck
 git add src/lib/command/http.ts src/lib/command/http.test.ts \
   src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
   src/lib/command/api.ts src/lib/command/api.test.ts \
   src/lib/command/home.ts src/lib/command/home.test.ts \
+  src/test/fixtures/commandHome.ts \
+  src/components/command/home/CommandHome.tsx \
+  src/components/command/home/CommandHome.test.tsx \
   src/components/command/home/HomeContextPanels.tsx \
   src/components/command/home/HomeContextPanels.test.tsx
 git commit -m "feat: add typed Command contacts client"
@@ -3125,6 +3468,11 @@ Expected: FAIL because the current page uses `any`, one generic list renderer, s
 At desktop, keep a 320–360px sticky profile column and a flexible tab workspace. At mobile, profile collapses into an accessible disclosure above tabs. Use `CommandTabs` for top/nested tabs, `CommandStatePanel` for all states, and `CommandEvidencePanel` inside each source-only/partial view.
 
 `ContactObservedMap` receives only server-returned coordinates/static-map metadata. If coordinates are absent, show the observed formatted address and `Map location was not captured`; do not geocode in the browser or infer a pin.
+
+Replacing `[contactId]/page.tsx` in this task removes the final
+`commandApi.contactWorkspace(id)` rich-legacy consumer. Do not remove or
+redirect that consumer during Task 8; the Task 9 page switches directly to the
+decoded `contactsApi` detail, summary, timeline, and section methods.
 
 Recovered celebration examples render as:
 
