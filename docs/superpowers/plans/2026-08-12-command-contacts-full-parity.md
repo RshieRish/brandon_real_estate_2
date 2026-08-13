@@ -3482,6 +3482,7 @@ git commit -m "feat: rebuild Command contacts directory"
 - Modify: `frontend/src/components/command/contacts/useContactDirectoryQuery.test.tsx`
 - Modify: `frontend/src/components/command/ui/CommandEvidencePanel.tsx`
 - Modify: `frontend/src/components/command/ui/CommandUi.test.tsx`
+- Modify: `frontend/src/components/command/CommandWorkspaceDeepLinks.test.tsx`
 - Modify: `frontend/src/components/command/ContactActions.tsx`
 - Modify: `frontend/src/components/command/ContactProfileEditor.tsx`
 - Modify: `frontend/src/app/admin/command/command-shell.css`
@@ -3707,6 +3708,7 @@ cd frontend
 npm test -- src/components/command/contacts/ContactDetailWorkspace.test.tsx \
   src/components/command/contacts/ContactsWorkspace.test.tsx \
   src/components/command/contacts/useContactDirectoryQuery.test.tsx \
+  src/components/command/CommandWorkspaceDeepLinks.test.tsx \
   src/lib/command/contacts.test.ts src/lib/command/api.test.ts \
   src/components/command/ui/CommandUi.test.tsx
 npm run typecheck
@@ -3714,6 +3716,7 @@ git add src/components/command/contacts src/components/command/ContactActions.ts
   src/components/command/ContactProfileEditor.tsx \
   src/components/command/ui/CommandEvidencePanel.tsx \
   src/components/command/ui/CommandUi.test.tsx \
+  src/components/command/CommandWorkspaceDeepLinks.test.tsx \
   src/lib/command/contacts.ts src/lib/command/contacts.test.ts \
   src/lib/command/api.ts src/lib/command/api.test.ts \
   src/app/admin/command/command-shell.css \
