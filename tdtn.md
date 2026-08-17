@@ -3,6 +3,14 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-08-02
 
+### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
+- Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
+- The design uses review-required task suggestions from both received and sent Gmail, a restart-safe History worker, exact-once task application, and minimal persisted email data.
+- Sydney must ask Brandon one concise question at a time whenever creating the right task would require a consequential guess, retain the pending suggestion, resume it after the answer, and send at most one reminder. A repo-owned worker delivers through the Sydney bot; initial final approval remains in authenticated Command UI.
+- CRM tasks use reversible Archive and Restore with immutable actor audit; other top-level CRM records receive entity-specific lifecycle actions rather than generic hard delete.
+- Instagram moves behind FastAPI with bearer-header authentication, a last-good cache, health state, and alerts. The token supplied on 2026-08-17 is expired and exposed, so a newly generated valid long-lived Page token is still required before production cutover.
+- Next: review this design, create the implementation plan, then deliver the work in feature-flagged phases with live production verification.
+
 ### 2026-08-12 - Command Workspace Design
 - Approved a new `/admin/command` workspace that remains separate from the existing admin panel and uses the current FastAPI/PostgreSQL stack as the source of truth.
 - Defined a unified internal CRM design covering Contacts, Tasks, Smart Plans, Opportunities, Marketing, Agreements/Templates/files, Reports, Listings/Search/Map, Websites, and server-side auditable AI features.
