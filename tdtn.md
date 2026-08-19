@@ -17,6 +17,13 @@ Last Updated: 2026-08-18
 - TDD/review evidence: expected missing-model RED; real empty database -> Alembic `7d1f3a5b6c8e` -> `81a4d2c6e9f0` -> downgrade -> re-upgrade GREEN; final PostgreSQL contract `11 passed`; adjacent CRMTask sweep `301 passed, 1 skipped`; sole head `81a4d2c6e9f0`; independent spec review PASS and code-quality review APPROVED. Commits: `9c03491`, `0b54d16`, `72c62f6`.
 - Next: centralize task projection semantics before enabling any lifecycle mutation.
 
+### 2026-08-18 - Unified CRM Task Projections
+- Added one shared task projection contract: non-archived `open`/`in_progress` are active, non-archived `completed` and `cancelled` are separate, and any row with `archived_at` is archived regardless of preserved workflow status. Unknown workflow states fail closed.
+- Replaced divergent open-task logic in Command overview, AI briefing, reports/details, default/due task reads, and contact summaries. Cancelled/archived/completed tasks no longer inflate open counts; `in_progress` is accepted consistently.
+- Contact summaries now return mutable archived tasks separately from immutable recovered archive evidence while preserving the combined `archived_tasks` total. The new frontend accepts both the legacy 8-field and expanded 12-field summary during rollout and explicitly keeps the current eight-key summary strip until the lifecycle UI slice.
+- TDD/review evidence: expected missing-module and five frontend RED failures; final focused backend `317 passed`, frontend `136 passed`, TypeScript and focused ESLint pass; independent spec review PASS and code-quality review APPROVED. Commit: `e863320`.
+- Deployment order is locked: deploy the compatible frontend before the additive backend response. Next: build the shared transactional task creation service.
+
 ### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
 - Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
 - The design uses review-required task suggestions from both received and sent Gmail, a restart-safe History worker, exact-once task application, and minimal persisted email data.
