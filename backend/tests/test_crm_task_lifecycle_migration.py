@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import subprocess
+import sys
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
@@ -127,91 +129,127 @@ def _normalized_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip().upper()
 
 
-def _sync_test_url() -> sa.engine.URL:
+def _isolated_test_url() -> sa.engine.URL:
     raw_url = os.getenv("CRM_TASK_TEST_DATABASE_URL")
     if not raw_url:
         pytest.skip("CRM_TASK_TEST_DATABASE_URL is not provisioned")
     url = make_url(raw_url)
-    assert url.database and url.database.endswith("_test"), (
+    expected_database = os.getenv("CRM_TASK_TEST_DATABASE_NAME")
+    assert expected_database and expected_database.endswith("_test"), (
+        "CRM_TASK_TEST_DATABASE_NAME must identify the disposable _test "
+        "database"
+    )
+    assert url.database == expected_database, (
+        "CRM_TASK_TEST_DATABASE_URL must target exactly "
+        "CRM_TASK_TEST_DATABASE_NAME"
+    )
+    assert url.database.endswith("_test"), (
         "CRM task migration integration tests require a disposable PostgreSQL "
         "database whose name ends in _test"
     )
     assert url.drivername.startswith("postgresql"), (
         "CRM task migration integration tests require PostgreSQL"
     )
-    query = {
-        key: value
-        for key, value in url.query.items()
-        if key not in {"ssl", "sslmode"}
-    }
+    return url
+
+
+def _sync_test_url(url: sa.engine.URL) -> sa.engine.URL:
+    query = dict(url.query)
+    async_ssl_mode = query.pop("ssl", None)
+    if async_ssl_mode is not None:
+        query.setdefault("sslmode", async_ssl_mode)
     return url.set(drivername="postgresql+psycopg2", query=query)
 
 
-def _create_7d1f3a5b6c8e_fixture(connection: sa.Connection) -> None:
-    metadata = sa.MetaData()
-    tasks = sa.Table(
-        "crm_tasks",
-        metadata,
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("contact_id", sa.Integer(), nullable=True),
-        sa.Column("title", sa.String(255), nullable=False),
-        sa.Column("description", sa.Text(), nullable=False, server_default=""),
-        sa.Column("status", sa.String(32), nullable=False, server_default="open"),
-        sa.Column(
-            "priority", sa.String(32), nullable=False, server_default="normal"
-        ),
-        sa.Column("due_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=True,
-            server_default=sa.func.now(),
-        ),
+def _run_alembic(url: sa.engine.URL, *arguments: str) -> str:
+    backend_root = Path(__file__).parents[1]
+    alembic_executable = Path(sys.executable).with_name("alembic")
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = url.render_as_string(hide_password=False)
+    environment.setdefault("JWT_SECRET", "test-secret")
+    completed = subprocess.run(
+        [str(alembic_executable), *arguments],
+        cwd=backend_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    sa.Index(
-        "ix_crm_tasks_contact_status_id",
-        tasks.c.contact_id,
-        tasks.c.status,
-        tasks.c.id,
+    output = f"{completed.stdout}\n{completed.stderr}"
+    assert completed.returncode == 0, (
+        f"alembic {' '.join(arguments)} failed with exit code "
+        f"{completed.returncode}:\n{output}"
     )
-    sa.Table(
-        "crm_contact_source_occurrences",
-        metadata,
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("contact_id", sa.Integer(), nullable=False),
-        sa.Column("section_capture_id", sa.Integer(), nullable=False),
-        sa.Column("source_record_id", sa.Integer(), nullable=False),
-        sa.Column("occurrence_ordinal", sa.Integer(), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-    )
-    sa.Table(
-        "alembic_version",
-        metadata,
-        sa.Column("version_num", sa.String(32), primary_key=True),
-    )
-    metadata.create_all(connection)
+    return output
+
+
+def _seed_real_7d1f3a5b6c8e_schema(connection: sa.Connection) -> None:
     connection.execute(
         sa.text(
-            "INSERT INTO alembic_version (version_num) VALUES (:version_num)"
-        ),
-        {"version_num": DOWN_REVISION},
+            "INSERT INTO crm_contacts (id, first_name, last_name) "
+            "VALUES (10, 'Recovered', 'Evidence')"
+        )
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO crm_source_records
+                (id, source_system, module, record_kind, source_key,
+                 evidence_level, display_label, payload_json, capture_quality,
+                 captured_at, parser_version)
+            VALUES
+                (40, 'kw_command', 'contacts', 'contact_capture_position',
+                 'lifecycle-test:capture', 'rendered_occurrence', 'Capture',
+                 '{}', 'complete', '2026-05-05 17:00:00+00', 'test-v1'),
+                (41, 'kw_command', 'contacts', 'contact_section_capture',
+                 'lifecycle-test:section', 'rendered_occurrence', 'Section',
+                 '{}', 'complete', '2026-05-05 17:00:00+00', 'test-v1'),
+                (42, 'kw_command', 'contacts', 'contact_task',
+                 'lifecycle-test:occurrence', 'rendered_occurrence',
+                 'Recovered archived task', '{}', 'complete',
+                 '2026-05-05 17:00:00+00', 'test-v1')
+            """
+        )
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO crm_contact_capture_positions
+                (id, contact_id, source_record_id, bundle_fingerprint,
+                 capture_ordinal, source_contact_id, captured_at,
+                 capture_quality, limitations_json)
+            VALUES
+                (30, 10, 40,
+                 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 1, '0123456789abcdef01234567',
+                 '2026-05-05 17:00:00+00', 'complete', '[]')
+            """
+        )
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO crm_contact_section_captures
+                (id, capture_position_id, source_record_id, section_name,
+                 captured_at, capture_quality, is_empty, row_count,
+                 limitations_json)
+            VALUES
+                (31, 30, 41, 'tasks_archived',
+                 '2026-05-05 17:00:00+00', 'complete', false, 1, '[]')
+            """
+        )
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO crm_contact_source_occurrences
+                (id, contact_id, section_capture_id, source_record_id,
+                 occurrence_ordinal, created_at, updated_at)
+            VALUES
+                (21, 10, 31, 42, 1,
+                 '2026-05-05 17:00:00+00', '2026-05-06 18:00:00+00')
+            """
+        )
     )
     connection.execute(
         sa.text(
@@ -224,15 +262,6 @@ def _create_7d1f3a5b6c8e_fixture(connection: sa.Connection) -> None:
             "'2026-03-03 14:00:00+00', NULL), "
             "(3, 10, 'Existing open', '', 'open', 'normal', "
             "'2026-04-04 15:00:00+00', '2026-04-05 16:00:00+00')"
-        )
-    )
-    connection.execute(
-        sa.text(
-            "INSERT INTO crm_contact_source_occurrences "
-            "(id, contact_id, section_capture_id, source_record_id, "
-            "occurrence_ordinal, created_at, updated_at) VALUES "
-            "(21, 10, 30, 40, 2, "
-            "'2026-05-05 17:00:00+00', '2026-05-06 18:00:00+00')"
         )
     )
 
@@ -488,20 +517,28 @@ def test_generated_downgrade_restores_legacy_status_and_only_drops_new_indexes()
 
 
 def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql() -> None:
-    engine = sa.create_engine(_sync_test_url())
+    url = _isolated_test_url()
+    expected_database = os.environ["CRM_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(_sync_test_url(url))
     try:
         with engine.connect() as connection:
             database_name = connection.scalar(sa.text("SELECT current_database()"))
-            assert isinstance(database_name, str) and database_name.endswith("_test")
+            assert database_name == expected_database
             assert sa.inspect(connection).get_table_names() == []
 
-            _create_7d1f3a5b6c8e_fixture(connection)
-            connection.commit()
+        _run_alembic(url, "upgrade", DOWN_REVISION)
+        with engine.begin() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == DOWN_REVISION
+            _seed_real_7d1f3a5b6c8e_schema(connection)
             source_before = _source_evidence_row(connection)
-            revision = _load_revision()
-            revision.op = Operations(MigrationContext.configure(connection))
-            revision.upgrade()
-            connection.commit()
+
+        _run_alembic(url, "upgrade", REVISION)
+        with engine.connect() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == REVISION
 
             inspector = sa.inspect(connection)
             assert NEW_TABLES.issubset(inspector.get_table_names())
@@ -568,11 +605,23 @@ def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql
             assert rows[2]["version"] == 1
             assert _source_evidence_row(connection) == source_before
 
-            revision.downgrade()
-            connection.commit()
+        current_output = _run_alembic(url, "current")
+        assert f"{REVISION} (head)" in current_output
+        heads_output = _run_alembic(url, "heads")
+        assert heads_output.count(f"{REVISION} (head)") == 1
+
+        _run_alembic(url, "downgrade", DOWN_REVISION)
+        with engine.connect() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == DOWN_REVISION
             assert NEW_TABLES.isdisjoint(sa.inspect(connection).get_table_names())
             assert _indexes(sa.inspect(connection), "crm_tasks") == {
                 "ix_crm_tasks_contact_status_id": ("contact_id", "status", "id")
+            }
+            assert "version" not in {
+                column["name"]
+                for column in sa.inspect(connection).get_columns("crm_tasks")
             }
             downgraded = connection.execute(
                 sa.text("SELECT id, status FROM crm_tasks ORDER BY id")
@@ -580,8 +629,11 @@ def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql
             assert downgraded == [(1, "archived"), (2, "archived"), (3, "open")]
             assert _source_evidence_row(connection) == source_before
 
-            revision.upgrade()
-            connection.commit()
+        _run_alembic(url, "upgrade", REVISION)
+        with engine.connect() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == REVISION
             assert connection.scalar(
                 sa.text(
                     "SELECT count(*) FROM crm_tasks WHERE status = 'open' "
@@ -590,4 +642,10 @@ def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql
             ) == 3
             assert _source_evidence_row(connection) == source_before
     finally:
+        with engine.begin() as connection:
+            assert connection.scalar(
+                sa.text("SELECT current_database()")
+            ) == expected_database
+            connection.exec_driver_sql("DROP SCHEMA public CASCADE")
+            connection.exec_driver_sql("CREATE SCHEMA public")
         engine.dispose()
