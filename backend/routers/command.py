@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Annotated
+from uuid import UUID
 
 import httpx
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Path,
     Response,
@@ -109,7 +111,22 @@ from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
-from services.command_tasks import task_activity_summary
+from services.command_tasks import (
+    ARCHIVE_TASK_SOURCE_ID,
+    archive_task_source_key,
+    task_activity_summary,
+)
+from services.crm_task_service import (
+    CreateTaskCommand,
+    TaskActor,
+    TaskCommandValidationError,
+    TaskContactNotFound,
+    TaskCreationStateError,
+    TaskIdempotencyConflict,
+    TaskSource,
+    TaskSourceConflict,
+    crm_task_service,
+)
 from services.crm_task_projection import (
     TaskWorkflowStatus,
     active_task_clause,
@@ -328,14 +345,37 @@ async def _import_archive_bundle(
         item = CRMAgreementTemplate(name=row.name, body=row.body); db.add(item); await db.flush()
         templates_by_name[key] = item; created["templates"] += 1
 
-    for row in payload.tasks:
+    for ordinal, row in enumerate(payload.tasks):
         contact_id = resolve(row.contact_email)
         if row.contact_email and contact_id is None: unresolved += 1
-        existing = (await db.execute(select(CRMTask).where(CRMTask.title == row.title, CRMTask.contact_id == contact_id))).scalar_one_or_none()
-        if existing: skipped["tasks"] += 1; continue
-        item = CRMTask(title=row.title, description=row.description, status=row.status, priority=row.priority, due_at=row.due_at, contact_id=contact_id)
-        db.add(item); await db.flush(); created["tasks"] += 1
-        if contact_id is not None: db.add(CRMActivity(contact_id=contact_id, kind="archive_task_imported", summary=f"Imported task: {item.title}"))
+        try:
+            source_key = archive_task_source_key(row, ordinal)
+            result = await crm_task_service.create(
+                db,
+                CreateTaskCommand(
+                    title=row.title,
+                    description=row.description,
+                    priority=row.priority,
+                    due_at=row.due_at,
+                    contact_id=contact_id,
+                    actor=TaskActor(type="admin", id=actor_subject),
+                    source=TaskSource(
+                        type="archive_import",
+                        id=ARCHIVE_TASK_SOURCE_ID,
+                        key=source_key,
+                    ),
+                    idempotency_scope="archive_import",
+                    idempotency_key=source_key,
+                    client_timezone="UTC",
+                    status=row.status,
+                ),
+            )
+        except TaskCommandValidationError:
+            raise ContactSectionUnsupported("archive task input is invalid") from None
+        if result.replayed:
+            skipped["tasks"] += 1
+        else:
+            created["tasks"] += 1
 
     for row in payload.notes:
         contact_id = resolve(row.contact_email)
@@ -564,12 +604,59 @@ async def tasks(status: TaskWorkflowStatus | None = None, due_before: datetime |
 
 
 @router.post("/tasks", response_model=TaskOut)
-async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_db)):
-    if payload.contact_id is not None and not await db.get(CRMContact, payload.contact_id):
-        raise HTTPException(404, "Task contact not found")
-    item = CRMTask(**payload.model_dump()); db.add(item); await db.flush()
-    db.add(CRMActivity(contact_id=item.contact_id, kind="task_created", summary=item.title)); await db.flush()
-    return item
+async def create_task(
+    payload: TaskCreate,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+    idempotency_key: Annotated[UUID, Header(alias="X-Idempotency-Key")],
+    client_timezone: Annotated[str, Header(alias="X-Client-Timezone")] = "UTC",
+):
+    try:
+        result = await crm_task_service.create(
+            db,
+            CreateTaskCommand(
+                **payload.model_dump(),
+                actor=TaskActor(type="admin", id=actor_subject),
+                source=TaskSource(
+                    type="command_ui",
+                    id=str(idempotency_key),
+                    key="primary",
+                ),
+                idempotency_scope="command_ui",
+                idempotency_key=str(idempotency_key),
+                client_timezone=client_timezone,
+            ),
+        )
+        return result.task
+    except TaskContactNotFound:
+        raise HTTPException(404, "Task contact not found") from None
+    except TaskCommandValidationError:
+        raise HTTPException(422, "Task request is invalid") from None
+    except TaskIdempotencyConflict:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_idempotency_mismatch",
+                "message": "Idempotency key was already used with a different task request",
+            },
+        ) from None
+    except TaskCreationStateError:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_creation_state_invalid",
+                "message": "Task creation request is not in a replayable state",
+            },
+        ) from None
+    except TaskSourceConflict:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_source_conflict",
+                "message": "Task source identity is already linked",
+            },
+        ) from None
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
