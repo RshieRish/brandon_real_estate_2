@@ -735,10 +735,29 @@ def test_repository_ci_runs_the_real_tls_postgresql_migration_contract() -> None
         "backend/tests/test_command_task_api.py",
         "tests/test_crm_task_service.py",
         "tests/test_command_task_api.py",
+        '"pytest==9.0.3"',
+        '"pytest-asyncio==1.3.0"',
+        '"backend/database.py"',
+        '"backend/middleware/auth.py"',
+        '"backend/config.py"',
         "if: always()",
         "docker rm --force crm-task-lifecycle-postgres",
     ):
         assert required_fragment in workflow
+
+
+def test_approved_plan_uses_a_disposable_database_name_accepted_by_test_gate() -> None:
+    plan_path = (
+        Path(__file__).parents[2]
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-08-18-crm-task-archive-foundation.md"
+    )
+    plan = plan_path.read_text(encoding="utf-8")
+    database_name = "brandon_crm_task_archive_<unique-suffix>_test"
+    assert f"CRM_TASK_TEST_DATABASE_NAME='{database_name}'" in plan
+    assert f"/{database_name}?ssl=require" in plan
 
 
 def test_populated_test_database_is_not_claimed_or_destroyed() -> None:

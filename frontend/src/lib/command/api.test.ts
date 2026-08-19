@@ -221,6 +221,26 @@ describe('commandApi', () => {
     await expect(commandApi.createContact({ first_name: 'A', last_name: '', email: null, phone: null })).rejects.toThrow('Contact already exists');
   });
 
+  it('surfaces the message from a structured archive import conflict', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        detail: {
+          code: 'task_idempotency_mismatch',
+          message: 'Archive task identity was already used with different task data or authority',
+        },
+      }),
+    }));
+    await expect(commandApi.importArchiveBundle({
+      source_id: 'archive-1',
+      tasks: [{ source_row_id: 'row-1', title: 'Call' }],
+    })).rejects.toThrow(
+      'Archive task identity was already used with different task data or authority',
+    );
+  });
+
   it('creates an opportunity contact relationship through the authenticated API', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-relationship' });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 8, contact_id: 12, role: 'buyer' }) });

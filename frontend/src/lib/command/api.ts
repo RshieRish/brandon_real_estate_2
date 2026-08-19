@@ -51,7 +51,19 @@ export type Relationship = { id:number; contact_id?:number; name?:string; email?
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('admin_token');
   const response = await fetch(`${API_URL}/api/v1/command${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init?.headers } });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Unable to load Command workspace');
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const detail = body && typeof body === 'object' && 'detail' in body
+      ? (body as { detail?: unknown }).detail
+      : null;
+    const message = typeof detail === 'string'
+      ? detail
+      : detail && typeof detail === 'object' && 'message' in detail
+        && typeof (detail as { message?: unknown }).message === 'string'
+        ? (detail as { message: string }).message
+        : 'Unable to load Command workspace';
+    throw new Error(message);
+  }
   return response.json() as Promise<T>;
 }
 

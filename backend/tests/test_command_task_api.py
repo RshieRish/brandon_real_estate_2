@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -20,6 +21,7 @@ from models.crm_task_lifecycle import (
     CRMTaskSource,
 )
 from routers import command as command_router
+from services.command_tasks import archive_task_source_key
 from tests.test_crm_task_service import owned_task_database
 
 
@@ -191,7 +193,10 @@ async def test_archive_import_keeps_same_title_rows_and_replays_by_stable_identi
         tasks = (await verifier.scalars(sa.select(CRMTask).order_by(CRMTask.id))).all()
         sources = (await verifier.scalars(sa.select(CRMTaskSource).order_by(CRMTaskSource.id))).all()
         assert [task.title for task in tasks] == ["Same title", "Same title"]
-        assert [task.status for task in tasks] == ["open", "completed"]
+        assert {task.description: task.status for task in tasks} == {
+            "First source row": "open",
+            "Second source row": "completed",
+        }
         assert len({source.source_key for source in sources}) == 2
         assert all(UUID(source.source_key).version == 5 for source in sources)
 
@@ -257,6 +262,95 @@ async def test_archive_retry_survives_row_reordering(task_app, task_api_database
     _engine, factory = task_api_database
     async with factory() as verifier:
         assert await verifier.scalar(sa.select(sa.func.count()).select_from(CRMTask)) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reversed_archive_requests_lock_tasks_in_stable_order(
+    monkeypatch, task_app, task_api_database
+) -> None:
+    source_id = "concurrent-reversed-export"
+    rows = [
+        {"source_row_id": "row-a", "title": "First"},
+        {"source_row_id": "row-b", "title": "Second"},
+    ]
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: archive_task_source_key(source_id, row["source_row_id"]),
+    )
+    payloads = (
+        {"source_id": source_id, "tasks": ordered_rows},
+        {"source_id": source_id, "tasks": list(reversed(ordered_rows))},
+    )
+
+    original_create = command_router.crm_task_service.create
+    first_call_ready = asyncio.Event()
+    first_call_finished = asyncio.Event()
+    first_keys_by_session: dict[int, str] = {}
+    finished_first_calls = 0
+    gate_lock = asyncio.Lock()
+
+    async def create_with_concurrency_gate(db, task_command):
+        nonlocal finished_first_calls
+        session_key = id(db)
+        async with gate_lock:
+            is_first_call = session_key not in first_keys_by_session
+            if is_first_call:
+                first_keys_by_session[session_key] = task_command.source.key
+                if len(first_keys_by_session) == 2:
+                    first_call_ready.set()
+        if is_first_call:
+            await asyncio.wait_for(first_call_ready.wait(), timeout=3)
+
+        result = await original_create(db, task_command)
+
+        # The old caller-order implementation reaches this branch with two
+        # different first locks. Hold both until acquired so its second calls
+        # deterministically exercise PostgreSQL's reversed-lock deadlock.
+        if is_first_call and len(set(first_keys_by_session.values())) == 2:
+            async with gate_lock:
+                finished_first_calls += 1
+                if finished_first_calls == 2:
+                    first_call_finished.set()
+            await asyncio.wait_for(first_call_finished.wait(), timeout=3)
+        return result
+
+    monkeypatch.setattr(
+        command_router.crm_task_service, "create", create_with_concurrency_gate
+    )
+    responses = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                _request(
+                    task_app,
+                    "POST",
+                    "/api/v1/command/archive/import",
+                    json=payload,
+                    headers=_headers(),
+                )
+                for payload in payloads
+            )
+        ),
+        timeout=8,
+    )
+
+    assert len(first_keys_by_session) == 2
+    assert len(set(first_keys_by_session.values())) == 1
+    assert [response.status_code for response in responses] == [200, 200]
+    assert sorted(response.json()["created"]["tasks"] for response in responses) == [0, 2]
+    assert sorted(
+        response.json()["skipped_duplicates"]["tasks"] for response in responses
+    ) == [0, 2]
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        for model in (
+            CRMTask,
+            CRMTaskSource,
+            CRMTaskCreationRequest,
+            CRMRecordLifecycleEvent,
+        ):
+            assert await verifier.scalar(
+                sa.select(sa.func.count()).select_from(model)
+            ) == 2
 
 
 @pytest.mark.asyncio

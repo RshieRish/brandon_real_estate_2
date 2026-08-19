@@ -344,12 +344,21 @@ async def _import_archive_bundle(
         item = CRMAgreementTemplate(name=row.name, body=row.body); db.add(item); await db.flush()
         templates_by_name[key] = item; created["templates"] += 1
 
-    for row in payload.tasks:
+    if payload.tasks and payload.source_id is None:
+        raise TaskCommandValidationError("archive task source is invalid")
+    task_rows_with_source_keys = sorted(
+        (
+            (
+                archive_task_source_key(payload.source_id, row.source_row_id),
+                row,
+            )
+            for row in payload.tasks
+        ),
+        key=lambda item: item[0],
+    )
+    for source_key, row in task_rows_with_source_keys:
         contact_id = resolve(row.contact_email)
         if row.contact_email and contact_id is None: unresolved += 1
-        if payload.source_id is None:
-            raise TaskCommandValidationError("archive task source is invalid")
-        source_key = archive_task_source_key(payload.source_id, row.source_row_id)
         result = await crm_task_service.create(
             db,
             CreateTaskCommand(

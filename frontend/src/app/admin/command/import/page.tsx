@@ -6,9 +6,9 @@ import { commandApi, type ArchiveBundle, type ContactImportRow } from '@/lib/com
 
 const acceptedHeaders = new Set(['first_name', 'last_name', 'email', 'phone', 'stage', 'birthday', 'anniversary']);
 export const archiveTemplate: ArchiveBundle = {
-  source_id: 'REPLACE_WITH_STABLE_UNIQUE_ARCHIVE_SOURCE_ID',
+  source_id: '',
   contacts: [{ first_name: 'Avery', last_name: 'Lake', email: 'avery@example.com', phone: '+15550100', stage: 'lead', birthday: '1990-08-12', anniversary: null }],
-  tasks: [{ source_row_id: 'REPLACE_WITH_IMMUTABLE_SOURCE_ROW_ID', title: 'Call Avery', contact_email: 'avery@example.com', description: 'Review next steps', status: 'open', priority: 'high', due_at: null }],
+  tasks: [{ source_row_id: '', title: 'Call Avery', contact_email: 'avery@example.com', description: 'Review next steps', status: 'open', priority: 'high', due_at: null }],
   notes: [{ contact_email: 'avery@example.com', body: 'Imported timeline context.' }],
   opportunities: [{ name: '10 Main Street purchase', stage: 'active', value_cents: 75000000, contact_emails: ['avery@example.com'] }],
   referrals: [{ name: 'Avery referral', source: 'Partner', status: 'new', contact_email: 'avery@example.com' }],

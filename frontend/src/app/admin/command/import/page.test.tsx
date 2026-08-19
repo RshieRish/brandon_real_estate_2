@@ -21,10 +21,19 @@ import ImportContactsPage, {
 describe('Command archive import identities', () => {
   beforeEach(() => importArchiveBundle.mockReset());
 
-  it('ships explicit immutable source identities in the downloadable template', () => {
-    expect(archiveTemplate.source_id).toBe('REPLACE_WITH_STABLE_UNIQUE_ARCHIVE_SOURCE_ID');
-    expect(archiveTemplate.tasks?.[0]?.source_row_id).toBe('REPLACE_WITH_IMMUTABLE_SOURCE_ROW_ID');
-    expect(validateArchiveBundle(archiveTemplate)).toBe(archiveTemplate);
+  it('ships intentionally blank identities that must be replaced', () => {
+    expect(archiveTemplate.source_id).toBe('');
+    expect(archiveTemplate.tasks?.[0]?.source_row_id).toBe('');
+    expect(() => validateArchiveBundle(archiveTemplate))
+      .toThrow('Task archive source_id must be a non-empty string');
+  });
+
+  it('accepts explicit stable archive and row identities', () => {
+    const bundle = {
+      source_id: 'command-export-2026-08-18',
+      tasks: [{ source_row_id: 'task-0001', title: 'Call Avery' }],
+    };
+    expect(validateArchiveBundle(bundle)).toBe(bundle);
   });
 
   it('explains that unrelated archives need different stable source identities', () => {
@@ -56,5 +65,26 @@ describe('Command archive import identities', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Task archive source_id must be a non-empty string');
     await waitFor(() => expect(importArchiveBundle).not.toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Import archive' })).not.toBeInTheDocument();
+  });
+
+  it('shows an archive conflict message returned by the client', async () => {
+    importArchiveBundle.mockRejectedValueOnce(
+      new Error('Archive task identity was already used with different task data or authority'),
+    );
+    const { container } = render(<ImportContactsPage />);
+    const input = container.querySelector('input[type="file"]');
+    const file = {
+      name: 'archive.json',
+      text: async () => JSON.stringify({
+        source_id: 'archive-1',
+        tasks: [{ source_row_id: 'row-1', title: 'Call' }],
+      }),
+    };
+    fireEvent.change(input!, { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Import archive' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Archive task identity was already used with different task data or authority',
+    );
   });
 });

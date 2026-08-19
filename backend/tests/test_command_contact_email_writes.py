@@ -199,7 +199,10 @@ async def test_archive_import_queries_only_referenced_canonical_emails_and_links
     assert result.skipped_duplicates["contacts"] == 2
     assert result.unresolved_contact_references == 0
     tasks = (await email_write_db.scalars(select(CRMTask).order_by(CRMTask.id))).all()
-    assert [task.contact_id for task in tasks] == [owner.id, owner.id + 1]
+    assert {task.title: task.contact_id for task in tasks} == {
+        "Canonical reference": owner.id,
+        "New canonical reference": owner.id + 1,
+    }
     contact_queries = [query for query in statements if "FROM crm_contacts" in query]
     assert contact_queries
     assert all("normalized_email" in query for query in contact_queries)

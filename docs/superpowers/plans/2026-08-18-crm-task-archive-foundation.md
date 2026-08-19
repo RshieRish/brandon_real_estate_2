@@ -60,8 +60,8 @@ Modify:
 All backend commands in this plan run against a disposable PostgreSQL database created only for this branch. Provision a fresh database (an ephemeral Neon branch/database or an isolated local PostgreSQL database), record its unique name, and export both URLs before Task 1. Never substitute the parse-only `postgresql+asyncpg://user:pass@localhost/test` value and never point these commands at development, staging, or production.
 
 ```bash
-export CRM_TASK_TEST_DATABASE_NAME='brandon_crm_task_archive_<unique-suffix>'
-export CRM_TASK_TEST_DATABASE_URL='postgresql+asyncpg://<test-user>:<test-password>@<isolated-host>/brandon_crm_task_archive_<unique-suffix>?ssl=require'
+export CRM_TASK_TEST_DATABASE_NAME='brandon_crm_task_archive_<unique-suffix>_test'
+export CRM_TASK_TEST_DATABASE_URL='postgresql+asyncpg://<test-user>:<test-password>@<isolated-host>/brandon_crm_task_archive_<unique-suffix>_test?ssl=require'
 : "${CRM_TASK_TEST_DATABASE_NAME:?set the isolated database name}"
 : "${CRM_TASK_TEST_DATABASE_URL:?set the isolated async PostgreSQL URL}"
 case "$CRM_TASK_TEST_DATABASE_URL" in
