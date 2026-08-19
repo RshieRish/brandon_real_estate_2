@@ -14,6 +14,59 @@ depends_on = None
 _PRESERVATION_COUNTS_TABLE = (
     "_crm_task_lifecycle_counts_81a4d2c6e9f0"
 )
+# Keep lock acquisition short so a busy production table aborts cleanly rather
+# than extending deployment downtime. Each individual migration statement is
+# also bounded; PostgreSQL rolls the whole transactional revision back on error.
+_LOCK_TIMEOUT = "2s"
+_STATEMENT_TIMEOUT = "30s"
+
+
+def _set_transaction_timeouts() -> None:
+    op.execute(sa.text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'"))
+    op.execute(
+        sa.text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT}'")
+    )
+
+
+def _lock_preserved_upgrade_sources() -> None:
+    # SHARE ROW EXCLUSIVE blocks task/evidence writers while preserving reads.
+    # The locks are transaction-held, so both count snapshots stay stable.
+    op.execute(
+        sa.text(
+            "LOCK TABLE crm_tasks, crm_contact_source_occurrences "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
+    )
+
+
+def _refuse_durable_history_loss() -> None:
+    # Block lifecycle writers between the preflight and table removal.
+    op.execute(
+        sa.text(
+            "LOCK TABLE crm_tasks, crm_task_creation_requests, "
+            "crm_task_sources, crm_record_lifecycle_events "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM crm_task_creation_requests)
+                   OR EXISTS (SELECT 1 FROM crm_task_sources)
+                   OR EXISTS (SELECT 1 FROM crm_record_lifecycle_events)
+                THEN
+                    RAISE EXCEPTION
+                        'refusing CRM task lifecycle downgrade: durable history exists'
+                    USING HINT =
+                        'Export and explicitly clear lifecycle history before retrying.';
+                END IF;
+            END
+            $$
+            """
+        )
+    )
 
 
 def _capture_preservation_counts() -> None:
@@ -92,6 +145,8 @@ def _assert_preservation_counts() -> None:
 
 
 def upgrade() -> None:
+    _set_transaction_timeouts()
+    _lock_preserved_upgrade_sources()
     _capture_preservation_counts()
 
     op.add_column(
@@ -128,7 +183,7 @@ def upgrade() -> None:
         sa.text(
             """
             UPDATE crm_tasks
-            SET archived_at = COALESCE(updated_at, created_at),
+            SET archived_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP),
                 archived_by_type = 'migration',
                 archived_by_id = '81a4d2c6e9f0',
                 archive_reason = 'legacy_status_migration',
@@ -291,6 +346,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade cannot reconstruct a task's pre-archive workflow status."""
+
+    _set_transaction_timeouts()
+    _refuse_durable_history_loss()
 
     op.execute(
         sa.text(

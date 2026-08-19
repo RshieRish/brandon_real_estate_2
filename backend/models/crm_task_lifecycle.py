@@ -46,12 +46,14 @@ class CRMTaskCreationRequest(Timestamped, Base):
     actor_id: Mapped[str] = mapped_column(String(128))
     source_type: Mapped[str] = mapped_column(String(64))
     source_id: Mapped[str] = mapped_column(String(255))
-    state: Mapped[str] = mapped_column(String(32), default="applying")
+    state: Mapped[str] = mapped_column(
+        String(32), default="applying", server_default="applying"
+    )
     failure_category: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
     metadata_json: Mapped[str] = mapped_column(
-        Text, default="{}", nullable=False
+        Text, default="{}", server_default="{}", nullable=False
     )
     task_id: Mapped[int | None] = mapped_column(
         ForeignKey("crm_tasks.id", ondelete="RESTRICT"), nullable=True
@@ -117,9 +119,11 @@ class CRMRecordLifecycleEvent(Base):
     actor_id: Mapped[str] = mapped_column(String(128))
     source_type: Mapped[str] = mapped_column(String(64))
     source_id: Mapped[str] = mapped_column(String(255))
-    result_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    result_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}", nullable=False
+    )
     metadata_json: Mapped[str] = mapped_column(
-        Text, default="{}", nullable=False
+        Text, default="{}", server_default="{}", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
