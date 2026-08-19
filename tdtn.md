@@ -10,6 +10,13 @@ Last Updated: 2026-08-18
 - The Instagram plan explicitly rejects the exposed/expired pasted token and requires a fresh long-lived Page credential, backend bearer authentication, persisted last-good feed, health/version alerts, and production media verification before enablement.
 - Next: execute the task foundation first through red/green tests, then the shared worker and Gmail suggestion engine, Sydney review bridge, Instagram cutover, and remaining entity-specific lifecycle controls.
 
+### 2026-08-18 - CRM Task Lifecycle Persistence Foundation
+- Added serial Alembic revision `81a4d2c6e9f0` after `7d1f3a5b6c8e`, with task archive metadata, optimistic `version`, durable creation idempotency, source provenance, and immutable lifecycle-event tables. Legacy normalized `status=archived` tasks convert to archived visibility with `status=open`; recovered source-only evidence is counted and preserved separately.
+- Hardened the migration with transaction-local lock/statement timeouts, write locks before preservation counts, a deterministic fallback when both legacy timestamps are null, and downgrade refusal whenever durable lifecycle history exists.
+- Added ownership-gated disposable PostgreSQL cleanup and a required TLS PostgreSQL GitHub Actions migration job. A populated `_test` database is preserved when the emptiness gate fails.
+- TDD/review evidence: expected missing-model RED; real empty database -> Alembic `7d1f3a5b6c8e` -> `81a4d2c6e9f0` -> downgrade -> re-upgrade GREEN; final PostgreSQL contract `11 passed`; adjacent CRMTask sweep `301 passed, 1 skipped`; sole head `81a4d2c6e9f0`; independent spec review PASS and code-quality review APPROVED. Commits: `9c03491`, `0b54d16`, `72c62f6`.
+- Next: centralize task projection semantics before enabling any lifecycle mutation.
+
 ### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
 - Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
 - The design uses review-required task suggestions from both received and sent Gmail, a restart-safe History worker, exact-once task application, and minimal persisted email data.
