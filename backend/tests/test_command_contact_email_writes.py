@@ -170,6 +170,7 @@ async def test_archive_import_queries_only_referenced_canonical_emails_and_links
     try:
         result = await import_archive_bundle(
             ArchiveBundleImportRequest(
+                source_id="canonical-reference-fixture",
                 contacts=[
                     _row("owner@example.test", first_name="Existing duplicate"),
                     _row("New@Example.Test", first_name="New owner"),
@@ -177,10 +178,12 @@ async def test_archive_import_queries_only_referenced_canonical_emails_and_links
                 ],
                 tasks=[
                     ArchiveTaskImportRow(
+                        source_row_id="canonical-reference",
                         title="Canonical reference",
                         contact_email="owner@example.test",
                     ),
                     ArchiveTaskImportRow(
+                        source_row_id="new-canonical-reference",
                         title="New canonical reference",
                         contact_email="ＮＥＷ@example.test",
                     ),
@@ -227,9 +230,11 @@ async def test_archive_import_never_attaches_children_to_an_ambiguous_email_owne
 
     result = await import_archive_bundle(
         ArchiveBundleImportRequest(
+            source_id="ambiguous-owner-fixture",
             contacts=[_row("DUPLICATE@example.test", first_name="Third owner")],
             tasks=[
                 ArchiveTaskImportRow(
+                    source_row_id="ambiguous-task",
                     title="Ambiguous task",
                     contact_email="duplicate@example.test",
                 )
@@ -454,8 +459,15 @@ async def test_archive_import_delegates_contacts_once_with_all_child_references(
     real_service = command_router.contact_service
     monkeypatch.setattr(real_service, "ingest_archive_contacts", ingest)
     payload = ArchiveBundleImportRequest(
+        source_id="child-reference-fixture",
         contacts=[_row("contact@example.test")],
-        tasks=[ArchiveTaskImportRow(title="Task", contact_email="task@example.test")],
+        tasks=[
+            ArchiveTaskImportRow(
+                source_row_id="task-reference",
+                title="Task",
+                contact_email="task@example.test",
+            )
+        ],
         notes=[ArchiveNoteImportRow(body="Note", contact_email="note@example.test")],
         opportunities=[
             ArchiveOpportunityImportRow(
@@ -793,8 +805,10 @@ async def test_archive_children_use_private_id_map_without_contact_refetch(
     try:
         result = await import_archive_bundle(
             ArchiveBundleImportRequest(
+                source_id="private-id-map-fixture",
                 tasks=[
                     ArchiveTaskImportRow(
+                        source_row_id="mapped-task",
                         title="Mapped task",
                         contact_email=" ＯＷＮＥＲ@Example.Test ",
                     )
@@ -829,8 +843,10 @@ async def test_archive_missing_owner_key_fails_closed_without_private_value(
     with pytest.raises(HTTPException) as caught:
         await import_archive_bundle(
             ArchiveBundleImportRequest(
+                source_id="missing-owner-fixture",
                 tasks=[
                     ArchiveTaskImportRow(
+                        source_row_id="missing-owner-task",
                         title="Missing owner", contact_email=private_email
                     )
                 ]
@@ -944,7 +960,14 @@ async def test_archive_empty_child_references_do_not_increment_unresolved(
     )
     result = await import_archive_bundle(
         ArchiveBundleImportRequest(
-            tasks=[ArchiveTaskImportRow(title="No owner", contact_email="")],
+            source_id="empty-child-reference-fixture",
+            tasks=[
+                ArchiveTaskImportRow(
+                    source_row_id="no-owner-task",
+                    title="No owner",
+                    contact_email="",
+                )
+            ],
             notes=[ArchiveNoteImportRow(body="No owner", contact_email="")],
             opportunities=[
                 ArchiveOpportunityImportRow(name="No owner", contact_emails=[""])
@@ -1022,6 +1045,7 @@ async def test_archive_real_request_finalizer_commits_or_rolls_back_atomically(
         response = await client.post(
             "/archive/import",
             json={
+                "source_id": "atomic-finalizer-fixture",
                 "contacts": [
                     {
                         "first_name": "Atomic",
@@ -1032,6 +1056,7 @@ async def test_archive_real_request_finalizer_commits_or_rolls_back_atomically(
                 ],
                 "tasks": [
                     {
+                        "source_row_id": "atomic-task",
                         "title": "Atomic task",
                         "contact_email": "atomic@example.test",
                     }

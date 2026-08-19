@@ -35,7 +35,7 @@ from schemas.command import (
 )
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
-from services.command_tasks import task_activity_summary
+from services.command_tasks import archive_task_source_key, task_activity_summary
 
 
 def test_all_focused_contact_boundary_models_share_strict_extra_policy():
@@ -387,8 +387,19 @@ def test_contact_import_supports_private_celebration_dates():
 
 
 def test_archive_bundle_accepts_every_internal_record_collection():
-    bundle = ArchiveBundleImportRequest(contacts=[{"first_name": "Avery", "email": "avery@example.com"}], tasks=[{"title": "Call Avery", "contact_email": "avery@example.com"}], notes=[{"contact_email": "avery@example.com", "body": "Imported context"}], opportunities=[{"name": "Main Street", "contact_emails": ["avery@example.com"]}], referrals=[{"name": "Avery referral"}], listings=[{"address": "10 Main Street"}], templates=[{"name": "Buyer agreement"}], agreements=[{"title": "Buyer agreement", "contact_email": "avery@example.com", "template_name": "Buyer agreement"}])
+    bundle = ArchiveBundleImportRequest(source_id="complete-bundle-fixture", contacts=[{"first_name": "Avery", "email": "avery@example.com"}], tasks=[{"source_row_id": "call-avery", "title": "Call Avery", "contact_email": "avery@example.com"}], notes=[{"contact_email": "avery@example.com", "body": "Imported context"}], opportunities=[{"name": "Main Street", "contact_emails": ["avery@example.com"]}], referrals=[{"name": "Avery referral"}], listings=[{"address": "10 Main Street"}], templates=[{"name": "Buyer agreement"}], agreements=[{"title": "Buyer agreement", "contact_email": "avery@example.com", "template_name": "Buyer agreement"}])
     assert (len(bundle.contacts), len(bundle.tasks), len(bundle.agreements)) == (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("source_id", "source_row_id"),
+    [("   ", "row-1"), ("source-1", "\n\t")],
+)
+def test_archive_task_source_key_rejects_whitespace_only_identities(
+    source_id: str, source_row_id: str
+):
+    with pytest.raises(ValueError):
+        archive_task_source_key(source_id, source_row_id)
 
 
 def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():

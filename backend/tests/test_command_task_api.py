@@ -51,8 +51,10 @@ def _token(subject: str = "17") -> str:
     )
 
 
-def _headers(key: UUID | str | None = None) -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {_token()}"}
+def _headers(
+    key: UUID | str | None = None, *, subject: str = "17"
+) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {_token(subject)}"}
     if key is not None:
         headers["X-Idempotency-Key"] = str(key)
     return headers
@@ -154,13 +156,19 @@ async def test_real_get_db_finalizer_commits_success_and_rolls_back_late_failure
 
 
 @pytest.mark.asyncio
-async def test_archive_import_keeps_same_title_rows_and_replays_by_stable_ordinal(
+async def test_archive_import_keeps_same_title_rows_and_replays_by_stable_identity(
     task_app, task_api_database
 ) -> None:
     payload = {
+        "source_id": "fixture-export-2026-08-18",
         "tasks": [
-            {"title": "Same title", "description": "First source row"},
             {
+                "source_row_id": "task-row-1",
+                "title": "Same title",
+                "description": "First source row",
+            },
+            {
+                "source_row_id": "task-row-2",
                 "title": "Same title",
                 "description": "Second source row",
                 "status": "completed",
@@ -186,6 +194,144 @@ async def test_archive_import_keeps_same_title_rows_and_replays_by_stable_ordina
         assert [task.status for task in tasks] == ["open", "completed"]
         assert len({source.source_key for source in sources}) == 2
         assert all(UUID(source.source_key).version == 5 for source in sources)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tasks": [{"source_row_id": "task-1", "title": "Missing source"}]},
+        {"source_id": "source-1", "tasks": [{"title": "Missing row identity"}]},
+        {
+            "source_id": "   ",
+            "tasks": [{"source_row_id": "task-1", "title": "Blank source"}],
+        },
+        {
+            "source_id": "source-1",
+            "tasks": [{"source_row_id": "\t", "title": "Blank row identity"}],
+        },
+        {
+            "source_id": "x" * 256,
+            "tasks": [{"source_row_id": "task-1", "title": "Long source"}],
+        },
+        {
+            "source_id": "source-1",
+            "tasks": [{"source_row_id": "x" * 129, "title": "Long row"}],
+        },
+    ],
+)
+async def test_archive_task_identity_is_required_and_bounded(task_app, payload) -> None:
+    response = await _request(
+        task_app,
+        "POST",
+        "/api/v1/command/archive/import",
+        json=payload,
+        headers=_headers(),
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_archive_retry_survives_row_reordering(task_app, task_api_database) -> None:
+    first_payload = {
+        "source_id": "stable-export",
+        "tasks": [
+            {"source_row_id": "row-a", "title": "First"},
+            {"source_row_id": "row-b", "title": "Second"},
+        ],
+    }
+    reordered = {
+        "source_id": "stable-export",
+        "tasks": list(reversed(first_payload["tasks"])),
+    }
+    first = await _request(
+        task_app, "POST", "/api/v1/command/archive/import", json=first_payload, headers=_headers()
+    )
+    replay = await _request(
+        task_app, "POST", "/api/v1/command/archive/import", json=reordered, headers=_headers()
+    )
+    assert first.status_code == replay.status_code == 200
+    assert first.json()["created"]["tasks"] == 2
+    assert replay.json()["created"]["tasks"] == 0
+    assert replay.json()["skipped_duplicates"]["tasks"] == 2
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        assert await verifier.scalar(sa.select(sa.func.count()).select_from(CRMTask)) == 2
+
+
+@pytest.mark.asyncio
+async def test_archive_edited_row_with_same_identity_is_structured_409(task_app, task_api_database) -> None:
+    original = {
+        "source_id": "edited-export",
+        "tasks": [{"source_row_id": "row-1", "title": "Original title"}],
+    }
+    edited = {
+        "source_id": "edited-export",
+        "tasks": [{"source_row_id": "row-1", "title": "Edited title"}],
+    }
+    assert (
+        await _request(
+            task_app, "POST", "/api/v1/command/archive/import", json=original, headers=_headers()
+        )
+    ).status_code == 200
+    conflict = await _request(
+        task_app, "POST", "/api/v1/command/archive/import", json=edited, headers=_headers()
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "task_idempotency_mismatch"
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        assert await verifier.scalar(sa.select(sa.func.count()).select_from(CRMTask)) == 1
+
+
+@pytest.mark.asyncio
+async def test_identical_archive_rows_from_distinct_sources_create_distinct_tasks(
+    task_app, task_api_database
+) -> None:
+    task = {"source_row_id": "row-1", "title": "Identical task"}
+    for source_id in ("export-a", "export-b"):
+        response = await _request(
+            task_app,
+            "POST",
+            "/api/v1/command/archive/import",
+            json={"source_id": source_id, "tasks": [task]},
+            headers=_headers(),
+        )
+        assert response.status_code == 200
+        assert response.json()["created"]["tasks"] == 1
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        assert await verifier.scalar(sa.select(sa.func.count()).select_from(CRMTask)) == 2
+
+
+@pytest.mark.asyncio
+async def test_archive_retry_by_another_admin_is_actor_bound_structured_409(
+    task_app, task_api_database
+) -> None:
+    payload = {
+        "source_id": "actor-bound-export",
+        "tasks": [{"source_row_id": "row-1", "title": "Actor-bound task"}],
+    }
+    first = await _request(
+        task_app,
+        "POST",
+        "/api/v1/command/archive/import",
+        json=payload,
+        headers=_headers(subject="17"),
+    )
+    conflict = await _request(
+        task_app,
+        "POST",
+        "/api/v1/command/archive/import",
+        json=payload,
+        headers=_headers(subject="18"),
+    )
+    assert first.status_code == 200
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "task_idempotency_mismatch"
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        assert await verifier.scalar(sa.select(sa.func.count()).select_from(CRMTask)) == 1
 
 
 def test_command_router_does_not_replace_get_db_dependency() -> None:

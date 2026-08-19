@@ -730,6 +730,11 @@ def test_repository_ci_runs_the_real_tls_postgresql_migration_contract() -> None
         "pg_stat_ssl",
         'sslmode="verify-full"',
         "tests/test_crm_task_lifecycle_migration.py",
+        "backend/services/crm_task_service.py",
+        "backend/tests/test_crm_task_service.py",
+        "backend/tests/test_command_task_api.py",
+        "tests/test_crm_task_service.py",
+        "tests/test_command_task_api.py",
         "if: always()",
         "docker rm --force crm-task-lifecycle-postgres",
     ):

@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ContactCreate(BaseModel):
@@ -204,12 +204,20 @@ class ContactImportResult(BaseModel):
 
 
 class ArchiveTaskImportRow(BaseModel):
+    source_row_id: str = Field(min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=255)
     contact_email: str | None = None
     description: str = ""
     status: str = Field(default="open", pattern="^(open|in_progress|completed|cancelled)$")
     priority: str = Field(default="normal", pattern="^(low|normal|high)$")
     due_at: datetime | None = None
+
+    @field_validator("source_row_id")
+    @classmethod
+    def reject_blank_source_row_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("source_row_id must not be blank")
+        return value
 
 
 class ArchiveNoteImportRow(BaseModel):
@@ -251,6 +259,7 @@ class ArchiveAgreementImportRow(BaseModel):
 
 
 class ArchiveBundleImportRequest(BaseModel):
+    source_id: str | None = Field(default=None, min_length=1, max_length=255)
     contacts: list[ContactImportRow] = Field(default_factory=list, max_length=10000)
     tasks: list[ArchiveTaskImportRow] = Field(default_factory=list, max_length=10000)
     notes: list[ArchiveNoteImportRow] = Field(default_factory=list, max_length=10000)
@@ -259,6 +268,19 @@ class ArchiveBundleImportRequest(BaseModel):
     listings: list[ArchiveListingImportRow] = Field(default_factory=list, max_length=10000)
     templates: list[ArchiveTemplateImportRow] = Field(default_factory=list, max_length=10000)
     agreements: list[ArchiveAgreementImportRow] = Field(default_factory=list, max_length=10000)
+
+    @field_validator("source_id")
+    @classmethod
+    def reject_blank_source_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("source_id must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def require_task_source_identity(self):
+        if self.tasks and self.source_id is None:
+            raise ValueError("source_id is required when importing tasks")
+        return self
 
 
 class ArchiveBundleImportResult(BaseModel):

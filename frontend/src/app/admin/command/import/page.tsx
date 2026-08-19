@@ -5,9 +5,10 @@ import { DownloadSimple, FileArrowUp, UploadSimple, WarningCircle } from '@phosp
 import { commandApi, type ArchiveBundle, type ContactImportRow } from '@/lib/command/api';
 
 const acceptedHeaders = new Set(['first_name', 'last_name', 'email', 'phone', 'stage', 'birthday', 'anniversary']);
-const archiveTemplate: ArchiveBundle = {
+export const archiveTemplate: ArchiveBundle = {
+  source_id: 'REPLACE_WITH_STABLE_UNIQUE_ARCHIVE_SOURCE_ID',
   contacts: [{ first_name: 'Avery', last_name: 'Lake', email: 'avery@example.com', phone: '+15550100', stage: 'lead', birthday: '1990-08-12', anniversary: null }],
-  tasks: [{ title: 'Call Avery', contact_email: 'avery@example.com', description: 'Review next steps', status: 'open', priority: 'high', due_at: null }],
+  tasks: [{ source_row_id: 'REPLACE_WITH_IMMUTABLE_SOURCE_ROW_ID', title: 'Call Avery', contact_email: 'avery@example.com', description: 'Review next steps', status: 'open', priority: 'high', due_at: null }],
   notes: [{ contact_email: 'avery@example.com', body: 'Imported timeline context.' }],
   opportunities: [{ name: '10 Main Street purchase', stage: 'active', value_cents: 75000000, contact_emails: ['avery@example.com'] }],
   referrals: [{ name: 'Avery referral', source: 'Partner', status: 'new', contact_email: 'avery@example.com' }],
@@ -15,6 +16,30 @@ const archiveTemplate: ArchiveBundle = {
   templates: [{ name: 'Buyer agreement', body: 'Internal agreement template content.' }],
   agreements: [{ title: 'Avery buyer agreement', contact_email: 'avery@example.com', template_name: 'Buyer agreement', status: 'draft' }],
 };
+
+const supportedArchiveCollections = ['contacts', 'tasks', 'notes', 'opportunities', 'referrals', 'listings', 'templates', 'agreements'] as const;
+
+function requiredIdentity(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string.`);
+  if (value.length > maximum) throw new Error(`${label} must be ${maximum} characters or fewer.`);
+  return value;
+}
+
+export function validateArchiveBundle(value: unknown): ArchiveBundle {
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('JSON archive must be an object.');
+  const archive = value as Record<string, unknown>;
+  if (!supportedArchiveCollections.some((key) => key in archive)) throw new Error('JSON archive must contain at least one supported collection.');
+  if ('tasks' in archive && !Array.isArray(archive.tasks)) throw new Error('Archive tasks must be an array.');
+  const tasks = (archive.tasks ?? []) as unknown[];
+  if (tasks.length) {
+    requiredIdentity(archive.source_id, 'Task archive source_id', 255);
+    tasks.forEach((task, index) => {
+      if (!task || Array.isArray(task) || typeof task !== 'object') throw new Error(`Task ${index + 1} must be an object.`);
+      requiredIdentity((task as Record<string, unknown>).source_row_id, `Task ${index + 1} source_row_id`, 128);
+    });
+  }
+  return value as ArchiveBundle;
+}
 
 function readCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -74,9 +99,7 @@ export default function ImportContactsPage() {
       const source = await file.text();
       const json = file.name.toLowerCase().endsWith('.json') ? JSON.parse(source) : null;
       if (json && !Array.isArray(json) && typeof json === 'object') {
-        const archive = json as ArchiveBundle;
-        const supported = ['contacts', 'tasks', 'notes', 'opportunities', 'referrals', 'listings', 'templates', 'agreements'];
-        if (!supported.some((key) => key in archive)) throw new Error('JSON archive must contain at least one supported collection.');
+        const archive = validateArchiveBundle(json);
         setBundle(archive); setRows(validateRows(archive.contacts ?? [])); setError(''); setResult(''); event.target.value = ''; return;
       }
       const parsed = json ? validateRows(json) : parseCsv(source);
@@ -107,5 +130,5 @@ export default function ImportContactsPage() {
     finally { setRunning(false); }
   }
 
-  return <div className="min-h-[100dvh] bg-[#080807] p-6 text-white"><main className="mx-auto max-w-4xl"><p className="text-xs uppercase tracking-[.25em] text-[#eac469]">Permitted internal intake</p><div className="mt-1 flex flex-wrap items-center justify-between gap-4"><h1 className="text-3xl font-black">Import archive</h1><button onClick={downloadTemplate} className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs text-white/70 hover:border-[#eac469]"><DownloadSimple size={16}/>Download JSON template</button></div><p className="mt-3 max-w-2xl text-sm leading-6 text-white/55">Import a contacts CSV/JSON or one JSON archive bundle. Bundle collections may include <code>contacts, tasks, notes, opportunities, referrals, listings, templates, agreements</code>. Email-based contact relationships are reconciled into the internal CRM; no external API is used.</p><label className="mt-8 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-[#eac469]/50 bg-[#eac469]/[.04] p-8 text-center transition hover:bg-[#eac469]/[.08]"><input className="sr-only" type="file" accept=".csv,application/json,.json,text/csv" onChange={loadFile}/><FileArrowUp size={32} className="text-[#eac469]"/><b className="mt-4">Choose a CSV or JSON archive</b><span className="mt-2 text-sm text-white/45">Contact CSV imports use 1,000-record batches. JSON bundles preserve supported CRM relationships.</span></label>{error && <p role="alert" className="mt-5 flex gap-2 rounded-xl border border-red-300/20 bg-red-300/10 p-4 text-sm text-red-200"><WarningCircle size={18}/>{error}</p>}{(rows.length > 0 || bundle) && <section className="mt-6 rounded-2xl border border-white/10 bg-white/[.035] p-5"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="font-bold">{bundle ? 'Archive bundle ready' : `${rows.length.toLocaleString()} contacts ready`}</h2><p className="mt-1 text-sm text-white/45">{bundle ? Object.entries(bundle).filter(([, value]) => Array.isArray(value) && value.length).map(([key, value]) => `${key}: ${(value as unknown[]).length}`).join(' · ') : `Previewing the first ${preview.length} rows. Existing emails are skipped case-insensitively.`}</p></div><button disabled={running} onClick={importRows} className="inline-flex items-center gap-2 rounded-xl bg-[#eac469] px-4 py-3 text-sm font-bold text-black disabled:opacity-50"><UploadSimple size={18}/>{running ? 'Importing…' : 'Import archive'}</button></div>{!bundle && <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="text-xs uppercase tracking-widest text-white/40"><tr><th className="pb-3">Name</th><th className="pb-3">Email</th><th className="pb-3">Phone</th><th className="pb-3">Stage</th></tr></thead><tbody>{preview.map((row, index) => <tr key={`${row.email}-${index}`} className="border-t border-white/10"><td className="py-3">{row.first_name} {row.last_name}</td><td className="py-3 text-white/60">{row.email ?? '—'}</td><td className="py-3 text-white/60">{row.phone ?? '—'}</td><td className="py-3 text-white/60">{row.stage}</td></tr>)}</tbody></table></div>}</section>}{result && <p className="mt-5 rounded-xl border border-[#eac469]/25 bg-[#eac469]/10 p-4 text-sm text-[#f5d98f]">{result}</p>}</main></div>;
+  return <div className="min-h-[100dvh] bg-[#080807] p-6 text-white"><main className="mx-auto max-w-4xl"><p className="text-xs uppercase tracking-[.25em] text-[#eac469]">Permitted internal intake</p><div className="mt-1 flex flex-wrap items-center justify-between gap-4"><h1 className="text-3xl font-black">Import archive</h1><button onClick={downloadTemplate} className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs text-white/70 hover:border-[#eac469]"><DownloadSimple size={16}/>Download JSON template</button></div><p className="mt-3 max-w-2xl text-sm leading-6 text-white/55">Import a contacts CSV/JSON or one JSON archive bundle. Bundle collections may include <code>contacts, tasks, notes, opportunities, referrals, listings, templates, agreements</code>. Task bundles retain immutable <code>source_id</code> and <code>source_row_id</code> values. Email-based contact relationships are reconciled into the internal CRM; no external API is used.</p><label className="mt-8 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-[#eac469]/50 bg-[#eac469]/[.04] p-8 text-center transition hover:bg-[#eac469]/[.08]"><input className="sr-only" type="file" accept=".csv,application/json,.json,text/csv" onChange={loadFile}/><FileArrowUp size={32} className="text-[#eac469]"/><b className="mt-4">Choose a CSV or JSON archive</b><span className="mt-2 text-sm text-white/45">Use one stable, unique source_id for each immutable archive source; use a different value for unrelated bundles. Keep every source_row_id unchanged across retries.</span></label>{error && <p role="alert" className="mt-5 flex gap-2 rounded-xl border border-red-300/20 bg-red-300/10 p-4 text-sm text-red-200"><WarningCircle size={18}/>{error}</p>}{(rows.length > 0 || bundle) && <section className="mt-6 rounded-2xl border border-white/10 bg-white/[.035] p-5"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="font-bold">{bundle ? 'Archive bundle ready' : `${rows.length.toLocaleString()} contacts ready`}</h2><p className="mt-1 text-sm text-white/45">{bundle ? Object.entries(bundle).filter(([, value]) => Array.isArray(value) && value.length).map(([key, value]) => `${key}: ${(value as unknown[]).length}`).join(' · ') : `Previewing the first ${preview.length} rows. Existing emails are skipped case-insensitively.`}</p></div><button disabled={running} onClick={importRows} className="inline-flex items-center gap-2 rounded-xl bg-[#eac469] px-4 py-3 text-sm font-bold text-black disabled:opacity-50"><UploadSimple size={18}/>{running ? 'Importing…' : 'Import archive'}</button></div>{!bundle && <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="text-xs uppercase tracking-widest text-white/40"><tr><th className="pb-3">Name</th><th className="pb-3">Email</th><th className="pb-3">Phone</th><th className="pb-3">Stage</th></tr></thead><tbody>{preview.map((row, index) => <tr key={`${row.email}-${index}`} className="border-t border-white/10"><td className="py-3">{row.first_name} {row.last_name}</td><td className="py-3 text-white/60">{row.email ?? '—'}</td><td className="py-3 text-white/60">{row.phone ?? '—'}</td><td className="py-3 text-white/60">{row.stage}</td></tr>)}</tbody></table></div>}</section>}{result && <p className="mt-5 rounded-xl border border-[#eac469]/25 bg-[#eac469]/10 p-4 text-sm text-[#f5d98f]">{result}</p>}</main></div>;
 }

@@ -5,7 +5,13 @@ on:
     paths:
       - "backend/alembic/**"
       - "backend/models/**"
+      - "backend/routers/command.py"
+      - "backend/schemas/command.py"
+      - "backend/services/command_tasks.py"
+      - "backend/services/crm_task_service.py"
+      - "backend/tests/test_command_task_api.py"
       - "backend/tests/test_crm_task_lifecycle_migration.py"
+      - "backend/tests/test_crm_task_service.py"
       - "backend/requirements.txt"
       - ".github/workflows/crm-task-lifecycle-migration.yml"
   push:
@@ -14,7 +20,13 @@ on:
     paths:
       - "backend/alembic/**"
       - "backend/models/**"
+      - "backend/routers/command.py"
+      - "backend/schemas/command.py"
+      - "backend/services/command_tasks.py"
+      - "backend/services/crm_task_service.py"
+      - "backend/tests/test_command_task_api.py"
       - "backend/tests/test_crm_task_lifecycle_migration.py"
+      - "backend/tests/test_crm_task_service.py"
       - "backend/requirements.txt"
       - ".github/workflows/crm-task-lifecycle-migration.yml"
   workflow_dispatch:
@@ -170,9 +182,13 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the complete migration contract
+      - name: Run the complete CRM task persistence contract
         working-directory: backend
-        run: python -m pytest -q tests/test_crm_task_lifecycle_migration.py
+        run: |
+          python -m pytest -q \
+            tests/test_crm_task_lifecycle_migration.py \
+            tests/test_crm_task_service.py \
+            tests/test_command_task_api.py
 
       - name: Remove the exact disposable fixtures
         if: always()

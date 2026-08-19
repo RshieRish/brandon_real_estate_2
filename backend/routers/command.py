@@ -112,7 +112,6 @@ from services.command_lifecycle import ensure_agreement_transition
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
 from services.command_tasks import (
-    ARCHIVE_TASK_SOURCE_ID,
     archive_task_source_key,
     task_activity_summary,
 )
@@ -345,33 +344,32 @@ async def _import_archive_bundle(
         item = CRMAgreementTemplate(name=row.name, body=row.body); db.add(item); await db.flush()
         templates_by_name[key] = item; created["templates"] += 1
 
-    for ordinal, row in enumerate(payload.tasks):
+    for row in payload.tasks:
         contact_id = resolve(row.contact_email)
         if row.contact_email and contact_id is None: unresolved += 1
-        try:
-            source_key = archive_task_source_key(row, ordinal)
-            result = await crm_task_service.create(
-                db,
-                CreateTaskCommand(
-                    title=row.title,
-                    description=row.description,
-                    priority=row.priority,
-                    due_at=row.due_at,
-                    contact_id=contact_id,
-                    actor=TaskActor(type="admin", id=actor_subject),
-                    source=TaskSource(
-                        type="archive_import",
-                        id=ARCHIVE_TASK_SOURCE_ID,
-                        key=source_key,
-                    ),
-                    idempotency_scope="archive_import",
-                    idempotency_key=source_key,
-                    client_timezone="UTC",
-                    status=row.status,
+        if payload.source_id is None:
+            raise TaskCommandValidationError("archive task source is invalid")
+        source_key = archive_task_source_key(payload.source_id, row.source_row_id)
+        result = await crm_task_service.create(
+            db,
+            CreateTaskCommand(
+                title=row.title,
+                description=row.description,
+                priority=row.priority,
+                due_at=row.due_at,
+                contact_id=contact_id,
+                actor=TaskActor(type="admin", id=actor_subject),
+                source=TaskSource(
+                    type="archive_import",
+                    id=payload.source_id,
+                    key=source_key,
                 ),
-            )
-        except TaskCommandValidationError:
-            raise ContactSectionUnsupported("archive task input is invalid") from None
+                idempotency_scope="archive_import",
+                idempotency_key=source_key,
+                client_timezone="UTC",
+                status=row.status,
+            ),
+        )
         if result.replayed:
             skipped["tasks"] += 1
         else:
@@ -485,6 +483,35 @@ async def import_archive_bundle(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Contact section is unsupported",
+        ) from None
+    except TaskCommandValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Archive task input is invalid",
+        ) from None
+    except TaskIdempotencyConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_idempotency_mismatch",
+                "message": "Archive task identity was already used with different task data or authority",
+            },
+        ) from None
+    except TaskSourceConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_source_conflict",
+                "message": "Archive task source identity is already linked",
+            },
+        ) from None
+    except TaskCreationStateError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_creation_state_invalid",
+                "message": "Archive task creation request is not replayable",
+            },
         ) from None
     except Exception:  # noqa: BLE001
         raise HTTPException(

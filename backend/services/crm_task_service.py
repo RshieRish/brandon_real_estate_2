@@ -112,11 +112,32 @@ def _bounded_text(value: object, *, name: str, minimum: int, maximum: int) -> st
 def _utc_rfc3339(value: datetime | None) -> str | None:
     if value is None:
         return None
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise TaskCommandValidationError("due_at must include a UTC offset")
-    return value.astimezone(UTC).isoformat(timespec="microseconds").replace(
+    normalized = _utc_datetime(value)
+    assert normalized is not None
+    return normalized.isoformat(timespec="microseconds").replace(
         ".000000+00:00", "Z"
     ).replace("+00:00", "Z")
+
+
+def _utc_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise TaskCommandValidationError("due_at must be a datetime")
+    try:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise TaskCommandValidationError("due_at must include a UTC offset")
+        return value.astimezone(UTC)
+    except TaskCommandValidationError:
+        raise
+    except Exception:
+        raise TaskCommandValidationError("due_at cannot be converted to UTC") from None
+
+
+def _supported_text(value: object, supported: frozenset[str], *, name: str) -> str:
+    if type(value) is not str or value not in supported:
+        raise TaskCommandValidationError(f"{name} is invalid")
+    return value
 
 
 def _validate(command: CreateTaskCommand) -> None:
@@ -124,20 +145,20 @@ def _validate(command: CreateTaskCommand) -> None:
         raise TaskCommandValidationError("task command is invalid")
     _bounded_text(command.title, name="title", minimum=1, maximum=255)
     _bounded_text(command.description, name="description", minimum=0, maximum=65_536)
-    if command.priority not in _PRIORITIES:
-        raise TaskCommandValidationError("priority is invalid")
-    if command.status not in _WORKFLOW_STATUSES:
-        raise TaskCommandValidationError("status is invalid")
+    _supported_text(command.priority, _PRIORITIES, name="priority")
+    _supported_text(command.status, _WORKFLOW_STATUSES, name="status")
     _utc_rfc3339(command.due_at)
     if command.contact_id is not None and (
         type(command.contact_id) is not int or command.contact_id <= 0
     ):
         raise TaskCommandValidationError("contact_id is invalid")
-    if not isinstance(command.actor, TaskActor) or command.actor.type not in _ACTOR_TYPES:
+    if not isinstance(command.actor, TaskActor):
         raise TaskCommandValidationError("actor type is invalid")
+    _supported_text(command.actor.type, _ACTOR_TYPES, name="actor type")
     _bounded_text(command.actor.id, name="actor id", minimum=1, maximum=128)
-    if not isinstance(command.source, TaskSource) or command.source.type not in _SOURCE_TYPES:
+    if not isinstance(command.source, TaskSource):
         raise TaskCommandValidationError("source type is invalid")
+    _supported_text(command.source.type, _SOURCE_TYPES, name="source type")
     _bounded_text(command.source.id, name="source id", minimum=1, maximum=255)
     _bounded_text(command.source.key, name="source key", minimum=1, maximum=128)
     _bounded_text(
@@ -249,9 +270,7 @@ class CRMTaskService:
         payload_json = canonical_task_command_json(command)
         payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         request_id = _request_id(command)
-        due_at = (
-            command.due_at.astimezone(UTC) if command.due_at is not None else None
-        )
+        due_at = _utc_datetime(command.due_at)
 
         claim_values = {
             "scope": command.idempotency_scope,

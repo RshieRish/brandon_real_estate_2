@@ -148,12 +148,24 @@ def test_canonical_hash_input_is_compact_sorted_complete_and_utc() -> None:
         {"title": "x" * 256},
         {"description": 7},
         {"priority": "urgent"},
+        {"priority": []},
         {"status": "archived"},
+        {"status": []},
+        {"due_at": object()},
         {"due_at": datetime(2026, 8, 18, 9, 15)},
+        {
+            "due_at": datetime.max.replace(
+                tzinfo=timezone(timedelta(hours=-23, minutes=-59))
+            )
+        },
         {"contact_id": 0},
+        {"actor": []},
         {"actor": TaskActor(type="robot", id="1")},
+        {"actor": TaskActor(type=[], id="1")},
         {"actor": TaskActor(type="admin", id="")},
+        {"source": []},
         {"source": TaskSource(type="webhook", id="1", key="primary")},
+        {"source": TaskSource(type=[], id="1", key="primary")},
         {"source": TaskSource(type="command_ui", id="", key="primary")},
         {"source": TaskSource(type="command_ui", id="1", key="")},
         {"idempotency_scope": "x" * 65},
@@ -279,22 +291,40 @@ async def test_source_identity_conflict_rolls_back_new_claim_and_task(task_datab
         assert await session.scalar(sa.select(sa.func.count()).select_from(CRMRecordLifecycleEvent)) == 1
 
 
+@pytest.mark.parametrize(
+    "rejected_type",
+    [CRMTaskSource, CRMActivity, CRMRecordLifecycleEvent],
+    ids=["source", "activity", "lifecycle"],
+)
 @pytest.mark.asyncio
-async def test_late_persistence_failure_rolls_back_service_savepoint(monkeypatch, task_database) -> None:
+async def test_each_late_persistence_failure_rolls_back_every_creation_row(
+    monkeypatch, task_database, rejected_type
+) -> None:
     _engine, factory = task_database
     async with factory() as session, session.begin():
+        contact = CRMContact(
+            first_name="Rollback", last_name="Owner", email="rollback@example.test"
+        )
+        session.add(contact)
+        await session.flush()
         original_add = session.add
 
-        def reject_lifecycle(instance, *args, **kwargs):
-            if isinstance(instance, CRMRecordLifecycleEvent):
-                raise RuntimeError("synthetic lifecycle failure")
+        def reject_persistence(instance, *args, **kwargs):
+            if isinstance(instance, rejected_type):
+                raise RuntimeError(f"synthetic {rejected_type.__tablename__} failure")
             return original_add(instance, *args, **kwargs)
 
-        monkeypatch.setattr(session, "add", reject_lifecycle)
-        with pytest.raises(RuntimeError, match="synthetic lifecycle failure"):
-            await CRMTaskService().create(session, command())
+        monkeypatch.setattr(session, "add", reject_persistence)
+        with pytest.raises(RuntimeError, match="synthetic crm_"):
+            await CRMTaskService().create(session, command(contact_id=contact.id))
         monkeypatch.setattr(session, "add", original_add)
-        for table in (CRMTaskCreationRequest, CRMTask, CRMTaskSource, CRMRecordLifecycleEvent):
+        for table in (
+            CRMTaskCreationRequest,
+            CRMTask,
+            CRMTaskSource,
+            CRMActivity,
+            CRMRecordLifecycleEvent,
+        ):
             assert await session.scalar(sa.select(sa.func.count()).select_from(table)) == 0
 
 
