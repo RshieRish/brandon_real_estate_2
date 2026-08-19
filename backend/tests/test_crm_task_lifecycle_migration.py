@@ -759,6 +759,41 @@ def test_approved_plan_uses_a_disposable_database_name_accepted_by_test_gate() -
     assert f"CRM_TASK_TEST_DATABASE_NAME='{database_name}'" in plan
     assert f"/{database_name}?ssl=require" in plan
 
+    sync_url_exports = [
+        line
+        for line in plan.splitlines()
+        if line.startswith("export CRM_TASK_TEST_SYNC_URL=")
+    ]
+    assert sync_url_exports
+    for async_url in (
+        "postgresql+asyncpg://fixture:fixture@db.example.test/"
+        "brandon_crm_task_archive_demo_test?ssl=require",
+        "postgresql+asyncpg://fixture:fixture@db.example.test/"
+        "brandon_crm_task_archive_demo_test?application_name=crm&ssl=require",
+    ):
+        completed = subprocess.run(
+            [
+                "bash",
+                "-euc",
+                "\n".join(
+                    [
+                        *sync_url_exports,
+                        'printf "%s" "$CRM_TASK_TEST_SYNC_URL"',
+                    ]
+                ),
+            ],
+            env={**os.environ, "CRM_TASK_TEST_DATABASE_URL": async_url},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout == async_url.replace(
+            "postgresql+asyncpg:", "postgresql:", 1
+        ).replace("ssl=require", "sslmode=require", 1)
+        assert "?ssl=require" not in completed.stdout
+        assert "&ssl=require" not in completed.stdout
+
 
 def test_populated_test_database_is_not_claimed_or_destroyed() -> None:
     url = _isolated_test_url()

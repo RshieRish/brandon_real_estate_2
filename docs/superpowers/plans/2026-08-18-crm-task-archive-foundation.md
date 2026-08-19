@@ -68,6 +68,7 @@ case "$CRM_TASK_TEST_DATABASE_URL" in
   *user:pass@localhost/test*) echo 'Refusing the fake parse-only DATABASE_URL'; exit 1 ;;
 esac
 export CRM_TASK_TEST_SYNC_URL="${CRM_TASK_TEST_DATABASE_URL/postgresql+asyncpg:/postgresql:}"
+export CRM_TASK_TEST_SYNC_URL="${CRM_TASK_TEST_SYNC_URL/ssl=require/sslmode=require}"
 test "$(psql "$CRM_TASK_TEST_SYNC_URL" -v ON_ERROR_STOP=1 -Atc 'select current_database()')" = "$CRM_TASK_TEST_DATABASE_NAME"
 test "$(psql "$CRM_TASK_TEST_SYNC_URL" -v ON_ERROR_STOP=1 -Atc "select count(*) from pg_catalog.pg_tables where schemaname = 'public'")" = '0'
 ```
