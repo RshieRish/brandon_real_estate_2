@@ -23,6 +23,11 @@ from models.command_provenance import (
     CRMSourceRecordArtifact,
     EvidenceLevel,
 )
+from models.crm_task_lifecycle import (
+    CRMRecordLifecycleEvent,
+    CRMTaskCreationRequest,
+    CRMTaskSource,
+)
 
 __all__ = [
     "AgentActionAudit",
@@ -42,9 +47,12 @@ __all__ = [
     "CRMEntitySource",
     "CRMReconciliationResult",
     "CRMReconciliationRun",
+    "CRMRecordLifecycleEvent",
     "CRMSourceRecord",
     "CRMSourceRecordArtifact",
     "CRMTask",
+    "CRMTaskCreationRequest",
+    "CRMTaskSource",
     "CaptureQuality",
     "EvidenceLevel",
 ]

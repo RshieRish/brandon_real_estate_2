@@ -5,6 +5,7 @@ from enum import Enum
 from database import Base
 from services.command_contact_identity import canonical_email
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -109,11 +111,35 @@ class CRMActivity(Base):
 class CRMTask(Timestamped, Base):
     __tablename__ = "crm_tasks"
     __table_args__ = (
+        CheckConstraint(
+            "version > 0",
+            name="ck_crm_tasks_version_positive",
+        ),
         Index(
             "ix_crm_tasks_contact_status_id",
             "contact_id",
             "status",
             "id",
+        ),
+        Index(
+            "ix_crm_tasks_active_status_due_id",
+            "status",
+            "due_at",
+            "id",
+            postgresql_where=text("archived_at IS NULL"),
+        ),
+        Index(
+            "ix_crm_tasks_active_contact_status_id",
+            "contact_id",
+            "status",
+            "id",
+            postgresql_where=text("archived_at IS NULL"),
+        ),
+        Index(
+            "ix_crm_tasks_archived_at_id",
+            "archived_at",
+            "id",
+            postgresql_where=text("archived_at IS NOT NULL"),
         ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -123,10 +149,21 @@ class CRMTask(Timestamped, Base):
     status: Mapped[str] = mapped_column(String(32), default="open")
     priority: Mapped[str] = mapped_column(String(32), default="normal")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by_type: Mapped[str | None] = mapped_column(String(32))
+    archived_by_id: Mapped[str | None] = mapped_column(String(128))
+    archive_reason: Mapped[str | None] = mapped_column(String(500))
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
 
     def __init__(self, **kwargs):
         kwargs.setdefault("status", "open")
         kwargs.setdefault("priority", "normal")
+        kwargs.setdefault("version", 1)
         super().__init__(**kwargs)
 
 
