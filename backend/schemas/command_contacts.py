@@ -244,13 +244,27 @@ class ContactNeighborsOut(ContactBoundaryModel):
 
 class ContactWorkspaceSummaryOut(ContactBoundaryModel):
     open_tasks: NonnegativeInt
+    active_tasks: NonnegativeInt
     completed_tasks: NonnegativeInt
+    cancelled_tasks: NonnegativeInt
     archived_tasks: NonnegativeInt
+    archived_mutable_tasks: NonnegativeInt
+    archived_recovered_evidence: NonnegativeInt
     active_smart_plans: NonnegativeInt
     opportunities: NonnegativeInt
     notes: NonnegativeInt
     saved_searches: NonnegativeInt
     bookings: NonnegativeInt
+
+    @model_validator(mode="after")
+    def _consistent_task_totals(self) -> ContactWorkspaceSummaryOut:
+        if self.open_tasks != self.active_tasks:
+            raise ValueError("open task total must equal active task total")
+        if self.archived_tasks != (
+            self.archived_mutable_tasks + self.archived_recovered_evidence
+        ):
+            raise ValueError("archived task total must equal its subtotals")
+        return self
 
 
 class ContactOpportunityOccurrenceOut(ContactBoundaryModel):

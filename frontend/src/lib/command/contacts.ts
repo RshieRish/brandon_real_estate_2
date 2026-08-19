@@ -112,7 +112,7 @@ export type ContactNeighbors = Readonly<{
   next_contact_id: number | null;
 }>;
 
-export type ContactWorkspaceSummary = Readonly<{
+type ContactWorkspaceSummaryBase = Readonly<{
   open_tasks: number;
   completed_tasks: number;
   archived_tasks: number;
@@ -122,6 +122,26 @@ export type ContactWorkspaceSummary = Readonly<{
   saved_searches: number;
   bookings: number;
 }>;
+
+type LegacyContactWorkspaceTaskSummary = Readonly<{
+  active_tasks?: never;
+  cancelled_tasks?: never;
+  archived_mutable_tasks?: never;
+  archived_recovered_evidence?: never;
+}>;
+
+type ExpandedContactWorkspaceTaskSummary = Readonly<{
+  active_tasks: number;
+  cancelled_tasks: number;
+  archived_mutable_tasks: number;
+  archived_recovered_evidence: number;
+}>;
+
+/** The legacy variant exists only for a rolling frontend-before-backend deploy. */
+export type ContactWorkspaceSummary = ContactWorkspaceSummaryBase & (
+  | LegacyContactWorkspaceTaskSummary
+  | ExpandedContactWorkspaceTaskSummary
+);
 
 export type ContactOccurrence =
   | Readonly<{ kind: 'opportunity'; title: string; stage: string | null; value_cents: number | null }>
@@ -274,7 +294,7 @@ export type ContactInternalTask = Readonly<{
   description: string;
   priority: string;
   due_at: string | null;
-  status: 'open' | 'completed' | 'archived';
+  status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'archived';
 }>;
 
 export type ContactInternalNote = Readonly<{
@@ -756,12 +776,21 @@ export const decodeContactNeighbors: Decoder<ContactNeighbors> = (input, path = 
 };
 
 export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (input, path = 'response') => {
-  const keys = [
+  const legacyKeys = [
     'open_tasks', 'completed_tasks', 'archived_tasks', 'active_smart_plans',
     'opportunities', 'notes', 'saved_searches', 'bookings',
-  ];
+  ] as const;
+  const additiveKeys = [
+    'active_tasks', 'cancelled_tasks',
+    'archived_mutable_tasks', 'archived_recovered_evidence',
+  ] as const;
+  const hasAdditiveKey = typeof input === 'object'
+    && input !== null
+    && !Array.isArray(input)
+    && additiveKeys.some((key) => Object.hasOwn(input, key));
+  const keys = hasAdditiveKey ? [...legacyKeys, ...additiveKeys] : legacyKeys;
   const read = objectReader(input, keys, path);
-  return {
+  const legacy = {
     open_tasks: nonnegativeInteger(read('open_tasks'), `${path}.open_tasks`),
     completed_tasks: nonnegativeInteger(read('completed_tasks'), `${path}.completed_tasks`),
     archived_tasks: nonnegativeInteger(read('archived_tasks'), `${path}.archived_tasks`),
@@ -771,6 +800,24 @@ export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (
     saved_searches: nonnegativeInteger(read('saved_searches'), `${path}.saved_searches`),
     bookings: nonnegativeInteger(read('bookings'), `${path}.bookings`),
   };
+  if (!hasAdditiveKey) return legacy;
+  const additive = {
+    active_tasks: nonnegativeInteger(read('active_tasks'), `${path}.active_tasks`),
+    cancelled_tasks: nonnegativeInteger(read('cancelled_tasks'), `${path}.cancelled_tasks`),
+    archived_mutable_tasks: nonnegativeInteger(
+      read('archived_mutable_tasks'), `${path}.archived_mutable_tasks`,
+    ),
+    archived_recovered_evidence: nonnegativeInteger(
+      read('archived_recovered_evidence'), `${path}.archived_recovered_evidence`,
+    ),
+  };
+  if (
+    legacy.open_tasks !== additive.active_tasks
+    || legacy.archived_tasks !== (
+      additive.archived_mutable_tasks + additive.archived_recovered_evidence
+    )
+  ) return invalid(path, 'consistent task summary totals');
+  return { ...legacy, ...additive };
 };
 
 function occurrenceValue(input: unknown, path: string): ContactOccurrence {
@@ -1152,7 +1199,11 @@ function internalTaskValue(input: unknown, path: string): ContactInternalTask {
     description: stringValue(read('description'), `${path}.description`),
     priority: stringValue(read('priority'), `${path}.priority`),
     due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
-    status: enumValue(read('status'), ['open', 'completed', 'archived'], `${path}.status`),
+    status: enumValue(
+      read('status'),
+      ['open', 'in_progress', 'completed', 'cancelled', 'archived'],
+      `${path}.status`,
+    ),
   };
 }
 

@@ -110,6 +110,11 @@ from services.command_lifecycle import ensure_agreement_transition
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
 from services.command_tasks import task_activity_summary
+from services.crm_task_projection import (
+    TaskWorkflowStatus,
+    active_task_clause,
+    workflow_status_task_clause,
+)
 from services.gemini import generate_text_flash_lite
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -148,7 +153,7 @@ async def _count(db: AsyncSession, model, *where) -> int:
 @router.get("/overview", response_model=OverviewOut)
 async def overview(db: AsyncSession = Depends(get_db)):
     return OverviewOut(
-        contacts=await _count(db, CRMContact), open_tasks=await _count(db, CRMTask, CRMTask.status != "completed"),
+        contacts=await _count(db, CRMContact), open_tasks=await _count(db, CRMTask, active_task_clause()),
         opportunities=await _count(db, CRMOpportunity), active_smart_plans=await _count(db, CRMSmartPlan, CRMSmartPlan.status == "active"),
     )
 
@@ -169,7 +174,7 @@ async def update_goal_progress(goal_id: int, payload: GoalUpdate, db: AsyncSessi
 @router.get("/ai/briefing")
 async def ai_briefing(db: AsyncSession = Depends(get_db)):
     """Deterministic, auditable pre-AI briefing; no contact data leaves the API."""
-    open_tasks = await _count(db, CRMTask, CRMTask.status != "completed")
+    open_tasks = await _count(db, CRMTask, active_task_clause())
     contacts = await _count(db, CRMContact)
     opportunities = await _count(db, CRMOpportunity)
     return {"summary": f"{open_tasks} open tasks across {contacts} contacts and {opportunities} opportunities.", "source": "internal-crm", "requires_review": True}
@@ -191,7 +196,7 @@ async def generate_ai_briefing(db:AsyncSession=Depends(get_db)):
 
 @router.get("/reports/summary")
 async def reports_summary(db:AsyncSession=Depends(get_db)):
-    return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,CRMTask.status!="completed"),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
+    return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,active_task_clause()),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
 
 
 @router.get("/archive/artifacts")
@@ -235,7 +240,7 @@ async def report_details(metric: str, db: AsyncSession = Depends(get_db)):
         rows = (await db.execute(select(Lead).order_by(Lead.updated_at.desc()).limit(25))).scalars().all()
         data = [{"id": row.id, "title": row.name or "Unnamed lead", "detail": f"{row.routing_status} · {row.source or 'internal'}", "occurred_at": row.updated_at} for row in rows]
     elif metric == "open_tasks":
-        rows = (await db.execute(select(CRMTask).where(CRMTask.status != "completed").order_by(CRMTask.due_at.asc().nulls_last()).limit(25))).scalars().all()
+        rows = (await db.execute(select(CRMTask).where(active_task_clause()).order_by(CRMTask.due_at.asc().nulls_last()).limit(25))).scalars().all()
         data = [{"id": row.id, "title": row.title, "detail": f"{row.status} · {row.priority}", "occurred_at": row.due_at or row.updated_at} for row in rows]
     elif metric == "opportunities":
         rows = (await db.execute(select(CRMOpportunity).order_by(CRMOpportunity.updated_at.desc()).limit(25))).scalars().all()
@@ -547,9 +552,12 @@ async def delete_saved_search(
 
 
 @router.get("/tasks", response_model=list[TaskOut])
-async def tasks(status: str | None = None, due_before: datetime | None = None, due_after: datetime | None = None, db: AsyncSession = Depends(get_db)):
-    query = select(CRMTask).order_by(CRMTask.due_at.asc().nulls_last())
-    if status: query = query.where(CRMTask.status == status)
+async def tasks(status: TaskWorkflowStatus | None = None, due_before: datetime | None = None, due_after: datetime | None = None, db: AsyncSession = Depends(get_db)):
+    query = select(CRMTask).where(
+        workflow_status_task_clause(status)
+        if status is not None
+        else active_task_clause()
+    ).order_by(CRMTask.due_at.asc().nulls_last())
     if due_before: query = query.where(CRMTask.due_at <= due_before)
     if due_after: query = query.where(CRMTask.due_at >= due_after)
     return (await db.execute(query)).scalars().all()

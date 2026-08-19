@@ -113,6 +113,14 @@ const summary: ContactWorkspaceSummary = {
   bookings: 2,
 };
 
+const expandedSummary: ContactWorkspaceSummary = {
+  ...summary,
+  active_tasks: 3,
+  cancelled_tasks: 1,
+  archived_mutable_tasks: 1,
+  archived_recovered_evidence: 1,
+};
+
 const internalWorkspace: ContactInternalWorkspace = {
   contact: {
     id: 7,
@@ -537,6 +545,29 @@ describe('ContactDetailWorkspace', () => {
     expect(screen.getByText('Analytical engine correspondent')).toBeInTheDocument();
     expect(document.querySelector('.command-contact-detail-grid')).not.toBeNull();
     expect(document.querySelector('.command-contact-profile-column')).not.toBeNull();
+  });
+
+  it('keeps additive summary counters out of the legacy count strip', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    const countStrip = screen.getByRole('complementary', { name: 'Contact workspace counts' });
+    const labels = Array.from(countStrip.querySelectorAll('span'), (row) =>
+      row.textContent?.replace(/^\d+/, ''),
+    );
+    expect(labels).toEqual([
+      'open tasks',
+      'completed tasks',
+      'archived tasks',
+      'active smart plans',
+      'opportunities',
+      'notes',
+      'saved searches',
+      'bookings',
+    ]);
   });
 
   it('exposes seven source views, nested task states, and an auxiliary SWS booking view as ARIA tabs', async () => {

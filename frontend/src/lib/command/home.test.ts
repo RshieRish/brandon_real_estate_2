@@ -264,6 +264,35 @@ describe('Follow-Up Readiness', () => {
     });
   });
 
+  it('projects only open and in-progress workflow tasks as active', () => {
+    const task = completeHomeInput.tasks?.[0];
+    expect(task).toBeDefined();
+    const model = buildCommandHomeModel({
+      ...completeHomeInput,
+      tasks: [
+        { ...task!, id: 101, status: 'open', due_at: '2026-08-11T13:00:00.000Z' },
+        { ...task!, id: 102, status: 'in_progress', due_at: null },
+        { ...task!, id: 103, status: 'completed', due_at: '2026-08-10T13:00:00.000Z' },
+        { ...task!, id: 104, status: 'cancelled', due_at: '2026-08-10T13:00:00.000Z' },
+        { ...task!, id: 105, status: 'archived', due_at: '2026-08-10T13:00:00.000Z' },
+      ],
+    }, now);
+
+    expect(model.tasks?.map(({ id }) => id)).toEqual([101, 102]);
+    expect(model.kpis.find(({ key }) => key === 'open_tasks')?.value).toBe('2');
+    expect(model.readiness.factors.find(({ key }) => key === 'overdue_tasks'))
+      .toMatchObject({ affected: 1, total: 2 });
+  });
+
+  it('rejects an unknown task workflow status instead of silently dropping it', () => {
+    const task = completeHomeInput.tasks?.[0];
+    expect(task).toBeDefined();
+    expect(() => buildCommandHomeModel({
+      ...completeHomeInput,
+      tasks: [{ ...task!, status: 'private-invalid-status' }],
+    }, now)).toThrow(CommandDecodeError);
+  });
+
   it('marks readiness partial when the server-owned SmartView totals are unavailable', () => {
     const model = buildCommandHomeModel({
       ...completeHomeInput,
@@ -616,6 +645,23 @@ describe('loadCommandHome', () => {
       tasks: 'Tasks unavailable',
       goals: 'Goals unavailable',
     });
+  });
+
+  it('isolates an unknown task workflow status to the task region', async () => {
+    const task = completeHomeInput.tasks?.[0];
+    expect(task).toBeDefined();
+    const api = makeApi({
+      tasks: vi.fn().mockResolvedValue([
+        { ...task!, status: 'private-invalid-status' },
+      ]),
+    });
+
+    const model = await loadCommandHome(api, now);
+
+    expect(model.tasks).toBeNull();
+    expect(model.regionErrors.tasks).toContain('known task workflow status');
+    expect(model.readiness.factors.find(({ key }) => key === 'overdue_tasks'))
+      .toMatchObject({ available: false });
   });
 
   it('rejects when every production region fails so the page can render a retryable error', async () => {

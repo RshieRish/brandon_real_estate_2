@@ -232,9 +232,13 @@ const legacyContact = {
 };
 
 const workspaceSummary = {
-  open_tasks: 1,
+  open_tasks: 3,
+  active_tasks: 3,
   completed_tasks: 2,
-  archived_tasks: 3,
+  cancelled_tasks: 1,
+  archived_tasks: 5,
+  archived_mutable_tasks: 2,
+  archived_recovered_evidence: 3,
   active_smart_plans: 4,
   opportunities: 5,
   notes: 6,
@@ -334,12 +338,16 @@ describe('Command contacts wire decoders', () => {
         tasks: [{ ...internalWorkspace.tasks[0], contact_id: contactId }],
       }, 7));
     }
-    for (const status of ['in_progress', 'cancelled', 'unknown']) {
-      privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+    for (const status of ['in_progress', 'cancelled'] as const) {
+      expect(decodeContactInternalWorkspaceForContact({
         ...internalWorkspace,
         tasks: [{ ...internalWorkspace.tasks[0], status }],
-      }, 7));
+      }, 7).tasks[0]?.status).toBe(status);
     }
+    privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+      ...internalWorkspace,
+      tasks: [{ ...internalWorkspace.tasks[0], status: 'unknown' }],
+    }, 7));
 
     const sorted = decodeContactInternalWorkspace({
       ...internalWorkspace,
@@ -765,6 +773,42 @@ describe('Command contacts wire decoders', () => {
       actioned_contact_ids: [7],
       action: 'add_tag',
     });
+  });
+
+  it('strictly decodes additive task summary fields and preserves the legacy rolling shape', () => {
+    expect(decodeContactWorkspaceSummary(workspaceSummary)).toEqual(workspaceSummary);
+
+    const legacy = {
+      open_tasks: 3,
+      completed_tasks: 2,
+      archived_tasks: 5,
+      active_smart_plans: 4,
+      opportunities: 5,
+      notes: 6,
+      saved_searches: 7,
+      bookings: 8,
+    };
+    expect(decodeContactWorkspaceSummary(legacy)).toEqual(legacy);
+
+    for (const key of [
+      'active_tasks',
+      'cancelled_tasks',
+      'archived_mutable_tasks',
+      'archived_recovered_evidence',
+    ]) {
+      privateDecodeFailure(() => decodeContactWorkspaceSummary(withoutKey(workspaceSummary, key)));
+    }
+    for (const invalid of [
+      { ...workspaceSummary, open_tasks: 4 },
+      { ...workspaceSummary, archived_tasks: 4 },
+      { ...workspaceSummary, cancelled_tasks: true },
+      { ...workspaceSummary, archived_mutable_tasks: -1 },
+      { ...workspaceSummary, archived_recovered_evidence: 1.5 },
+      { ...workspaceSummary, active_tasks: Number.MAX_SAFE_INTEGER + 1 },
+      { ...workspaceSummary, private_payload: 'private' },
+    ]) {
+      privateDecodeFailure(() => decodeContactWorkspaceSummary(invalid));
+    }
   });
 
   it('matches Task 6 celebration wire bounds without applying Home semantics', () => {

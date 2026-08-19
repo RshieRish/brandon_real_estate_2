@@ -151,7 +151,6 @@ const CONTACT_SMART_VIEW_URLS = {
   anniversaries_this_month: '/admin/command/contacts?smart_view=anniversaries_this_month',
 } as const;
 
-const ACTIVE_TASK_STATUSES = new Set(['open', 'in_progress']);
 const ACTIVE_OPPORTUNITY_STAGES = new Set(['active', 'offer', 'under_contract']);
 
 function roundedPercentage(numerator: number, denominator: number): number {
@@ -182,7 +181,15 @@ function availableFactor(
 }
 
 function activeTasks(tasks: readonly Task[]): Task[] {
-  return tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status.toLowerCase()));
+  return tasks.filter((task) => {
+    if (task.status === 'open' || task.status === 'in_progress') return true;
+    if (
+      task.status === 'completed'
+      || task.status === 'cancelled'
+      || task.status === 'archived'
+    ) return false;
+    throw new CommandDecodeError('tasks.status', 'known task workflow status');
+  });
 }
 
 function buildFactors(input: CommandHomeInput, now: Date): readonly ReadinessFactor[] {
@@ -661,7 +668,10 @@ export async function loadCommandHome(
   const requests = {
     overview: api.overview({ signal }),
     contacts: loadHomeContacts(api, signal),
-    tasks: api.tasks({}, { signal }),
+    tasks: api.tasks({}, { signal }).then((tasks) => {
+      activeTasks(tasks);
+      return tasks;
+    }),
     opportunities: api.opportunities({ signal }),
     celebrations: api
       .celebrations(now.getMonth() + 1, { signal })

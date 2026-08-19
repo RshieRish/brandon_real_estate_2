@@ -1581,7 +1581,20 @@ def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch)
 
     async def fake_summary(_db, contact_id):
         calls.append(("summary", contact_id))
-        return ContactWorkspaceSummary(1, 2, 3, 4, 5, 6, 7, 8)
+        return ContactWorkspaceSummary(
+            open_tasks=1,
+            active_tasks=1,
+            completed_tasks=2,
+            cancelled_tasks=3,
+            archived_tasks=7,
+            archived_mutable_tasks=4,
+            archived_recovered_evidence=3,
+            active_smart_plans=5,
+            opportunities=6,
+            notes=7,
+            saved_searches=8,
+            bookings=9,
+        )
 
     async def fake_evidence(_db, contact_id):
         calls.append(("evidence", contact_id))
@@ -1614,13 +1627,17 @@ def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch)
     }
     assert client.get("/contacts/7/workspace/summary").json() == {
         "open_tasks": 1,
+        "active_tasks": 1,
         "completed_tasks": 2,
-        "archived_tasks": 3,
-        "active_smart_plans": 4,
-        "opportunities": 5,
-        "notes": 6,
-        "saved_searches": 7,
-        "bookings": 8,
+        "cancelled_tasks": 3,
+        "archived_tasks": 7,
+        "archived_mutable_tasks": 4,
+        "archived_recovered_evidence": 3,
+        "active_smart_plans": 5,
+        "opportunities": 6,
+        "notes": 7,
+        "saved_searches": 8,
+        "bookings": 9,
     }
     assert client.get("/contacts/7/evidence").json()["capture_quality"] == (
         "limitation"

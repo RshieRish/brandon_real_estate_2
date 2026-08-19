@@ -52,6 +52,16 @@ const DETAIL_VIEWS: readonly ContactDetailView[] = [
   'saved_searches', 'evidence', 'bookings',
 ];
 const TASK_VIEWS: readonly ContactTaskView[] = ['to_do', 'completed', 'archived'];
+const SUMMARY_DISPLAY_KEYS = [
+  'open_tasks',
+  'completed_tasks',
+  'archived_tasks',
+  'active_smart_plans',
+  'opportunities',
+  'notes',
+  'saved_searches',
+  'bookings',
+] as const satisfies readonly (keyof ContactWorkspaceSummary)[];
 const SECTION_FOR_VIEW: Readonly<Partial<Record<ContactDetailView, Exclude<ContactSectionName, 'timeline'>>>> = {
   opportunities: 'opportunities',
   smart_plans: 'smart_plans',
@@ -1155,7 +1165,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
       {failure && currentDetail !== null ? <p className="command-contact-universe-state" role="alert">Current contact data could not be refreshed. <button type="button" className="command-inline-button" onClick={() => void loadBase()}>Retry contact data</button></p> : null}
       {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.label} status is unknown. Current contact data could not be verified. <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
       <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
-        {summary && currentDetail ? Object.entries(summary).map(([key, value]) => <span key={key}><strong>{value}</strong>{key.replaceAll('_', ' ')}</span>) : null}
+        {summary && currentDetail ? SUMMARY_DISPLAY_KEYS.map((key) => <span key={key}><strong>{summary[key]}</strong>{key.replaceAll('_', ' ')}</span>) : null}
       </aside>
     </section>
   );

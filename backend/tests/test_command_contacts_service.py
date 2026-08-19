@@ -583,8 +583,21 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
     await service_db.flush()
     tasks = [
         CRMTask(contact_id=contact.id, title="Open", status="open"),
+        CRMTask(contact_id=contact.id, title="In progress", status="in_progress"),
         CRMTask(contact_id=contact.id, title="Completed", status="completed"),
-        CRMTask(contact_id=contact.id, title="Archived", status="archived"),
+        CRMTask(contact_id=contact.id, title="Cancelled", status="cancelled"),
+        CRMTask(
+            contact_id=contact.id,
+            title="Archived open",
+            status="open",
+            archived_at=NOW,
+        ),
+        CRMTask(
+            contact_id=contact.id,
+            title="Archived completed",
+            status="completed",
+            archived_at=NOW,
+        ),
     ]
     plans = [
         CRMSmartPlan(name="Active Plan", status="active"),
@@ -713,6 +726,13 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
             {"name": "Internal search"},
             ("saved_search", search.id),
         ),
+        (
+            81_014,
+            "tasks_archived",
+            "contact_task",
+            {"title": "Archived open"},
+            ("task", tasks[4].id),
+        ),
     )
     for index, section, record_kind, values, link in materialized:
         await _add_contact_occurrence(
@@ -758,9 +778,13 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
         event.remove(service_db.bind.sync_engine, "before_cursor_execute", capture)
 
     assert summary == ContactWorkspaceSummary(
-        open_tasks=2,
+        open_tasks=3,
+        active_tasks=3,
         completed_tasks=2,
-        archived_tasks=2,
+        cancelled_tasks=1,
+        archived_tasks=3,
+        archived_mutable_tasks=2,
+        archived_recovered_evidence=1,
         active_smart_plans=2,
         opportunities=2,
         notes=18,
@@ -886,12 +910,16 @@ async def test_workspace_summary_fails_closed_on_unknown_state_and_bad_link(
     other = CRMContact(first_name="Wrong", last_name="Owner", stage="lead")
     service_db.add_all([contact, other])
     await service_db.flush()
-    invalid = CRMTask(contact_id=contact.id, title="Unknown", status="in_progress")
+    invalid = CRMTask(
+        contact_id=contact.id,
+        title="Unknown",
+        status="private-invalid-status",
+    )
     wrong = CRMNote(contact_id=other.id, body="Wrong owner")
     service_db.add_all([invalid, wrong])
     await service_db.flush()
 
-    with pytest.raises(ContactDataIntegrityError, match="task status"):
+    with pytest.raises(ContactDataIntegrityError, match="contact task status"):
         await get_contact_workspace_summary(service_db, contact.id)
 
     invalid.status = "open"
@@ -955,8 +983,12 @@ async def test_workspace_summary_ignores_valid_timeline_source_links(
         service_db, contact.id
     ) == ContactWorkspaceSummary(
         open_tasks=0,
+        active_tasks=0,
         completed_tasks=0,
+        cancelled_tasks=0,
         archived_tasks=0,
+        archived_mutable_tasks=0,
+        archived_recovered_evidence=0,
         active_smart_plans=0,
         opportunities=0,
         notes=0,
@@ -1098,8 +1130,12 @@ async def test_workspace_summary_empty_lead_booking_and_query_work_are_bounded(
 
     assert summary == ContactWorkspaceSummary(
         open_tasks=0,
+        active_tasks=0,
         completed_tasks=0,
+        cancelled_tasks=0,
         archived_tasks=0,
+        archived_mutable_tasks=0,
+        archived_recovered_evidence=0,
         active_smart_plans=0,
         opportunities=0,
         notes=0,

@@ -81,8 +81,18 @@ def test_focused_contact_compatibility_field_contracts_are_exact():
         "opportunities", "saved_searches", "bookings", "tags",
     )
     assert tuple(ContactWorkspaceSummaryOut.model_fields) == (
-        "open_tasks", "completed_tasks", "archived_tasks", "active_smart_plans",
-        "opportunities", "notes", "saved_searches", "bookings",
+        "open_tasks",
+        "active_tasks",
+        "completed_tasks",
+        "cancelled_tasks",
+        "archived_tasks",
+        "archived_mutable_tasks",
+        "archived_recovered_evidence",
+        "active_smart_plans",
+        "opportunities",
+        "notes",
+        "saved_searches",
+        "bookings",
     )
     assert tuple(ContactTagAssignmentOut.model_fields) == ("contact_id", "tag_id")
     assert tuple(ContactTagRemovalOut.model_fields) == (
@@ -102,6 +112,35 @@ def test_focused_contact_compatibility_field_contracts_are_exact():
     assert tuple(SavedSearchOut.model_fields) == (
         "id", "name", "criteria", "contact_id", "contact_name", "updated_at",
     )
+
+
+def test_contact_workspace_summary_requires_consistent_task_subtotals():
+    from schemas.command_contacts import ContactWorkspaceSummaryOut
+
+    valid = {
+        "open_tasks": 3,
+        "active_tasks": 3,
+        "completed_tasks": 2,
+        "cancelled_tasks": 1,
+        "archived_tasks": 5,
+        "archived_mutable_tasks": 2,
+        "archived_recovered_evidence": 3,
+        "active_smart_plans": 4,
+        "opportunities": 5,
+        "notes": 6,
+        "saved_searches": 7,
+        "bookings": 8,
+    }
+    assert ContactWorkspaceSummaryOut.model_validate(valid).model_dump() == valid
+
+    for invalid in (
+        {**valid, "open_tasks": 4},
+        {**valid, "archived_tasks": 4},
+        {**valid, "cancelled_tasks": True},
+        {**valid, "archived_mutable_tasks": -1},
+    ):
+        with pytest.raises(ValidationError):
+            ContactWorkspaceSummaryOut.model_validate(invalid)
 
 
 def test_archive_contact_parser_extracts_identity_and_profile_fields():
