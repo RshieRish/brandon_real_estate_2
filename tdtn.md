@@ -1,7 +1,14 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-02
+Last Updated: 2026-08-18
+
+### 2026-08-18 - Sydney CRM, Gmail, Instagram, and CRM Lifecycle Implementation Plans
+- Converted the approved design into four dependency-ordered, test-first plans under `docs/superpowers/plans/`: CRM task foundation, Gmail/Sydney task intake, Instagram reliability, and remaining CRM record lifecycles.
+- Reserved one serial Alembic chain from current head `7d1f3a5b6c8e`: task lifecycle `81a4d2c6e9f0`, shared integration runtime `82b5e3d7f0a1`, Gmail intake `83c6f4e8a1b2`, Sydney review `84d7a5f9b2c3`, and Instagram cache `85e8b6a0c3d4`; later CRM migrations follow that head.
+- Sydney's delivery plan asks one concise question only for consequential missing information, preserves one durable pending clarification, permits one reminder, and keeps initial task approval in authenticated Command.
+- The Instagram plan explicitly rejects the exposed/expired pasted token and requires a fresh long-lived Page credential, backend bearer authentication, persisted last-good feed, health/version alerts, and production media verification before enablement.
+- Next: execute the task foundation first through red/green tests, then the shared worker and Gmail suggestion engine, Sydney review bridge, Instagram cutover, and remaining entity-specific lifecycle controls.
 
 ### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
 - Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
