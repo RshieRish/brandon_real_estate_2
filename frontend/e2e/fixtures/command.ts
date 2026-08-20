@@ -3,6 +3,7 @@ import home from './command-home.json';
 import {
   createCommandContactsFixtureState,
   handleCommandContactsRequest,
+  type CommandFixtureTask,
   type CommandContactsFixtureState,
 } from './command-contacts';
 
@@ -32,12 +33,9 @@ type RouteState = {
   failures: Map<string, Map<string, FailureResponse>>;
   expectedHttpFailures: ExpectedHttpFailures;
   contacts: CommandContactsFixtureState;
-  taskCreates: Map<string, Readonly<{ fingerprint: string; task: Record<string, unknown> }>>;
-  nextTaskId: number;
+  tasks: CommandFixtureTask[];
   useCentralLegacyWorkspace: boolean;
 };
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class ExpectedHttpFailures {
   private readonly declared = new Map<string, number>();
@@ -104,9 +102,9 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
     method: 'GET',
     path: '/tasks',
     query: '?visibility=active',
-    respond: () => ({
+    respond: (_url, _request, state) => ({
       status: 200,
-      body: home.tasks.filter((task) => (
+      body: [...state.tasks, ...state.contacts.createdTasks].filter((task) => (
         task.archived_at === null
         && (task.status === 'open' || task.status === 'in_progress')
       )),
@@ -116,74 +114,10 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
     method: 'GET',
     path: '/tasks',
     query: '?visibility=all',
-    respond: () => ({ status: 200, body: home.tasks }),
-  },
-  {
-    method: 'POST',
-    path: '/tasks',
-    query: '',
-    respond: (_url, request, state) => {
-      let body: unknown;
-      try {
-        body = request.postDataJSON();
-      } catch {
-        return { status: 500, body: { detail: 'Unexpected Command fixture request: invalid task JSON.' } };
-      }
-      const key = request.headers()['x-idempotency-key'];
-      const timezone = request.headers()['x-client-timezone'];
-      const fields = ['title', 'contact_id', 'description', 'priority', 'due_at'];
-      if (
-        typeof body !== 'object'
-        || body === null
-        || Array.isArray(body)
-        || !UUID_PATTERN.test(key ?? '')
-        || typeof timezone !== 'string'
-        || timezone.trim().length === 0
-        || Object.keys(body).length !== fields.length
-        || Object.keys(body).some((field) => !fields.includes(field))
-        || typeof Reflect.get(body, 'title') !== 'string'
-        || String(Reflect.get(body, 'title')).trim().length === 0
-        || Reflect.get(body, 'contact_id') !== null
-        || typeof Reflect.get(body, 'description') !== 'string'
-        || !['low', 'normal', 'high'].includes(String(Reflect.get(body, 'priority')))
-        || (Reflect.get(body, 'due_at') !== null && typeof Reflect.get(body, 'due_at') !== 'string')
-      ) {
-        return { status: 500, body: { detail: 'Unexpected Command fixture request: invalid central task create.' } };
-      }
-      const payload = {
-        title: String(Reflect.get(body, 'title')),
-        contact_id: null,
-        description: String(Reflect.get(body, 'description')),
-        priority: String(Reflect.get(body, 'priority')),
-        due_at: Reflect.get(body, 'due_at') === null ? null : String(Reflect.get(body, 'due_at')),
-      };
-      const fingerprint = JSON.stringify(payload);
-      const existing = state.taskCreates.get(key!);
-      if (existing !== undefined) {
-        if (existing.fingerprint !== fingerprint) {
-          return {
-            status: 409,
-            body: {
-              detail: {
-                code: 'task_idempotency_mismatch',
-                message: 'Idempotency key was already used with a different task payload.',
-              },
-            },
-          };
-        }
-        return { status: 201, body: structuredClone(existing.task) };
-      }
-      const task = {
-        id: state.nextTaskId++,
-        ...payload,
-        status: 'open',
-        archived_at: null,
-        archive_reason: null,
-        version: 1,
-      };
-      state.taskCreates.set(key!, { fingerprint, task });
-      return { status: 201, body: task };
-    },
+    respond: (_url, _request, state) => ({
+      status: 200,
+      body: [...state.tasks, ...state.contacts.createdTasks],
+    }),
   },
   { method: 'GET', path: '/opportunities', query: '', respond: () => ({ status: 200, body: home.opportunities }) },
   { method: 'GET', path: '/goals', query: '', respond: () => ({ status: 200, body: home.goals }) },
@@ -307,8 +241,7 @@ export const test = base.extend<CommandFixtures>({
       failures: new Map(),
       expectedHttpFailures: new ExpectedHttpFailures(),
       contacts: createCommandContactsFixtureState(),
-      taskCreates: new Map(),
-      nextTaskId: 900,
+      tasks: structuredClone(home.tasks) as CommandFixtureTask[],
       useCentralLegacyWorkspace: false,
     });
   },

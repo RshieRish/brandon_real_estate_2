@@ -317,6 +317,41 @@ describe('typed task lifecycle client', () => {
       }));
     });
 
+    it.each([
+      ['different task id', { ...task, id: 8, version: 4 }],
+      ['unchanged version', { ...task, version: 3 }],
+      ['skipped version', { ...task, version: 5 }],
+    ])('treats an update TaskOut with %s as outcome-uncertain', async (_label, response) => {
+      authenticate();
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.updateTask(7, {
+        expected_version: 3,
+        priority: 'normal',
+      })).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('accepts an update reaching the int32 version boundary and rejects a success that cannot increment it', async () => {
+      authenticate();
+      const boundary = { ...task, version: 2_147_483_647 };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(boundary))
+        .mockResolvedValueOnce(jsonResponse(boundary));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.updateTask(7, {
+        expected_version: 2_147_483_646,
+        priority: 'normal',
+      })).resolves.toEqual(boundary);
+      await expect(commandApi.updateTask(7, {
+        expected_version: 2_147_483_647,
+        priority: 'normal',
+      })).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     it('sends expected_version in the task-link body and decodes its new task version', async () => {
       authenticate();
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse(link, 201));
@@ -403,6 +438,55 @@ describe('typed task lifecycle client', () => {
     });
 
     it.each([
+      ['archive', 'archiveTask', { ...task, archived_at: '2026-08-20T16:00:00Z', version: 3 }],
+      ['restore', 'restoreTask', { ...task, archived_at: null, archive_reason: null, version: 3 }],
+    ] as const)('accepts a same-state %s no-op at expected_version', async (_action, method, response) => {
+      authenticate();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(response)));
+
+      await expect(commandApi[method](7, {
+        request_id: REQUEST_ID,
+        expected_version: 3,
+      })).resolves.toEqual(response);
+    });
+
+    it.each([
+      ['archive id', 'archiveTask', { ...task, id: 8, archived_at: '2026-08-20T16:00:00Z', version: 4 }],
+      ['archive state', 'archiveTask', { ...task, archived_at: null, version: 4 }],
+      ['archive version', 'archiveTask', { ...task, archived_at: '2026-08-20T16:00:00Z', version: 5 }],
+      ['restore id', 'restoreTask', { ...task, id: 8, archived_at: null, archive_reason: null, version: 4 }],
+      ['restore state', 'restoreTask', { ...task, archived_at: '2026-08-20T16:00:00Z', version: 4 }],
+      ['restore version', 'restoreTask', { ...task, archived_at: null, archive_reason: null, version: 5 }],
+    ] as const)('treats a lifecycle TaskOut with mismatched %s as outcome-uncertain', async (
+      _label,
+      method,
+      response,
+    ) => {
+      authenticate();
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi[method](7, {
+        request_id: REQUEST_ID,
+        expected_version: 3,
+      })).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['archive', 'archiveTask', { ...task, archived_at: '2026-08-20T16:00:00Z', version: 2_147_483_647 }],
+      ['restore', 'restoreTask', { ...task, archived_at: null, archive_reason: null, version: 2_147_483_647 }],
+    ] as const)('accepts a same-state %s no-op at the int32 max version', async (_action, method, response) => {
+      authenticate();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(response)));
+
+      await expect(commandApi[method](7, {
+        request_id: REQUEST_ID,
+        expected_version: 2_147_483_647,
+      })).resolves.toEqual(response);
+    });
+
+    it.each([
       ['task id', () => commandApi.updateTask(2_147_483_648, { expected_version: 1, status: 'open' })],
       ['expected version', () => commandApi.updateTask(7, { expected_version: 2_147_483_648, status: 'open' })],
       ['contact id', () => commandApi.updateTask(7, { expected_version: 1, contact_id: 2_147_483_648 })],
@@ -436,6 +520,43 @@ describe('typed task lifecycle client', () => {
         conflict,
       });
       expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['update', () => commandApi.updateTask(7, { expected_version: 2, priority: 'normal' })],
+      ['link', () => commandApi.addTaskLink(7, { expected_version: 2, entity_type: 'agreement', entity_id: 19 })],
+      ['archive', () => commandApi.archiveTask(7, { request_id: REQUEST_ID, expected_version: 2 })],
+      ['restore', () => commandApi.restoreTask(7, { request_id: REQUEST_ID, expected_version: 2 })],
+    ] as const)('treats a structured %s conflict for a different task as outcome-uncertain', async (
+      _label,
+      invoke,
+    ) => {
+      authenticate();
+      const conflict = {
+        code: 'task_version_conflict',
+        current_version: task.version,
+        current_task: { ...task, id: 8 },
+      };
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: conflict }, 409));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(invoke()).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a same-task structured conflict definite at the int32 max version', async () => {
+      authenticate();
+      const conflict = {
+        code: 'task_version_conflict',
+        current_version: 2_147_483_647,
+        current_task: { ...task, version: 2_147_483_647 },
+      };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ detail: conflict }, 409)));
+
+      await expect(commandApi.updateTask(7, {
+        expected_version: 2_147_483_646,
+        priority: 'normal',
+      })).rejects.toMatchObject({ name: 'CommandConflictError', conflict });
     });
 
     it.each([

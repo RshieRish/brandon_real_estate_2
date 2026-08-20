@@ -348,9 +348,13 @@ export const decodeTaskConflict: Decoder<TaskConflict> = (input, path = 'respons
   };
 };
 
-function decodeConflictResponse(input: unknown): TaskConflict {
+function decodeConflictResponse(input: unknown, taskId: number): TaskConflict {
   const read = exactObject(input, ['detail'], 'response');
-  return decodeTaskConflict(read('detail'));
+  const conflict = decodeTaskConflict(read('detail'));
+  if (conflict.current_task.id !== taskId) {
+    return invalid('response.detail.current_task.id', `task id ${taskId}`);
+  }
+  return conflict;
 }
 
 const CREATE_CONFLICT_CODES: readonly TaskCreateConflict['code'][] = [
@@ -523,6 +527,7 @@ type TaskMutationRequest<Value> = Readonly<{
   idempotencyKey?: string;
   clientTimezone?: string;
   conflictKind?: 'lifecycle' | 'create';
+  conflictTaskId?: number;
   signal?: AbortSignal;
 }>;
 
@@ -560,7 +565,10 @@ async function taskMutation<Value>(request: TaskMutationRequest<Value>): Promise
       if (request.conflictKind === 'create') {
         throw new CommandCreateConflictError(decodeCreateConflictResponse(body));
       }
-      throw new CommandConflictError(decodeConflictResponse(body));
+      if (request.conflictTaskId === undefined) {
+        return invalid('request.conflict_task_id', 'task id for lifecycle conflict');
+      }
+      throw new CommandConflictError(decodeConflictResponse(body, request.conflictTaskId));
     } catch (error) {
       if (error instanceof CommandConflictError || error instanceof CommandCreateConflictError) throw error;
       throw new CommandOutcomeUncertainError(error);
@@ -634,7 +642,15 @@ export async function updateTask(
     path: `/tasks/${id}`,
     method: 'PATCH',
     body,
-    decode: decodeTask,
+    decode: (value, path) => {
+      const decoded = decodeTask(value, path);
+      if (decoded.id !== id) return invalid(`${path}.id`, `task id ${id}`);
+      if (decoded.version !== body.expected_version + 1) {
+        return invalid(`${path}.version`, `version ${body.expected_version + 1}`);
+      }
+      return decoded;
+    },
+    conflictTaskId: id,
     signal: options?.signal,
   });
 }
@@ -670,6 +686,7 @@ export async function addTaskLink(
       }
       return decoded;
     },
+    conflictTaskId: id,
     signal: options?.signal,
   });
 }
@@ -686,7 +703,27 @@ function changeArchiveState(
     path: `/tasks/${id}/${action}`,
     method: 'POST',
     body,
-    decode: decodeTask,
+    decode: (value, path) => {
+      const decoded = decodeTask(value, path);
+      if (decoded.id !== id) return invalid(`${path}.id`, `task id ${id}`);
+      if (
+        decoded.version !== body.expected_version
+        && decoded.version !== body.expected_version + 1
+      ) {
+        return invalid(
+          `${path}.version`,
+          `version ${body.expected_version} or ${body.expected_version + 1}`,
+        );
+      }
+      if (action === 'archive' && decoded.archived_at === null) {
+        return invalid(`${path}.archived_at`, 'archived task state');
+      }
+      if (action === 'restore' && decoded.archived_at !== null) {
+        return invalid(`${path}.archived_at`, 'restored task state');
+      }
+      return decoded;
+    },
+    conflictTaskId: id,
     signal: options?.signal,
   });
 }
