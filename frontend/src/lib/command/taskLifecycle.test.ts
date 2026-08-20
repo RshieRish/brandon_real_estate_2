@@ -175,6 +175,57 @@ describe('typed task lifecycle client', () => {
   });
 
   describe('mutation requests', () => {
+    it.each([
+      '2026-02-30T12:00:00Z',
+      '2025-02-29T12:00:00Z',
+      '2026-00-01T12:00:00Z',
+      '2026-13-01T12:00:00Z',
+      '2026-04-31T12:00:00Z',
+      '2026-01-00T12:00:00Z',
+      '2026-01-01T24:00:00Z',
+      '2026-01-01T23:60:00Z',
+      '2026-01-01T23:59:60Z',
+      '2026-01-01T12:00:00+24:00',
+    ])('rejects calendar-invalid RFC3339 %s before any due-filter/create/update fetch', async (dueAt) => {
+      authenticate();
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      expect(() => commandApi.tasks({ due_before: dueAt })).toThrow(CommandDecodeError);
+      expect(() => commandApi.tasks({ due_after: dueAt })).toThrow(CommandDecodeError);
+      await expect(commandApi.createTask({
+        title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: dueAt,
+      }, REQUEST_ID)).rejects.toBeInstanceOf(CommandDecodeError);
+      await expect(commandApi.updateTask(7, {
+        expected_version: 3, due_at: dueAt,
+      })).rejects.toBeInstanceOf(CommandDecodeError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      '2024-02-29T23:59:59.123456+05:30',
+      '2026-02-28T00:00:00Z',
+      '2026-12-31T23:59:59.9-04:00',
+    ])('accepts calendar-valid RFC3339 %s for filters and mutation bodies', async (dueAt) => {
+      authenticate();
+      const created = { ...task, due_at: dueAt, version: 1 };
+      const updated = { ...task, due_at: dueAt, version: 4 };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse([]))
+        .mockResolvedValueOnce(jsonResponse(created, 201))
+        .mockResolvedValueOnce(jsonResponse(updated));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.tasks({ due_before: dueAt, due_after: dueAt })).resolves.toEqual([]);
+      await expect(commandApi.createTask({
+        title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: dueAt,
+      }, REQUEST_ID)).resolves.toEqual(created);
+      await expect(commandApi.updateTask(7, {
+        expected_version: 3, due_at: dueAt,
+      })).resolves.toEqual(updated);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
     it('creates with the caller UUID in the exact idempotency header and decodes TaskOut', async () => {
       authenticate('create-token');
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...task, version: 1 }, 201));

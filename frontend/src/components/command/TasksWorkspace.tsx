@@ -23,6 +23,8 @@ type LinkableRecords = {
   listing: Listing[];
 };
 
+const TASK_REFRESH_REQUIRED_MESSAGE = 'Task state could not be refreshed. Refresh the page before making another task change.';
+
 export function TasksWorkspace({
   initialView = { tab: 'all', due: 'all' },
 }: {
@@ -48,12 +50,35 @@ export function TasksWorkspace({
   });
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
-  const createPendingRef = useRef(false);
+  const mutationPendingRef = useRef(false);
+  const [mutationsLocked, setMutationsLocked] = useState(false);
+  const [mutationRefreshRequired, setMutationRefreshRequired] = useState(false);
   const [creating, setCreating] = useState(false);
+
+  const beginTaskMutation = useCallback(() => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
+    setMutationRefreshRequired(false);
+    setMutationsLocked(true);
+    return true;
+  }, []);
+
+  const finishTaskMutation = useCallback(() => {
+    mutationPendingRef.current = false;
+    setMutationRefreshRequired(false);
+    setMutationsLocked(false);
+  }, []);
 
   const refetchAllTasks = useCallback(async () => {
     const rows = await commandApi.tasks({ visibility: 'all' });
-    setTasks([...rows]);
+    const authoritativeTasks = [...rows];
+    setTasks(authoritativeTasks);
+    setEditing((current) => current === null
+      ? null
+      : authoritativeTasks.find((task) => task.id === current.id) ?? null);
+    setSelected((current) => current !== null && authoritativeTasks.some((task) => task.id === current)
+      ? current
+      : null);
   }, []);
 
   useEffect(() => {
@@ -67,11 +92,13 @@ export function TasksWorkspace({
       try {
         await refetchAllTasks();
       } catch {
-        // The original mutation result remains the error the user must reconcile.
+        setMutationRefreshRequired(true);
+        return;
       }
     }
     setError(caught instanceof Error ? caught.message : fallback);
-  }, [refetchAllTasks]);
+    finishTaskMutation();
+  }, [finishTaskMutation, refetchAllTasks]);
 
   useEffect(() => {
     const loadContacts = async () => {
@@ -89,8 +116,7 @@ export function TasksWorkspace({
   }, []);
 
   async function add() {
-    if (!title.trim() || createPendingRef.current) return;
-    createPendingRef.current = true;
+    if (!title.trim() || !beginTaskMutation()) return;
     setCreating(true);
     try {
       const task = await commandApi.createTask({
@@ -104,33 +130,37 @@ export function TasksWorkspace({
       setTitle('');
       setContactId('');
       setDueAt('');
+      finishTaskMutation();
     } catch (caught) {
       await reconcileMutationFailure(caught, 'Unable to create task');
     } finally {
-      createPendingRef.current = false;
       setCreating(false);
     }
   }
 
   async function complete(task: Task) {
+    if (!beginTaskMutation()) return;
     try {
       const updated = await commandApi.updateTask(task.id, {
         expected_version: task.version,
         status: task.status === 'completed' ? 'open' : 'completed',
       });
       setTasks((all) => all.map((item) => item.id === task.id ? updated : item));
+      finishTaskMutation();
     } catch (caught) {
       await reconcileMutationFailure(caught, 'Unable to update task');
     }
   }
 
   async function assignContact(task: Task, nextContactId: string) {
+    if (!beginTaskMutation()) return;
     try {
       const updated = await commandApi.updateTask(task.id, {
         expected_version: task.version,
         contact_id: nextContactId ? Number(nextContactId) : null,
       });
       setTasks((all) => all.map((item) => item.id === task.id ? updated : item));
+      finishTaskMutation();
     } catch (caught) {
       await reconcileMutationFailure(caught, 'Unable to assign task contact');
     }
@@ -172,7 +202,7 @@ export function TasksWorkspace({
   async function linkTask() {
     if (!selected || !entityId) return;
     const task = tasks.find((candidate) => candidate.id === selected);
-    if (!task) return;
+    if (!task || !beginTaskMutation()) return;
     try {
       const created = await commandApi.addTaskLink(selected, {
         expected_version: task.version,
@@ -185,6 +215,7 @@ export function TasksWorkspace({
       await showLinks(selected);
       setEntityId('');
       setSelected(null);
+      finishTaskMutation();
     } catch (caught) {
       await reconcileMutationFailure(caught, 'Unable to link task');
     }
@@ -201,6 +232,7 @@ export function TasksWorkspace({
   }
 
   const visibleTasks = applyTaskWorkspaceView(tasks, { tab: status, due: dueScope }, new Date());
+  const displayedError = mutationRefreshRequired ? TASK_REFRESH_REQUIRED_MESSAGE : error;
 
   return (
     <div className="min-h-[100dvh] bg-[#080807] p-6 text-white">
@@ -209,6 +241,7 @@ export function TasksWorkspace({
         <h1 className="mt-1 text-3xl font-black">Tasks</h1>
         <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
           <input
+            disabled={mutationsLocked}
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && void add()}
@@ -217,6 +250,7 @@ export function TasksWorkspace({
           />
           <select
             aria-label="Assign task contact"
+            disabled={mutationsLocked}
             value={contactId}
             onChange={(event) => setContactId(event.target.value)}
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
@@ -228,6 +262,7 @@ export function TasksWorkspace({
           </select>
           <select
             aria-label="Task priority"
+            disabled={mutationsLocked}
             value={priority}
             onChange={(event) => setPriority(event.target.value as Task['priority'])}
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
@@ -237,13 +272,14 @@ export function TasksWorkspace({
             <option value="high">high</option>
           </select>
           <input
+            disabled={mutationsLocked}
             value={dueAt}
             onChange={(event) => setDueAt(event.target.value)}
             type="datetime-local"
             aria-label="Task due date"
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
           />
-          <button type="button" disabled={creating} onClick={() => void add()} aria-label="Add task" className="rounded-xl bg-[#eac469] px-4 text-black disabled:opacity-50">
+          <button type="button" disabled={creating || mutationsLocked} onClick={() => void add()} aria-label="Add task" className="rounded-xl bg-[#eac469] px-4 text-black disabled:opacity-50">
             <Plus size={19} />
           </button>
         </div>
@@ -269,13 +305,14 @@ export function TasksWorkspace({
             <option value="past">Past due</option>
           </select>
         </div>
-        {error ? <p className="mt-4 flex gap-2 text-red-300"><WarningCircle size={18} />{error}</p> : null}
+        {displayedError ? <p className="mt-4 flex gap-2 text-red-300"><WarningCircle size={18} />{displayedError}</p> : null}
         <div className="mt-6 space-y-2">
           {visibleTasks.map((task) => (
             <div key={task.id} className="rounded-xl border border-white/10 bg-white/[.035] p-4">
               <div className="flex items-center gap-4">
                 <button
                   type="button"
+                  disabled={mutationsLocked}
                   onClick={() => void complete(task)}
                   aria-label={`Toggle ${task.title}`}
                   className={`grid h-6 w-6 place-items-center rounded-full border ${task.status === 'completed' ? 'border-[#eac469] bg-[#eac469] text-black' : 'border-white/30'}`}
@@ -283,8 +320,8 @@ export function TasksWorkspace({
                   {task.status === 'completed' ? <Check size={15} /> : null}
                 </button>
                 <span className={task.status === 'completed' ? 'text-white/35 line-through' : 'font-medium'}>{task.title}</span>
-                <button type="button" onClick={() => setEditing(task)} className="ml-auto text-xs text-white/55">Edit</button>
-                <button type="button" onClick={() => void openLinker(task.id)} className="text-xs font-bold text-[#eac469]">Link record</button>
+                <button type="button" disabled={mutationsLocked} onClick={() => setEditing(task)} className="ml-auto text-xs text-white/55">Edit</button>
+                <button type="button" disabled={mutationsLocked} onClick={() => void openLinker(task.id)} className="text-xs font-bold text-[#eac469]">Link record</button>
                 <button type="button" onClick={() => void showLinks(task.id)} className="text-xs text-white/55">Show links</button>
                 <span className="text-xs uppercase text-white/45">{task.priority}</span>
               </div>
@@ -293,6 +330,7 @@ export function TasksWorkspace({
                 <span>{task.due_at ? `Due ${new Date(task.due_at).toLocaleString()}` : 'No due date'}</span>
                 <select
                   aria-label={`Assign ${task.title} contact`}
+                  disabled={mutationsLocked}
                   value={task.contact_id ?? ''}
                   onChange={(event) => void assignContact(task, event.target.value)}
                   className="rounded bg-black/30 px-2 py-1 text-xs"
@@ -350,7 +388,7 @@ export function TasksWorkspace({
                 <button type="button" onClick={() => setSelected(null)} className="text-sm text-white/60">Cancel</button>
                 <button
                   type="button"
-                  disabled={!entityId || loadingRecords}
+                  disabled={!entityId || loadingRecords || mutationsLocked}
                   onClick={() => void linkTask()}
                   className="rounded-lg bg-[#eac469] px-4 py-2 text-sm font-bold text-black disabled:opacity-50"
                 >
@@ -363,8 +401,13 @@ export function TasksWorkspace({
         {editing ? (
           <TaskEditor
             task={editing}
+            disabled={mutationsLocked}
+            onMutationStart={beginTaskMutation}
             onClose={() => setEditing(null)}
-            onUpdated={(updated) => setTasks((all) => all.map((item) => item.id === updated.id ? updated : item))}
+            onUpdated={(updated) => {
+              setTasks((all) => all.map((item) => item.id === updated.id ? updated : item));
+              finishTaskMutation();
+            }}
             onMutationError={(caught) => reconcileMutationFailure(caught, 'Unable to save task')}
           />
         ) : null}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as commandApiModule from '@/lib/command/api';
@@ -80,6 +80,14 @@ function outcomeError(kind: 'uncertain' | 'conflict'): Error {
         });
   }
   return Object.assign(new Error(kind), { name: kind === 'uncertain' ? 'CommandOutcomeUncertainError' : 'CommandConflictError' });
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
 }
 
 const contact: ContactDirectoryRow = {
@@ -267,6 +275,123 @@ describe('Command workspace deep links', () => {
       expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each(['uncertain', 'conflict'] as const)(
+    'locks every task write during %s editor reconciliation and saves with the refreshed version',
+    async (kind) => {
+      const refresh = deferred<readonly Task[]>();
+      const authoritativeTask = { ...tasks[0]!, version: 8 };
+      apiMocks.tasks.mockReset()
+        .mockResolvedValueOnce(tasks)
+        .mockReturnValueOnce(refresh.promise);
+      apiMocks.updateTask
+        .mockRejectedValueOnce(outcomeError(kind))
+        .mockResolvedValueOnce({ ...authoritativeTask, title: 'Fresh edit', version: 9 });
+      const user = userEvent.setup();
+      render(<TasksWorkspace />);
+      await screen.findByText('Past open');
+
+      await user.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
+      const titleInput = screen.getByRole('textbox', { name: 'Task title' });
+      await user.clear(titleInput);
+      await user.type(titleInput, 'Fresh edit');
+      const save = screen.getByRole('button', { name: 'Save task' });
+      await user.click(save);
+
+      await waitFor(() => expect(apiMocks.tasks).toHaveBeenCalledTimes(2));
+      expect(save).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Toggle Past open' })).toBeDisabled();
+      expect(screen.getByRole('combobox', { name: 'Assign Past open contact' })).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Edit' })[0]).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Link record' })[0]).toBeDisabled();
+      expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
+
+      await act(async () => refresh.resolve([
+        authoritativeTask,
+        ...tasks.slice(1),
+      ]));
+      await waitFor(() => expect(save).toBeEnabled());
+      await user.click(save);
+
+      await waitFor(() => expect(apiMocks.updateTask).toHaveBeenNthCalledWith(2, 1, {
+        expected_version: 8,
+        title: 'Fresh edit',
+        description: '',
+        priority: 'high',
+        due_at: expect.any(String),
+      }));
+    },
+  );
+
+  it.each(['uncertain', 'conflict'] as const)(
+    'locks every task write while a %s link outcome is authoritatively reconciled without retry',
+    async (kind) => {
+      const refresh = deferred<readonly Task[]>();
+      apiMocks.tasks.mockReset()
+        .mockResolvedValueOnce(tasks)
+        .mockReturnValueOnce(refresh.promise);
+      apiMocks.addTaskLink.mockRejectedValueOnce(outcomeError(kind));
+      const user = userEvent.setup();
+      render(<TasksWorkspace />);
+      await screen.findByText('Past open');
+
+      await user.click(screen.getAllByRole('button', { name: 'Link record' })[0]!);
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Internal record type' }), 'agreement');
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Internal record to link' }), '19');
+      const linkButton = screen.getByRole('button', { name: 'Link' });
+      await user.click(linkButton);
+
+      await waitFor(() => expect(apiMocks.tasks).toHaveBeenCalledTimes(2));
+      expect(linkButton).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Toggle Past open' })).toBeDisabled();
+      expect(screen.getByRole('combobox', { name: 'Assign Past open contact' })).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Edit' })[0]).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Link record' })[0]).toBeDisabled();
+      expect(apiMocks.addTaskLink).toHaveBeenCalledTimes(1);
+
+      await act(async () => refresh.resolve([
+        { ...tasks[0]!, version: 8 },
+        ...tasks.slice(1),
+      ]));
+      await waitFor(() => expect(linkButton).toBeEnabled());
+      expect(apiMocks.addTaskLink).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('keeps every task write locked when authoritative mutation reconciliation fails', async () => {
+    apiMocks.tasks.mockReset()
+      .mockResolvedValueOnce(tasks)
+      .mockRejectedValueOnce(new Error('Synthetic authoritative refresh failure'));
+    apiMocks.updateTask.mockRejectedValueOnce(outcomeError('uncertain'));
+    apiMocks.taskLinks.mockRejectedValueOnce(new Error('Synthetic link read failure'));
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Past open');
+
+    const toggle = screen.getByRole('button', { name: 'Toggle Past open' });
+    await user.click(toggle);
+
+    expect(await screen.findByText(
+      'Task state could not be refreshed. Refresh the page before making another task change.',
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled();
+    expect(toggle).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Assign Past open contact' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Edit' })[0]).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Link record' })[0]).toBeDisabled();
+
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await user.click(screen.getAllByRole('button', { name: 'Show links' })[0]!);
+    expect(await screen.findByText(
+      'Task state could not be refreshed. Refresh the page before making another task change.',
+    )).toBeInTheDocument();
+    expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
+    expect(apiMocks.createTask).not.toHaveBeenCalled();
+    expect(apiMocks.tasks).toHaveBeenCalledTimes(2);
+  });
 
   it('parses canonical SmartViews before all exact legacy aliases', () => {
     expect(parseLegacyContactWorkspaceQuery({ smart_view: 'recently_active', filter: 'birthdays' })).toEqual({ smart_view: 'recently_active' });

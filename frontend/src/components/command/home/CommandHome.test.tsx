@@ -387,6 +387,41 @@ describe('Command Home', () => {
     );
   });
 
+  it('keeps quick task creation locked when an uncertain outcome cannot be authoritatively refreshed', async () => {
+    apiMocks.createTask.mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')));
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockRejectedValueOnce(new Error('Synthetic authoritative refresh failure'));
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Uncertain task');
+    const save = screen.getByRole('button', { name: 'Save task' });
+    await user.click(save);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Task state could not be refreshed. Refresh the page before creating another task.',
+    );
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(loadHome).toHaveBeenCalledTimes(2);
+
+    const firstRequestId = apiMocks.createTask.mock.calls[0]?.[1];
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Task state could not be refreshed. Refresh the page before creating another task.',
+    );
+    const reopenedSave = screen.getByRole('button', { name: 'Save task' });
+    expect(reopenedSave).toBeDisabled();
+    await user.click(reopenedSave);
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(apiMocks.createTask.mock.calls[0]?.[1]).toBe(firstRequestId);
+  });
+
   it('reloads and swaps the whole Home model atomically after quick task creation', async () => {
     const user = userEvent.setup();
     let resolveRefresh!: (model: CommandHomeModel) => void;

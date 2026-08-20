@@ -10,7 +10,7 @@ const DATABASE_INTEGER_MAX = 2_147_483_647;
 const HTTP_DETAIL_MAX_LENGTH = 512;
 const OUTCOME_UNCERTAIN_MESSAGE = 'The server may have applied the task change; refresh before retrying.';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/;
 
 export type TaskVisibility = 'active' | 'archived' | 'all';
 export type TaskPriority = 'low' | 'normal' | 'high';
@@ -182,8 +182,47 @@ function enumValue<Value extends string>(
 function nullableRfc3339(input: unknown, path: string): string | null {
   if (input === null) return null;
   const value = stringValue(input, path);
-  if (!RFC3339_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) {
+  const match = RFC3339_PATTERN.exec(value);
+  if (match === null) {
     return invalid(path, 'RFC 3339 datetime with UTC offset or null');
+  }
+  const [, rawYear, rawMonth, rawDay, rawHour, rawMinute, rawSecond, rawOffsetHour, rawOffsetMinute] = match;
+  const year = Number(rawYear);
+  const month = Number(rawMonth);
+  const day = Number(rawDay);
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  const second = Number(rawSecond);
+  const offsetHour = rawOffsetHour === undefined ? 0 : Number(rawOffsetHour);
+  const offsetMinute = rawOffsetMinute === undefined ? 0 : Number(rawOffsetMinute);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (
+    year < 1
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > (daysInMonth[month - 1] ?? 0)
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || offsetHour > 23
+    || offsetMinute > 59
+  ) {
+    return invalid(path, 'calendar-valid RFC 3339 datetime with UTC offset or null');
   }
   return value;
 }
