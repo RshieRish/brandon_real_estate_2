@@ -1,6 +1,6 @@
 from datetime import date, datetime
 import re
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -10,6 +10,11 @@ _RFC3339_DATETIME_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
     r"(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
 )
+POSTGRES_INTEGER_MAX = 2_147_483_647
+DatabaseInteger = Annotated[
+    int,
+    Field(ge=1, le=POSTGRES_INTEGER_MAX, strict=True),
+]
 
 
 class ContactCreate(BaseModel):
@@ -53,13 +58,13 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_version: int = Field(ge=1, strict=True)
+    expected_version: DatabaseInteger
     status: Literal["open", "in_progress", "completed", "cancelled"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=65_536)
     priority: Literal["low", "normal", "high"] | None = None
     due_at: datetime | None = None
-    contact_id: int | None = Field(default=None, ge=1, strict=True)
+    contact_id: DatabaseInteger | None = None
 
     @field_validator("title")
     @classmethod
@@ -107,7 +112,7 @@ class TaskLifecycleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: UUID
-    expected_version: int = Field(ge=1, strict=True)
+    expected_version: DatabaseInteger
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -115,8 +120,8 @@ class TaskLinkCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     entity_type: str = Field(min_length=1, max_length=50)
-    entity_id: int = Field(gt=0, strict=True)
-    expected_version: int = Field(ge=1, strict=True)
+    entity_id: DatabaseInteger
+    expected_version: DatabaseInteger
 
 
 class TaskOut(TaskCreate):

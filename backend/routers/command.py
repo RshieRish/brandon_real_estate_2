@@ -50,6 +50,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from models.lead import Lead
 from schemas.command import (
+    POSTGRES_INTEGER_MAX,
     AgreementCreate,
     AgreementOut,
     AgreementStatusUpdate,
@@ -159,6 +160,11 @@ def _canonical_http_integer(value: object) -> int:
 SavedSearchId = Annotated[
     int,
     Path(gt=0),
+    BeforeValidator(_canonical_http_integer),
+]
+TaskId = Annotated[
+    int,
+    Path(ge=1, le=POSTGRES_INTEGER_MAX),
     BeforeValidator(_canonical_http_integer),
 ]
 
@@ -755,7 +761,7 @@ async def create_task(
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
 async def update_task(
-    task_id: int,
+    task_id: TaskId,
     payload: TaskUpdate,
     db: AsyncSession = Depends(get_db),
     *,
@@ -785,7 +791,7 @@ async def update_task(
 
 @router.post("/tasks/{task_id}/links", response_model=TaskLinkOut)
 async def add_task_link(
-    task_id: int,
+    task_id: TaskId,
     payload: TaskLinkCreate,
     db: AsyncSession = Depends(get_db),
     *,
@@ -812,8 +818,8 @@ async def add_task_link(
 
 
 @router.get("/tasks/{task_id}/links", response_model=list[TaskLinkOut])
-async def task_links(task_id: int, db: AsyncSession = Depends(get_db)):
-    task = await db.get(CRMTask, task_id)
+async def task_links(task_id: TaskId, db: AsyncSession = Depends(get_db)):
+    task = await db.get(CRMTask, task_id, with_for_update=True)
     if not task:
         raise HTTPException(404, "Task not found")
     rows = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id).order_by(CRMTaskLink.id.desc()))).scalars().all()
@@ -868,7 +874,7 @@ async def _change_task_archive_state(
 
 @router.post("/tasks/{task_id}/archive", response_model=TaskOut)
 async def archive_task(
-    task_id: int,
+    task_id: TaskId,
     payload: TaskLifecycleRequest,
     db: AsyncSession = Depends(get_db),
     *,
@@ -885,7 +891,7 @@ async def archive_task(
 
 @router.post("/tasks/{task_id}/restore", response_model=TaskOut)
 async def restore_task(
-    task_id: int,
+    task_id: TaskId,
     payload: TaskLifecycleRequest,
     db: AsyncSession = Depends(get_db),
     *,

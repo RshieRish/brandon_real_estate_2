@@ -35,9 +35,13 @@ from models.crm_task_lifecycle import (
     CRMTaskSource,
 )
 from routers import command as command_router
-from schemas.command import TaskUpdate
+from schemas.command import TaskLifecycleRequest, TaskLinkCreate, TaskUpdate
 from services.command_tasks import archive_task_source_key
 from tests.test_crm_task_service import owned_task_database
+
+
+POSTGRES_INTEGER_MAX = 2_147_483_647
+POSTGRES_INTEGER_OVERFLOW = POSTGRES_INTEGER_MAX + 1
 
 
 @pytest_asyncio.fixture()
@@ -630,6 +634,11 @@ async def test_patch_and_link_remain_available_when_archive_flag_is_disabled(
         {"request_id": "not-a-uuid", "expected_version": 1},
         {"request_id": str(uuid4()), "expected_version": 0},
         {"request_id": str(uuid4()), "expected_version": True},
+        {"request_id": str(uuid4()), "expected_version": "1"},
+        {
+            "request_id": str(uuid4()),
+            "expected_version": POSTGRES_INTEGER_OVERFLOW,
+        },
         {
             "request_id": str(uuid4()),
             "expected_version": 1,
@@ -670,6 +679,86 @@ def test_task_update_schema_rejects_whitespace_only_title() -> None:
         TaskUpdate(expected_version=1, title="   ")
 
 
+@pytest.mark.parametrize(
+    "schema_call",
+    [
+        lambda: TaskUpdate(
+            expected_version=POSTGRES_INTEGER_OVERFLOW,
+            title="Overflow",
+        ),
+        lambda: TaskUpdate(
+            expected_version=1,
+            contact_id=POSTGRES_INTEGER_OVERFLOW,
+        ),
+        lambda: TaskLifecycleRequest(
+            request_id=uuid4(),
+            expected_version=POSTGRES_INTEGER_OVERFLOW,
+        ),
+        lambda: TaskLinkCreate(
+            entity_type="contact",
+            entity_id=POSTGRES_INTEGER_OVERFLOW,
+            expected_version=1,
+        ),
+        lambda: TaskLinkCreate(
+            entity_type="contact",
+            entity_id=1,
+            expected_version=POSTGRES_INTEGER_OVERFLOW,
+        ),
+    ],
+    ids=[
+        "patch-version",
+        "patch-contact",
+        "lifecycle-version",
+        "link-entity",
+        "link-version",
+    ],
+)
+def test_task_write_schemas_reject_postgresql_integer_overflow(
+    schema_call,
+) -> None:
+    with pytest.raises(ValidationError):
+        schema_call()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "suffix", "payload"),
+    [
+        ("GET", "/links", None),
+        (
+            "PATCH",
+            "",
+            {"expected_version": 1, "title": "Path overflow"},
+        ),
+        (
+            "POST",
+            "/links",
+            {
+                "entity_type": "contact",
+                "entity_id": 1,
+                "expected_version": 1,
+            },
+        ),
+        ("POST", "/archive", _lifecycle_payload(1)),
+        ("POST", "/restore", _lifecycle_payload(1)),
+    ],
+    ids=["get-links", "patch", "link", "archive", "restore"],
+)
+async def test_task_path_ids_reject_postgresql_integer_overflow(
+    task_lifecycle_app, method, suffix, payload
+) -> None:
+    kwargs = {"headers": _headers()}
+    if payload is not None:
+        kwargs["json"] = payload
+    response = await _request(
+        task_lifecycle_app,
+        method,
+        f"/api/v1/command/tasks/{POSTGRES_INTEGER_OVERFLOW}{suffix}",
+        **kwargs,
+    )
+    assert response.status_code == 422, response.text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
@@ -683,10 +772,14 @@ def test_task_update_schema_rejects_whitespace_only_title() -> None:
         {"expected_version": 1, "status": None},
         {"expected_version": 0, "title": "Invalid version"},
         {"expected_version": True, "title": "Invalid version"},
+        {"expected_version": "1", "title": "Invalid version"},
+        {"expected_version": POSTGRES_INTEGER_OVERFLOW, "title": "Overflow"},
         {"expected_version": 1, "title": 7},
         {"expected_version": 1, "priority": "urgent"},
         {"expected_version": 1, "status": "archived"},
         {"expected_version": 1, "contact_id": True},
+        {"expected_version": 1, "contact_id": "1"},
+        {"expected_version": 1, "contact_id": POSTGRES_INTEGER_OVERFLOW},
         {"expected_version": 1, "due_at": 1_724_073_300},
         {"expected_version": 1, "due_at": "1724073300"},
         {"expected_version": 1, "due_at": "1724073300.5"},
@@ -1197,6 +1290,99 @@ async def test_task_link_duplicate_replays_after_polymorphic_target_is_removed(
 
 
 @pytest.mark.asyncio
+async def test_get_task_links_holds_one_snapshot_against_concurrent_link_writer(
+    task_lifecycle_app, task_api_database
+) -> None:
+    contact_id = await _create_contact(task_api_database)
+    task = await _create_task(task_lifecycle_app)
+    _engine, factory = task_api_database
+    task_loaded = asyncio.Event()
+    release_reader = asyncio.Event()
+    writer_pid = asyncio.get_running_loop().create_future()
+
+    class GatedReader:
+        def __init__(self, session):
+            self.session = session
+            self.task_lock_requested = False
+
+        async def get(self, entity, ident, **kwargs):
+            record = await self.session.get(entity, ident, **kwargs)
+            if entity is CRMTask and ident == task["id"]:
+                self.task_lock_requested = kwargs.get("with_for_update") is True
+                task_loaded.set()
+                await asyncio.wait_for(release_reader.wait(), timeout=5)
+            return record
+
+        async def execute(self, statement, *args, **kwargs):
+            return await self.session.execute(statement, *args, **kwargs)
+
+    async with (
+        factory() as reader_session,
+        factory() as writer_session,
+        factory() as observer_session,
+    ):
+        gated_reader = GatedReader(reader_session)
+
+        async def read_links():
+            async with reader_session.begin():
+                return await command_router.task_links(
+                    task["id"],
+                    db=gated_reader,
+                )
+
+        async def write_link():
+            async with writer_session.begin():
+                pid = await writer_session.scalar(
+                    sa.text("SELECT pg_backend_pid()")
+                )
+                writer_pid.set_result(pid)
+                return await command_router.crm_task_service.add_link(
+                    writer_session,
+                    task_id=task["id"],
+                    entity_type="contact",
+                    entity_id=contact_id,
+                    expected_version=1,
+                    actor=command_router.TaskActor(type="admin", id="17"),
+                )
+
+        reader_call = asyncio.create_task(read_links())
+        await asyncio.wait_for(task_loaded.wait(), timeout=5)
+        writer_call = asyncio.create_task(write_link())
+        pid = await asyncio.wait_for(writer_pid, timeout=5)
+
+        writer_was_blocked = False
+        for _ in range(300):
+            if writer_call.done():
+                break
+            blockers = await observer_session.scalar(
+                sa.text("SELECT pg_blocking_pids(:pid)"),
+                {"pid": pid},
+            )
+            if blockers:
+                writer_was_blocked = True
+                break
+            await asyncio.sleep(0.01)
+
+        release_reader.set()
+        listed, linked = await asyncio.wait_for(
+            asyncio.gather(reader_call, writer_call),
+            timeout=8,
+        )
+
+    assert gated_reader.task_lock_requested is True
+    assert writer_was_blocked is True
+    assert listed == []
+    assert linked.task_version == 2
+
+    async with factory() as verifier:
+        stored = await verifier.get(CRMTask, task["id"])
+        assert stored is not None and stored.version == 2
+        assert await verifier.scalar(
+            sa.select(sa.func.count()).select_from(CRMTaskLink)
+        ) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
@@ -1206,9 +1392,19 @@ async def test_task_link_duplicate_replays_after_polymorphic_target_is_removed(
         {"entity_type": "contact", "entity_id": 0, "expected_version": 1},
         {"entity_type": "contact", "entity_id": True, "expected_version": 1},
         {"entity_type": "contact", "entity_id": "1", "expected_version": 1},
+        {
+            "entity_type": "contact",
+            "entity_id": POSTGRES_INTEGER_OVERFLOW,
+            "expected_version": 1,
+        },
         {"entity_type": "contact", "entity_id": 1, "expected_version": 0},
         {"entity_type": "contact", "entity_id": 1, "expected_version": True},
         {"entity_type": "contact", "entity_id": 1, "expected_version": "1"},
+        {
+            "entity_type": "contact",
+            "entity_id": 1,
+            "expected_version": POSTGRES_INTEGER_OVERFLOW,
+        },
     ],
 )
 async def test_task_link_request_bounds_and_types_are_strict(
@@ -1386,6 +1582,205 @@ async def test_task_link_insert_failure_rolls_back_parent_version(
         assert await verifier.scalar(
             sa.select(sa.func.count()).select_from(CRMTaskLink)
         ) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["patch", "link", "archive", "restore"])
+async def test_task_version_increment_at_postgresql_max_is_structured_conflict(
+    task_lifecycle_app, task_api_database, action
+) -> None:
+    contact_id = await _create_contact(task_api_database)
+    task = await _create_task(task_lifecycle_app, title="Maximum version")
+    _engine, factory = task_api_database
+    async with factory() as setup, setup.begin():
+        stored = await setup.get(CRMTask, task["id"])
+        assert stored is not None
+        stored.version = POSTGRES_INTEGER_MAX
+        if action == "restore":
+            stored.archived_at = datetime(2026, 8, 20, 12, tzinfo=UTC)
+            stored.archived_by_type = "admin"
+            stored.archived_by_id = "17"
+            stored.archive_reason = "Already archived"
+
+    snapshot_response = await _request(
+        task_lifecycle_app,
+        "GET",
+        "/api/v1/command/tasks?visibility=all",
+        headers=_headers(),
+    )
+    assert snapshot_response.status_code == 200, snapshot_response.text
+    snapshot = next(
+        row for row in snapshot_response.json() if row["id"] == task["id"]
+    )
+
+    path = f"/api/v1/command/tasks/{task['id']}"
+    if action == "patch":
+        response = await _request(
+            task_lifecycle_app,
+            "PATCH",
+            path,
+            json={
+                "expected_version": POSTGRES_INTEGER_MAX,
+                "title": "Must not overflow",
+            },
+            headers=_headers(),
+        )
+    elif action == "link":
+        response = await _request(
+            task_lifecycle_app,
+            "POST",
+            f"{path}/links",
+            json={
+                "entity_type": "contact",
+                "entity_id": contact_id,
+                "expected_version": POSTGRES_INTEGER_MAX,
+            },
+            headers=_headers(),
+        )
+    else:
+        response = await _request(
+            task_lifecycle_app,
+            "POST",
+            f"{path}/{action}",
+            json=_lifecycle_payload(POSTGRES_INTEGER_MAX),
+            headers=_headers(),
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == {
+        "code": "task_version_conflict",
+        "current_version": POSTGRES_INTEGER_MAX,
+        "current_task": snapshot,
+    }
+
+    async with factory() as verifier:
+        stored = await verifier.get(CRMTask, task["id"])
+        assert stored is not None
+        assert stored.version == POSTGRES_INTEGER_MAX
+        if action == "restore":
+            assert stored.archived_at is not None
+        else:
+            assert stored.archived_at is None
+        assert await verifier.scalar(
+            sa.select(sa.func.count()).select_from(CRMTaskLink)
+        ) == 0
+        assert await verifier.scalar(
+            sa.select(sa.func.count())
+            .select_from(CRMActivity)
+            .where(CRMActivity.kind.in_(("task_updated", "task_linked")))
+        ) == 0
+        assert await verifier.scalar(
+            sa.select(sa.func.count())
+            .select_from(CRMRecordLifecycleEvent)
+            .where(CRMRecordLifecycleEvent.action.in_(("archive", "restore")))
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_task_link_remains_noop_at_postgresql_max_version(
+    task_lifecycle_app, task_api_database
+) -> None:
+    contact_id = await _create_contact(task_api_database)
+    task = await _create_task(task_lifecycle_app)
+    path = f"/api/v1/command/tasks/{task['id']}/links"
+    created = await _request(
+        task_lifecycle_app,
+        "POST",
+        path,
+        json={
+            "entity_type": "contact",
+            "entity_id": contact_id,
+            "expected_version": 1,
+        },
+        headers=_headers(),
+    )
+    assert created.status_code == 200, created.text
+
+    _engine, factory = task_api_database
+    async with factory() as setup, setup.begin():
+        stored = await setup.get(CRMTask, task["id"])
+        assert stored is not None
+        stored.version = POSTGRES_INTEGER_MAX
+
+    duplicate = await _request(
+        task_lifecycle_app,
+        "POST",
+        path,
+        json={
+            "entity_type": "contact",
+            "entity_id": contact_id,
+            "expected_version": POSTGRES_INTEGER_MAX,
+        },
+        headers=_headers(),
+    )
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["id"] == created.json()["id"]
+    assert duplicate.json()["task_version"] == POSTGRES_INTEGER_MAX
+
+    async with factory() as verifier:
+        stored = await verifier.get(CRMTask, task["id"])
+        assert stored is not None and stored.version == POSTGRES_INTEGER_MAX
+        assert await verifier.scalar(
+            sa.select(sa.func.count()).select_from(CRMTaskLink)
+        ) == 1
+        assert await verifier.scalar(
+            sa.select(sa.func.count())
+            .select_from(CRMActivity)
+            .where(CRMActivity.kind == "task_linked")
+        ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["archive", "restore"])
+async def test_same_state_lifecycle_noop_and_replay_work_at_max_version(
+    task_lifecycle_app, task_api_database, action
+) -> None:
+    task = await _create_task(task_lifecycle_app)
+    _engine, factory = task_api_database
+    async with factory() as setup, setup.begin():
+        stored = await setup.get(CRMTask, task["id"])
+        assert stored is not None
+        stored.version = POSTGRES_INTEGER_MAX
+        if action == "archive":
+            stored.archived_at = datetime(2026, 8, 20, 12, tzinfo=UTC)
+            stored.archived_by_type = "admin"
+            stored.archived_by_id = "17"
+            stored.archive_reason = "Already archived"
+
+    payload = _lifecycle_payload(POSTGRES_INTEGER_MAX)
+    path = f"/api/v1/command/tasks/{task['id']}/{action}"
+    first = await _request(
+        task_lifecycle_app,
+        "POST",
+        path,
+        json=payload,
+        headers=_headers(),
+    )
+    replay = await _request(
+        task_lifecycle_app,
+        "POST",
+        path,
+        json=payload,
+        headers=_headers(),
+    )
+    assert first.status_code == replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["version"] == POSTGRES_INTEGER_MAX
+
+    async with factory() as verifier:
+        stored = await verifier.get(CRMTask, task["id"])
+        assert stored is not None and stored.version == POSTGRES_INTEGER_MAX
+        events = (
+            await verifier.scalars(
+                sa.select(CRMRecordLifecycleEvent).where(
+                    CRMRecordLifecycleEvent.entity_type == "task",
+                    CRMRecordLifecycleEvent.entity_id == task["id"],
+                    CRMRecordLifecycleEvent.action == action,
+                )
+            )
+        ).all()
+        assert len(events) == 1
+        assert json.loads(events[0].result_json)["changed"] is False
 
 
 @pytest.mark.asyncio

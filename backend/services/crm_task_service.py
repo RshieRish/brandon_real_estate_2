@@ -23,6 +23,7 @@ from models.crm_task_lifecycle import (
     CRMTaskCreationRequest,
     CRMTaskSource,
 )
+from schemas.command import POSTGRES_INTEGER_MAX
 from services.command_task_links import task_link_display_name, task_link_model
 from services.command_tasks import task_activity_summary
 
@@ -195,7 +196,11 @@ def _supported_text(value: object, supported: frozenset[str], *, name: str) -> s
 
 
 def _positive_integer(value: object, *, name: str) -> int:
-    if type(value) is not int or value <= 0:
+    if (
+        type(value) is not int
+        or value <= 0
+        or value > POSTGRES_INTEGER_MAX
+    ):
         raise TaskCommandValidationError(f"{name} is invalid")
     return value
 
@@ -502,6 +507,7 @@ class CRMTaskService:
             cas = update(CRMTask).where(
                 CRMTask.id == task_id,
                 CRMTask.version == expected_version,
+                CRMTask.version < POSTGRES_INTEGER_MAX,
                 CRMTask.archived_at.is_(None),
             )
             if contact_id is not None:
@@ -537,6 +543,11 @@ class CRMTaskService:
                 if current_task.version != expected_version:
                     raise TaskVersionConflict(
                         "Task version is stale",
+                        current_task=snapshot,
+                    )
+                if current_task.version >= POSTGRES_INTEGER_MAX:
+                    raise TaskVersionConflict(
+                        "Task version cannot be incremented",
                         current_task=snapshot,
                     )
                 if contact_id is not None:
@@ -639,6 +650,11 @@ class CRMTaskService:
                     "Linked internal record not found"
                 )
             display_name = task_link_display_name(entity_type, record)
+            if task.version >= POSTGRES_INTEGER_MAX:
+                raise TaskVersionConflict(
+                    "Task version cannot be incremented",
+                    current_task=snapshot,
+                )
             link = CRMTaskLink(
                 task_id=task_id,
                 entity_type=entity_type,
@@ -785,6 +801,11 @@ class CRMTaskService:
                 if action == "archive"
                 else task.archived_at is not None
             )
+            if changed and task.version >= POSTGRES_INTEGER_MAX:
+                raise TaskVersionConflict(
+                    "Task version cannot be incremented",
+                    current_task=task_snapshot(task),
+                )
             if changed and action == "archive":
                 task.archived_at = datetime.now(UTC)
                 task.archived_by_type = actor.type

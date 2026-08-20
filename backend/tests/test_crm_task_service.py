@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import hashlib
+import inspect
 import json
 import os
 import ssl
+import subprocess
+import sys
+import textwrap
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,6 +29,7 @@ from models.crm_task_lifecycle import (
     CRMTaskCreationRequest,
     CRMTaskSource,
 )
+from models.lead import Lead  # noqa: F401 - register CRMContact's foreign key target
 from services.crm_task_service import (
     CRMTaskService,
     CreateTaskCommand,
@@ -40,6 +47,7 @@ from tests.test_crm_task_lifecycle_migration import _public_schema_user_objects
 
 NOW = datetime(2026, 8, 18, 9, 15, tzinfo=timezone(timedelta(hours=-4)))
 OWNERSHIP_TABLE = "_crm_task_service_test_ownership"
+POSTGRES_INTEGER_OVERFLOW = 2_147_483_648
 
 
 def _test_database_url() -> sa.engine.URL:
@@ -50,9 +58,12 @@ def _test_database_url() -> sa.engine.URL:
             pytest.fail("CI requires CRM_TASK_TEST_DATABASE_URL and CRM_TASK_TEST_DATABASE_NAME")
         pytest.skip("CRM task PostgreSQL test database is not provisioned")
     url = make_url(raw_url)
-    assert expected_name.endswith("_test")
-    assert url.database == expected_name
-    assert url.drivername.startswith("postgresql")
+    if not expected_name.endswith("_test"):
+        raise RuntimeError("CRM task test database name must end with _test")
+    if url.database != expected_name:
+        raise RuntimeError("CRM task test database URL target does not match")
+    if not url.drivername.startswith("postgresql"):
+        raise RuntimeError("CRM task tests require PostgreSQL")
     return url
 
 
@@ -69,9 +80,14 @@ async def owned_task_database():
     armed = False
     try:
         async with engine.begin() as connection:
-            assert await connection.scalar(sa.text("SELECT current_database()")) == expected_name
+            current_database = await connection.scalar(
+                sa.text("SELECT current_database()")
+            )
+            if current_database != expected_name:
+                raise RuntimeError("CRM task test database target changed")
             objects = await connection.run_sync(_public_schema_user_objects)
-            assert objects == [], f"public schema is not empty: {objects}"
+            if objects:
+                raise RuntimeError(f"public schema is not empty: {objects}")
             await connection.execute(
                 sa.text(f"CREATE TABLE public.{OWNERSHIP_TABLE} (marker text PRIMARY KEY)")
             )
@@ -85,14 +101,178 @@ async def owned_task_database():
     finally:
         if armed:
             async with engine.begin() as connection:
-                assert await connection.scalar(sa.text("SELECT current_database()")) == expected_name
-                assert await connection.scalar(
-                    sa.text(f"SELECT count(*) FROM public.{OWNERSHIP_TABLE} WHERE marker=:marker"),
-                    {"marker": marker},
-                ) == 1
+                current_database = await connection.scalar(
+                    sa.text("SELECT current_database()")
+                )
+                if current_database != expected_name:
+                    raise RuntimeError("CRM task test database target changed")
+                marker_counts = (
+                    await connection.execute(
+                        sa.text(
+                            f"SELECT count(*), "
+                            f"count(*) FILTER (WHERE marker=:marker) "
+                            f"FROM public.{OWNERSHIP_TABLE}"
+                        ),
+                        {"marker": marker},
+                    )
+                ).one()
+                if tuple(marker_counts) != (1, 1):
+                    raise RuntimeError("CRM task test database ownership marker is invalid")
                 await connection.execute(sa.text("DROP SCHEMA public CASCADE"))
                 await connection.execute(sa.text("CREATE SCHEMA public"))
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("expected_name", "test_url"),
+    [
+        (
+            "production",
+            "postgresql+asyncpg://unused:unused@localhost:1/production",
+        ),
+        (
+            "owned_test",
+            "postgresql+asyncpg://unused:unused@localhost:1/different_test",
+        ),
+        ("owned_test", "sqlite+aiosqlite:///owned_test"),
+    ],
+    ids=["database-suffix", "exact-target", "postgresql-driver"],
+)
+def test_test_database_url_guards_survive_optimized_python(
+    expected_name: str,
+    test_url: str,
+) -> None:
+    environment = {
+        **os.environ,
+        "CRM_TASK_TEST_DATABASE_NAME": expected_name,
+        "CRM_TASK_TEST_DATABASE_URL": test_url,
+        "DATABASE_URL": (
+            "postgresql+asyncpg://unused:unused@localhost:1/bootstrap_test"
+        ),
+        "JWT_SECRET": "optimized-fixture-contract",
+        "PYTHONPATH": str(Path(__file__).parents[1]),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-O",
+            "-c",
+            textwrap.dedent(
+                """
+                from tests.test_crm_task_service import _test_database_url
+
+                try:
+                    _test_database_url()
+                except RuntimeError:
+                    raise SystemExit(0)
+                raise SystemExit("unsafe test database target was accepted")
+                """
+            ),
+        ],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_destructive_fixture_preconditions_do_not_use_optimizable_asserts() -> None:
+    for function in (_test_database_url, owned_task_database):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        assert not any(isinstance(node, ast.Assert) for node in ast.walk(tree))
+
+
+@pytest.mark.asyncio
+async def test_owned_task_database_refuses_cleanup_with_foreign_marker() -> None:
+    foreign_marker = f"foreign-{uuid4().hex}"
+    fixture_marker: str | None = None
+
+    with pytest.raises(
+        RuntimeError,
+        match="CRM task test database ownership marker is invalid",
+    ):
+        async with owned_task_database() as (engine, _factory):
+            async with engine.begin() as connection:
+                fixture_markers = tuple(
+                    (
+                        await connection.execute(
+                            sa.text(f"SELECT marker FROM public.{OWNERSHIP_TABLE}")
+                        )
+                    ).scalars()
+                )
+                if len(fixture_markers) != 1:
+                    raise RuntimeError(
+                        "test setup does not have one fixture ownership marker"
+                    )
+                fixture_marker = fixture_markers[0]
+                await connection.execute(
+                    sa.text(
+                        f"INSERT INTO public.{OWNERSHIP_TABLE} (marker) "
+                        "VALUES (:marker)"
+                    ),
+                    {"marker": foreign_marker},
+                )
+
+    if fixture_marker is None:
+        raise RuntimeError("fixture ownership marker was not captured")
+    url = _test_database_url()
+    expected_name = os.environ["CRM_TASK_TEST_DATABASE_NAME"]
+    cleanup_engine = create_async_engine(
+        url,
+        connect_args={"ssl": _ssl_context()},
+    )
+    try:
+        async with cleanup_engine.begin() as connection:
+            current_database = await connection.scalar(
+                sa.text("SELECT current_database()")
+            )
+            if current_database != expected_name:
+                raise RuntimeError("CRM task test database target changed")
+            marker_rows = tuple(
+                (
+                    await connection.execute(
+                        sa.text(
+                            f"SELECT marker FROM public.{OWNERSHIP_TABLE} "
+                            "ORDER BY marker"
+                        )
+                    )
+                ).scalars()
+            )
+            if (
+                len(marker_rows) != 2
+                or set(marker_rows) != {fixture_marker, foreign_marker}
+            ):
+                raise RuntimeError(
+                    "refused cleanup did not preserve the ownership markers"
+                )
+            await connection.execute(
+                sa.text(
+                    f"DELETE FROM public.{OWNERSHIP_TABLE} WHERE marker=:marker"
+                ),
+                {"marker": foreign_marker},
+            )
+            remaining_markers = tuple(
+                (
+                    await connection.execute(
+                        sa.text(f"SELECT marker FROM public.{OWNERSHIP_TABLE}")
+                    )
+                ).scalars()
+            )
+            if remaining_markers != (fixture_marker,):
+                raise RuntimeError(
+                    "refusing recovery cleanup without the exact fixture marker"
+                )
+            task_table = await connection.scalar(
+                sa.text("SELECT to_regclass('public.crm_tasks')")
+            )
+            if task_table is None:
+                raise RuntimeError("refused cleanup unexpectedly dropped task tables")
+            await connection.execute(sa.text("DROP SCHEMA public CASCADE"))
+            await connection.execute(sa.text("CREATE SCHEMA public"))
+    finally:
+        await cleanup_engine.dispose()
 
 
 @pytest_asyncio.fixture()
@@ -177,6 +357,91 @@ def test_canonical_hash_input_is_compact_sorted_complete_and_utc() -> None:
 async def test_command_validation_fails_before_database_use(override) -> None:
     with pytest.raises(TaskCommandValidationError):
         await CRMTaskService().create(None, command(**override))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "update-task-id",
+        "update-version",
+        "update-contact",
+        "link-task-id",
+        "link-entity-id",
+        "link-version",
+        "archive-task-id",
+        "archive-version",
+        "restore-task-id",
+        "restore-version",
+    ],
+)
+@pytest.mark.asyncio
+async def test_task_mutation_integer_overflow_fails_before_database_use(
+    case: str,
+) -> None:
+    service = CRMTaskService()
+    actor = TaskActor(type="admin", id="17")
+    source = TaskSource(type="command_ui", id=str(uuid4()), key="primary")
+    with pytest.raises(TaskCommandValidationError):
+        if case.startswith("update"):
+            await service.update(
+                None,  # type: ignore[arg-type]
+                task_id=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case == "update-task-id"
+                    else 1
+                ),
+                expected_version=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case == "update-version"
+                    else 1
+                ),
+                changes={
+                    "contact_id": POSTGRES_INTEGER_OVERFLOW
+                    if case == "update-contact"
+                    else None
+                },
+                actor=actor,
+            )
+        elif case.startswith("link"):
+            await service.add_link(
+                None,  # type: ignore[arg-type]
+                task_id=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case == "link-task-id"
+                    else 1
+                ),
+                entity_type="contact",
+                entity_id=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case == "link-entity-id"
+                    else 1
+                ),
+                expected_version=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case == "link-version"
+                    else 1
+                ),
+                actor=actor,
+            )
+        else:
+            method = service.archive if case.startswith("archive") else service.restore
+            await method(
+                None,  # type: ignore[arg-type]
+                task_id=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case.endswith("task-id")
+                    else 1
+                ),
+                request_id=uuid4(),
+                expected_version=(
+                    POSTGRES_INTEGER_OVERFLOW
+                    if case.endswith("version")
+                    else 1
+                ),
+                reason=None,
+                actor=actor,
+                source=source,
+            )
 
 
 @pytest.mark.asyncio
