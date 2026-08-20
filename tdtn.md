@@ -1,7 +1,7 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-18
+Last Updated: 2026-08-20
 
 ### 2026-08-18 - Sydney CRM, Gmail, Instagram, and CRM Lifecycle Implementation Plans
 - Converted the approved design into four dependency-ordered, test-first plans under `docs/superpowers/plans/`: CRM task foundation, Gmail/Sydney task intake, Instagram reliability, and remaining CRM record lifecycles.
@@ -31,6 +31,13 @@ Last Updated: 2026-08-18
 - The TLS PostgreSQL CI contract now runs migrations plus service/API concurrency tests, pins its async pytest dependencies, and triggers on database/auth/config changes. The disposable test instructions use an accepted `_test` database name and translate async `ssl=require` to libpq `sslmode=require` for `psql` safety checks.
 - TDD/review evidence: intentional service/API/import/CI/frontend REDs; final disposable TLS PostgreSQL matrix `156 passed`; frontend import/API `60 passed`; TypeScript, touched-file ESLint, YAML, constructor audit, and diff checks passed; independent specification review PASS and adversarial quality review APPROVED with no remaining findings. Commits: `771f9ca`, `8cfae68`, `fae1be7`, `aa59f7b`.
 - Deployment order remains locked: do not deploy the required task idempotency header until the planned typed frontend task clients, including the contact-task producer, send it. Next: add versioned task Archive and Restore APIs.
+
+### 2026-08-20 - Versioned CRM Task Archive and Restore APIs
+- Added an off-by-default feature flag, strict versioned `TaskUpdate`, `TaskLink`, and lifecycle schemas, reversible Archive/Restore that preserves workflow status and links, and active-by-default plus strict archived/all visibility modes.
+- Centralized lifecycle semantics in the shared service: one optimistic version spans atomic PATCH compare-and-swap, row-locked new links, and durable actor/source-bound archive/restore replay and same-state no-op events, with exact stable conflicts and no outer transaction ownership.
+- Hardened link reads to use a coherent snapshot, bounded task integers to PostgreSQL `int32`, mapped maximum-version mutations to `task_version_conflict`, and made the exact ownership cleanup guard safe under optimized Python.
+- Evidence: real TLS PostgreSQL final focused suite `113 passed`; related service/lifecycle/model/contact suite `457 passed`; SPEC PASS and QUALITY APPROVED with no findings. Commits: `0d91ca2`, `5f6aa0f`, `f99544c`.
+- Deployment gate: do not deploy the backend until Task 5's typed frontend sends create idempotency and PATCH/link `expected_version`. Next: Task 5 client.
 
 ### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
 - Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
