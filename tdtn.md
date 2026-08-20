@@ -39,6 +39,13 @@ Last Updated: 2026-08-20
 - Evidence: real TLS PostgreSQL final focused suite `113 passed`; related service/lifecycle/model/contact suite `457 passed`; SPEC PASS and QUALITY APPROVED with no findings. Commits: `0d91ca2`, `5f6aa0f`, `f99544c`.
 - Deployment gate: do not deploy the backend until Task 5's typed frontend sends create idempotency and PATCH/link `expected_version`. Next: Task 5 client.
 
+### 2026-08-20 - Atomic Typed CRM Task Client
+- Added one strict frontend task boundary for reads and single-attempt mutations. All three production task-create callers now generate and retain one UUID, canonical payload, and client timezone for the same logical attempt; PATCH and link writes send the current `expected_version`, and no task mutation retries automatically.
+- Added PostgreSQL-`int32` and RFC3339 response validation, operation-specific conflict decoding, task/link identity and version correlation, exact due-instant preservation, and authoritative reconciliation locks. Stale task/link reads cannot overwrite newer state, stale editors close after conflicts, and Home does not unlock creation when only a partial aggregate response is available without authoritative Tasks data.
+- Made the stateful browser fixtures match production task semantics: HTTP 200 create/replay, timezone-bound idempotency fingerprints, one shared task ledger, structured mismatches, and read-after-create across central and contact surfaces.
+- TDD/review evidence: initial `33` focused unit and `3` browser failures plus targeted follow-up REDs; final Task 5 suite `430 passed`; desktop browser `33 passed`, accessibility browser `8 passed`, focused fixture `2 passed`, and Home `6 passed`; TypeScript, touched-file ESLint, and diff checks pass. Exact specification review PASS and final code-quality review APPROVED. Commits: `9966421`, `f39c482`, `0475b602`, `05cd99c`, `31a44de`.
+- Deployment gate: the versioned backend and typed callers are compatible, but Archive/Restore stays disabled until Task 6 exposes the accessible lifecycle UI and the target environment explicitly enables `CRM_TASK_ARCHIVE_ENABLED`. Next: Task 6 archive/restore controls.
+
 ### 2026-08-17 - Sydney CRM, Gmail Task Intake, and Instagram Reliability Design
 - Approved design is documented in `docs/superpowers/specs/2026-08-17-sydney-crm-email-tasks-instagram-design.md`.
 - The design uses review-required task suggestions from both received and sent Gmail, a restart-safe History worker, exact-once task application, and minimal persisted email data.
