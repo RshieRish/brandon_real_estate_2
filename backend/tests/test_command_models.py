@@ -338,14 +338,22 @@ def test_contact_profile_updates_keep_explicit_optional_field_clears():
 
 
 def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
-    update = TaskUpdate(status="in_progress", priority="high", description="Call before noon", contact_id=12, due_at=None)
+    update = TaskUpdate(
+        expected_version=1,
+        status="in_progress",
+        priority="high",
+        description="Call before noon",
+        contact_id=12,
+        due_at=None,
+    )
+    assert update.expected_version == 1
     assert update.priority == "high"
     assert update.contact_id == 12
     assert {"contact_id", "due_at"}.issubset(update.model_fields_set)
     with pytest.raises(ValidationError):
-        TaskUpdate(status="deleted")
+        TaskUpdate(expected_version=1, status="deleted")
     with pytest.raises(ValidationError):
-        TaskUpdate(priority="urgentish")
+        TaskUpdate(expected_version=1, priority="urgentish")
 
 
 def test_task_audit_summary_describes_the_persisted_changed_fields():

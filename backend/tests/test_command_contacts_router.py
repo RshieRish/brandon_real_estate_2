@@ -1213,7 +1213,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     routes = _main_command_routes()
     inventory = _mounted_inventory(routes)
 
-    assert len(inventory) == 86
+    assert len(inventory) == 88
     assert inventory[:24] == FULL_ROUTE_INVENTORY
     assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
     assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (
@@ -1259,7 +1259,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method in sorted(route.methods or ())
         if method != "HEAD"
     )
-    assert len(inventory) == 86
+    assert len(inventory) == 88
     assert len(set(inventory)) == len(inventory)
     schema = fresh.openapi()
     operation_ids = [
@@ -1268,7 +1268,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method, operation in path.items()
         if method.lower() in {"get", "post", "patch", "delete", "put"}
     ]
-    assert len(operation_ids) == 86
+    assert len(operation_ids) == 88
     assert len(set(operation_ids)) == len(operation_ids)
     expected_response_schemas = {
         ("/api/v1/command/contacts/directory", "get"): "ContactDirectoryPageOut",

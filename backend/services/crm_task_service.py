@@ -11,18 +11,20 @@ from typing import Literal
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.command import CRMActivity, CRMContact, CRMTask
+from models.command import CRMActivity, CRMContact, CRMTask, CRMTaskLink
 from models.crm_task_lifecycle import (
     CRMRecordLifecycleEvent,
     CRMTaskCreationRequest,
     CRMTaskSource,
 )
+from services.command_task_links import task_link_display_name, task_link_model
+from services.command_tasks import task_activity_summary
 
 
 ActorType = Literal["admin", "sydney", "system"]
@@ -65,6 +67,39 @@ class TaskSourceConflict(CRMTaskCreationError):
     code = "task_source_conflict"
 
 
+class TaskNotFound(CRMTaskCreationError):
+    code = "task_not_found"
+
+
+class TaskLinkedRecordNotFound(CRMTaskCreationError):
+    code = "task_linked_record_not_found"
+
+
+class TaskStateConflict(CRMTaskCreationError):
+    code = "task_state_conflict"
+
+    def __init__(self, message: str, *, current_task: dict[str, object]):
+        super().__init__(message)
+        self.current_task = current_task
+        self.current_version = int(current_task["version"])
+
+
+class TaskVersionConflict(TaskStateConflict):
+    code = "task_version_conflict"
+
+
+class TaskArchived(TaskStateConflict):
+    code = "task_archived"
+
+
+class TaskRequestMismatch(TaskStateConflict):
+    code = "task_request_mismatch"
+
+
+class TaskLifecycleStateError(TaskStateConflict):
+    code = "task_lifecycle_state_invalid"
+
+
 @dataclass(frozen=True, slots=True)
 class TaskActor:
     type: ActorType
@@ -99,6 +134,25 @@ class CreateTaskResult:
     replayed: bool
     request_id: UUID
     request_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskMutationResult:
+    task: CRMTask
+
+
+@dataclass(frozen=True, slots=True)
+class TaskLinkResult:
+    link: CRMTaskLink
+    display_name: str
+    task_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaskLifecycleResult:
+    task: dict[str, object]
+    replayed: bool
+    changed: bool
 
 
 def _bounded_text(value: object, *, name: str, minimum: int, maximum: int) -> str:
@@ -140,6 +194,29 @@ def _supported_text(value: object, supported: frozenset[str], *, name: str) -> s
     return value
 
 
+def _positive_integer(value: object, *, name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise TaskCommandValidationError(f"{name} is invalid")
+    return value
+
+
+def _validate_actor(actor: object) -> TaskActor:
+    if not isinstance(actor, TaskActor):
+        raise TaskCommandValidationError("actor type is invalid")
+    _supported_text(actor.type, _ACTOR_TYPES, name="actor type")
+    _bounded_text(actor.id, name="actor id", minimum=1, maximum=128)
+    return actor
+
+
+def _validate_source(source: object) -> TaskSource:
+    if not isinstance(source, TaskSource):
+        raise TaskCommandValidationError("source type is invalid")
+    _supported_text(source.type, _SOURCE_TYPES, name="source type")
+    _bounded_text(source.id, name="source id", minimum=1, maximum=255)
+    _bounded_text(source.key, name="source key", minimum=1, maximum=128)
+    return source
+
+
 def _validate(command: CreateTaskCommand) -> None:
     if not isinstance(command, CreateTaskCommand):
         raise TaskCommandValidationError("task command is invalid")
@@ -148,19 +225,10 @@ def _validate(command: CreateTaskCommand) -> None:
     _supported_text(command.priority, _PRIORITIES, name="priority")
     _supported_text(command.status, _WORKFLOW_STATUSES, name="status")
     _utc_rfc3339(command.due_at)
-    if command.contact_id is not None and (
-        type(command.contact_id) is not int or command.contact_id <= 0
-    ):
-        raise TaskCommandValidationError("contact_id is invalid")
-    if not isinstance(command.actor, TaskActor):
-        raise TaskCommandValidationError("actor type is invalid")
-    _supported_text(command.actor.type, _ACTOR_TYPES, name="actor type")
-    _bounded_text(command.actor.id, name="actor id", minimum=1, maximum=128)
-    if not isinstance(command.source, TaskSource):
-        raise TaskCommandValidationError("source type is invalid")
-    _supported_text(command.source.type, _SOURCE_TYPES, name="source type")
-    _bounded_text(command.source.id, name="source id", minimum=1, maximum=255)
-    _bounded_text(command.source.key, name="source key", minimum=1, maximum=128)
+    if command.contact_id is not None:
+        _positive_integer(command.contact_id, name="contact_id")
+    _validate_actor(command.actor)
+    _validate_source(command.source)
     _bounded_text(
         command.idempotency_scope,
         name="idempotency scope",
@@ -241,6 +309,157 @@ def _task_result_json(task: CRMTask) -> str:
     )
 
 
+def task_snapshot(task: CRMTask) -> dict[str, object]:
+    """Return the stable public task representation used in conflict/replay data."""
+
+    return {
+        "archive_reason": task.archive_reason,
+        "archived_at": _utc_rfc3339(task.archived_at),
+        "contact_id": task.contact_id,
+        "description": task.description,
+        "due_at": _utc_rfc3339(task.due_at),
+        "id": task.id,
+        "priority": task.priority,
+        "status": task.status,
+        "title": task.title,
+        "version": task.version,
+    }
+
+
+def _task_lifecycle_payload(
+    *,
+    action: Literal["archive", "restore"],
+    task_id: int,
+    request_id: UUID,
+    expected_version: int,
+    reason: str | None,
+    actor: TaskActor,
+    source: TaskSource,
+) -> dict[str, object]:
+    return {
+        "action": action,
+        "actor": {"id": actor.id, "type": actor.type},
+        "expected_version": expected_version,
+        "reason": reason,
+        "request_id": str(request_id),
+        "source": {
+            "id": source.id,
+            "key": source.key,
+            "type": source.type,
+        },
+        "task_id": task_id,
+    }
+
+
+def canonical_task_lifecycle_json(
+    *,
+    action: Literal["archive", "restore"],
+    task_id: int,
+    request_id: UUID,
+    expected_version: int,
+    reason: str | None,
+    actor: TaskActor,
+    source: TaskSource,
+) -> str:
+    if action not in ("archive", "restore"):
+        raise TaskCommandValidationError("task lifecycle action is invalid")
+    _positive_integer(task_id, name="task_id")
+    if not isinstance(request_id, UUID):
+        raise TaskCommandValidationError("request_id is invalid")
+    _positive_integer(expected_version, name="expected_version")
+    if reason is not None:
+        _bounded_text(reason, name="reason", minimum=0, maximum=500)
+    _validate_actor(actor)
+    _validate_source(source)
+    return _canonical_json(
+        _task_lifecycle_payload(
+            action=action,
+            task_id=task_id,
+            request_id=request_id,
+            expected_version=expected_version,
+            reason=reason,
+            actor=actor,
+            source=source,
+        )
+    )
+
+
+def _lifecycle_result_json(task: CRMTask, *, changed: bool) -> str:
+    return _canonical_json({**task_snapshot(task), "changed": changed})
+
+
+def _stored_lifecycle_result(
+    event: CRMRecordLifecycleEvent,
+    *,
+    current_task: CRMTask,
+) -> dict[str, object]:
+    try:
+        payload = json.loads(event.result_json)
+    except (TypeError, ValueError):
+        raise TaskLifecycleStateError(
+            "Task lifecycle result is invalid",
+            current_task=task_snapshot(current_task),
+        ) from None
+    if type(payload) is not dict or type(payload.get("changed")) is not bool:
+        raise TaskLifecycleStateError(
+            "Task lifecycle result is invalid",
+            current_task=task_snapshot(current_task),
+        )
+    required_fields = {
+        "archive_reason",
+        "archived_at",
+        "contact_id",
+        "description",
+        "due_at",
+        "id",
+        "priority",
+        "status",
+        "title",
+        "version",
+    }
+    if not required_fields.issubset(payload):
+        raise TaskLifecycleStateError(
+            "Task lifecycle result is invalid",
+            current_task=task_snapshot(current_task),
+        )
+    return payload
+
+
+def _validated_update_changes(changes: object) -> dict[str, object]:
+    if type(changes) is not dict or not changes:
+        raise TaskCommandValidationError("task changes are invalid")
+    supported = {
+        "contact_id",
+        "description",
+        "due_at",
+        "priority",
+        "status",
+        "title",
+    }
+    if not set(changes).issubset(supported):
+        raise TaskCommandValidationError("task changes are invalid")
+
+    validated = dict(changes)
+    if "status" in validated:
+        _supported_text(validated["status"], _WORKFLOW_STATUSES, name="status")
+    if "title" in validated:
+        _bounded_text(validated["title"], name="title", minimum=1, maximum=255)
+    if "description" in validated:
+        _bounded_text(
+            validated["description"],
+            name="description",
+            minimum=0,
+            maximum=65_536,
+        )
+    if "priority" in validated:
+        _supported_text(validated["priority"], _PRIORITIES, name="priority")
+    if "due_at" in validated:
+        validated["due_at"] = _utc_datetime(validated["due_at"])
+    if "contact_id" in validated and validated["contact_id"] is not None:
+        _positive_integer(validated["contact_id"], name="contact_id")
+    return validated
+
+
 def _sanitized_activity_summary(title: str) -> str:
     visible = re.sub(r"\s+", " ", title).strip()
     return f"Created task: {visible}"[:500]
@@ -264,6 +483,352 @@ def _constraint_name(exc: IntegrityError) -> str | None:
 
 
 class CRMTaskService:
+    async def update(
+        self,
+        db: AsyncSession,
+        *,
+        task_id: int,
+        expected_version: int,
+        changes: dict[str, object],
+        actor: TaskActor,
+    ) -> TaskMutationResult:
+        _positive_integer(task_id, name="task_id")
+        _positive_integer(expected_version, name="expected_version")
+        _validate_actor(actor)
+        validated_changes = _validated_update_changes(changes)
+
+        async with db.begin_nested():
+            contact_id = validated_changes.get("contact_id")
+            cas = update(CRMTask).where(
+                CRMTask.id == task_id,
+                CRMTask.version == expected_version,
+                CRMTask.archived_at.is_(None),
+            )
+            if contact_id is not None:
+                cas = cas.where(
+                    select(CRMContact.id)
+                    .where(CRMContact.id == contact_id)
+                    .exists()
+                )
+
+            task = await db.scalar(
+                cas
+                .values(
+                    **validated_changes,
+                    version=CRMTask.version + 1,
+                )
+                .returning(CRMTask)
+                .execution_options(populate_existing=True)
+            )
+            if task is None:
+                current_task = await db.scalar(
+                    select(CRMTask)
+                    .where(CRMTask.id == task_id)
+                    .execution_options(populate_existing=True)
+                )
+                if current_task is None:
+                    raise TaskNotFound("Task not found")
+                snapshot = task_snapshot(current_task)
+                if current_task.archived_at is not None:
+                    raise TaskArchived(
+                        "Task is archived",
+                        current_task=snapshot,
+                    )
+                if current_task.version != expected_version:
+                    raise TaskVersionConflict(
+                        "Task version is stale",
+                        current_task=snapshot,
+                    )
+                if contact_id is not None:
+                    raise TaskContactNotFound("Task contact not found")
+                raise TaskVersionConflict(
+                    "Task version changed during the update",
+                    current_task=snapshot,
+                )
+
+            db.add(
+                CRMActivity(
+                    contact_id=task.contact_id,
+                    kind="task_updated",
+                    summary=task_activity_summary(validated_changes),
+                    metadata_json=_canonical_json(
+                        {
+                            "actor_id": actor.id,
+                            "actor_type": actor.type,
+                        }
+                    ),
+                )
+            )
+            await db.flush()
+            return TaskMutationResult(task=task)
+
+    async def add_link(
+        self,
+        db: AsyncSession,
+        *,
+        task_id: int,
+        entity_type: str,
+        entity_id: int,
+        expected_version: int,
+        actor: TaskActor,
+    ) -> TaskLinkResult:
+        _positive_integer(task_id, name="task_id")
+        _bounded_text(
+            entity_type,
+            name="entity_type",
+            minimum=1,
+            maximum=50,
+        )
+        _positive_integer(entity_id, name="entity_id")
+        _positive_integer(expected_version, name="expected_version")
+        _validate_actor(actor)
+
+        async with db.begin_nested():
+            task = await db.scalar(
+                select(CRMTask)
+                .where(CRMTask.id == task_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if task is None:
+                raise TaskNotFound("Task not found")
+            snapshot = task_snapshot(task)
+            if task.archived_at is not None:
+                raise TaskArchived(
+                    "Task is archived",
+                    current_task=snapshot,
+                )
+            if task.version != expected_version:
+                raise TaskVersionConflict(
+                    "Task version is stale",
+                    current_task=snapshot,
+                )
+
+            existing = await db.scalar(
+                select(CRMTaskLink).where(
+                    CRMTaskLink.task_id == task_id,
+                    CRMTaskLink.entity_type == entity_type,
+                    CRMTaskLink.entity_id == entity_id,
+                )
+            )
+            if existing is not None:
+                entity_model = task_link_model(entity_type)
+                record = (
+                    await db.get(entity_model, entity_id)
+                    if entity_model is not None
+                    else None
+                )
+                return TaskLinkResult(
+                    link=existing,
+                    display_name=(
+                        task_link_display_name(entity_type, record)
+                        if record is not None
+                        else "Removed internal record"
+                    ),
+                    task_version=task.version,
+                )
+
+            entity_model = task_link_model(entity_type)
+            if entity_model is None:
+                raise TaskCommandValidationError(
+                    "Task-link entity type is unsupported"
+                )
+            record = await db.get(entity_model, entity_id)
+            if record is None:
+                raise TaskLinkedRecordNotFound(
+                    "Linked internal record not found"
+                )
+            display_name = task_link_display_name(entity_type, record)
+            link = CRMTaskLink(
+                task_id=task_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
+            db.add(link)
+            task.version += 1
+            db.add(
+                CRMActivity(
+                    contact_id=task.contact_id,
+                    kind="task_linked",
+                    summary=f"Linked task to {entity_type}",
+                    metadata_json=_canonical_json(
+                        {
+                            "actor_id": actor.id,
+                            "actor_type": actor.type,
+                            "entity_id": entity_id,
+                            "entity_type": entity_type,
+                        }
+                    ),
+                )
+            )
+            await db.flush()
+            return TaskLinkResult(
+                link=link,
+                display_name=display_name,
+                task_version=task.version,
+            )
+
+    async def archive(
+        self,
+        db: AsyncSession,
+        *,
+        task_id: int,
+        request_id: UUID,
+        expected_version: int,
+        reason: str | None,
+        actor: TaskActor,
+        source: TaskSource,
+    ) -> TaskLifecycleResult:
+        return await self._change_lifecycle(
+            db,
+            action="archive",
+            task_id=task_id,
+            request_id=request_id,
+            expected_version=expected_version,
+            reason=reason,
+            actor=actor,
+            source=source,
+        )
+
+    async def restore(
+        self,
+        db: AsyncSession,
+        *,
+        task_id: int,
+        request_id: UUID,
+        expected_version: int,
+        reason: str | None,
+        actor: TaskActor,
+        source: TaskSource,
+    ) -> TaskLifecycleResult:
+        return await self._change_lifecycle(
+            db,
+            action="restore",
+            task_id=task_id,
+            request_id=request_id,
+            expected_version=expected_version,
+            reason=reason,
+            actor=actor,
+            source=source,
+        )
+
+    async def _change_lifecycle(
+        self,
+        db: AsyncSession,
+        *,
+        action: Literal["archive", "restore"],
+        task_id: int,
+        request_id: UUID,
+        expected_version: int,
+        reason: str | None,
+        actor: TaskActor,
+        source: TaskSource,
+    ) -> TaskLifecycleResult:
+        canonical_request = canonical_task_lifecycle_json(
+            action=action,
+            task_id=task_id,
+            request_id=request_id,
+            expected_version=expected_version,
+            reason=reason,
+            actor=actor,
+            source=source,
+        )
+        request_hash = hashlib.sha256(
+            canonical_request.encode("utf-8")
+        ).hexdigest()
+
+        async with db.begin_nested():
+            task = await db.scalar(
+                select(CRMTask)
+                .where(CRMTask.id == task_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if task is None:
+                raise TaskNotFound("Task not found")
+
+            event = await db.scalar(
+                select(CRMRecordLifecycleEvent)
+                .where(
+                    CRMRecordLifecycleEvent.entity_type == "task",
+                    CRMRecordLifecycleEvent.entity_id == task_id,
+                    CRMRecordLifecycleEvent.action == action,
+                    CRMRecordLifecycleEvent.request_id == request_id,
+                )
+                .with_for_update()
+            )
+            if event is not None:
+                if event.request_hash != request_hash:
+                    raise TaskRequestMismatch(
+                        "Task lifecycle request does not match its prior use",
+                        current_task=task_snapshot(task),
+                    )
+                stored = _stored_lifecycle_result(
+                    event,
+                    current_task=task,
+                )
+                changed = bool(stored.pop("changed"))
+                return TaskLifecycleResult(
+                    task=stored,
+                    replayed=True,
+                    changed=changed,
+                )
+
+            if task.version != expected_version:
+                raise TaskVersionConflict(
+                    "Task version is stale",
+                    current_task=task_snapshot(task),
+                )
+
+            changed = (
+                task.archived_at is None
+                if action == "archive"
+                else task.archived_at is not None
+            )
+            if changed and action == "archive":
+                task.archived_at = datetime.now(UTC)
+                task.archived_by_type = actor.type
+                task.archived_by_id = actor.id
+                task.archive_reason = reason
+                task.version += 1
+            elif changed:
+                task.archived_at = None
+                task.archived_by_type = None
+                task.archived_by_id = None
+                task.archive_reason = None
+                task.version += 1
+
+            result_json = _lifecycle_result_json(task, changed=changed)
+            db.add(
+                CRMRecordLifecycleEvent(
+                    entity_type="task",
+                    entity_id=task.id,
+                    action=action,
+                    request_id=request_id,
+                    request_hash=request_hash,
+                    actor_type=actor.type,
+                    actor_id=actor.id,
+                    source_type=source.type,
+                    source_id=source.id,
+                    result_json=result_json,
+                    metadata_json=_canonical_json(
+                        {
+                            "changed": changed,
+                            "reason": reason,
+                            "source_key": source.key,
+                        }
+                    ),
+                )
+            )
+            await db.flush()
+            snapshot = json.loads(result_json)
+            snapshot.pop("changed")
+            return TaskLifecycleResult(
+                task=snapshot,
+                replayed=False,
+                changed=changed,
+            )
+
     async def create(
         self, db: AsyncSession, command: CreateTaskCommand
     ) -> CreateTaskResult:

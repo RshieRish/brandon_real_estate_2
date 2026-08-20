@@ -1,5 +1,15 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field, field_validator, model_validator
+import re
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+_RFC3339_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
+)
 
 
 class ContactCreate(BaseModel):
@@ -41,23 +51,83 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(open|in_progress|completed|cancelled)$")
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1, strict=True)
+    status: Literal["open", "in_progress", "completed", "cancelled"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = None
-    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
+    description: str | None = Field(default=None, max_length=65_536)
+    priority: Literal["low", "normal", "high"] | None = None
     due_at: datetime | None = None
-    contact_id: int | None = Field(default=None, ge=1)
+    contact_id: int | None = Field(default=None, ge=1, strict=True)
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def reject_non_datetime_due_input(cls, value: object) -> object:
+        if value is None or isinstance(value, datetime):
+            return value
+        if type(value) is str and _RFC3339_DATETIME_PATTERN.fullmatch(value):
+            return value
+        raise ValueError("due_at must be an RFC 3339 datetime")
+
+    @field_validator("due_at")
+    @classmethod
+    def require_due_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("due_at must include a UTC offset")
+        return value
+
+    @model_validator(mode="after")
+    def require_mutable_nonnull_change(self):
+        mutable_fields = {
+            "status",
+            "title",
+            "description",
+            "priority",
+            "due_at",
+            "contact_id",
+        }
+        provided = self.model_fields_set & mutable_fields
+        if not provided:
+            raise ValueError("at least one mutable task field is required")
+        nonnullable = {"status", "title", "description", "priority"}
+        if any(getattr(self, field) is None for field in provided & nonnullable):
+            raise ValueError("non-nullable task fields cannot be null")
+        return self
+
+
+class TaskLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    expected_version: int = Field(ge=1, strict=True)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class TaskLinkCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     entity_type: str = Field(min_length=1, max_length=50)
-    entity_id: int = Field(gt=0)
+    entity_id: int = Field(gt=0, strict=True)
+    expected_version: int = Field(ge=1, strict=True)
 
 
 class TaskOut(TaskCreate):
     id: int
     status: str
+    archived_at: datetime | None
+    archive_reason: str | None
+    version: int
     class Config: from_attributes = True
+
+
+class TaskLinkOut(BaseModel):
+    id: int
+    task_id: int
+    entity_type: str
+    entity_id: int
+    display_name: str
+    task_version: int
 
 
 class OverviewOut(BaseModel):

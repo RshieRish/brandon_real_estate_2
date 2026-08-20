@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     AGENT_CONTROL_TOKEN: str = ""
     AGENT_CONTROL_ENABLED: bool = False
     AGENT_CONTROL_RECENT_LIMIT: int = 10
+    CRM_TASK_ARCHIVE_ENABLED: bool = False
 
 
 settings = Settings()
