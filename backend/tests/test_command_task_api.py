@@ -15,6 +15,7 @@ import pytest_asyncio
 import sqlalchemy as sa
 from fastapi import FastAPI
 from jose import jwt
+from pydantic import ValidationError
 
 import database
 from config import settings
@@ -34,6 +35,7 @@ from models.crm_task_lifecycle import (
     CRMTaskSource,
 )
 from routers import command as command_router
+from schemas.command import TaskUpdate
 from services.command_tasks import archive_task_source_key
 from tests.test_crm_task_service import owned_task_database
 
@@ -661,6 +663,11 @@ async def test_task_responses_expose_archive_fields_and_version(task_app) -> Non
     assert task["archived_at"] is None
     assert task["archive_reason"] is None
     assert task["version"] == 1
+
+
+def test_task_update_schema_rejects_whitespace_only_title() -> None:
+    with pytest.raises(ValidationError):
+        TaskUpdate(expected_version=1, title="   ")
 
 
 @pytest.mark.asyncio

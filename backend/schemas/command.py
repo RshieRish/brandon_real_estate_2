@@ -61,6 +61,13 @@ class TaskUpdate(BaseModel):
     due_at: datetime | None = None
     contact_id: int | None = Field(default=None, ge=1, strict=True)
 
+    @field_validator("title")
+    @classmethod
+    def require_nonblank_title(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("title cannot be blank")
+        return value
+
     @field_validator("due_at", mode="before")
     @classmethod
     def reject_non_datetime_due_input(cls, value: object) -> object:
