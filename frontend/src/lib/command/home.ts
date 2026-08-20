@@ -182,12 +182,9 @@ function availableFactor(
 
 function activeTasks(tasks: readonly Task[]): Task[] {
   return tasks.filter((task) => {
+    if (task.archived_at !== null) return false;
     if (task.status === 'open' || task.status === 'in_progress') return true;
-    if (
-      task.status === 'completed'
-      || task.status === 'cancelled'
-      || task.status === 'archived'
-    ) return false;
+    if (task.status === 'completed' || task.status === 'cancelled') return false;
     throw new CommandDecodeError('tasks.status', 'known task workflow status');
   });
 }
@@ -668,7 +665,7 @@ export async function loadCommandHome(
   const requests = {
     overview: api.overview({ signal }),
     contacts: loadHomeContacts(api, signal),
-    tasks: api.tasks({}, { signal }).then((tasks) => {
+    tasks: api.tasks({ visibility: 'active' }, { signal }).then((tasks) => {
       activeTasks(tasks);
       return tasks;
     }),

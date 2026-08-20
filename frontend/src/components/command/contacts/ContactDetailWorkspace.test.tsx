@@ -21,6 +21,7 @@ import { CommandToastProvider } from '../ui/CommandToastProvider';
 import { ContactDetailWorkspace } from './ContactDetailWorkspace';
 import { canonicalContactId } from '@/app/admin/command/contacts/[contactId]/page';
 import { CommandHttpError } from '@/lib/command/http';
+import type { Task } from '@/lib/command/tasks';
 
 const navigation = vi.hoisted(() => ({
   pathname: '/admin/command/contacts/7',
@@ -474,6 +475,9 @@ function fakeApi(): ContactsApi {
       priority: 'normal',
       due_at: null,
       status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
     }),
     artifactBlob: vi.fn().mockResolvedValue(new Blob(['archive evidence'], { type: 'text/html' })),
   };
@@ -930,7 +934,9 @@ describe('ContactDetailWorkspace', () => {
       description: '',
       priority: 'normal',
       due_at: null,
-    }, { signal: expect.any(AbortSignal) });
+    }, expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i), {
+      signal: expect.any(AbortSignal),
+    });
     await waitFor(() => expect(api.internalWorkspace).toHaveBeenCalledTimes(2));
     expect(api.workspace).toHaveBeenCalledTimes(2);
     expect(api.timeline).toHaveBeenCalledTimes(2);
@@ -1351,7 +1357,7 @@ describe('ContactDetailWorkspace', () => {
 
   it('provides an Escape/cancel path for a task draft and blocks it during save', async () => {
     const api = fakeApi();
-    const pendingTask = deferred<ContactInternalWorkspace['tasks'][number]>();
+    const pendingTask = deferred<Task>();
     vi.mocked(api.createTask).mockReturnValue(pendingTask.promise);
     renderWorkspace(api);
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
@@ -1368,7 +1374,16 @@ describe('ContactDetailWorkspace', () => {
     fireEvent.keyDown(screen.getByRole('region', { name: 'Add task' }), { key: 'Escape' });
     expect(screen.getByRole('region', { name: 'Add task' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close task editor' })).toBeDisabled();
-    await act(async () => pendingTask.resolve({ ...internalWorkspace.tasks[0]!, id: 999, title: 'Pending task' }));
+    await act(async () => pendingTask.resolve({
+      ...internalWorkspace.tasks[0]!,
+      id: 999,
+      title: 'Pending task',
+      priority: 'normal',
+      status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
+    }));
     await waitFor(() => expect(addTask).toHaveFocus());
   });
 

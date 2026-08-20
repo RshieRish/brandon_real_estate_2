@@ -1,4 +1,5 @@
 import { commandBlob, commandJson, CommandDecodeError, type Decoder } from './http';
+import { createTask as createLifecycleTask, type Task } from './tasks';
 
 export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
@@ -1512,11 +1513,6 @@ const decodeContactTagRemoval: Decoder<ContactTagRemoval> = (input, path = 'resp
   };
 };
 
-const decodeContactInternalTask: Decoder<ContactInternalTask> = (
-  input,
-  path = 'response',
-) => internalTaskValue(input, path);
-
 function inputReader(input: unknown, allowed: readonly string[], path: string): Reader {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return invalid(path, 'object');
   const actual = Object.keys(input);
@@ -1758,7 +1754,11 @@ export type ContactsApi = Readonly<{
   createTag: (input: ContactTagCreateInput, options?: CommandRequestOptions) => Promise<ContactTag>;
   assignTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagAssignment>;
   removeTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagRemoval>;
-  createTask: (input: ContactTaskCreateInput, options?: CommandRequestOptions) => Promise<ContactInternalTask>;
+  createTask: (
+    input: ContactTaskCreateInput,
+    idempotencyKey: string,
+    options?: CommandRequestOptions,
+  ) => Promise<Task>;
   artifactBlob: (artifactId: number, options?: CommandRequestOptions) => Promise<Blob>;
 }>;
 
@@ -2044,22 +2044,13 @@ export const contactsApi: ContactsApi = {
       signal: options?.signal,
     });
   },
-  createTask: async (input, options) => {
+  createTask: async (input, idempotencyKey, options) => {
     const body = decodeContactTaskCreateInput(input);
-    return commandJson({
-      path: '/tasks',
-      method: 'POST',
-      body,
-      decode: (raw: unknown, path?: string) => {
-        const responsePath = path ?? 'response';
-        const decoded = decodeContactInternalTask(raw, responsePath);
-        if (decoded.contact_id !== body.contact_id || decoded.status !== 'open') {
-          return invalid(responsePath, 'created contact task identity and state');
-        }
-        return decoded;
-      },
-      signal: options?.signal,
-    });
+    const created = await createLifecycleTask(body, idempotencyKey, options);
+    if (created.contact_id !== body.contact_id || created.status !== 'open') {
+      return invalid('response', 'created contact task identity and state');
+    }
+    return created;
   },
   artifactBlob: async (artifactId, options) => commandBlob({
     path: `/archive/artifacts/${validId(artifactId, 'request.artifact_id')}/content`,

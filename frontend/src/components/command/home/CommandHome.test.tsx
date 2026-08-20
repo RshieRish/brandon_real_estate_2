@@ -7,6 +7,8 @@ import {
   emptyButAvailableInput,
   emptyButUnavailableInput,
 } from '@/test/fixtures/commandHome';
+import * as commandApiModule from '@/lib/command/api';
+import type { Task } from '@/lib/command/tasks';
 import { CommandHome } from './CommandHome';
 
 const navigationMocks = vi.hoisted(() => ({
@@ -38,6 +40,19 @@ vi.mock('@/lib/command/api', async (importOriginal) => {
 });
 
 const now = new Date('2026-08-12T13:00:00.000Z');
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function outcomeUncertain(cause: unknown): Error {
+  const Constructor = Reflect.get(commandApiModule, 'CommandOutcomeUncertainError');
+  if (typeof Constructor === 'function') {
+    return new (Constructor as new (cause: unknown) => Error)(cause);
+  }
+  return Object.assign(
+    new Error('The server may have applied the task change; refresh before retrying.'),
+    { name: 'CommandOutcomeUncertainError', cause },
+  );
+}
+
 const completeHomeModel = buildCommandHomeModel(completeHomeInput, now);
 const partialHomeModel = buildCommandHomeModel({
   ...completeHomeInput,
@@ -76,6 +91,9 @@ describe('Command Home', () => {
       priority: 'normal',
       due_at: null,
       status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
     });
     apiMocks.updateGoalProgress.mockReset().mockResolvedValue({
       ...completeHomeInput.goals?.[0],
@@ -315,7 +333,7 @@ describe('Command Home', () => {
       priority: 'normal',
       contact_id: null,
       due_at: null,
-    }));
+    }, expect.stringMatching(UUID_PATTERN)));
     expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
     expect(navigationMocks.replace).toHaveBeenCalledWith('/admin/command', { scroll: false });
   });
@@ -349,6 +367,26 @@ describe('Command Home', () => {
     expect(alert).toHaveTextContent('Synthetic task rejection');
   });
 
+  it('authoritatively refreshes after an outcome-uncertain create without retrying it', async () => {
+    apiMocks.createTask.mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')));
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Uncertain task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The server may have applied the task change; refresh before retrying.',
+    );
+  });
+
   it('reloads and swaps the whole Home model atomically after quick task creation', async () => {
     const user = userEvent.setup();
     let resolveRefresh!: (model: CommandHomeModel) => void;
@@ -364,6 +402,9 @@ describe('Command Home', () => {
           priority: 'normal',
           due_at: '2026-08-08T13:00:00.000Z',
           status: 'open',
+          archived_at: null,
+          archive_reason: null,
+          version: 1,
         },
       ],
     }, now);
@@ -446,15 +487,7 @@ describe('Command Home', () => {
 
   it('does not start a Home refresh when unmounted during the task mutation', async () => {
     const user = userEvent.setup();
-    let resolveCreateTask!: (value: {
-      id: number;
-      title: string;
-      contact_id: null;
-      description: string;
-      priority: string;
-      due_at: null;
-      status: string;
-    }) => void;
+    let resolveCreateTask!: (value: Task) => void;
     apiMocks.createTask.mockImplementationOnce(() => new Promise((resolve) => {
       resolveCreateTask = resolve;
     }));
@@ -476,6 +509,9 @@ describe('Command Home', () => {
       priority: 'normal',
       due_at: null,
       status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
     }));
 
     expect(loadHome).toHaveBeenCalledTimes(1);

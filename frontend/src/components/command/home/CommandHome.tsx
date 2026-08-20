@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { commandApi, type Goal } from '@/lib/command/api';
+import {
+  commandApi,
+  CommandOutcomeUncertainError,
+  type Goal,
+  type TaskPriority,
+} from '@/lib/command/api';
 import {
   loadCommandHome,
   type CommandHomeModel,
@@ -60,7 +65,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const [taskOpen, setTaskOpen] = useState(createToken === 'task');
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
-  const [taskPriority, setTaskPriority] = useState('normal');
+  const [taskPriority, setTaskPriority] = useState<TaskPriority>('normal');
   const [taskDueAt, setTaskDueAt] = useState('');
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskSaved, setTaskSaved] = useState(false);
@@ -142,8 +147,32 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
         priority: taskPriority,
         contact_id: null,
         due_at: taskDueAt ? new Date(taskDueAt).toISOString() : null,
-      });
+      }, crypto.randomUUID());
     } catch (error) {
+      if (error instanceof CommandOutcomeUncertainError && mountedRef.current) {
+        refreshControllerRef.current?.abort();
+        const refreshController = new AbortController();
+        refreshControllerRef.current = refreshController;
+        const refreshId = refreshIdRef.current + 1;
+        refreshIdRef.current = refreshId;
+        try {
+          const refreshedModel = await loadHome(refreshController.signal);
+          if (
+            mountedRef.current
+            && !refreshController.signal.aborted
+            && refreshIdRef.current === refreshId
+          ) {
+            setLoadState({ kind: 'ready', model: refreshedModel });
+          }
+        } catch {
+          // The original uncertain mutation result remains actionable after a failed refresh.
+        } finally {
+          if (refreshControllerRef.current === refreshController) {
+            refreshControllerRef.current = null;
+          }
+        }
+      }
+      if (!mountedRef.current) return;
       setTaskError(error instanceof Error ? error.message : 'Unable to create task.');
       setTaskSaving(false);
       return;
@@ -387,7 +416,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
               <select
                 aria-label="Task priority"
                 value={taskPriority}
-                onChange={(event) => setTaskPriority(event.target.value)}
+                onChange={(event) => setTaskPriority(event.target.value as TaskPriority)}
               >
                 <option value="low">Low</option>
                 <option value="normal">Normal</option>

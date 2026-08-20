@@ -141,7 +141,9 @@ test('keyboard-only journey reaches shell actions, live regions, and sortable re
   }
   await expect(saveTask).toBeFocused();
   await commandPage.keyboard.press('Enter');
-  const error = commandPage.getByRole('alert').filter({ hasText: 'Synthetic task rejection' });
+  const error = commandPage.getByRole('alert').filter({
+    hasText: 'The server may have applied the task change; refresh before retrying.',
+  });
   await expect(error).toHaveAttribute('aria-live', 'assertive');
   await commandPage.keyboard.press('Escape');
   await expect(commandPage).toHaveURL('/admin/command');
@@ -154,6 +156,9 @@ test('keyboard-only journey reaches shell actions, live regions, and sortable re
     priority: 'normal',
     due_at: null,
     status: 'open',
+    archived_at: null,
+    archive_reason: null,
+    version: 1,
   }, 201, 'POST');
   await commandPage.keyboard.press('Enter');
   await expect(commandPage).toHaveURL('/admin/command?create=task');

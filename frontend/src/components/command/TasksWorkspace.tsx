@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Plus, WarningCircle } from '@phosphor-icons/react';
 import { TaskEditor } from '@/components/command/TaskEditor';
 import { applyTaskWorkspaceView, type TaskWorkspaceView } from '@/components/command/workspaceFilters';
 import {
   commandApi,
+  CommandConflictError,
+  CommandOutcomeUncertainError,
   type Agreement,
   type Contact,
   type Listing,
@@ -29,13 +31,13 @@ export function TasksWorkspace({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [title, setTitle] = useState('');
   const [contactId, setContactId] = useState('');
-  const [priority, setPriority] = useState('normal');
+  const [priority, setPriority] = useState<Task['priority']>('normal');
   const [dueAt, setDueAt] = useState('');
   const [status, setStatus] = useState<TaskWorkspaceView['tab']>(initialView.tab);
   const [dueScope, setDueScope] = useState<TaskWorkspaceView['due']>(initialView.due);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [links, setLinks] = useState<Record<number, TaskLink[]>>({});
+  const [links, setLinks] = useState<Record<number, readonly TaskLink[]>>({});
   const [entityType, setEntityType] = useState<keyof LinkableRecords>('opportunity');
   const [entityId, setEntityId] = useState('');
   const [records, setRecords] = useState<LinkableRecords>({
@@ -46,10 +48,30 @@ export function TasksWorkspace({
   });
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
+  const createPendingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
+
+  const refetchAllTasks = useCallback(async () => {
+    const rows = await commandApi.tasks({ visibility: 'all' });
+    setTasks([...rows]);
+  }, []);
 
   useEffect(() => {
-    void commandApi.tasks().then(setTasks).catch((caught) => setError(caught.message));
-  }, []);
+    void refetchAllTasks().catch((caught: unknown) => {
+      setError(caught instanceof Error ? caught.message : 'Unable to load tasks');
+    });
+  }, [refetchAllTasks]);
+
+  const reconcileMutationFailure = useCallback(async (caught: unknown, fallback: string) => {
+    if (caught instanceof CommandOutcomeUncertainError || caught instanceof CommandConflictError) {
+      try {
+        await refetchAllTasks();
+      } catch {
+        // The original mutation result remains the error the user must reconcile.
+      }
+    }
+    setError(caught instanceof Error ? caught.message : fallback);
+  }, [refetchAllTasks]);
 
   useEffect(() => {
     const loadContacts = async () => {
@@ -67,7 +89,9 @@ export function TasksWorkspace({
   }, []);
 
   async function add() {
-    if (!title.trim()) return;
+    if (!title.trim() || createPendingRef.current) return;
+    createPendingRef.current = true;
+    setCreating(true);
     try {
       const task = await commandApi.createTask({
         title: title.trim(),
@@ -75,35 +99,40 @@ export function TasksWorkspace({
         priority,
         contact_id: contactId ? Number(contactId) : null,
         due_at: dueAt ? new Date(dueAt).toISOString() : null,
-      });
+      }, crypto.randomUUID());
       setTasks((all) => [...all, task]);
       setTitle('');
       setContactId('');
       setDueAt('');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to create task');
+      await reconcileMutationFailure(caught, 'Unable to create task');
+    } finally {
+      createPendingRef.current = false;
+      setCreating(false);
     }
   }
 
   async function complete(task: Task) {
     try {
       const updated = await commandApi.updateTask(task.id, {
+        expected_version: task.version,
         status: task.status === 'completed' ? 'open' : 'completed',
       });
       setTasks((all) => all.map((item) => item.id === task.id ? updated : item));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to update task');
+      await reconcileMutationFailure(caught, 'Unable to update task');
     }
   }
 
   async function assignContact(task: Task, nextContactId: string) {
     try {
       const updated = await commandApi.updateTask(task.id, {
+        expected_version: task.version,
         contact_id: nextContactId ? Number(nextContactId) : null,
       });
       setTasks((all) => all.map((item) => item.id === task.id ? updated : item));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to assign task contact');
+      await reconcileMutationFailure(caught, 'Unable to assign task contact');
     }
   }
 
@@ -142,13 +171,22 @@ export function TasksWorkspace({
 
   async function linkTask() {
     if (!selected || !entityId) return;
+    const task = tasks.find((candidate) => candidate.id === selected);
+    if (!task) return;
     try {
-      await commandApi.addTaskLink(selected, entityType, Number(entityId));
+      const created = await commandApi.addTaskLink(selected, {
+        expected_version: task.version,
+        entity_type: entityType,
+        entity_id: Number(entityId),
+      });
+      setTasks((all) => all.map((item) => item.id === selected
+        ? { ...item, version: created.task_version }
+        : item));
       await showLinks(selected);
       setEntityId('');
       setSelected(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to link task');
+      await reconcileMutationFailure(caught, 'Unable to link task');
     }
   }
 
@@ -191,7 +229,7 @@ export function TasksWorkspace({
           <select
             aria-label="Task priority"
             value={priority}
-            onChange={(event) => setPriority(event.target.value)}
+            onChange={(event) => setPriority(event.target.value as Task['priority'])}
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
           >
             <option value="low">low</option>
@@ -205,7 +243,7 @@ export function TasksWorkspace({
             aria-label="Task due date"
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
           />
-          <button type="button" onClick={() => void add()} aria-label="Add task" className="rounded-xl bg-[#eac469] px-4 text-black">
+          <button type="button" disabled={creating} onClick={() => void add()} aria-label="Add task" className="rounded-xl bg-[#eac469] px-4 text-black disabled:opacity-50">
             <Plus size={19} />
           </button>
         </div>
@@ -327,6 +365,7 @@ export function TasksWorkspace({
             task={editing}
             onClose={() => setEditing(null)}
             onUpdated={(updated) => setTasks((all) => all.map((item) => item.id === updated.id ? updated : item))}
+            onMutationError={(caught) => reconcileMutationFailure(caught, 'Unable to save task')}
           />
         ) : null}
       </main>

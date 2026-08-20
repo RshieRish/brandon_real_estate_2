@@ -9,6 +9,7 @@ import {
 } from './home';
 import { CommandDecodeError } from './http';
 import type { ContactDirectoryRow } from './contacts';
+import type { Task } from './tasks';
 import {
   completeHomeInput,
   emptyButAvailableInput,
@@ -264,7 +265,7 @@ describe('Follow-Up Readiness', () => {
     });
   });
 
-  it('projects only open and in-progress workflow tasks as active', () => {
+  it('projects only nonarchived open and in-progress workflow tasks as active', () => {
     const task = completeHomeInput.tasks?.[0];
     expect(task).toBeDefined();
     const model = buildCommandHomeModel({
@@ -274,7 +275,14 @@ describe('Follow-Up Readiness', () => {
         { ...task!, id: 102, status: 'in_progress', due_at: null },
         { ...task!, id: 103, status: 'completed', due_at: '2026-08-10T13:00:00.000Z' },
         { ...task!, id: 104, status: 'cancelled', due_at: '2026-08-10T13:00:00.000Z' },
-        { ...task!, id: 105, status: 'archived', due_at: '2026-08-10T13:00:00.000Z' },
+        {
+          ...task!,
+          id: 105,
+          status: 'open',
+          archived_at: '2026-08-12T10:00:00.000Z',
+          archive_reason: 'No longer actionable',
+          due_at: '2026-08-10T13:00:00.000Z',
+        },
       ],
     }, now);
 
@@ -289,7 +297,7 @@ describe('Follow-Up Readiness', () => {
     expect(task).toBeDefined();
     expect(() => buildCommandHomeModel({
       ...completeHomeInput,
-      tasks: [{ ...task!, status: 'private-invalid-status' }],
+      tasks: [{ ...task!, status: 'private-invalid-status' as Task['status'] }],
     }, now)).toThrow(CommandDecodeError);
   });
 
@@ -496,7 +504,7 @@ describe('loadCommandHome', () => {
     const model = await loadCommandHome(api, now, controller.signal);
 
     expect(api.contactDirectory).toHaveBeenCalledTimes(8);
-    expect(api.tasks).toHaveBeenCalledWith({}, { signal: controller.signal });
+    expect(api.tasks).toHaveBeenCalledWith({ visibility: 'active' }, { signal: controller.signal });
     expect(api.overview).toHaveBeenCalledWith({ signal: controller.signal });
     expect(api.opportunities).toHaveBeenCalledWith({ signal: controller.signal });
     expect(api.goals).toHaveBeenCalledWith({ signal: controller.signal });

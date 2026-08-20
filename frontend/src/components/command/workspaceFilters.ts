@@ -32,6 +32,7 @@ export function applyTaskWorkspaceView(
   now: Date,
 ): Task[] {
   return tasks.filter((task) => {
+    if (task.archived_at !== null) return false;
     const status = task.status.toLowerCase();
     const statusMatches = view.tab === 'all'
       || (view.tab === 'todo' && (status === 'open' || status === 'in_progress'))

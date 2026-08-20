@@ -26,6 +26,7 @@ import {
 
 const COMMAND_BASE_URL = 'http://localhost:8000/api/v1/command';
 const SHA = 'a'.repeat(64);
+const TASK_IDEMPOTENCY_KEY = '550e8400-e29b-41d4-a716-446655440000';
 
 const actor = {
   role: 'owner',
@@ -1139,6 +1140,9 @@ describe('dedicated Contacts API transport map', () => {
         priority: 'normal',
         due_at: null,
         status: 'open',
+        archived_at: null,
+        archive_reason: null,
+        version: 1,
       },
     ];
     const fetchMock = vi.fn().mockImplementation(() => {
@@ -1161,7 +1165,7 @@ describe('dedicated Contacts API transport map', () => {
     await contactsApi.removeTag(7, 33, { signal: controller.signal });
     await contactsApi.createTask({
       title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
-    }, { signal: controller.signal });
+    }, TASK_IDEMPOTENCY_KEY, { signal: controller.signal });
     await expect(contactsApi.artifactBlob(9, { signal: controller.signal })).resolves.toMatchObject({
       size: 8,
       type: 'text/html',
@@ -1191,6 +1195,21 @@ describe('dedicated Contacts API transport map', () => {
       if (body === undefined) expect(call?.[1]).not.toHaveProperty('body');
       else expect(call?.[1]?.body).toBe(body);
     });
+    expect(fetchMock.mock.calls[7]?.[1]?.headers).toEqual(expect.objectContaining({
+      Authorization: 'Bearer admin-token',
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': TASK_IDEMPOTENCY_KEY,
+    }));
+  });
+
+  it('rejects an invalid contact-task idempotency key before fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    }, 'not-a-uuid')).rejects.toBeInstanceOf(CommandDecodeError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects wrong-contact internal and mutation responses at the boundary', async () => {
@@ -1210,6 +1229,9 @@ describe('dedicated Contacts API transport map', () => {
         priority: 'normal',
         due_at: null,
         status: 'open',
+        archived_at: null,
+        archive_reason: null,
+        version: 1,
       }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1219,7 +1241,7 @@ describe('dedicated Contacts API transport map', () => {
     await expect(contactsApi.internalWorkspace(7)).rejects.toBeInstanceOf(CommandDecodeError);
     await expect(contactsApi.createTask({
       title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
-    })).rejects.toBeInstanceOf(CommandDecodeError);
+    }, TASK_IDEMPOTENCY_KEY)).rejects.toBeInstanceOf(CommandDecodeError);
   });
 
   it('rejects a created tag whose response name does not bind to the request', async () => {

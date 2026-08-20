@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures/command';
 
 const defaultDirectory = '/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=50';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function api(page: Page, path: string, method = 'GET', body?: unknown) {
   return page.evaluate(async ({ requestPath, requestMethod, requestBody }) => {
@@ -458,7 +459,9 @@ test('internal profile, note, search, tag, task, delete, and remove mutations se
   await commandPage.getByLabel('Task title').fill('Browser task');
   const task = commandPage.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/tasks'));
   await commandPage.getByRole('button', { name: 'Save task' }).click();
-  expect((await task).postDataJSON()).toEqual({ title: 'Browser task', contact_id: 1, description: '', priority: 'normal', due_at: null });
+  const taskRequest = await task;
+  expect(taskRequest.postDataJSON()).toEqual({ title: 'Browser task', contact_id: 1, description: '', priority: 'normal', due_at: null });
+  expect(taskRequest.headers()['x-idempotency-key']).toMatch(UUID_PATTERN);
   await expect(commandPage.getByRole('button', { name: 'Add task' })).toBeFocused();
 
   await commandPage.getByRole('tab', { name: 'Notes' }).click();

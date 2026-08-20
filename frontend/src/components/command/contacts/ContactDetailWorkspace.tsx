@@ -848,7 +848,11 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     mutationControllerRef.current = controller;
     let authoritative = false;
     try {
-      await api.createTask({ title, contact_id: contactId, description: '', priority: 'normal', due_at: null }, { signal: controller.signal });
+      await api.createTask(
+        { title, contact_id: contactId, description: '', priority: 'normal', due_at: null },
+        crypto.randomUUID(),
+        { signal: controller.signal },
+      );
       if (!mutationIsCurrent(controller, ownedContactId)) return;
       const refreshed = await refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
       if (!mutationIsCurrent(controller, ownedContactId)) return;

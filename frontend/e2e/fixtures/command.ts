@@ -95,7 +95,24 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
       body: Number(url.searchParams.get('offset') ?? '0') === 0 ? home.contacts : [],
     }),
   },
-  { method: 'GET', path: '/tasks', query: '', respond: () => ({ status: 200, body: home.tasks }) },
+  {
+    method: 'GET',
+    path: '/tasks',
+    query: '?visibility=active',
+    respond: () => ({
+      status: 200,
+      body: home.tasks.filter((task) => (
+        task.archived_at === null
+        && (task.status === 'open' || task.status === 'in_progress')
+      )),
+    }),
+  },
+  {
+    method: 'GET',
+    path: '/tasks',
+    query: '?visibility=all',
+    respond: () => ({ status: 200, body: home.tasks }),
+  },
   {
     method: 'POST',
     path: '/tasks',
@@ -110,6 +127,9 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
         priority: 'normal',
         due_at: null,
         status: 'open',
+        archived_at: null,
+        archive_reason: null,
+        version: 1,
       },
     }),
   },
@@ -128,7 +148,17 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
       body: {
         contact: home.contacts[0],
         timeline: [],
-        tasks: home.tasks.filter((task) => task.contact_id === 1),
+        tasks: home.tasks
+          .filter((task) => task.contact_id === 1)
+          .map((task) => ({
+            id: task.id,
+            title: task.title,
+            contact_id: task.contact_id,
+            description: task.description,
+            priority: task.priority,
+            due_at: task.due_at,
+            status: task.archived_at === null ? task.status : 'archived',
+          })),
         notes: [],
         smart_plans: [],
         opportunities: home.opportunities.slice(0, 1),

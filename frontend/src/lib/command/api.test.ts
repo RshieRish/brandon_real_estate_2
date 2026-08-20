@@ -96,6 +96,8 @@ describe('commandApi', () => {
       'addTaskLink',
       'taskLinks',
       'updateTask',
+      'archiveTask',
+      'restoreTask',
     ]);
   });
 
@@ -110,7 +112,6 @@ describe('commandApi', () => {
       path: string;
     }>[] = [
       { name: 'overview', invoke: () => commandApi.overview(), path: '/overview' },
-      { name: 'tasks', invoke: () => commandApi.tasks({ status: 'open' }), path: '/tasks?status=open' },
       { name: 'savedSearches', invoke: () => commandApi.savedSearches(), path: '/saved-searches' },
       { name: 'goals', invoke: () => commandApi.goals(), path: '/goals' },
       { name: 'aiBriefing', invoke: () => commandApi.aiBriefing(), path: '/ai/briefing' },
@@ -129,7 +130,6 @@ describe('commandApi', () => {
       { name: 'reportsSummary', invoke: () => commandApi.reportsSummary(), path: '/reports/summary' },
       { name: 'archiveArtifacts', invoke: () => commandApi.archiveArtifacts('contacts', 3), path: '/archive/artifacts?limit=100&offset=3&domain=contacts' },
       { name: 'reportDetails', invoke: () => commandApi.reportDetails('contact health'), path: '/reports/details/contact%20health' },
-      { name: 'taskLinks', invoke: () => commandApi.taskLinks(7), path: '/tasks/7/links' },
     ];
 
     for (const item of cases) {
@@ -189,9 +189,6 @@ describe('commandApi', () => {
       { name: 'geocodeListing', invoke: () => commandApi.geocodeListing(7), path: '/listings/7/geocode', method: 'POST' },
       { name: 'createReferral', invoke: () => commandApi.createReferral({ name: 'Referral', source: 'Partner', contact_id: null }), path: '/referrals', method: 'POST', body: JSON.stringify({ name: 'Referral', source: 'Partner', contact_id: null }) },
       { name: 'updateReferralStatus', invoke: () => commandApi.updateReferralStatus(7, 'contacted'), path: '/referrals/7', method: 'PATCH', body: JSON.stringify({ status: 'contacted' }) },
-      { name: 'createTask', invoke: () => commandApi.createTask({ title: 'Call', description: '', priority: 'normal', contact_id: null, due_at: null }), path: '/tasks', method: 'POST', body: JSON.stringify({ title: 'Call', description: '', priority: 'normal', contact_id: null, due_at: null }) },
-      { name: 'addTaskLink', invoke: () => commandApi.addTaskLink(7, 'agreement', 8), path: '/tasks/7/links', method: 'POST', body: JSON.stringify({ entity_type: 'agreement', entity_id: 8 }) },
-      { name: 'updateTask', invoke: () => commandApi.updateTask(7, { status: 'completed' }), path: '/tasks/7', method: 'PATCH', body: JSON.stringify({ status: 'completed' }) },
     ];
 
     for (const item of cases) {
@@ -485,10 +482,27 @@ describe('commandApi', () => {
 
   it('creates an internal record link for a task', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-task-link' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 2, task_id: 8, entity_type: 'agreement', entity_id: 15 }) });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 2,
+        task_id: 8,
+        entity_type: 'agreement',
+        entity_id: 15,
+        display_name: 'Agreement 15',
+        task_version: 4,
+      }),
+    });
     vi.stubGlobal('fetch', fetchMock);
-    await expect(commandApi.addTaskLink(8, 'agreement', 15)).resolves.toMatchObject({ entity_id: 15 });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/8/links'), expect.objectContaining({ method: 'POST', body: JSON.stringify({ entity_type: 'agreement', entity_id: 15 }) }));
+    await expect(commandApi.addTaskLink(8, {
+      expected_version: 3,
+      entity_type: 'agreement',
+      entity_id: 15,
+    })).resolves.toMatchObject({ entity_id: 15, task_version: 4 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/8/links'), expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ expected_version: 3, entity_type: 'agreement', entity_id: 15 }),
+    }));
   });
 
   it('updates an internal agreement template body', async () => {
@@ -616,19 +630,67 @@ describe('commandApi', () => {
 
   it('persists a complete task edit through the internal API', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-task-edit' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null, contact_id: null }) });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 9,
+        title: 'Call buyer',
+        description: 'Discuss timeline',
+        priority: 'high',
+        status: 'in_progress',
+        due_at: null,
+        contact_id: null,
+        archived_at: null,
+        archive_reason: null,
+        version: 4,
+      }),
+    });
     vi.stubGlobal('fetch', fetchMock);
 
-    await commandApi.updateTask(9, { title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: 'Call buyer', description: 'Discuss timeline', priority: 'high', status: 'in_progress', due_at: null }) }));
+    await commandApi.updateTask(9, {
+      expected_version: 3,
+      title: 'Call buyer',
+      description: 'Discuss timeline',
+      priority: 'high',
+      status: 'in_progress',
+      due_at: null,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({
+        expected_version: 3,
+        title: 'Call buyer',
+        description: 'Discuss timeline',
+        priority: 'high',
+        status: 'in_progress',
+        due_at: null,
+      }),
+    }));
   });
 
   it('assigns a task to a selected internal contact', async () => {
     vi.stubGlobal('localStorage', { getItem: () => 'token-task-contact' });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 9, contact_id: 14 }) });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 9,
+        title: 'Call buyer',
+        description: '',
+        priority: 'normal',
+        status: 'open',
+        due_at: null,
+        contact_id: 14,
+        archived_at: null,
+        archive_reason: null,
+        version: 6,
+      }),
+    });
     vi.stubGlobal('fetch', fetchMock);
-    await commandApi.updateTask(9, { contact_id: 14 });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ contact_id: 14 }) }));
+    await commandApi.updateTask(9, { expected_version: 5, contact_id: 14 });
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tasks/9'), expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ expected_version: 5, contact_id: 14 }),
+    }));
   });
 
   it('loads a report-card drilldown through the authenticated Command API', async () => {
