@@ -679,13 +679,111 @@ describe('TasksWorkspace archive lifecycle', () => {
     const refresh = screen.getByRole('button', { name: 'Refresh tasks' });
     expect(refresh).toBeEnabled();
     expect(refresh).toHaveClass('command-touch-target');
+    expect(refresh).toHaveFocus();
     expect(apiMocks.archiveTask).toHaveBeenCalledTimes(1);
 
     apiMocks.tasks.mockResolvedValueOnce([activeTask]);
     await user.click(refresh);
 
-    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    await waitFor(() => expect(retry).toHaveFocus());
     expect(apiMocks.archiveTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves focus from Refresh tasks to Retry when authoritative refresh finds the unchanged task', async () => {
+    apiMocks.archiveTask.mockRejectedValueOnce(
+      new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')),
+    );
+    apiMocks.tasks
+      .mockResolvedValueOnce([activeTask])
+      .mockRejectedValueOnce(new Error('Synthetic refresh failure'))
+      .mockResolvedValueOnce([activeTask]);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Call Jane');
+    await openArchiveDialog(user);
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    const refresh = await screen.findByRole('button', { name: 'Refresh tasks' });
+    refresh.focus();
+    expect(refresh).toHaveFocus();
+    await user.click(refresh);
+
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(retry).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Refresh tasks' })).not.toBeInTheDocument();
+    expect(apiMocks.archiveTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves focus from Retry to Refresh tasks when retry reconciliation fails', async () => {
+    apiMocks.archiveTask
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic retry disconnect')));
+    apiMocks.tasks
+      .mockResolvedValueOnce([activeTask])
+      .mockResolvedValueOnce([activeTask])
+      .mockRejectedValueOnce(new Error('Synthetic retry refresh failure'));
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Call Jane');
+    await openArchiveDialog(user);
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    retry.focus();
+    expect(retry).toHaveFocus();
+    await user.click(retry);
+
+    const refresh = await screen.findByRole('button', { name: 'Refresh tasks' });
+    expect(refresh).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(apiMocks.archiveTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('focuses the visibility fallback when authoritative refresh finds a differently changed task', async () => {
+    const changedActive = {
+      ...activeTask,
+      description: 'Changed during failed reconciliation',
+      version: 5,
+    };
+    apiMocks.archiveTask.mockRejectedValueOnce(
+      new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')),
+    );
+    apiMocks.tasks
+      .mockResolvedValueOnce([activeTask])
+      .mockRejectedValueOnce(new Error('Synthetic refresh failure'))
+      .mockResolvedValueOnce([changedActive]);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Call Jane');
+    await openArchiveDialog(user);
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Refresh tasks' }));
+
+    expect(await screen.findByText('Changed during failed reconciliation')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Active' })).toHaveFocus();
+  });
+
+  it('focuses Undo when authoritative refresh confirms the archive was applied', async () => {
+    apiMocks.archiveTask.mockRejectedValueOnce(
+      new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')),
+    );
+    apiMocks.tasks
+      .mockResolvedValueOnce([activeTask])
+      .mockRejectedValueOnce(new Error('Synthetic refresh failure'))
+      .mockResolvedValueOnce([archivedTask]);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Call Jane');
+    await openArchiveDialog(user);
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Refresh tasks' }));
+
+    expect(await screen.findByText(/Archive confirmed after refreshing/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toHaveFocus();
   });
 
   it('never briefly installs a historical Archive retry ACK while authoritative reconciliation is pending', async () => {

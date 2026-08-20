@@ -139,7 +139,7 @@ export function TasksWorkspace({
   const [lifecycleRetry, setLifecycleRetry] = useState<TaskLifecycleAttempt | null>(null);
   const [undoArchive, setUndoArchive] = useState<Task | null>(null);
   const [refreshContext, setRefreshContext] = useState<RefreshContext | null>(null);
-  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'undo' | null>(null);
+  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'undo' | 'retry' | 'refresh' | null>(null);
 
   const mutationPendingRef = useRef(false);
   const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
@@ -152,6 +152,8 @@ export function TasksWorkspace({
   const activeVisibilityRef = useRef<HTMLButtonElement>(null);
   const archivedVisibilityRef = useRef<HTMLButtonElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const lifecycleRetryRef = useRef<HTMLButtonElement>(null);
+  const refreshTasksRef = useRef<HTMLButtonElement>(null);
 
   const beginTaskMutation = useCallback(() => {
     if (mutationPendingRef.current) return false;
@@ -213,11 +215,15 @@ export function TasksWorkspace({
   useEffect(() => {
     const target = focusTarget === 'undo'
       ? undoRef.current
+      : focusTarget === 'retry'
+        ? lifecycleRetryRef.current
+        : focusTarget === 'refresh'
+          ? refreshTasksRef.current
       : focusTarget === 'archived'
-        ? archivedVisibilityRef.current
-        : focusTarget === 'active'
-          ? activeVisibilityRef.current
-          : null;
+            ? archivedVisibilityRef.current
+            : focusTarget === 'active'
+              ? activeVisibilityRef.current
+              : null;
     if (target === null) return;
     target.focus();
     setFocusTarget(null);
@@ -268,6 +274,7 @@ export function TasksWorkspace({
     if (phase === 'uncertain' && sameTask(authoritative, attempt.originalTask)) {
       setLifecycleRetry(attempt);
       setMutationError(`${label} outcome is unknown. Retry sends the same protected request, or review the task and start a fresh action.`);
+      setFocusTarget('retry');
       finishTaskMutation();
       return;
     }
@@ -289,12 +296,14 @@ export function TasksWorkspace({
       if (rows === null) {
         setMutationRefreshRequired(true);
         setRefreshContext({ kind: 'lifecycle', attempt, phase });
+        setFocusTarget('refresh');
         return;
       }
       resolveLifecycleRows(attempt, rows, phase);
     } catch {
       setMutationRefreshRequired(true);
       setRefreshContext({ kind: 'lifecycle', attempt, phase });
+      setFocusTarget('refresh');
     }
   }
 
@@ -570,6 +579,7 @@ export function TasksWorkspace({
       }
     } catch {
       setMutationRefreshRequired(true);
+      if (refreshContext?.kind === 'lifecycle') setFocusTarget('refresh');
     } finally {
       setRefreshingTasks(false);
     }
@@ -711,8 +721,8 @@ export function TasksWorkspace({
         {displayedError ? (
           <div role="alert" aria-live="assertive" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-red-300/20 bg-red-950/25 p-3 text-sm text-red-200">
             <WarningCircle aria-hidden="true" size={18} /><span>{displayedError}</span>
-            {lifecycleRetry && !mutationRefreshRequired ? <button type="button" disabled={mutationsLocked} onClick={retryLifecycleRequest} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">Retry</button> : null}
-            {mutationRefreshRequired ? <button type="button" disabled={refreshingTasks} onClick={() => void refreshAuthoritativeTasks()} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">{refreshingTasks ? 'Refreshing…' : 'Refresh tasks'}</button> : null}
+            {lifecycleRetry && !mutationRefreshRequired ? <button ref={lifecycleRetryRef} type="button" disabled={mutationsLocked} onClick={retryLifecycleRequest} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">Retry</button> : null}
+            {mutationRefreshRequired ? <button ref={refreshTasksRef} type="button" disabled={refreshingTasks} onClick={() => void refreshAuthoritativeTasks()} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">{refreshingTasks ? 'Refreshing…' : 'Refresh tasks'}</button> : null}
           </div>
         ) : null}
 
