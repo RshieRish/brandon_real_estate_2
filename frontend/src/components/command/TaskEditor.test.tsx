@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Task } from '@/lib/command/api';
@@ -105,5 +106,57 @@ describe('TaskEditor lifecycle compatibility', () => {
     );
 
     expect(screen.getByLabelText('Task due date')).toHaveValue('');
+  });
+
+  it('contains keyboard focus and restores its live trigger after Cancel, Escape, and save', async () => {
+    function EditorHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open task editor</button>
+          {open ? (
+            <TaskEditor
+              task={task}
+              onUpdated={vi.fn()}
+              onClose={() => setOpen(false)}
+            />
+          ) : null}
+        </>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(<EditorHarness />);
+    const trigger = screen.getByRole('button', { name: 'Open task editor' });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit task' });
+    const close = within(dialog).getByRole('button', { name: 'Close task editor' });
+    const save = within(dialog).getByRole('button', { name: 'Save task' });
+    expect(close).toHaveFocus();
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(save).toHaveFocus();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Edit task' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: 'Edit task' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit task' })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it('gives every editor action a reusable 44px touch-target class', () => {
+    render(<TaskEditor task={task} onUpdated={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Close task editor' })).toHaveClass('command-touch-target');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('command-touch-target');
+    expect(screen.getByRole('button', { name: 'Save task' })).toHaveClass('command-touch-target');
   });
 });
