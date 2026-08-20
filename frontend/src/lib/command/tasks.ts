@@ -78,7 +78,15 @@ export type TaskConflict = Readonly<{
   current_task: Task;
 }>;
 
-export type TaskRequestOptions = Readonly<{ signal?: AbortSignal }>;
+export type TaskCreateConflict = Readonly<{
+  code: 'task_idempotency_mismatch' | 'task_creation_state_invalid' | 'task_source_conflict';
+  message: string;
+}>;
+
+export type TaskRequestOptions = Readonly<{
+  signal?: AbortSignal;
+  clientTimezone?: string;
+}>;
 
 export class CommandConflictError extends Error {
   readonly name = 'CommandConflictError';
@@ -95,6 +103,14 @@ export class CommandOutcomeUncertainError extends Error {
   constructor(cause: unknown) {
     super(OUTCOME_UNCERTAIN_MESSAGE);
     this.cause = cause;
+  }
+}
+
+export class CommandCreateConflictError extends CommandHttpError {
+  readonly name = 'CommandCreateConflictError';
+
+  constructor(readonly conflict: TaskCreateConflict) {
+    super(409, conflict.message);
   }
 }
 
@@ -165,8 +181,8 @@ function databaseInteger(input: unknown, path: string): number {
   return value;
 }
 
-function nullablePositiveSafeInteger(input: unknown, path: string): number | null {
-  return input === null ? null : positiveSafeInteger(input, path);
+function nullableDatabaseInteger(input: unknown, path: string): number | null {
+  return input === null ? null : databaseInteger(input, path);
 }
 
 function enumValue<Value extends string>(
@@ -258,20 +274,20 @@ const TASK_FIELDS = [
 export const decodeTask: Decoder<Task> = (input, path = 'response') => {
   const read = exactObject(input, TASK_FIELDS, path);
   return {
-    id: positiveSafeInteger(read('id'), `${path}.id`),
+    id: databaseInteger(read('id'), `${path}.id`),
     title: stringValue(read('title'), `${path}.title`),
-    contact_id: nullablePositiveSafeInteger(read('contact_id'), `${path}.contact_id`),
+    contact_id: nullableDatabaseInteger(read('contact_id'), `${path}.contact_id`),
     description: stringValue(read('description'), `${path}.description`),
     priority: enumValue(read('priority'), ['low', 'normal', 'high'], `${path}.priority`),
-    due_at: nullableString(read('due_at'), `${path}.due_at`),
+    due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
     status: enumValue(
       read('status'),
       ['open', 'in_progress', 'completed', 'cancelled'],
       `${path}.status`,
     ),
-    archived_at: nullableString(read('archived_at'), `${path}.archived_at`),
+    archived_at: nullableRfc3339(read('archived_at'), `${path}.archived_at`),
     archive_reason: nullableString(read('archive_reason'), `${path}.archive_reason`),
-    version: positiveSafeInteger(read('version'), `${path}.version`),
+    version: databaseInteger(read('version'), `${path}.version`),
   };
 };
 
@@ -291,18 +307,26 @@ const TASK_LINK_FIELDS = [
 export const decodeTaskLink: Decoder<TaskLink> = (input, path = 'response') => {
   const read = exactObject(input, TASK_LINK_FIELDS, path);
   return {
-    id: positiveSafeInteger(read('id'), `${path}.id`),
-    task_id: positiveSafeInteger(read('task_id'), `${path}.task_id`),
+    id: databaseInteger(read('id'), `${path}.id`),
+    task_id: databaseInteger(read('task_id'), `${path}.task_id`),
     entity_type: stringValue(read('entity_type'), `${path}.entity_type`),
-    entity_id: positiveSafeInteger(read('entity_id'), `${path}.entity_id`),
+    entity_id: databaseInteger(read('entity_id'), `${path}.entity_id`),
     display_name: stringValue(read('display_name'), `${path}.display_name`),
-    task_version: positiveSafeInteger(read('task_version'), `${path}.task_version`),
+    task_version: databaseInteger(read('task_version'), `${path}.task_version`),
   };
 };
 
 export const decodeTaskLinks: Decoder<readonly TaskLink[]> = (input, path = 'response') => (
   decodeArray(input, path, decodeTaskLink)
 );
+
+function decodeTaskLinksFor(taskId: number): Decoder<readonly TaskLink[]> {
+  return (input, path = 'response') => decodeArray(input, path, (value, childPath) => {
+    const decoded = decodeTaskLink(value, childPath);
+    if (decoded.task_id !== taskId) return invalid(`${childPath}.task_id`, `task id ${taskId}`);
+    return decoded;
+  });
+}
 
 const CONFLICT_CODES: readonly TaskConflict['code'][] = [
   'task_version_conflict',
@@ -312,7 +336,7 @@ const CONFLICT_CODES: readonly TaskConflict['code'][] = [
 
 export const decodeTaskConflict: Decoder<TaskConflict> = (input, path = 'response.detail') => {
   const read = exactObject(input, ['code', 'current_version', 'current_task'], path);
-  const currentVersion = positiveSafeInteger(read('current_version'), `${path}.current_version`);
+  const currentVersion = databaseInteger(read('current_version'), `${path}.current_version`);
   const currentTask = decodeTask(read('current_task'), `${path}.current_task`);
   if (currentTask.version !== currentVersion) {
     return invalid(path, 'conflict version matching current task');
@@ -327,6 +351,39 @@ export const decodeTaskConflict: Decoder<TaskConflict> = (input, path = 'respons
 function decodeConflictResponse(input: unknown): TaskConflict {
   const read = exactObject(input, ['detail'], 'response');
   return decodeTaskConflict(read('detail'));
+}
+
+const CREATE_CONFLICT_CODES: readonly TaskCreateConflict['code'][] = [
+  'task_idempotency_mismatch',
+  'task_creation_state_invalid',
+  'task_source_conflict',
+];
+
+function decodeCreateConflictResponse(input: unknown): TaskCreateConflict {
+  const response = exactObject(input, ['detail'], 'response');
+  const detail = exactObject(response('detail'), ['code', 'message'], 'response.detail');
+  return {
+    code: enumValue(detail('code'), CREATE_CONFLICT_CODES, 'response.detail.code'),
+    message: nonblankString(detail('message'), 'response.detail.message', HTTP_DETAIL_MAX_LENGTH),
+  };
+}
+
+function clientTimezoneValue(input: unknown, path: string): string {
+  const value = nonblankString(input, path, 100);
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+  } catch {
+    return invalid(path, 'IANA time zone');
+  }
+  return value;
+}
+
+export function currentTaskClientTimezone(): string {
+  try {
+    return clientTimezoneValue(Intl.DateTimeFormat().resolvedOptions().timeZone, 'request.client_timezone');
+  } catch {
+    return 'UTC';
+  }
 }
 
 function serializeTaskFilters(filters: TaskFilters): string {
@@ -464,6 +521,8 @@ type TaskMutationRequest<Value> = Readonly<{
   body: unknown;
   decode: Decoder<Value>;
   idempotencyKey?: string;
+  clientTimezone?: string;
+  conflictKind?: 'lifecycle' | 'create';
   signal?: AbortSignal;
 }>;
 
@@ -478,6 +537,9 @@ async function taskMutation<Value>(request: TaskMutationRequest<Value>): Promise
   };
   if (request.idempotencyKey !== undefined) {
     headers['X-Idempotency-Key'] = request.idempotencyKey;
+  }
+  if (request.clientTimezone !== undefined) {
+    headers['X-Client-Timezone'] = request.clientTimezone;
   }
 
   let response: Response;
@@ -494,9 +556,13 @@ async function taskMutation<Value>(request: TaskMutationRequest<Value>): Promise
 
   if (response.status === 409) {
     try {
-      throw new CommandConflictError(decodeConflictResponse(await response.json()));
+      const body: unknown = await response.json();
+      if (request.conflictKind === 'create') {
+        throw new CommandCreateConflictError(decodeCreateConflictResponse(body));
+      }
+      throw new CommandConflictError(decodeConflictResponse(body));
     } catch (error) {
-      if (error instanceof CommandConflictError) throw error;
+      if (error instanceof CommandConflictError || error instanceof CommandCreateConflictError) throw error;
       throw new CommandOutcomeUncertainError(error);
     }
   }
@@ -530,7 +596,7 @@ export function loadTaskLinks(taskId: number, options?: TaskRequestOptions): Pro
   const id = databaseInteger(taskId, 'request.task_id');
   return commandJson({
     path: `/tasks/${id}/links`,
-    decode: decodeTaskLinks,
+    decode: decodeTaskLinksFor(id),
     signal: options?.signal,
   });
 }
@@ -542,12 +608,17 @@ export async function createTask(
 ): Promise<Task> {
   const body = decodeTaskCreateInput(input);
   const key = uuidValue(idempotencyKey, 'request.idempotency_key');
+  const clientTimezone = options?.clientTimezone === undefined
+    ? currentTaskClientTimezone()
+    : clientTimezoneValue(options.clientTimezone, 'request.client_timezone');
   return taskMutation({
     path: '/tasks',
     method: 'POST',
     body,
     decode: decodeTask,
     idempotencyKey: key,
+    clientTimezone,
+    conflictKind: 'create',
     signal: options?.signal,
   });
 }
@@ -579,7 +650,26 @@ export async function addTaskLink(
     path: `/tasks/${id}/links`,
     method: 'POST',
     body,
-    decode: decodeTaskLink,
+    decode: (value, path) => {
+      const decoded = decodeTaskLink(value, path);
+      if (decoded.task_id !== id) return invalid(`${path}.task_id`, `task id ${id}`);
+      if (decoded.entity_type !== body.entity_type) {
+        return invalid(`${path}.entity_type`, `entity type ${body.entity_type}`);
+      }
+      if (decoded.entity_id !== body.entity_id) {
+        return invalid(`${path}.entity_id`, `entity id ${body.entity_id}`);
+      }
+      if (
+        decoded.task_version !== body.expected_version
+        && decoded.task_version !== body.expected_version + 1
+      ) {
+        return invalid(
+          `${path}.task_version`,
+          `expected version ${body.expected_version} or ${body.expected_version + 1}`,
+        );
+      }
+      return decoded;
+    },
     signal: options?.signal,
   });
 }

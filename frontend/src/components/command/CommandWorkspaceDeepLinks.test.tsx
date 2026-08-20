@@ -84,10 +84,12 @@ function outcomeError(kind: 'uncertain' | 'conflict'): Error {
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((onResolve) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<Value>((onResolve, onReject) => {
     resolve = onResolve;
+    reject = onReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const contact: ContactDirectoryRow = {
@@ -188,7 +190,9 @@ describe('Command workspace deep links', () => {
       priority: 'normal',
       contact_id: null,
       due_at: null,
-    }, expect.stringMatching(UUID_PATTERN)));
+    }, expect.stringMatching(UUID_PATTERN), {
+      clientTimezone: expect.any(String),
+    }));
     expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
   });
 
@@ -216,6 +220,63 @@ describe('Command workspace deep links', () => {
 
     resolveRefetch(tasks);
     await waitFor(() => expect(addTask).toBeEnabled());
+  });
+
+  it('reuses the same UUID and canonical payload only for an unchanged explicit create retry', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeError('uncertain'))
+      .mockResolvedValueOnce({
+        ...tasks[0], id: 99, title: 'Uncertain task', priority: 'normal', due_at: null, version: 1,
+      });
+    apiMocks.tasks.mockReset()
+      .mockResolvedValueOnce(tasks)
+      .mockResolvedValueOnce(tasks);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Past open');
+
+    await user.type(screen.getByPlaceholderText('Add a task'), 'Uncertain task');
+    const addTask = screen.getByRole('button', { name: 'Add task' });
+    await user.click(addTask);
+    await waitFor(() => expect(addTask).toBeEnabled());
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    const [firstPayload, firstKey] = apiMocks.createTask.mock.calls[0]!;
+
+    await user.type(screen.getByPlaceholderText('Add a task'), ' ');
+    await user.click(addTask);
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]).toEqual([
+      firstPayload,
+      firstKey,
+      apiMocks.createTask.mock.calls[0]?.[2],
+    ]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('allocates a new UUID when any create payload field changes after uncertainty', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeError('uncertain'))
+      .mockResolvedValueOnce({
+        ...tasks[0], id: 100, title: 'Changed intent', priority: 'normal', due_at: null, version: 1,
+      });
+    apiMocks.tasks.mockReset()
+      .mockResolvedValueOnce(tasks)
+      .mockResolvedValueOnce(tasks);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Past open');
+
+    const titleInput = screen.getByPlaceholderText('Add a task');
+    await user.type(titleInput, 'Original intent');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add task' })).toBeEnabled());
+    const firstKey = apiMocks.createTask.mock.calls[0]?.[1];
+
+    await user.clear(titleInput);
+    await user.type(titleInput, 'Changed intent');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]?.[1]).not.toBe(firstKey);
   });
 
   it('uses each authoritative mutation response version for the next update', async () => {
@@ -277,16 +338,21 @@ describe('Command workspace deep links', () => {
   );
 
   it.each(['uncertain', 'conflict'] as const)(
-    'locks every task write during %s editor reconciliation and saves with the refreshed version',
+    'locks every task write during %s editor reconciliation and closes the stale editor',
     async (kind) => {
       const refresh = deferred<readonly Task[]>();
-      const authoritativeTask = { ...tasks[0]!, version: 8 };
+      const authoritativeTask = {
+        ...tasks[0]!,
+        title: 'Server-owned concurrent title',
+        description: 'Server-owned concurrent description',
+        priority: 'low' as const,
+        due_at: null,
+        version: 8,
+      };
       apiMocks.tasks.mockReset()
         .mockResolvedValueOnce(tasks)
         .mockReturnValueOnce(refresh.promise);
-      apiMocks.updateTask
-        .mockRejectedValueOnce(outcomeError(kind))
-        .mockResolvedValueOnce({ ...authoritativeTask, title: 'Fresh edit', version: 9 });
+      apiMocks.updateTask.mockRejectedValueOnce(outcomeError(kind));
       const user = userEvent.setup();
       render(<TasksWorkspace />);
       await screen.findByText('Past open');
@@ -311,16 +377,8 @@ describe('Command workspace deep links', () => {
         authoritativeTask,
         ...tasks.slice(1),
       ]));
-      await waitFor(() => expect(save).toBeEnabled());
-      await user.click(save);
-
-      await waitFor(() => expect(apiMocks.updateTask).toHaveBeenNthCalledWith(2, 1, {
-        expected_version: 8,
-        title: 'Fresh edit',
-        description: '',
-        priority: 'high',
-        due_at: expect.any(String),
-      }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit task' })).not.toBeInTheDocument());
+      expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -355,7 +413,7 @@ describe('Command workspace deep links', () => {
         { ...tasks[0]!, version: 8 },
         ...tasks.slice(1),
       ]));
-      await waitFor(() => expect(linkButton).toBeEnabled());
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Link internal record' })).not.toBeInTheDocument());
       expect(apiMocks.addTaskLink).toHaveBeenCalledTimes(1);
     },
   );
@@ -373,9 +431,10 @@ describe('Command workspace deep links', () => {
     const toggle = screen.getByRole('button', { name: 'Toggle Past open' });
     await user.click(toggle);
 
-    expect(await screen.findByText(
+    const refreshRequired = await screen.findByText(
       'Task state could not be refreshed. Refresh the page before making another task change.',
-    )).toBeInTheDocument();
+    );
+    expect(refreshRequired.closest('[role="alert"]')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled();
     expect(toggle).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Assign Past open contact' })).toBeDisabled();
@@ -391,6 +450,66 @@ describe('Command workspace deep links', () => {
     expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
     expect(apiMocks.createTask).not.toHaveBeenCalled();
     expect(apiMocks.tasks).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores an initial task read that settles after a confirmed create mutation', async () => {
+    const staleInitial = deferred<readonly Task[]>();
+    apiMocks.tasks.mockReset().mockReturnValueOnce(staleInitial.promise);
+    apiMocks.createTask.mockResolvedValueOnce({
+      ...tasks[0], id: 99, title: 'Created while loading', priority: 'normal', due_at: null, version: 1,
+    });
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+
+    await user.type(screen.getByPlaceholderText('Add a task'), 'Created while loading');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    expect(await screen.findByText('Created while loading')).toBeInTheDocument();
+
+    await act(async () => staleInitial.resolve(tasks));
+    expect(screen.getByText('Created while loading')).toBeInTheDocument();
+  });
+
+  it('ignores a stale initial task-read failure after a newer confirmed mutation', async () => {
+    const staleInitial = deferred<readonly Task[]>();
+    apiMocks.tasks.mockReset().mockReturnValueOnce(staleInitial.promise);
+    apiMocks.createTask.mockResolvedValueOnce({
+      ...tasks[0], id: 99, title: 'Newest task', priority: 'normal', due_at: null, version: 1,
+    });
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+
+    await user.type(screen.getByPlaceholderText('Add a task'), 'Newest task');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    expect(await screen.findByText('Newest task')).toBeInTheDocument();
+
+    await act(async () => staleInitial.reject(new Error('Stale tasks read failed')));
+    expect(screen.queryByText('Stale tasks read failed')).not.toBeInTheDocument();
+  });
+
+  it('keeps the newest task-link read when an older request settles last', async () => {
+    const oldLinks = deferred<readonly commandApiModule.TaskLink[]>();
+    const freshLink = {
+      id: 20, task_id: 1, entity_type: 'agreement', entity_id: 19,
+      display_name: 'Fresh buyer agreement', task_version: 2,
+    };
+    apiMocks.taskLinks.mockReset()
+      .mockReturnValueOnce(oldLinks.promise)
+      .mockResolvedValueOnce([freshLink]);
+    apiMocks.addTaskLink.mockResolvedValueOnce(freshLink);
+    const user = userEvent.setup();
+    render(<TasksWorkspace />);
+    await screen.findByText('Past open');
+
+    await user.click(screen.getAllByRole('button', { name: 'Show links' })[0]!);
+    await user.click(screen.getAllByRole('button', { name: 'Link record' })[0]!);
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Internal record type' }), 'agreement');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Internal record to link' }), '19');
+    await user.click(screen.getByRole('button', { name: 'Link' }));
+
+    expect(await screen.findByText(/Fresh buyer agreement/)).toBeInTheDocument();
+    await act(async () => oldLinks.resolve([{ ...freshLink, id: 21, display_name: 'Stale agreement' }]));
+    expect(screen.getByText(/Fresh buyer agreement/)).toBeInTheDocument();
+    expect(screen.queryByText(/Stale agreement/)).not.toBeInTheDocument();
   });
 
   it('parses canonical SmartViews before all exact legacy aliases', () => {

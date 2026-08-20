@@ -27,6 +27,28 @@ async function rawApi(page: Page, path: string, method: string, body: string) {
   }, { requestPath: path, requestMethod: method, requestBody: body });
 }
 
+async function taskApi(page: Page, key: string, title: string) {
+  return page.evaluate(async ({ idempotencyKey, taskTitle }) => {
+    const response = await fetch('/api/v1/command/tasks', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-admin-token',
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': idempotencyKey,
+        'X-Client-Timezone': 'America/New_York',
+      },
+      body: JSON.stringify({
+        title: taskTitle,
+        contact_id: 1,
+        description: '',
+        priority: 'normal',
+        due_at: null,
+      }),
+    });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }, { idempotencyKey: key, taskTitle: title });
+}
+
 test('Contacts loads the deterministic 366-row directory and accessible table @critical', async ({ commandPage }) => {
   await commandPage.goto('/admin/command/contacts');
   await expect(commandPage.getByRole('heading', { name: 'Contacts', exact: true })).toBeVisible();
@@ -188,6 +210,31 @@ test('fixture is auth-bound, fail-closed, stateful, and returns exact binary byt
     }
   });
   expect(externalFailure).toBe('TypeError');
+});
+
+test('contact task fixture replays the same-key payload once and rejects key reuse with changed intent', async ({ commandPage, routeState }) => {
+  await commandPage.goto('/admin/login');
+  const key = '550e8400-e29b-41d4-a716-446655440000';
+  const beforeTasks = routeState.contacts.workspaces.get(1)!.tasks.length;
+  const first = await taskApi(commandPage, key, 'Contact replay task');
+  const replay = await taskApi(commandPage, key, 'Contact replay task');
+
+  expect(first.status).toBe(201);
+  expect(replay).toEqual(first);
+  expect(routeState.contacts.workspaces.get(1)!.tasks).toHaveLength(beforeTasks + 1);
+
+  routeState.expectedHttpFailures.add('/tasks', 'POST');
+  const mismatch = await taskApi(commandPage, key, 'Changed contact replay task');
+  expect(mismatch).toEqual({
+    status: 409,
+    body: {
+      detail: {
+        code: 'task_idempotency_mismatch',
+        message: 'Idempotency key was already used with a different task payload.',
+      },
+    },
+  });
+  expect(routeState.contacts.workspaces.get(1)!.tasks).toHaveLength(beforeTasks + 1);
 });
 
 test('detail renders celebrations, all eight top-level panels, three task panels, and source ownership', async ({ commandPage }) => {

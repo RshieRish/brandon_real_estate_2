@@ -15,8 +15,10 @@ import {
   addTaskLink as addTypedTaskLink,
   archiveTask as archiveTypedTask,
   CommandConflictError,
+  CommandCreateConflictError,
   CommandOutcomeUncertainError,
   createTask as createTypedTask,
+  currentTaskClientTimezone,
   decodeTask,
   decodeTaskConflict,
   decodeTaskLink,
@@ -26,6 +28,7 @@ import {
   updateTask as updateTypedTask,
   type Task,
   type TaskConflict,
+  type TaskCreateConflict,
   type TaskCreateInput,
   type TaskFilters,
   type TaskLifecycleRequest,
@@ -42,7 +45,9 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 export { contactsApi };
 export {
   CommandConflictError,
+  CommandCreateConflictError,
   CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
   decodeTask,
   decodeTaskConflict,
   decodeTaskLink,
@@ -50,6 +55,7 @@ export {
 export type {
   Task,
   TaskConflict,
+  TaskCreateConflict,
   TaskCreateInput,
   TaskFilters,
   TaskLifecycleRequest,

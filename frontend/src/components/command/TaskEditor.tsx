@@ -13,6 +13,29 @@ type TaskEditorProps = Readonly<{
   onMutationError?: (error: unknown) => void | Promise<void>;
 }>;
 
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+export function taskInstantToLocalInput(value: string | null): string {
+  if (value === null || value.trim().length === 0) return '';
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return '';
+  const date = [
+    String(instant.getFullYear()).padStart(4, '0'),
+    padDatePart(instant.getMonth() + 1),
+    padDatePart(instant.getDate()),
+  ].join('-');
+  let time = `${padDatePart(instant.getHours())}:${padDatePart(instant.getMinutes())}`;
+  if (instant.getSeconds() !== 0 || instant.getMilliseconds() !== 0) {
+    time += `:${padDatePart(instant.getSeconds())}`;
+  }
+  if (instant.getMilliseconds() !== 0) {
+    time += `.${String(instant.getMilliseconds()).padStart(3, '0')}`;
+  }
+  return `${date}T${time}`;
+}
+
 export function TaskEditor({
   task,
   disabled = false,
@@ -24,7 +47,8 @@ export function TaskEditor({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [priority, setPriority] = useState<Task['priority']>(task.priority);
-  const [dueAt, setDueAt] = useState(task.due_at ? task.due_at.slice(0, 16) : '');
+  const [dueAt, setDueAt] = useState(() => taskInstantToLocalInput(task.due_at));
+  const [dueAtDirty, setDueAtDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,7 +67,9 @@ export function TaskEditor({
         title: title.trim(),
         description,
         priority,
-        due_at: dueAt ? new Date(dueAt).toISOString() : null,
+        due_at: dueAtDirty
+          ? dueAt ? new Date(dueAt).toISOString() : null
+          : dueAt ? task.due_at : null,
       }));
       onClose();
     } catch (caught) {
@@ -70,7 +96,7 @@ export function TaskEditor({
               <option value="normal">normal</option>
               <option value="high">high</option>
             </select>
-            <input disabled={disabled} value={dueAt} onChange={(event) => setDueAt(event.target.value)} type="datetime-local" aria-label="Task due date" className="rounded-lg border border-white/10 bg-black/30 p-3 text-sm" />
+            <input disabled={disabled} value={dueAt} onChange={(event) => { setDueAt(event.target.value); setDueAtDirty(true); }} type="datetime-local" aria-label="Task due date" className="rounded-lg border border-white/10 bg-black/30 p-3 text-sm" />
           </div>
         </div>
         {error ? <p role="alert" className="mt-3 text-sm text-red-200">{error}</p> : null}

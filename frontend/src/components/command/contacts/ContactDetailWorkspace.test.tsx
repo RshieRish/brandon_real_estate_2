@@ -21,7 +21,7 @@ import { CommandToastProvider } from '../ui/CommandToastProvider';
 import { ContactDetailWorkspace } from './ContactDetailWorkspace';
 import { canonicalContactId } from '@/app/admin/command/contacts/[contactId]/page';
 import { CommandHttpError } from '@/lib/command/http';
-import type { Task } from '@/lib/command/tasks';
+import { CommandOutcomeUncertainError, type Task } from '@/lib/command/tasks';
 
 const navigation = vi.hoisted(() => ({
   pathname: '/admin/command/contacts/7',
@@ -919,6 +919,18 @@ describe('ContactDetailWorkspace', () => {
 
   it('exposes no globally addressed task mutation and allows contact-bound task creation only', async () => {
     const api = fakeApi();
+    vi.mocked(api.createTask).mockResolvedValueOnce({
+      id: 204,
+      title: 'New task',
+      contact_id: null,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 4,
+    });
     renderWorkspace(api);
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
     await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
@@ -936,10 +948,154 @@ describe('ContactDetailWorkspace', () => {
       due_at: null,
     }, expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i), {
       signal: expect.any(AbortSignal),
+      clientTimezone: expect.any(String),
     });
     await waitFor(() => expect(api.internalWorkspace).toHaveBeenCalledTimes(2));
     expect(api.workspace).toHaveBeenCalledTimes(2);
     expect(api.timeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses one UUID and canonical payload for an unchanged contact-task retry after uncertainty', async () => {
+    const api = fakeApi();
+    vi.mocked(api.createTask)
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockResolvedValueOnce({
+        id: 204, title: 'Uncertain contact task', contact_id: 7, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+    await userEvent.type(screen.getByLabelText('Task title'), 'Uncertain contact task');
+    const save = screen.getByRole('button', { name: 'Save task' });
+
+    await userEvent.click(save);
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(api.createTask).toHaveBeenCalledTimes(1);
+    const firstCall = vi.mocked(api.createTask).mock.calls[0];
+    await userEvent.type(screen.getByLabelText('Task title'), ' ');
+    await userEvent.click(save);
+
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createTask).mock.calls[1]?.slice(0, 2)).toEqual(firstCall?.slice(0, 2));
+    expect(vi.mocked(api.createTask).mock.calls[1]?.[2]).toEqual({
+      signal: expect.any(AbortSignal),
+      clientTimezone: vi.mocked(api.createTask).mock.calls[0]?.[2]?.clientTimezone,
+    });
+  });
+
+  it('uses a new UUID when a contact-task draft changes after uncertainty', async () => {
+    const api = fakeApi();
+    vi.mocked(api.createTask)
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockResolvedValueOnce({
+        id: 204, title: 'Changed contact task', contact_id: 7, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+    const title = screen.getByLabelText('Task title');
+    await userEvent.type(title, 'Original contact task');
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save task' })).toBeEnabled());
+    const firstKey = vi.mocked(api.createTask).mock.calls[0]?.[1];
+
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Changed contact task');
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createTask).mock.calls[1]?.[1]).not.toBe(firstKey);
+  });
+
+  it.each([401, 404, 422])(
+    'treats a definite task-create %i as direct, unlocks contact actions, and performs no reconciliation reads',
+    async (status) => {
+      const api = fakeApi();
+      renderWorkspace(api);
+      await screen.findByRole('heading', { name: 'Ada Lovelace' });
+      await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+      vi.mocked(api.createTask).mockRejectedValueOnce(new CommandHttpError(status, `Definite ${status} task failure`));
+
+      await userEvent.type(screen.getByLabelText('Task title'), 'Rejected contact task');
+      await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(`Definite ${status} task failure`);
+      expect(api.internalWorkspace).toHaveBeenCalledTimes(1);
+      expect(api.workspace).toHaveBeenCalledTimes(1);
+      expect(api.timeline).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Save task' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Edit profile' })).toBeEnabled();
+    },
+  );
+
+  it('keeps a confirmed task create locked after its single authoritative refresh cycle fails', async () => {
+    const api = fakeApi();
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+    vi.mocked(api.internalWorkspace)
+      .mockRejectedValueOnce(new Error('Synthetic internal refresh failure'))
+      .mockRejectedValueOnce(new Error('Synthetic internal retry failure'));
+    vi.mocked(api.workspace)
+      .mockRejectedValueOnce(new Error('Synthetic summary refresh failure'))
+      .mockRejectedValueOnce(new Error('Synthetic summary retry failure'));
+    vi.mocked(api.timeline)
+      .mockRejectedValueOnce(new Error('Synthetic timeline refresh failure'))
+      .mockRejectedValueOnce(new Error('Synthetic timeline retry failure'));
+
+    await userEvent.type(screen.getByLabelText('Task title'), 'Confirmed but unverified task');
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+
+    expect(await screen.findByRole('button', { name: 'Retry contact refresh' })).toBeInTheDocument();
+    expect(api.createTask).toHaveBeenCalledTimes(1);
+    expect(api.internalWorkspace).toHaveBeenCalledTimes(2);
+    expect(api.workspace).toHaveBeenCalledTimes(2);
+    expect(api.timeline).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry contact refresh' }));
+    await waitFor(() => expect(api.internalWorkspace).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole('button', { name: 'Retry contact refresh' })).toBeEnabled();
+    expect(screen.getAllByText('Task was saved, but current contact data could not be verified.').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Task mutation status is unknown. Current contact data could not be verified.')).not.toBeInTheDocument();
+    expect(api.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains an uncertain contact-task attempt through failed verification and reuses it after explicit recovery', async () => {
+    const api = fakeApi();
+    vi.mocked(api.createTask)
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockResolvedValueOnce({
+        id: 204, title: 'Retry after verification', contact_id: 7, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+    vi.mocked(api.internalWorkspace).mockRejectedValueOnce(new Error('Synthetic internal refresh failure'));
+    vi.mocked(api.workspace).mockRejectedValueOnce(new Error('Synthetic summary refresh failure'));
+    vi.mocked(api.timeline).mockRejectedValueOnce(new Error('Synthetic timeline refresh failure'));
+    await userEvent.type(screen.getByLabelText('Task title'), 'Retry after verification');
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+    const firstCall = vi.mocked(api.createTask).mock.calls[0];
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry contact refresh' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save task' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createTask).mock.calls[1]?.slice(0, 2)).toEqual(firstCall?.slice(0, 2));
+    expect(vi.mocked(api.createTask).mock.calls[1]?.[2]).toEqual({
+      signal: expect.any(AbortSignal),
+      clientTimezone: vi.mocked(api.createTask).mock.calls[0]?.[2]?.clientTimezone,
+    });
   });
 
   it('never prefills recovered-only dates into the SWS profile mutation', async () => {
@@ -1385,6 +1541,27 @@ describe('ContactDetailWorkspace', () => {
       version: 1,
     }));
     await waitFor(() => expect(addTask).toHaveFocus());
+  });
+
+  it('aborts a pending contact-task create on navigation without surfacing uncertainty', async () => {
+    const api = fakeApi();
+    const pendingTask = deferred<Task>();
+    vi.mocked(api.createTask).mockReturnValueOnce(pendingTask.promise);
+    const view = renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }));
+    await userEvent.type(screen.getByLabelText('Task title'), 'Navigation-safe task');
+    await userEvent.click(screen.getByRole('button', { name: 'Save task' }));
+    const signal = vi.mocked(api.createTask).mock.calls[0]?.[2]?.signal;
+
+    navigation.pathname = '/admin/command/contacts/9';
+    view.rerender(workspace(api, 9));
+    expect(signal?.aborted).toBe(true);
+    await act(async () => pendingTask.reject(new DOMException('Navigation aborted', 'AbortError')));
+
+    expect(screen.queryByText(/Task mutation status is unknown/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/server may have applied/)).not.toBeInTheDocument();
   });
 
   it('validates code-point input bounds locally before any write or uncertainty refresh', async () => {

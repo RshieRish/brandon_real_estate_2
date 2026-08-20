@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  CommandOutcomeUncertainError,
   commandApi,
   type CommandConflictError,
-  type CommandOutcomeUncertainError,
   type Task,
   type TaskConflict,
   type TaskLifecycleRequest,
@@ -113,15 +113,20 @@ describe('typed task lifecycle client', () => {
     it.each([
       ['non-array response', task],
       ['wrong id', [{ ...task, id: 0 }]],
+      ['over-max id', [{ ...task, id: 2_147_483_648 }]],
       ['wrong title', [{ ...task, title: 9 }]],
       ['wrong contact_id', [{ ...task, contact_id: 0 }]],
+      ['over-max contact_id', [{ ...task, contact_id: 2_147_483_648 }]],
       ['wrong description', [{ ...task, description: null }]],
       ['wrong priority literal', [{ ...task, priority: 'urgent' }]],
       ['wrong due_at', [{ ...task, due_at: 1_724_073_300 }]],
+      ['calendar-invalid due_at', [{ ...task, due_at: '2026-02-30T12:00:00Z' }]],
       ['wrong status literal', [{ ...task, status: 'archived' }]],
       ['wrong archived_at', [{ ...task, archived_at: false }]],
+      ['calendar-invalid archived_at', [{ ...task, archived_at: '2025-02-29T12:00:00Z' }]],
       ['wrong archive_reason', [{ ...task, archive_reason: 42 }]],
       ['wrong version', [{ ...task, version: 0 }]],
+      ['over-max version', [{ ...task, version: 2_147_483_648 }]],
       ['extra field', [{ ...task, private_value: 'must not cross boundary' }]],
     ])('rejects a %s', async (_label, payload) => {
       authenticate();
@@ -165,7 +170,12 @@ describe('typed task lifecycle client', () => {
       ['missing task_version', [withoutKey(link as unknown as Record<string, unknown>, 'task_version')]],
       ['zero task_version', [{ ...link, task_version: 0 }]],
       ['string task_version', [{ ...link, task_version: '4' }]],
+      ['over-max id', [{ ...link, id: 2_147_483_648 }]],
+      ['over-max task_id', [{ ...link, task_id: 2_147_483_648 }]],
+      ['over-max entity_id', [{ ...link, entity_id: 2_147_483_648 }]],
+      ['over-max task_version', [{ ...link, task_version: 2_147_483_648 }]],
       ['extra field', [{ ...link, secret: true }]],
+      ['different task id', [{ ...link, task_id: 8 }]],
     ])('rejects a link with %s', async (_label, payload) => {
       authenticate();
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload)));
@@ -238,13 +248,16 @@ describe('typed task lifecycle client', () => {
         due_at: '2026-08-21T14:30:00Z',
       };
 
-      await expect(commandApi.createTask(payload, REQUEST_ID)).resolves.toEqual({ ...task, version: 1 });
+      await expect(commandApi.createTask(payload, REQUEST_ID, {
+        clientTimezone: 'America/New_York',
+      })).resolves.toEqual({ ...task, version: 1 });
       expect(fetchMock).toHaveBeenCalledWith(`${COMMAND_BASE_URL}/tasks`, {
         method: 'POST',
         headers: {
           Authorization: 'Bearer create-token',
           'Content-Type': 'application/json',
           'X-Idempotency-Key': REQUEST_ID,
+          'X-Client-Timezone': 'America/New_York',
         },
         body: JSON.stringify(payload),
       });
@@ -263,6 +276,17 @@ describe('typed task lifecycle client', () => {
         expect(fetchMock).not.toHaveBeenCalled();
       },
     );
+
+    it('rejects an invalid client timezone before create fetch', async () => {
+      authenticate();
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.createTask({
+        title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: null,
+      }, REQUEST_ID, { clientTimezone: 'Mars/Olympus_Mons' })).rejects.toBeInstanceOf(CommandDecodeError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
 
     it('sends expected_version with every update field and decodes the incremented task', async () => {
       authenticate();
@@ -311,6 +335,50 @@ describe('typed task lifecycle client', () => {
           entity_id: 19,
         }),
       }));
+    });
+
+    it.each([
+      ['task id', { ...link, task_id: 8 }],
+      ['entity type', { ...link, entity_type: 'contact' }],
+      ['entity id', { ...link, entity_id: 20 }],
+      ['impossible version jump', { ...link, task_version: 5 }],
+    ])('treats a successful task-link mutation with mismatched %s as outcome-uncertain', async (_label, response) => {
+      authenticate();
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response, 201));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.addTaskLink(7, {
+        expected_version: 3,
+        entity_type: 'agreement',
+        entity_id: 19,
+      })).rejects.toMatchObject({ name: 'CommandOutcomeUncertainError' });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('accepts a duplicate-link replay whose task version remains at expected_version', async () => {
+      authenticate();
+      const duplicate = { ...link, task_version: 3 };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(duplicate, 200)));
+
+      await expect(commandApi.addTaskLink(7, {
+        expected_version: 3,
+        entity_type: 'agreement',
+        entity_id: 19,
+      })).resolves.toEqual(duplicate);
+    });
+
+    it('rejects an impossible max-version increment in a successful link response', async () => {
+      authenticate();
+      const impossible = { ...link, task_version: 2_147_483_648 };
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(impossible, 201));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.addTaskLink(7, {
+        expected_version: 2_147_483_647,
+        entity_type: 'agreement',
+        entity_id: 19,
+      })).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+      expect(fetchMock).toHaveBeenCalledOnce();
     });
 
     it.each([
@@ -375,6 +443,7 @@ describe('typed task lifecycle client', () => {
       ['missing detail', () => jsonResponse({ code: 'task_archived' }, 409)],
       ['unknown code', () => jsonResponse({ detail: { code: 'other', current_version: 3, current_task: task } }, 409)],
       ['invalid current version', () => jsonResponse({ detail: { code: 'task_archived', current_version: 0, current_task: task } }, 409)],
+      ['over-max current version', () => jsonResponse({ detail: { code: 'task_archived', current_version: 2_147_483_648, current_task: { ...task, version: 2_147_483_648 } } }, 409)],
       ['malformed current task', () => jsonResponse({ detail: { code: 'task_archived', current_version: 3, current_task: { ...task, version: 0 } } }, 409)],
     ])('treats a 409 with %s as outcome-uncertain without retry', async (_label, response) => {
       authenticate();
@@ -386,6 +455,45 @@ describe('typed task lifecycle client', () => {
         name: 'CommandOutcomeUncertainError',
         message: 'The server may have applied the task change; refresh before retrying.',
       });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      'task_idempotency_mismatch',
+      'task_creation_state_invalid',
+      'task_source_conflict',
+    ] as const)('keeps a structured create-only %s conflict definite', async (code) => {
+      authenticate();
+      const conflict = { code, message: 'Create request conflicts with authoritative task state.' };
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: conflict }, 409));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.createTask({
+        title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: null,
+      }, REQUEST_ID)).rejects.toMatchObject({
+        name: 'CommandCreateConflictError',
+        conflict,
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['malformed JSON', malformedJsonResponse(409)],
+      ['lifecycle conflict shape', jsonResponse({ detail: {
+        code: 'task_version_conflict', current_version: 3, current_task: task,
+      } }, 409)],
+      ['unknown code', jsonResponse({ detail: { code: 'other', message: 'Unknown' } }, 409)],
+      ['extra field', jsonResponse({ detail: {
+        code: 'task_idempotency_mismatch', message: 'Mismatch', private: true,
+      } }, 409)],
+    ])('treats a create 409 with %s as outcome-uncertain without retry', async (_label, response) => {
+      authenticate();
+      const fetchMock = vi.fn().mockResolvedValue(response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(commandApi.createTask({
+        title: 'Call', contact_id: null, description: '', priority: 'normal', due_at: null,
+      }, REQUEST_ID)).rejects.toMatchObject({ name: 'CommandOutcomeUncertainError' });
       expect(fetchMock).toHaveBeenCalledOnce();
     });
 
@@ -423,6 +531,8 @@ describe('typed task lifecycle client', () => {
     it.each([
       ['invalid JSON', malformedJsonResponse()],
       ['invalid TaskOut', jsonResponse({ ...task, version: 0 })],
+      ['calendar-invalid TaskOut due_at', jsonResponse({ ...task, due_at: '2026-02-30T12:00:00Z' })],
+      ['calendar-invalid TaskOut archived_at', jsonResponse({ ...task, archived_at: '2026-04-31T12:00:00Z' })],
     ])('wraps a successful mutation with %s as outcome-uncertain', async (_label, response) => {
       authenticate();
       const fetchMock = vi.fn().mockResolvedValue(response);

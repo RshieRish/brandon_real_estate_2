@@ -333,7 +333,9 @@ describe('Command Home', () => {
       priority: 'normal',
       contact_id: null,
       due_at: null,
-    }, expect.stringMatching(UUID_PATTERN)));
+    }, expect.stringMatching(UUID_PATTERN), {
+      clientTimezone: expect.any(String),
+    }));
     expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
     expect(navigationMocks.replace).toHaveBeenCalledWith('/admin/command', { scroll: false });
   });
@@ -387,6 +389,65 @@ describe('Command Home', () => {
     );
   });
 
+  it('reuses the same UUID and canonical payload for an unchanged explicit retry after reconciliation', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')))
+      .mockResolvedValueOnce({
+        id: 20, title: 'Uncertain task', contact_id: null, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Uncertain task');
+    const save = screen.getByRole('button', { name: 'Save task' });
+    await user.click(save);
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    const firstCall = apiMocks.createTask.mock.calls[0];
+
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), ' ');
+    await user.type(screen.getByRole('textbox', { name: 'Task description' }), ' ');
+    await user.click(save);
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]).toEqual(firstCall);
+  });
+
+  it('allocates a new UUID when the Home create draft changes after uncertainty', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')))
+      .mockResolvedValueOnce({
+        id: 20, title: 'Changed task', contact_id: null, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    const title = screen.getByRole('textbox', { name: 'Task title' });
+    await user.type(title, 'Original task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save task' })).toBeEnabled());
+    const firstKey = apiMocks.createTask.mock.calls[0]?.[1];
+
+    await user.clear(title);
+    await user.type(title, 'Changed task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]?.[1]).not.toBe(firstKey);
+  });
+
   it('keeps quick task creation locked when an uncertain outcome cannot be authoritatively refreshed', async () => {
     apiMocks.createTask.mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')));
     const loadHome = vi.fn()
@@ -420,6 +481,110 @@ describe('Command Home', () => {
     await user.click(reopenedSave);
     expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
     expect(apiMocks.createTask.mock.calls[0]?.[1]).toBe(firstRequestId);
+  });
+
+  it('releases a refresh-required create lock only after an explicit authoritative Home retry succeeds', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')))
+      .mockResolvedValueOnce({
+        id: 20, title: 'Retry-safe task', contact_id: null, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockRejectedValueOnce(new Error('Synthetic mutation refresh failure'))
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Retry-safe task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await screen.findByText('Task state could not be refreshed. Refresh the page before creating another task.');
+    const firstCall = apiMocks.createTask.mock.calls[0];
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+    const save = screen.getByRole('button', { name: 'Save task' });
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]).toEqual(firstCall);
+  });
+
+  it('retains the create lock when an explicit authoritative Home retry also fails', async () => {
+    apiMocks.createTask.mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')));
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockRejectedValueOnce(new Error('Synthetic mutation refresh failure'))
+      .mockRejectedValueOnce(new Error('Synthetic explicit retry failure'));
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Still locked task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await screen.findByText('Task state could not be refreshed. Refresh the page before creating another task.');
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await screen.findByRole('heading', { name: 'Command Home unavailable' });
+    expect(screen.getByRole('button', { name: 'Save task' })).toBeDisabled();
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a confirmed create only after an explicit authoritative Home recovery succeeds', async () => {
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockRejectedValueOnce(new Error('Synthetic post-create refresh failure'))
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Confirmed task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Task saved, but Home could not refresh. Synthetic post-create refresh failure Refresh the page before creating another task.',
+    );
+    expect(screen.getByRole('button', { name: 'Task saved' })).toBeDisabled();
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument());
+    expect(loadHome).toHaveBeenCalledTimes(3);
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let an older unrelated Home read release a newer mutation refresh lock', async () => {
+    apiMocks.createTask.mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')));
+    let resolveOlderRead!: (model: CommandHomeModel) => void;
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(regionFailureHomeModel)
+      .mockImplementationOnce(() => new Promise<CommandHomeModel>((resolve) => {
+        resolveOlderRead = resolve;
+      }))
+      .mockRejectedValueOnce(new Error('Synthetic authoritative mutation refresh failure'));
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('button', { name: 'Retry unavailable regions' });
+
+    await user.click(screen.getByRole('button', { name: 'Retry unavailable regions' }));
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Generation-owned task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+    await screen.findByText('Task state could not be refreshed. Refresh the page before creating another task.');
+
+    await act(async () => resolveOlderRead(completeHomeModel));
+    expect(screen.getByRole('button', { name: 'Save task' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Task state could not be refreshed. Refresh the page before creating another task.',
+    );
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
   });
 
   it('reloads and swaps the whole Home model atomically after quick task creation', async () => {
@@ -467,16 +632,16 @@ describe('Command Home', () => {
     expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
   });
 
-  it('aborts a pending quick refresh on retry and ignores its later stale rejection', async () => {
+  it('does not let generic Home retry abort a pending post-create authoritative refresh', async () => {
     const user = userEvent.setup();
     const signals: Array<AbortSignal | undefined> = [];
-    let rejectQuickRefresh!: (reason: unknown) => void;
+    let resolveQuickRefresh!: (model: CommandHomeModel) => void;
     const loadHome = vi.fn((signal?: AbortSignal) => {
       signals.push(signal);
       if (signals.length === 1) return Promise.resolve(regionFailureHomeModel);
       if (signals.length === 2) {
-        return new Promise<CommandHomeModel>((_resolve, reject) => {
-          rejectQuickRefresh = reject;
+        return new Promise<CommandHomeModel>((resolve) => {
+          resolveQuickRefresh = resolve;
         });
       }
       return Promise.resolve(emptyHomeModel);
@@ -491,12 +656,10 @@ describe('Command Home', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Retry unavailable regions' }));
 
-    expect(await screen.findByText('Your follow-up queue is clear.')).toBeInTheDocument();
-    expect(signals[1]?.aborted).toBe(true);
-    await act(async () => rejectQuickRefresh(new Error('Stale quick refresh')));
-    expect(screen.getByText('Your follow-up queue is clear.')).toBeInTheDocument();
-    expect(screen.queryByText(/Home could not refresh/i)).not.toBeInTheDocument();
-    expect(screen.queryByText('Stale quick refresh')).not.toBeInTheDocument();
+    expect(signals[1]?.aborted).toBe(false);
+    expect(loadHome).toHaveBeenCalledTimes(2);
+    await act(async () => resolveQuickRefresh(completeHomeModel));
+    expect(await screen.findByRole('heading', { name: 'Follow-Up Readiness' })).toBeInTheDocument();
   });
 
   it('aborts a pending quick-task refresh on unmount', async () => {

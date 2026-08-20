@@ -26,6 +26,11 @@ import type {
 } from '@/lib/command/contacts';
 import { contactsApi, serializeDirectoryRequest } from '@/lib/command/contacts';
 import { CommandHttpError } from '@/lib/command/http';
+import {
+  CommandConflictError,
+  CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
+} from '@/lib/command/tasks';
 import { ContactActions } from '../ContactActions';
 import { CommandModuleHeader } from '../ui/CommandModuleHeader';
 import { CommandStatePanel } from '../ui/CommandStatePanel';
@@ -102,6 +107,14 @@ type PendingMutationVerification = Readonly<{
   label: string;
   controller: AbortController;
   contactId: number;
+  taskOutcome?: 'uncertain' | 'confirmed';
+}>;
+
+type TaskCreateAttempt = Readonly<{
+  key: string;
+  fingerprint: string;
+  payload: Parameters<ContactsApi['createTask']>[0];
+  clientTimezone: string;
 }>;
 
 function abortError(error: unknown): boolean {
@@ -282,6 +295,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const mutationControllerRef = useRef<AbortController | null>(null);
   const mutationOwnerRef = useRef<string | null>(null);
   const mutationVerificationRefreshRef = useRef<(() => Promise<boolean>) | null>(null);
+  const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
   const taskOpenerRef = useRef<HTMLButtonElement | null>(null);
   const baseRecordRef = useRef<LoadRecord | null>(null);
   const internalRecordRef = useRef<LoadRecord | null>(null);
@@ -662,6 +676,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setTaskRestoreFocus(false);
     setTaskTitle('');
     setTaskError('');
+    taskCreateAttemptRef.current = null;
     setProfileOpen(false);
     setJump('');
     setJumpResult(null);
@@ -813,6 +828,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setTaskFormOpen(false);
     setTaskTitle('');
     setTaskError('');
+    taskCreateAttemptRef.current = null;
   };
 
   useEffect(() => {
@@ -847,31 +863,81 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     const ownedContactId = contactId;
     mutationControllerRef.current = controller;
     let authoritative = false;
+    const payload: Parameters<ContactsApi['createTask']>[0] = {
+      title,
+      contact_id: contactId,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+    };
+    const fingerprint = JSON.stringify(payload);
+    const attempt = taskCreateAttemptRef.current?.fingerprint === fingerprint
+      ? taskCreateAttemptRef.current
+      : {
+          key: crypto.randomUUID(),
+          fingerprint,
+          payload,
+          clientTimezone: currentTaskClientTimezone(),
+        };
+    taskCreateAttemptRef.current = attempt;
     try {
       await api.createTask(
-        { title, contact_id: contactId, description: '', priority: 'normal', due_at: null },
-        crypto.randomUUID(),
-        { signal: controller.signal },
+        attempt.payload,
+        attempt.key,
+        { signal: controller.signal, clientTimezone: attempt.clientTimezone },
       );
+      taskCreateAttemptRef.current = null;
       if (!mutationIsCurrent(controller, ownedContactId)) return;
       const refreshed = await refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
       if (!mutationIsCurrent(controller, ownedContactId)) return;
-      if (!refreshed) throw new Error('Authoritative contact refresh failed');
+      if (!refreshed) {
+        mutationVerificationRefreshRef.current = () => refreshMutation([
+          loadInternal(), loadSummary(), loadTimeline(false, null),
+        ]);
+        setMutationVerification({
+          owner: 'task-create',
+          label: 'Task mutation',
+          controller,
+          contactId: ownedContactId,
+          taskOutcome: 'confirmed',
+        });
+        pushToast({
+          tone: 'error',
+          message: 'Task was saved, but current contact data could not be verified.',
+        });
+        return;
+      }
       authoritative = true;
       setTaskTitle('');
       setTaskError('');
       setTaskRestoreFocus(true);
       setTaskFormOpen(false);
       pushToast({ tone: 'success', message: 'Task added' });
-    } catch {
+    } catch (caught) {
       if (mutationIsCurrent(controller, ownedContactId)) {
+        const uncertain = caught instanceof CommandOutcomeUncertainError
+          || caught instanceof CommandConflictError;
+        if (!uncertain) {
+          authoritative = true;
+          if (!abortError(caught)) {
+            setTaskError(caught instanceof Error ? caught.message : 'Unable to create task.');
+          }
+          return;
+        }
         const refreshed = await refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
         if (!mutationIsCurrent(controller, ownedContactId)) return;
         authoritative = refreshed;
         if (!refreshed) {
           mutationVerificationRefreshRef.current = () => refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
-          setMutationVerification({ owner: 'task-create', label: 'Task mutation', controller, contactId: ownedContactId });
+          setMutationVerification({
+            owner: 'task-create',
+            label: 'Task mutation',
+            controller,
+            contactId: ownedContactId,
+            taskOutcome: 'uncertain',
+          });
         }
+        setTaskError(refreshed && caught instanceof Error ? caught.message : '');
         pushToast({ tone: 'error', message: refreshed
           ? 'Task mutation status is unknown. Current contact data was refreshed.'
           : 'Task mutation status is unknown. Current contact data could not be verified.' });
@@ -986,7 +1052,12 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     if (!mutationIsCurrent(pending.controller, pending.contactId)) return;
     if (!refreshed) {
       setMutationVerificationRetrying(false);
-      pushToast({ tone: 'error', message: `${pending.label} status is unknown. Current contact data could not be verified.` });
+      pushToast({
+        tone: 'error',
+        message: pending.taskOutcome === 'confirmed'
+          ? 'Task was saved, but current contact data could not be verified.'
+          : `${pending.label} status is unknown. Current contact data could not be verified.`,
+      });
       return;
     }
     mutationVerificationRefreshRef.current = null;
@@ -994,6 +1065,14 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setMutationVerificationRetrying(false);
     mutationControllerRef.current = null;
     releaseMutation(pending.owner);
+    if (pending.owner === 'task-create' && pending.taskOutcome === 'confirmed') {
+      setTaskTitle('');
+      setTaskError('');
+      setTaskRestoreFocus(true);
+      setTaskFormOpen(false);
+      pushToast({ tone: 'success', message: 'Task added' });
+      return;
+    }
     pushToast({ tone: 'success', message: `${pending.label} data was refreshed.` });
   }
 
@@ -1167,7 +1246,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
       {currentOutsideUniverse ? <p className="command-contact-universe-state" role="status">This contact is outside the current directory view</p> : null}
       {currentNeighborsFailed ? <p className="command-contact-universe-state" role="status">Directory navigation is unavailable for the current view. <button type="button" className="command-inline-button" onClick={() => void loadBase()}>Retry</button></p> : null}
       {failure && currentDetail !== null ? <p className="command-contact-universe-state" role="alert">Current contact data could not be refreshed. <button type="button" className="command-inline-button" onClick={() => void loadBase()}>Retry contact data</button></p> : null}
-      {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.label} status is unknown. Current contact data could not be verified. <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
+      {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.taskOutcome === 'confirmed' ? 'Task was saved, but current contact data could not be verified.' : `${mutationVerification.label} status is unknown. Current contact data could not be verified.`} <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
       <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
         {summary && currentDetail ? SUMMARY_DISPLAY_KEYS.map((key) => <span key={key}><strong>{summary[key]}</strong>{key.replaceAll('_', ' ')}</span>) : null}
       </aside>

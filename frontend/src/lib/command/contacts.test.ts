@@ -1212,6 +1212,26 @@ describe('dedicated Contacts API transport map', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('accepts the current mutable task row returned by an idempotent contact-task replay', async () => {
+    const replayedTask = {
+      id: 34,
+      title: 'Call',
+      contact_id: 8,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 4,
+    } as const;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(replayedTask)));
+
+    await expect(contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    }, TASK_IDEMPOTENCY_KEY)).resolves.toEqual(replayedTask);
+  });
+
   it('rejects wrong-contact internal and mutation responses at the boundary', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ ...detail, contact: { ...detail.contact, id: 8 } }))
@@ -1220,18 +1240,6 @@ describe('dedicated Contacts API transport map', () => {
       .mockResolvedValueOnce(jsonResponse({
         ...internalWorkspace,
         tasks: [{ ...internalWorkspace.tasks[0], contact_id: 8 }],
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        id: 34,
-        title: 'Call',
-        contact_id: 8,
-        description: '',
-        priority: 'normal',
-        due_at: null,
-        status: 'open',
-        archived_at: null,
-        archive_reason: null,
-        version: 1,
       }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1239,9 +1247,6 @@ describe('dedicated Contacts API transport map', () => {
     await expect(contactsApi.evidence(7)).rejects.toBeInstanceOf(CommandDecodeError);
     await expect(contactsApi.update(7, { first_name: 'Avery' })).rejects.toBeInstanceOf(CommandDecodeError);
     await expect(contactsApi.internalWorkspace(7)).rejects.toBeInstanceOf(CommandDecodeError);
-    await expect(contactsApi.createTask({
-      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
-    }, TASK_IDEMPOTENCY_KEY)).rejects.toBeInstanceOf(CommandDecodeError);
   });
 
   it('rejects a created tag whose response name does not bind to the request', async () => {

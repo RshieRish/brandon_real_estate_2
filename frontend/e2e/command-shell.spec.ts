@@ -15,6 +15,32 @@ async function fetchCommand(
   }, { requestPath: path, requestMethod: method });
 }
 
+async function createFixtureTask(
+  commandPage: Page,
+  idempotencyKey: string,
+  title: string,
+) {
+  return commandPage.evaluate(async ({ key, taskTitle }) => {
+    const response = await fetch('/api/v1/command/tasks', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-admin-token',
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': key,
+        'X-Client-Timezone': 'America/New_York',
+      },
+      body: JSON.stringify({
+        title: taskTitle,
+        contact_id: null,
+        description: '',
+        priority: 'normal',
+        due_at: null,
+      }),
+    });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }, { key: idempotencyKey, taskTitle: title });
+}
+
 test('shell persists across module navigation @critical', async ({ commandPage }) => {
   await commandPage.goto('/admin/command');
   const navigation = commandPage.getByRole('navigation', { name: 'Command modules' });
@@ -121,4 +147,46 @@ test('a wrong method cannot consume a one-shot failure registered for another me
 
   const recovered = await fetchCommand(commandPage, '/overview', 'GET');
   expect(recovered).toEqual({ status: 200, body: expect.any(Object) });
+});
+
+test('central task fixture replays one logical create and rejects same-key changed payload', async ({ commandPage, routeState }) => {
+  await commandPage.goto('/admin/login');
+  const key = '550e8400-e29b-41d4-a716-446655440000';
+  const first = await createFixtureTask(commandPage, key, 'Replay-safe task');
+  const replay = await createFixtureTask(commandPage, key, 'Replay-safe task');
+  expect(first.status).toBe(201);
+  expect(replay).toEqual(first);
+
+  routeState.expectedHttpFailures.add('/tasks', 'POST');
+  const mismatch = await createFixtureTask(commandPage, key, 'Changed payload');
+  expect(mismatch).toEqual({
+    status: 409,
+    body: {
+      detail: {
+        code: 'task_idempotency_mismatch',
+        message: 'Idempotency key was already used with a different task payload.',
+      },
+    },
+  });
+
+  const other = await createFixtureTask(
+    commandPage,
+    '123e4567-e89b-42d3-a456-426614174000',
+    'Replay-safe task',
+  );
+  expect(other.status).toBe(201);
+  expect(other.body.id).not.toBe(first.body.id);
+});
+
+test('central legacy contact workspace preserves raw workflow status for archived rows', async ({ commandPage, routeState }) => {
+  routeState.useCentralLegacyWorkspace = true;
+  await commandPage.goto('/admin/login');
+  const workspace = await commandPage.evaluate(async () => {
+    const response = await fetch('/api/v1/command/contacts/1/workspace', {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    });
+    return response.json() as Promise<{ tasks: { title: string; status: string }[] }>;
+  });
+
+  expect(workspace.tasks.find((task) => task.title === 'Archived reminder')?.status).toBe('open');
 });

@@ -43,6 +43,7 @@ type MutableContactState = {
   nextTagId: number;
   nextTaskId: number;
   nextActivityId: number;
+  taskCreates: Map<string, Readonly<{ fingerprint: string; task: Record<string, unknown> }>>;
   createdAt: Map<number, string>;
   updatedAt: Map<number, string>;
 };
@@ -171,6 +172,7 @@ export function createCommandContactsFixtureState(): CommandContactsFixtureState
     nextTagId: 2,
     nextTaskId: 700,
     nextActivityId: 800,
+    taskCreates: new Map(),
     createdAt: new Map(rows.map((row) => [row.id, new Date(Date.parse(FIXED_AT) - row.id * 60_000).toISOString()])),
     updatedAt: new Map(rows.map((row) => [row.id, new Date(Date.parse(FIXED_AT) - row.id * 30_000).toISOString()])),
   };
@@ -738,21 +740,43 @@ export function handleCommandContactsRequest(
     const body = jsonBody(request);
     const keys = ['title', 'contact_id', 'description', 'priority', 'due_at'];
     if (isFixtureResponse(body)) return body;
+    if (body.contact_id === null) return null;
     const idempotencyKey = request.headers()['x-idempotency-key'];
+    const clientTimezone = request.headers()['x-client-timezone'];
     const validContact = body.contact_id === null || (Number.isInteger(body.contact_id) && state.rows.some((row) => row.id === body.contact_id));
-    if (!UUID_PATTERN.test(idempotencyKey ?? '') || !exactKeys(body, keys) || !validContact || typeof body.title !== 'string' || body.title.trim().length === 0 || Array.from(body.title).length > 255 || typeof body.description !== 'string' || !['low', 'normal', 'high'].includes(String(body.priority)) || !rfc3339Value(body.due_at)) return fail('invalid contact task body');
-    const createdTask = {
-      id: state.nextTaskId++,
+    if (!UUID_PATTERN.test(idempotencyKey ?? '') || typeof clientTimezone !== 'string' || clientTimezone.trim().length === 0 || clientTimezone.length > 100 || !exactKeys(body, keys) || !validContact || typeof body.title !== 'string' || body.title.trim().length === 0 || Array.from(body.title).length > 255 || typeof body.description !== 'string' || !['low', 'normal', 'high'].includes(String(body.priority)) || !rfc3339Value(body.due_at)) return fail('invalid contact task body');
+    const canonicalPayload = {
       title: String(body.title),
-      contact_id: body.contact_id === null ? null : Number(body.contact_id),
+      contact_id: Number(body.contact_id),
       description: String(body.description),
       priority: String(body.priority),
       due_at: body.due_at === null ? null : String(body.due_at),
+    };
+    const fingerprint = JSON.stringify(canonicalPayload);
+    const existing = state.taskCreates.get(idempotencyKey!);
+    if (existing !== undefined) {
+      if (existing.fingerprint !== fingerprint) {
+        return {
+          status: 409,
+          body: {
+            detail: {
+              code: 'task_idempotency_mismatch',
+              message: 'Idempotency key was already used with a different task payload.',
+            },
+          },
+        };
+      }
+      return { status: 201, body: structuredClone(existing.task) };
+    }
+    const createdTask = {
+      id: state.nextTaskId++,
+      ...canonicalPayload,
       status: 'open' as const,
       archived_at: null,
       archive_reason: null,
       version: 1,
     };
+    state.taskCreates.set(idempotencyKey!, { fingerprint, task: createdTask });
     if (createdTask.contact_id !== null) {
       const taskWorkspace = state.workspaces.get(createdTask.contact_id)!;
       const legacyTask = {

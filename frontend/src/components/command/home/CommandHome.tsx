@@ -6,7 +6,9 @@ import {
   commandApi,
   CommandConflictError,
   CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
   type Goal,
+  type TaskCreateInput,
   type TaskPriority,
 } from '@/lib/command/api';
 import {
@@ -41,6 +43,13 @@ type HomePreferences = Readonly<{
 const defaultLoadHome = (signal?: AbortSignal) => loadCommandHome(commandApi, new Date(), signal);
 const TASK_REFRESH_REQUIRED_MESSAGE = 'Task state could not be refreshed. Refresh the page before creating another task.';
 
+type TaskCreateAttempt = Readonly<{
+  key: string;
+  fingerprint: string;
+  payload: TaskCreateInput;
+  clientTimezone: string;
+}>;
+
 function isAbortError(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
@@ -57,6 +66,11 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const mountedRef = useRef(false);
   const refreshIdRef = useRef(0);
   const taskMutationPendingRef = useRef(false);
+  const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
+  const taskRefreshRequiredRef = useRef(false);
+  const taskReconciliationKindRef = useRef<'uncertain' | 'confirmed' | null>(null);
+  const taskReconciliationMessageRef = useRef('');
+  const recoveryRequestedRef = useRef(false);
   const [loadState, setLoadState] = useState<HomeLoadState>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -83,10 +97,36 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     const controller = new AbortController();
     const loadId = refreshIdRef.current + 1;
     refreshIdRef.current = loadId;
+    const isTaskRecovery = recoveryRequestedRef.current;
+    recoveryRequestedRef.current = false;
     void loadHome(controller.signal).then(
       (model) => {
         if (!controller.signal.aborted && refreshIdRef.current === loadId) {
           setLoadState({ kind: 'ready', model });
+          if (
+            isTaskRecovery
+            && taskRefreshRequiredRef.current
+            && taskMutationPendingRef.current
+          ) {
+            const reconciliationKind = taskReconciliationKindRef.current;
+            taskMutationPendingRef.current = false;
+            taskRefreshRequiredRef.current = false;
+            taskReconciliationKindRef.current = null;
+            setTaskRefreshRequired(false);
+            setTaskSaving(false);
+            if (reconciliationKind === 'confirmed') {
+              setTaskTitle('');
+              setTaskDescription('');
+              setTaskPriority('normal');
+              setTaskDueAt('');
+              setTaskSaved(false);
+              setTaskOpen(false);
+              setTaskError('');
+              replace('/admin/command', { scroll: false });
+            } else {
+              setTaskError(taskReconciliationMessageRef.current);
+            }
+          }
         }
       },
       (error: unknown) => {
@@ -105,7 +145,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     return () => {
       controller.abort();
     };
-  }, [attempt, loadHome]);
+  }, [attempt, loadHome, replace]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -116,7 +156,8 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   }, []);
 
   function retryHome() {
-    refreshControllerRef.current?.abort();
+    if (taskMutationPendingRef.current && refreshControllerRef.current !== null) return;
+    recoveryRequestedRef.current = taskRefreshRequiredRef.current && taskMutationPendingRef.current;
     setLoadState({ kind: 'loading' });
     setAttempt((current) => current + 1);
   }
@@ -146,19 +187,37 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     taskMutationPendingRef.current = true;
     setTaskSaving(true);
     setTaskError('');
+    const candidate: TaskCreateInput = {
+      title: taskTitle.trim(),
+      description: taskDescription.trim(),
+      priority: taskPriority,
+      contact_id: null,
+      due_at: taskDueAt ? new Date(taskDueAt).toISOString() : null,
+    };
+    const fingerprint = JSON.stringify(candidate);
+    const createAttempt = taskCreateAttemptRef.current?.fingerprint === fingerprint
+      ? taskCreateAttemptRef.current
+      : {
+          key: crypto.randomUUID(),
+          fingerprint,
+          payload: candidate,
+          clientTimezone: currentTaskClientTimezone(),
+        };
+    taskCreateAttemptRef.current = createAttempt;
     try {
-      await commandApi.createTask({
-        title: taskTitle.trim(),
-        description: taskDescription.trim(),
-        priority: taskPriority,
-        contact_id: null,
-        due_at: taskDueAt ? new Date(taskDueAt).toISOString() : null,
-      }, crypto.randomUUID());
+      await commandApi.createTask(createAttempt.payload, createAttempt.key, {
+        clientTimezone: createAttempt.clientTimezone,
+      });
+      taskCreateAttemptRef.current = null;
     } catch (error) {
       const needsAuthoritativeRefresh = error instanceof CommandOutcomeUncertainError
         || error instanceof CommandConflictError;
       let reconciled = false;
       if (needsAuthoritativeRefresh && mountedRef.current) {
+        taskReconciliationKindRef.current = 'uncertain';
+        taskReconciliationMessageRef.current = error instanceof Error
+          ? error.message
+          : 'Unable to create task.';
         refreshControllerRef.current?.abort();
         const refreshController = new AbortController();
         refreshControllerRef.current = refreshController;
@@ -184,12 +243,15 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       }
       if (!mountedRef.current) return;
       if (needsAuthoritativeRefresh && !reconciled) {
+        taskRefreshRequiredRef.current = true;
         setTaskRefreshRequired(true);
         setTaskError(TASK_REFRESH_REQUIRED_MESSAGE);
         setTaskSaving(false);
         return;
       }
       taskMutationPendingRef.current = false;
+      taskRefreshRequiredRef.current = false;
+      taskReconciliationKindRef.current = null;
       setTaskRefreshRequired(false);
       setTaskError(error instanceof Error ? error.message : 'Unable to create task.');
       setTaskSaving(false);
@@ -197,6 +259,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
     }
 
     if (!mountedRef.current) return;
+    taskReconciliationKindRef.current = 'confirmed';
     setTaskSaved(true);
     refreshControllerRef.current?.abort();
     const refreshController = new AbortController();
@@ -212,6 +275,8 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
       ) return;
       setLoadState({ kind: 'ready', model: refreshedModel });
       taskMutationPendingRef.current = false;
+      taskRefreshRequiredRef.current = false;
+      taskReconciliationKindRef.current = null;
       setTaskRefreshRequired(false);
       setTaskTitle('');
       setTaskDescription('');
@@ -226,6 +291,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
         || isAbortError(error)
       ) return;
       const detail = error instanceof Error ? ` ${error.message}` : '';
+      taskRefreshRequiredRef.current = true;
       setTaskRefreshRequired(true);
       setTaskError(`Task saved, but Home could not refresh.${detail} Refresh the page before creating another task.`);
     } finally {
@@ -421,7 +487,9 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
               aria-label="Task title"
               disabled={taskSaving || taskSaved || taskRefreshRequired}
               value={taskTitle}
-              onChange={(event) => setTaskTitle(event.target.value)}
+              onChange={(event) => {
+                setTaskTitle(event.target.value);
+              }}
             />
           </label>
           <label>
@@ -430,7 +498,9 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
               aria-label="Task description"
               disabled={taskSaving || taskSaved || taskRefreshRequired}
               value={taskDescription}
-              onChange={(event) => setTaskDescription(event.target.value)}
+              onChange={(event) => {
+                setTaskDescription(event.target.value);
+              }}
             />
           </label>
           <div className="command-home-form-grid">
@@ -440,7 +510,9 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
                 aria-label="Task priority"
                 disabled={taskSaving || taskSaved || taskRefreshRequired}
                 value={taskPriority}
-                onChange={(event) => setTaskPriority(event.target.value as TaskPriority)}
+                onChange={(event) => {
+                  setTaskPriority(event.target.value as TaskPriority);
+                }}
               >
                 <option value="low">Low</option>
                 <option value="normal">Normal</option>
@@ -454,7 +526,9 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
                 aria-label="Task due date"
                 disabled={taskSaving || taskSaved || taskRefreshRequired}
                 value={taskDueAt}
-                onChange={(event) => setTaskDueAt(event.target.value)}
+                onChange={(event) => {
+                  setTaskDueAt(event.target.value);
+                }}
               />
             </label>
           </div>
@@ -462,6 +536,16 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
             <p role="alert" aria-live="assertive" aria-atomic="true" className="command-home-error-copy">
               {taskError}
             </p>
+          ) : null}
+          {taskRefreshRequired ? (
+            <button
+              type="button"
+              className="command-secondary-button command-touch-target"
+              disabled={loadState.kind === 'loading'}
+              onClick={retryHome}
+            >
+              Retry Home refresh
+            </button>
           ) : null}
           <div className="command-home-form-actions">
             <button type="button" className="command-secondary-button command-touch-target" onClick={closeTask}>

@@ -8,11 +8,13 @@ import {
   commandApi,
   CommandConflictError,
   CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
   type Agreement,
   type Contact,
   type Listing,
   type Opportunity,
   type Task,
+  type TaskCreateInput,
   type TaskLink,
 } from '@/lib/command/api';
 
@@ -24,6 +26,13 @@ type LinkableRecords = {
 };
 
 const TASK_REFRESH_REQUIRED_MESSAGE = 'Task state could not be refreshed. Refresh the page before making another task change.';
+
+type TaskCreateAttempt = Readonly<{
+  key: string;
+  fingerprint: string;
+  payload: TaskCreateInput;
+  clientTimezone: string;
+}>;
 
 export function TasksWorkspace({
   initialView = { tab: 'all', due: 'all' },
@@ -38,6 +47,7 @@ export function TasksWorkspace({
   const [status, setStatus] = useState<TaskWorkspaceView['tab']>(initialView.tab);
   const [dueScope, setDueScope] = useState<TaskWorkspaceView['due']>(initialView.due);
   const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [links, setLinks] = useState<Record<number, readonly TaskLink[]>>({});
   const [entityType, setEntityType] = useState<keyof LinkableRecords>('opportunity');
@@ -51,6 +61,9 @@ export function TasksWorkspace({
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const mutationPendingRef = useRef(false);
+  const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
+  const taskReadGenerationRef = useRef(0);
+  const linkReadGenerationRef = useRef(0);
   const [mutationsLocked, setMutationsLocked] = useState(false);
   const [mutationRefreshRequired, setMutationRefreshRequired] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -58,6 +71,9 @@ export function TasksWorkspace({
   const beginTaskMutation = useCallback(() => {
     if (mutationPendingRef.current) return false;
     mutationPendingRef.current = true;
+    taskReadGenerationRef.current += 1;
+    linkReadGenerationRef.current += 1;
+    setMutationError(null);
     setMutationRefreshRequired(false);
     setMutationsLocked(true);
     return true;
@@ -69,16 +85,22 @@ export function TasksWorkspace({
     setMutationsLocked(false);
   }, []);
 
-  const refetchAllTasks = useCallback(async () => {
-    const rows = await commandApi.tasks({ visibility: 'all' });
-    const authoritativeTasks = [...rows];
-    setTasks(authoritativeTasks);
-    setEditing((current) => current === null
-      ? null
-      : authoritativeTasks.find((task) => task.id === current.id) ?? null);
-    setSelected((current) => current !== null && authoritativeTasks.some((task) => task.id === current)
-      ? current
-      : null);
+  const refetchAllTasks = useCallback(async (closeTransient = false): Promise<boolean> => {
+    const generation = taskReadGenerationRef.current + 1;
+    taskReadGenerationRef.current = generation;
+    try {
+      const rows = await commandApi.tasks({ visibility: 'all' });
+      if (taskReadGenerationRef.current !== generation) return false;
+      setTasks([...rows]);
+      if (closeTransient) {
+        setEditing(null);
+        setSelected(null);
+      }
+      return true;
+    } catch (caught) {
+      if (taskReadGenerationRef.current !== generation) return false;
+      throw caught;
+    }
   }, []);
 
   useEffect(() => {
@@ -90,13 +112,17 @@ export function TasksWorkspace({
   const reconcileMutationFailure = useCallback(async (caught: unknown, fallback: string) => {
     if (caught instanceof CommandOutcomeUncertainError || caught instanceof CommandConflictError) {
       try {
-        await refetchAllTasks();
+        const reconciled = await refetchAllTasks(true);
+        if (!reconciled) {
+          setMutationRefreshRequired(true);
+          return;
+        }
       } catch {
         setMutationRefreshRequired(true);
         return;
       }
     }
-    setError(caught instanceof Error ? caught.message : fallback);
+    setMutationError(caught instanceof Error ? caught.message : fallback);
     finishTaskMutation();
   }, [finishTaskMutation, refetchAllTasks]);
 
@@ -118,15 +144,31 @@ export function TasksWorkspace({
   async function add() {
     if (!title.trim() || !beginTaskMutation()) return;
     setCreating(true);
+    const candidate: TaskCreateInput = {
+      title: title.trim(),
+      description: '',
+      priority,
+      contact_id: contactId ? Number(contactId) : null,
+      due_at: dueAt ? new Date(dueAt).toISOString() : null,
+    };
+    const fingerprint = JSON.stringify(candidate);
+    const attempt = taskCreateAttemptRef.current?.fingerprint === fingerprint
+      ? taskCreateAttemptRef.current
+      : {
+          key: crypto.randomUUID(),
+          fingerprint,
+          payload: candidate,
+          clientTimezone: currentTaskClientTimezone(),
+        };
+    taskCreateAttemptRef.current = attempt;
     try {
-      const task = await commandApi.createTask({
-        title: title.trim(),
-        description: '',
-        priority,
-        contact_id: contactId ? Number(contactId) : null,
-        due_at: dueAt ? new Date(dueAt).toISOString() : null,
-      }, crypto.randomUUID());
-      setTasks((all) => [...all, task]);
+      const task = await commandApi.createTask(attempt.payload, attempt.key, {
+        clientTimezone: attempt.clientTimezone,
+      });
+      taskCreateAttemptRef.current = null;
+      setTasks((all) => all.some((item) => item.id === task.id)
+        ? all.map((item) => item.id === task.id ? task : item)
+        : [...all, task]);
       setTitle('');
       setContactId('');
       setDueAt('');
@@ -167,10 +209,14 @@ export function TasksWorkspace({
   }
 
   async function showLinks(taskId: number) {
+    const generation = linkReadGenerationRef.current + 1;
+    linkReadGenerationRef.current = generation;
     try {
       const rows = await commandApi.taskLinks(taskId);
+      if (linkReadGenerationRef.current !== generation) return;
       setLinks((all) => ({ ...all, [taskId]: rows }));
     } catch (caught) {
+      if (linkReadGenerationRef.current !== generation) return;
       setError(caught instanceof Error ? caught.message : 'Unable to load task links');
     }
   }
@@ -232,7 +278,9 @@ export function TasksWorkspace({
   }
 
   const visibleTasks = applyTaskWorkspaceView(tasks, { tab: status, due: dueScope }, new Date());
-  const displayedError = mutationRefreshRequired ? TASK_REFRESH_REQUIRED_MESSAGE : error;
+  const displayedError = mutationRefreshRequired
+    ? TASK_REFRESH_REQUIRED_MESSAGE
+    : mutationError ?? error;
 
   return (
     <div className="min-h-[100dvh] bg-[#080807] p-6 text-white">
@@ -243,7 +291,9 @@ export function TasksWorkspace({
           <input
             disabled={mutationsLocked}
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              setTitle(event.target.value);
+            }}
             onKeyDown={(event) => event.key === 'Enter' && void add()}
             placeholder="Add a task"
             className="rounded-xl border border-white/10 bg-white/5 px-4 py-3"
@@ -252,7 +302,9 @@ export function TasksWorkspace({
             aria-label="Assign task contact"
             disabled={mutationsLocked}
             value={contactId}
-            onChange={(event) => setContactId(event.target.value)}
+            onChange={(event) => {
+              setContactId(event.target.value);
+            }}
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
           >
             <option value="">No contact</option>
@@ -264,7 +316,9 @@ export function TasksWorkspace({
             aria-label="Task priority"
             disabled={mutationsLocked}
             value={priority}
-            onChange={(event) => setPriority(event.target.value as Task['priority'])}
+            onChange={(event) => {
+              setPriority(event.target.value as Task['priority']);
+            }}
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
           >
             <option value="low">low</option>
@@ -274,7 +328,9 @@ export function TasksWorkspace({
           <input
             disabled={mutationsLocked}
             value={dueAt}
-            onChange={(event) => setDueAt(event.target.value)}
+            onChange={(event) => {
+              setDueAt(event.target.value);
+            }}
             type="datetime-local"
             aria-label="Task due date"
             className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
@@ -305,7 +361,7 @@ export function TasksWorkspace({
             <option value="past">Past due</option>
           </select>
         </div>
-        {displayedError ? <p className="mt-4 flex gap-2 text-red-300"><WarningCircle size={18} />{displayedError}</p> : null}
+        {displayedError ? <p role="alert" aria-live="assertive" className="mt-4 flex gap-2 text-red-300"><WarningCircle size={18} />{displayedError}</p> : null}
         <div className="mt-6 space-y-2">
           {visibleTasks.map((task) => (
             <div key={task.id} className="rounded-xl border border-white/10 bg-white/[.035] p-4">

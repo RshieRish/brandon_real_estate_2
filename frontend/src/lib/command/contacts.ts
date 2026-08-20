@@ -1,5 +1,9 @@
 import { commandBlob, commandJson, CommandDecodeError, type Decoder } from './http';
-import { createTask as createLifecycleTask, type Task } from './tasks';
+import {
+  createTask as createLifecycleTask,
+  type Task,
+  type TaskRequestOptions,
+} from './tasks';
 
 export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
@@ -1757,7 +1761,7 @@ export type ContactsApi = Readonly<{
   createTask: (
     input: ContactTaskCreateInput,
     idempotencyKey: string,
-    options?: CommandRequestOptions,
+    options?: TaskRequestOptions,
   ) => Promise<Task>;
   artifactBlob: (artifactId: number, options?: CommandRequestOptions) => Promise<Blob>;
 }>;
@@ -2046,11 +2050,7 @@ export const contactsApi: ContactsApi = {
   },
   createTask: async (input, idempotencyKey, options) => {
     const body = decodeContactTaskCreateInput(input);
-    const created = await createLifecycleTask(body, idempotencyKey, options);
-    if (created.contact_id !== body.contact_id || created.status !== 'open') {
-      return invalid('response', 'created contact task identity and state');
-    }
-    return created;
+    return createLifecycleTask(body, idempotencyKey, options);
   },
   artifactBlob: async (artifactId, options) => commandBlob({
     path: `/archive/artifacts/${validId(artifactId, 'request.artifact_id')}/content`,
