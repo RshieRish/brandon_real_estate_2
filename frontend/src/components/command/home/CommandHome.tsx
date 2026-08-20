@@ -57,6 +57,10 @@ function isAbortError(error: unknown): boolean {
     && error.name === 'AbortError';
 }
 
+function hasAuthoritativeTasks(model: CommandHomeModel): boolean {
+  return model.tasks !== null && model.regionErrors.tasks === undefined;
+}
+
 export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
   const { replace } = useRouter();
   const searchParams = useSearchParams();
@@ -107,6 +111,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
             isTaskRecovery
             && taskRefreshRequiredRef.current
             && taskMutationPendingRef.current
+            && hasAuthoritativeTasks(model)
           ) {
             const reconciliationKind = taskReconciliationKindRef.current;
             taskMutationPendingRef.current = false;
@@ -231,7 +236,7 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
             && refreshIdRef.current === refreshId
           ) {
             setLoadState({ kind: 'ready', model: refreshedModel });
-            reconciled = true;
+            reconciled = hasAuthoritativeTasks(refreshedModel);
           }
         } catch {
           // The mutation gate remains locked until the page obtains authoritative state.
@@ -274,6 +279,12 @@ export function CommandHome({ loadHome = defaultLoadHome }: CommandHomeProps) {
         || refreshIdRef.current !== refreshId
       ) return;
       setLoadState({ kind: 'ready', model: refreshedModel });
+      if (!hasAuthoritativeTasks(refreshedModel)) {
+        taskRefreshRequiredRef.current = true;
+        setTaskRefreshRequired(true);
+        setTaskError('Task saved, but Home could not refresh. Refresh the page before creating another task.');
+        return;
+      }
       taskMutationPendingRef.current = false;
       taskRefreshRequiredRef.current = false;
       taskReconciliationKindRef.current = null;

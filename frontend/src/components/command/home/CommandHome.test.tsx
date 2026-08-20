@@ -73,6 +73,13 @@ const regionFailureHomeModel = buildCommandHomeModel({
     briefing: 'Briefing unavailable',
   },
 }, now);
+const taskAuthoritativeRegionFailureHomeModel = buildCommandHomeModel({
+  ...completeHomeInput,
+  goals: null,
+  errors: {
+    goals: 'Goals unavailable',
+  },
+}, now);
 
 function resolved(model: CommandHomeModel = completeHomeModel) {
   return vi.fn().mockResolvedValue(model);
@@ -483,6 +490,53 @@ describe('Command Home', () => {
     expect(apiMocks.createTask.mock.calls[0]?.[1]).toBe(firstRequestId);
   });
 
+  it('keeps an uncertain create locked through resolved task-region failures until tasks are authoritative', async () => {
+    apiMocks.createTask
+      .mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')))
+      .mockResolvedValueOnce({
+        id: 20, title: 'Task-region retry', contact_id: null, description: '', priority: 'normal',
+        due_at: null, status: 'open', archived_at: null, archive_reason: null, version: 1,
+      });
+    let resolvePartialRetry!: (model: CommandHomeModel) => void;
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(regionFailureHomeModel)
+      .mockImplementationOnce(() => new Promise<CommandHomeModel>((resolve) => {
+        resolvePartialRetry = resolve;
+      }))
+      .mockResolvedValueOnce(taskAuthoritativeRegionFailureHomeModel)
+      .mockResolvedValueOnce(completeHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Task-region retry');
+    const save = screen.getByRole('button', { name: 'Save task' });
+    await user.click(save);
+
+    expect(await screen.findByText(
+      'Task state could not be refreshed. Refresh the page before creating another task.',
+    )).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+    const firstCall = apiMocks.createTask.mock.calls[0];
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(3));
+    await act(async () => resolvePartialRetry(regionFailureHomeModel));
+    expect(save).toBeDisabled();
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await screen.findByRole('heading', { name: 'Goals unavailable' });
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    await waitFor(() => expect(apiMocks.createTask).toHaveBeenCalledTimes(2));
+    expect(apiMocks.createTask.mock.calls[1]).toEqual(firstCall);
+  });
+
   it('releases a refresh-required create lock only after an explicit authoritative Home retry succeeds', async () => {
     apiMocks.createTask
       .mockRejectedValueOnce(outcomeUncertain(new TypeError('Synthetic network loss')))
@@ -557,6 +611,39 @@ describe('Command Home', () => {
     await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument());
     expect(loadHome).toHaveBeenCalledTimes(3);
+    expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a confirmed create locked when a resolved Home refresh has no authoritative tasks', async () => {
+    let resolvePartialRetry!: (model: CommandHomeModel) => void;
+    const loadHome = vi.fn()
+      .mockResolvedValueOnce(completeHomeModel)
+      .mockResolvedValueOnce(regionFailureHomeModel)
+      .mockImplementationOnce(() => new Promise<CommandHomeModel>((resolve) => {
+        resolvePartialRetry = resolve;
+      }))
+      .mockResolvedValueOnce(taskAuthoritativeRegionFailureHomeModel);
+    const user = userEvent.setup();
+    render(<CommandHome loadHome={loadHome} />);
+    await screen.findByRole('heading', { name: 'Follow-Up Readiness' });
+
+    await user.click(screen.getByRole('button', { name: 'Create task' }));
+    await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Confirmed partial task');
+    await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+    expect(await screen.findByText(
+      'Task saved, but Home could not refresh. Refresh the page before creating another task.',
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Task saved' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await waitFor(() => expect(loadHome).toHaveBeenCalledTimes(3));
+    await act(async () => resolvePartialRetry(regionFailureHomeModel));
+    expect(screen.getByRole('button', { name: 'Task saved' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Retry Home refresh' }));
+    await screen.findByRole('heading', { name: 'Goals unavailable' });
+    expect(screen.queryByRole('dialog', { name: 'Create task' })).not.toBeInTheDocument();
     expect(apiMocks.createTask).toHaveBeenCalledTimes(1);
   });
 
