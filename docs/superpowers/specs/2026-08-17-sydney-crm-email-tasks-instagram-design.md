@@ -60,13 +60,15 @@ The design starts from the production-aligned `origin/main` snapshot verified on
 | Creation authority | A human approval is required before creating a task in the initial rollout. |
 | Clarification | Sydney asks the minimum necessary question when required information is missing or ambiguous. |
 | Conversation continuity | Sydney retains a durable pending clarification and resumes the same suggestion after Brandon answers. |
-| Unanswered questions | Keep the suggestion in the review queue; send at most one reminder, then stop. |
+| Unanswered questions | Send one reminder at 24 hours, time out/release the chat slot at 48 hours, and keep the suggestion in Command. |
 | Task removal | Archive and Restore, not hard delete. |
 | Other CRM removal | Use entity-specific lifecycle actions with immutable audit. |
 | Agent access | Extend the narrow agent-control API and MCP bridge; never share an admin JWT or database credentials. |
 | Gmail ingestion | Start with a dedicated, restart-safe Gmail History worker. Pub/Sub may later wake the same processor but is not required for the first reliable release. |
 | Instagram fetch | Move it into FastAPI, use an authorization header, cache the last good response, and let the frontend call the backend. |
 | Token storage | Railway secret variables only. The browser, rendered HTML, frontend build logs, database, and source code never contain the token. |
+| Initial task ownership | Every applied task is implicitly Brandon-owned; no owner field or alternate assignee is introduced in this slice. |
+| Approval handoff | A Telegram/agent link uses a one-time handoff nonce; authenticated Command exchange issues a separate one-time approval nonce, and opening the link never approves. |
 
 ## System Architecture
 
@@ -133,11 +135,11 @@ The service accepts a typed command containing:
 - `source_type`: `command_ui`, `gmail_message`, or `sydney_chat`
 - `source_id`
 - `idempotency_key`
-- optional linked internal records
+- no owner or linked-record fields; Brandon is the implicit owner and only an optional uniquely resolved `contact_id` is applied
 
 It must:
 
-1. Validate the contact and linked records.
+1. Validate the optional contact. The initial create command does not atomically add opportunity, listing, or agreement links.
 2. Normalize timestamps to UTC while preserving the user's timezone interpretation in audit metadata.
 3. Enforce uniqueness on the idempotency key before inserting.
 4. Create the task, contact activity when applicable, provenance link, and lifecycle event in one database transaction.
@@ -147,6 +149,8 @@ It must:
 Persist this contract in `crm_task_creation_requests`, not only in application memory. Each row contains an idempotency scope/key, normalized payload hash, actor/source, state, resulting task ID, failure category, and timestamps. `(scope, idempotency_key)` is unique. The creation request, task, provenance, contact activity, lifecycle event, and write audit commit together; a payload mismatch or audit failure rolls the transaction back.
 
 No route or agent tool may bypass this service after cutover.
+
+The first Gmail/Sydney slice applies only the existing `CreateTaskCommand` shape: title, description, priority, due time, optional uniquely resolved `contact_id`, and `status=open`. If evidence clearly assigns the work to someone other than Brandon, the suggestion stays `pending_review` with blocker `unsupported_owner`. If ownership is ambiguous, Sydney may ask once whether this should be Brandon's follow-up; a non-Brandon answer returns it to that blocker. A requested non-contact task link stays `pending_review` with blocker `unsupported_link`. Command may resolve either blocker only through a versioned, audited choice to make it Brandon-owned or create without the unsupported link, or dismiss it. Approval is disabled while either blocker remains; the system never fabricates an owner or link.
 
 ## CRM Removal and Lifecycle Design
 
@@ -271,21 +275,32 @@ Run one dedicated `integration-worker` Railway service from the backend image, f
 python -m workers.integration_worker
 ```
 
-Do not run the polling loop inside every Uvicorn process. The worker hosts independently feature-flagged Gmail intake and Instagram health jobs. Gmail polls at a configurable interval, initially two minutes, and takes a PostgreSQL advisory lock per Workspace account. Only one lease-holder advances a mailbox cursor.
+Do not run the polling loop inside every Uvicorn process. The worker hosts independently feature-flagged Gmail intake and Instagram health jobs. Gmail polls at a configurable interval, initially two minutes. Advisory contract `v1` hashes exact account bytes `b"sws:gmail-task-intake:advisory:v1:account\x00" + account_uuid.bytes`; thread bytes are `b"sws:gmail-task-intake:advisory:v1:thread\x00" + account_uuid.bytes + len(thread_ascii).to_bytes(2, "big") + thread_ascii`. Take SHA-256's first eight bytes big-endian unsigned and subtract `2**64` when the high bit is set for PostgreSQL signed bigint. Fixed vectors for account `00000000-0000-0000-0000-000000000001` are `848794804012879307` for the account and `-7678506188538908948` for thread `thread-123`. Tests pin domain/version, UUID byte order, ASCII length framing, signed conversion, vectors, and `PYTHONHASHSEED` independence. All rolling workers stay on `v1`; a future version acquires old/new keys in sorted numeric order during an explicit dual-lock drain rollout. The session account lock is held on one dedicated PostgreSQL connection across every provider page and final cursor compare-and-set and released in `finally`; failure to acquire skips that account. Only one lease-holder advances a mailbox cursor.
 
 The current web Docker/Railway configuration cannot be reused unchanged because it hardcodes Uvicorn and an HTTP health check. Add a worker-specific target:
 
 - `backend/Dockerfile.worker` shares the pinned backend dependencies but starts `python -m workers.integration_worker`;
 - `backend/railway.integration-worker.json` selects that Dockerfile and `/health` as its Railway health path;
 - the worker module runs a minimal internal ASGI health server on Railway's `$PORT` alongside the job loops;
-- `/health` proves process liveness, while `/ready` verifies database reachability, a recent worker heartbeat, and that every enabled job has initialized;
+- `/health` is liveness only and returns exactly `{"status":"ok","service":"integration-worker"}` without touching PostgreSQL, Alembic, providers, or job configuration;
+- `/ready` returns exactly `{"status":"ready","service":"integration-worker","database":"ok","migration":"ok","heartbeat":"ok","job_registry":"ok"}` only when read-only checks find PostgreSQL reachable, the expected single Alembic head, a fresh scheduler-owned boot/heartbeat, and an already-initialized valid non-secret registry; it never inserts, updates, flushes, or refreshes heartbeat state; otherwise it returns 503 with bounded component names;
 - health output contains no mailbox identity, token, subject, recipient, or provider credential.
+
+Railway's only restart health path is `/health`; `/ready` is a post-deploy promotion check. `backend/Dockerfile.worker` has no Docker `HEALTHCHECK` and installs or calls neither curl nor wget. A repo-owned Python standard-library probe checks `/ready`, so health verification does not depend on a binary absent from the backend image.
+
+The scheduler owns boot/heartbeat writes after registry initialization. The worker supervises exactly the scheduler and ASGI server with `asyncio.wait(..., return_when=FIRST_COMPLETED)`. Any error or unexpected normal return sets server shutdown, cancels and awaits the peer, and raises so Railway restarts; a `TaskGroup` is not treated as a run-forever supervisor.
+
+The Google Workspace/Gmail, Gemini, and current Telegram clients are synchronous. Their calls run only in dedicated bounded executors with provider socket/request timeouts and outer hard job deadlines. A timed-out future is tracked, and the same account/thread/outbox job cannot overlap it. Executor saturation degrades protected provider status but cannot occupy the scheduler/ASGI event loop; a stalled-provider test must prove `/health` and the read-only `/ready` remain responsive.
 
 The worker service has its own restart policy and deployment verification. A successful web backend deployment is not evidence that the worker is healthy.
 
 On first enablement, store Gmail's current `historyId` and do not scan historical mail. An authenticated admin can request an explicit bounded backfill, initially capped at seven days. If Gmail reports that the cursor is too old, record a blocked health state, reseed from the current profile cursor, and require an explicit bounded backfill rather than silently replaying the mailbox.
 
-History discovery and content extraction are separate durable stages. A `gmail_history_runs` row records the committed start cursor, target history ID, next page token, and run state. For each History page, one transaction upserts every discovered message ID as a pending receipt and checkpoints the next page token. Only the final-page transaction marks the run complete and advances `gmail_sync_states.current_history_id`. A crash resumes the page or run; it cannot advance past an undiscovered message. A separate consumer claims pending receipts, refetches message content when needed, extracts suggestions, and records success/failure without moving the mailbox cursor.
+History discovery and content extraction are separate durable stages. A `gmail_sync_runs` row records the committed start cursor, terminal History ID, next page token, and run state; `gmail_sync_page_checkpoints` persists each page. For every History page, one transaction upserts each discovered message ID as a pending receipt and checkpoints the next page token. Only the final-page transaction marks the run complete and advances `gmail_sync_accounts.committed_history_id`. A crash resumes the page or run; it cannot advance past an undiscovered message. A separate consumer claims pending receipts, refetches message content when needed, extracts suggestions, and records success/failure without moving the mailbox cursor.
+
+Before any receipt mutates obligations, suggestions, suppressions, or source links, its transaction takes `pg_advisory_xact_lock` on a stable SHA-256-derived signed 64-bit key for `(account_id, gmail_thread_id)`. Same-thread receipts therefore serialize across workers while different threads remain parallel. Python's randomized `hash()` is forbidden for both advisory key families.
+
+Migration, advisory-lock, cursor, lease, and end-to-end tests run against independent connections to a real disposable PostgreSQL 16 database. The guard requires both `GMAIL_TASK_TEST_DATABASE_NAME` and `GMAIL_TASK_TEST_DATABASE_URL`, requires the configured and parsed database names to be exactly equal and end in `_test`, requires a PostgreSQL driver, and fails rather than skips when `CI=true`. Destructive setup/cleanup uses explicit fail-closed checks, never Python assertions, and requires the exact owned marker tuple `(total_rows, matching_run_rows) == (1, 1)` even under `python -O`. A dedicated scoped GitHub workflow starts and removes an exact TLS-enabled PostgreSQL container; SQLite and parse-only DDL do not satisfy this contract. The existing CRM lifecycle migration workflow is updated before revision `82` so its exact revision-81 tests remain valid while `81` is an ancestor of the sole serial head `82`, then `83`, then `84`.
 
 ### Direction and eligibility
 
@@ -301,54 +316,88 @@ For each changed message:
 
 Received messages are candidates when they request, promise, schedule, defer, or require an action. Sent messages are candidates when Brandon commits to a follow-up, requests a response by a time, promises a deliverable, or delegates an action. Informational messages produce a non-actionable receipt, not a suggestion.
 
-Client-facing email sent through Sydney remains eligible. The agent-control Gmail send path records `gmail_message_origins` keyed by Workspace account and returned Gmail message ID, with origin type such as `client_facing_agent_send` or `internal_operational_automation`. The former enters normal sent-mail extraction and thread reconciliation; only the latter is suppressed. The later History event uses the same origin row and receipt key.
+Client-facing email sent through Sydney remains eligible. Every agent-control send requires a caller-generated UUID `request_id` and permits optional UUID `retry_of_request_id`; `confirmed_by_brandon` alone is never an idempotency key. Before any provider call, the route commits a `gmail_message_origins` pre-send intent keyed by `(account_id, request_id)` with a canonical send hash excluding both UUIDs, canonical envelope/body hash, optional unique predecessor FK, `origin_kind=sydney_client_send`, and `delivery_state=sending`, plus a same-transaction fail-closed action audit. The partial unique gate on `(account_id, canonical_send_hash)` uses exact PostgreSQL `delivery_state IN ('sending', 'delivery_uncertain') AND reconciled_outcome IS DISTINCT FROM 'not_delivered'`; bare `!=`/`<>` is forbidden because NULL would evade the predicate. The Gmail transport uses zero automatic retries. Known success fills provider IDs, succeeds, and enqueues. Timeout/crash/unknown/persistence failure becomes uncertain; neither unresolved state may call Gmail again.
+
+A new UUID with the same canonical payload is rejected before Gmail while its predecessor is unresolved, whether or not it falsely names that predecessor. Only authenticated `not_delivered` reconciliation releases the gate, and exactly one successor must explicitly bind `retry_of_request_id` to that same-account/same-hash predecessor. Missing, mismatched, unresolved, delivered, or already-used predecessor fails closed. A real two-session barrier test simultaneously inserts first intents with distinct UUIDs, identical account/hash, and NULL outcomes and proves one commit/provider call. Further tests prove fresh-UUID rejection, acceptance only after `not_delivered`, and one provider call under racing successors.
+
+The only persisted origin values are `sydney_client_send`, `human_send`, and `system_automation`. A sent message first observed through History without an app intent gets a `human_send` origin already in `succeeded`. `sydney_client_send` enters normal sent-mail extraction and thread reconciliation; only `system_automation` is suppressed. The later History event uses the same successful origin and receipt key.
 
 ### Durable data model
 
-`gmail_sync_states`
+`gmail_sync_accounts`
 
 - one row per Workspace account;
-- mailbox identity, current history cursor, lease metadata, last success, last error, and enabled state;
+- mailbox identity, committed History cursor, reseed candidate, mode, blocked reason, last success, and bounded last error;
 - never stores OAuth token material.
+
+`gmail_sync_runs` and `gmail_sync_page_checkpoints`
+
+- one resumable poll/backfill run plus unique ordered page checkpoints;
+- page commits never advance `gmail_sync_accounts.committed_history_id`; only the terminal-page compare-and-set does.
 
 `gmail_message_origins`
 
-- identifies known app/agent-created sent messages by account and Gmail message ID;
-- records only origin class, source request ID, and timestamps;
-- unique on `(workspace_account_id, gmail_message_id)` and contains no body.
+- represents app/agent pre-send intents and History-inferred human sent-message origins for one account;
+- for agent/API sends, records required UUID request ID, canonical send hash excluding request/retry UUIDs, canonical envelope/body hash, optional unique self-FK predecessor, positive row version, originating audit, exact state `sending`, `succeeded`, or `delivery_uncertain`, and origin `sydney_client_send` or `system_automation` before the call;
+- partial uniqueness on unresolved `(account_id, canonical_send_hash)` uses exact NULL-safe `delivery_state IN ('sending', 'delivery_uncertain') AND reconciled_outcome IS DISTINCT FROM 'not_delivered'`, blocks fresh-UUID bypass until authenticated `not_delivered`, and permits at most one predecessor-bound successor;
+- provider message/thread IDs are nullable until known success; only `(account_id, gmail_message_id)` is unique when present, while `gmail_thread_id` is nonunique and indexed because a thread has many messages; History-inferred `human_send` rows are created already succeeded without a caller request ID;
+- contains no body and no retry loop.
 
 `gmail_message_receipts`
 
 - Workspace account ID, Gmail message ID, thread ID, direction, received/sent timestamp, normalized participant hashes, subject preview, content hash, classification, and processing timestamps;
-- unique on `(workspace_account_id, gmail_message_id)`;
+- unique on `(workspace_account_id, gmail_message_id)` with a separate nonunique `(workspace_account_id, gmail_thread_id)` lookup index;
 - stores no full raw body.
 
 `crm_task_suggestions`
 
 - structured title, description, priority, due time, matched contact, confidence, rationale, state, model/schema version, idempotency key, and resulting task ID;
-- states: `needs_clarification`, `possible_duplicate`, `pending_review`, `approved`, `dismissed`, `applied`, or `failed`;
+- states: `needs_clarification`, `possible_duplicate`, `pending_review`, `approved`, `dismissed`, `applied`, or `failed`; a separate clarification state and blocker-code set represent manual review without inventing another top-level state;
 - zero, one, or many suggestions may belong to a receipt;
 - unique source key based on mailbox, message ID, stable normalized action key, and model schema version, so one email can yield two distinct tasks while reprocessing cannot duplicate either one;
 - an `obligation_fingerprint`, Gmail thread ID, and optional `duplicate_of_suggestion_id` support cross-message reconciliation.
 
-`crm_task_email_sources`
+`gmail_extraction_attempts` and `gmail_extracted_obligations`
+
+- bounded versioned extraction attempts and structured obligations with deterministic action/source identity;
+- contain only sanitized categories, structured task fields, hashes, and evidence previews, never raw bodies.
+
+`crm_task_suggestion_sources`
 
 - immutable link from suggestion and resulting task to the Gmail receipt;
 - includes direction and a minimal user-visible source label;
-- unique on `(workspace_account_id, gmail_message_id, suggestion_key)`;
+- unique on `(suggestion_id, obligation_id)`;
 - no raw body.
 
-`sydney_clarification_threads`
+`crm_task_suggestion_suppressions`
 
-- one active thread per suggestion;
-- one outstanding clarification per Telegram chat, enforced by a partial unique constraint while state is `awaiting_answer`;
-- state, opaque clarification code, current structured missing field, normalized options where useful, question version, ask count, Telegram chat/message IDs when available, last asked time, one reminder time, resolved fields, and completion time;
+- unique `(source_type, source_scope_key, source_action_key, obligation_fingerprint)`, where the source/action identity is version-independent and Gmail scope includes account plus thread;
+- the same semantic fingerprint in an unrelated source scope remains eligible and is never globally suppressed;
+- only an authenticated audited reprocess can supersede the suppression.
+
+`gmail_backfill_requests`
+
+- authenticated administrator, reason, maximum-seven-day bounds, expired/reseed cursors, audit, and terminal result.
+
+`crm_task_clarifications`
+
+- one active clarification per suggestion and one unresolved clarification per configured Telegram chat, enforced by partial unique constraints;
+- stores only opaque code hash, current consequential field, suggestion version, normalized options, round 1 through 5, Telegram delivery correlation, last asked time, one 24-hour reminder time, 48-hour timeout/release, resolved fields, and completion state;
+- unique `(suggestion_id, suggestion_version, field_name)` prevents repeating a field on one version;
 - does not store the original full email or unrelated chat history.
 
 `sydney_question_outbox`
 
-- durable delivery job with suggestion ID, dedupe key, claim time, sent time, and delivery status;
-- unique dedupe key prevents duplicate questions after restarts.
+- one immutable-payload row per `initial`, explicit `initial_retry`, or sole `reminder` attempt, with parent initial ID, deterministic unique dedupe key, claim/attempt/sent times, and exact `pending`, `sending`, `sent`, `failed`, or `delivery_uncertain` state;
+- every attempt commits `sending` before `sendMessage`; uncertain is never automatically retried, and a reminder is never replaced or retried.
+
+`crm_task_suggestion_approval_nonces` and `crm_task_suggestion_events`
+
+- both nonce kinds come from Python `secrets.token_urlsafe(32)` (256-bit, never below 128-bit), persist only a unique SHA-256 digest, and reject malformed/short/noncanonical base64url before lookup;
+- hash-only nonce rows and immutable suggestion transition events;
+- a 15-minute administrator-null `handoff` is consumed by authenticated Command exchange to create a distinct 5-minute administrator-bound `approval` with `issuance_path=handoff_exchange` and a required parent; ordinary authenticated Command prepare instead creates a 5-minute `approval` with `issuance_path=command_prepare` and no parent.
+
+These names supersede the early shorthand `gmail_sync_states`, `gmail_history_runs`, `crm_task_email_sources`, `gmail_obligation_suppressions`, and `sydney_clarification_threads`. No alias tables or legacy origin labels are created. Feature/code rollback leaves schema in place. Revisions `83`/`84` refuse downgrade while any owned durable/evidence/audit row exists; only a separate explicit audited export-and-destructive procedure may empty them first. Tests prove refusal preserves existing CRM and intake evidence and prove downgrade only on empty owned tables.
 
 ### Structured extraction
 
@@ -387,7 +436,7 @@ Before creating a new suggestion, reconcile it against open suggestions and sour
 - an uncertain match enters `possible_duplicate` review and is never auto-merged;
 - messages in different Gmail threads are never auto-merged solely because their titles match.
 
-This makes `crm_task_email_sources` many-to-one: multiple received and sent receipts can explain one suggestion and resulting task.
+This makes `crm_task_suggestion_sources` many-to-one: multiple received and sent obligations can explain one suggestion and resulting task.
 
 ### When Sydney must ask
 
@@ -396,26 +445,28 @@ Sydney asks when proceeding would require a consequential guess. The backend, no
 - the intended action is ambiguous or more than one materially different task is plausible;
 - a deadline is clearly required by the email but the time expression is incomplete, conflicting, or timezone-ambiguous;
 - more than one CRM contact is a plausible match and the relationship matters to the task;
-- the email delegates among multiple people and the owner of the CRM task is unclear;
+- the email delegates among multiple people and it is unclear whether this should be Brandon's follow-up task;
 - approval text conflicts with the stored structured suggestion;
-- a requested linked opportunity, agreement, listing, or contact cannot be uniquely resolved.
+- a requested contact cannot be uniquely resolved.
 
 Sydney does not ask merely because an optional field is absent. A clear task may have no contact or due date. Sydney also does not invent a contact, deadline, owner, or external action.
+
+The initial schema cannot represent a non-Brandon assignee or atomically create opportunity/listing/agreement links. An explicit non-Brandon assignment and any requested non-contact link stay `pending_review` with blocker `unsupported_owner` or `unsupported_link`; Sydney does not ask repeated questions that cannot make the payload representable.
 
 The same evaluator applies to `sydney_chat` drafts created from a direct request. A direct request is not allowed to bypass missing-field, duplicate, contact-match, or deadline checks merely because Brandon initiated it conversationally.
 
 ### Clarification conversation policy
 
-1. Ask one short, specific question at a time in Brandon's allowlisted Telegram chat. Do not deliver a second suggestion's question until the current chat question is resolved or timed out back to the Command queue.
+1. Ask one short, specific question at a time in Brandon's configured Telegram chat. A partial unique constraint prevents a second suggestion's question from owning the chat slot until the current row resolves or times out at 48 hours.
 2. Include just enough context to identify the email, using sender/recipient, compact subject, and proposed task title. Never paste the full body unless Brandon explicitly asks Sydney to read the thread.
 3. Offer two or three choices only when the backend has real candidates; otherwise ask a direct free-text question.
 4. Store the pending field, opaque clarification code, and suggestion ID before delivery. Include the short opaque code in the question without exposing a database ID.
-5. Correlate the answer to the one outstanding chat clarification, opaque code, and Telegram reply-to message ID when available.
-6. Validate and persist the structured answer, then reevaluate the same suggestion.
-7. Ask the next required question only if another consequential ambiguity remains.
+5. The initial Hermes answer tool accepts only opaque code, expected suggestion version, and bounded structured answer. It accepts no caller-provided chat ID, user ID, suggestion ID, owner, or approval claim. The backend verifies the code hash and that the active row has a successful outbound delivery to the configured chat; this prevents cross-suggestion mistakes but is not proof of human identity.
+6. Validate and persist the structured answer, close the clarification, increment the same suggestion's version, then reevaluate it. Any independent edit, reprocess, or material source update that changes the version first marks the active clarification `superseded` and releases the chat slot in the same transaction.
+7. Ask the next highest-consequence field only if another consequential ambiguity remains. Never repeat `(suggestion_id, suggestion_version, field)` and stop after five rounds; unresolved ambiguity then becomes `manual_review_required` without a sixth question.
 8. When complete, show a compact final task preview and ask Brandon to Approve, Edit, or Dismiss.
-9. If Brandon does not answer, send no more than one reminder after 24 hours. The suggestion remains in Command's review queue without further messages.
-10. If an answer cannot be correlated safely, Sydney names the compact subject and opaque code and asks Brandon to choose; it does not apply the answer speculatively.
+9. If Brandon does not answer after a known delivered initial/retry, create exactly one immutable reminder outbox attempt due at that attempt's `sent_at + 24 hours`, only when still before the fixed slot deadline. Commit the reminder as `sending` before its call and finish it as `sent`, `failed`, or `delivery_uncertain`; never retry or replace it. The slot deadline never moves: known initial success uses `sent_at + 48 hours`, failed/uncertain initial uses `first_attempt_at + 48 hours`, and never-attempted pending uses `created_at + 48 hours`. Retries/reminders do not extend it. At the deadline, mark the row `timed_out`, release the slot, and leave it in Command.
+10. A timed-out/resolved/superseded row, stale suggestion version, replaced field, or old code is a stale late answer: return `409 stale_clarification` and change no draft or chat slot. If an answer cannot be correlated safely in conversation, Sydney names the compact subject and opaque code and asks Brandon to choose; it does not call the tool speculatively.
 
 Examples:
 
@@ -429,15 +480,21 @@ Sydney must never ask the client or any email participant. All clarification goe
 
 A complete suggestion enters `pending_review`. Command shows the proposal, source direction, compact email identifier, confidence, extracted fields, missing-field state, and audit trail. Brandon can edit structured fields before approving.
 
-Approval creates a short-lived server-issued nonce and payload hash bound to suggestion ID, current version, approver, and normalized task fields. The nonce has `expires_at` and `used_at`; it can be consumed only once. If the suggestion changes after preview, the old approval becomes invalid. The shared task service applies the approved version once and records the resulting task ID. Retries reconcile and return that same task.
+Sydney's approval-link action creates a 15-minute hash-only `handoff` bound to suggestion ID, current version, payload hash, and normalized task fields, with no administrator identity. The link is `/admin/command/task-suggestions?suggestion={id}#handoff={opaque}`; a handoff or approval secret is never accepted in the query. A no-store/no-referrer bootstrap synchronously captures and clears the fragment with `history.replaceState` before hydration, telemetry, analytics, fetch/beacon, or any other application network/referrer path, holds it only in ephemeral memory, and never puts it in DOM, logs, or local/session storage. An unauthenticated visitor must sign in and reopen the still-unused link.
 
-For the initial rollout, final approval occurs in authenticated Command UI through a signed deep link Sydney may present. This is the only current path that proves the approver is an authenticated administrator rather than merely the holder of `AGENT_CONTROL_TOKEN`. Telegram-native approval stays disabled until the Hermes delivery gate below can provide a trusted, server-verifiable channel assertion bound to Brandon's allowlisted Telegram user/chat and inbound update ID.
+Authenticated exchange revalidates/consumes the handoff and creates a distinct 5-minute administrator-bound `approval` with `issuance_path=handoff_exchange` and its parent. Ordinary authenticated Command review uses `POST /api/v1/command/task-suggestions/{suggestion_id}/approval/prepare`, which revalidates expected version/hash, returns the exact preview, and creates a 5-minute administrator-bound `approval` with `issuance_path=command_prepare` and no parent. Both paths require a separate Approve click; prepare/open/exchange never creates a task. Only Approve consumes the nonce in the same transaction as shared-service application/audit. Version/hash changes, wrong administrator, wrong kind/path/parent, expiry, or replay fail closed.
 
-Dismissal records a reason category and prevents repeated suggestions for the same semantic action unless the source message itself changes.
+Handoff and approval issuers both use Python `secrets.token_urlsafe(32)`, yielding 32 random bytes (256 bits; never less than 128 bits), and store only unique SHA-256 digests. Consumers validate canonical ASCII base64url and exactly 32 decoded bytes before hashing or repository lookup; malformed, short, or noncanonical input gets the same bounded rejection. Tests pin the generator call/source and decoded length, prove plaintext absence, and force a duplicate generator output to test digest uniqueness/bounded regeneration or fail-closed behavior. They do not infer randomness statistically from generated samples.
 
-Dismissal suppression is independent of extractor/model version. Persist a `gmail_obligation_suppressions` row keyed by the version-independent source/action identity and obligation fingerprint, with dismissal reason, actor, and time. Model/schema version remains extraction metadata, not part of suppression identity. Reprocessing does not bypass this ledger; only an explicit authenticated admin Reprocess action can supersede a dismissal, and that override is audited.
+The exact approval mutations are `POST /api/v1/command/task-suggestions/{suggestion_id}/approval/prepare`, `POST /api/v1/command/task-suggestions/{suggestion_id}/handoff/exchange`, and `POST /api/v1/command/task-suggestions/{suggestion_id}/approve`. Prepare and exchange issue different approval paths as above. Approve accepts either valid stage-two nonce, expected version/hash, and a required request UUID.
 
-When the existing agent-control Gmail send action succeeds, it should enqueue the returned Gmail message ID for the same receipt processor. The later Gmail History observation uses the receipt uniqueness key and becomes an idempotent reconciliation, not a second suggestion. History cursor advancement follows the durable scan-run contract: every discovered message is committed as a pending receipt before the final sync cursor advances, while extraction may safely continue afterward.
+For the initial rollout, final approval occurs in authenticated Command UI through the two-stage handoff link Sydney may present. This is the only current path that proves the approver is an authenticated administrator rather than merely the holder of `AGENT_CONTROL_TOKEN`. Telegram-native approval stays disabled until the Hermes delivery gate below can provide a trusted, server-verifiable channel assertion bound to Brandon's configured Telegram user/chat and inbound update ID.
+
+Authenticated Command dismissal records a reason category and suppresses only the same version-independent source/action identity and obligation fingerprint within its scoped source (for Gmail, account plus thread). It is not a global semantic veto; an unrelated message/thread remains eligible.
+
+Dismissal suppression is independent of extractor/model version but never global by semantic fingerprint. Persist a `crm_task_suggestion_suppressions` row unique on `(source_type, source_scope_key, source_action_key, obligation_fingerprint)`, with dismissal reason, actor, and time. Gmail scope includes account UUID and thread ID; model/schema version and individual message ID are not part of the source/action identity. The same fingerprint in another thread/source remains eligible. Reprocessing does not bypass this ledger; only an explicit authenticated admin Reprocess action can supersede a dismissal, and that override is audited.
+
+When the agent-control Gmail send state reaches `succeeded`, it enqueues the returned Gmail message ID for the same receipt processor. The later Gmail History observation uses the receipt uniqueness key and becomes an idempotent reconciliation, not a second suggestion. History cursor advancement follows the durable scan-run contract: every discovered message is committed as a pending receipt before the final sync cursor advances, while extraction may safely continue afterward.
 
 ### Gmail intake health and alerts
 
@@ -446,12 +503,18 @@ Protected admin routes:
 - `GET /api/v1/admin/integrations/gmail-task-intake/status`
 - `POST /api/v1/admin/integrations/gmail-task-intake/check`
 - `POST /api/v1/admin/integrations/gmail-task-intake/reprocess/{receipt_id}`
+- `GET /api/v1/admin/integrations/gmail-task-intake/send-intents/{request_id}`
+- `POST /api/v1/admin/integrations/gmail-task-intake/send-intents/{request_id}/reconcile`
 
 Status reports only bounded operational data: enabled/shadow/live mode, worker heartbeat age, last poll/success, current cursor state, current History run state, pending/failed receipt counts, oldest pending age, last applied suggestion time, and sanitized error category. It never returns subjects, participants, bodies, OAuth tokens, or raw provider errors.
+
+Send-intent reconciliation is authenticated and never sends. Candidate delivered IDs trigger a transient deadline-bounded Gmail profile/message fetch through the configured account. Success requires matching account identity, exact message, `SENT`, candidate and intended thread, and canonical From/To/Cc/Bcc/subject/body hash. Only then may the origin succeed and enqueue. Wrong account/message/thread/label/envelope/body writes bounded quarantine evidence, remains uncertain, and is ineligible until independent History verification. `not_delivered` requires a bounded reason and expected state/version; only it releases the canonical-hash gate for one new UUID explicitly bound to that old intent.
 
 Configurable thresholds cover maximum worker-heartbeat age, poll age, pending-receipt age, and repeated failed receipts. Revoked Workspace OAuth, expired History cursor, stalled scan, missed worker heartbeat, growing pending backlog, and repeated extraction failures transition a deduplicated health state and enqueue an administrator email through `notification_jobs`. Recovery sends one resolved notification. An authenticated, diagnostics-gated canary may enqueue a synthetic Gmail-intake alert under a separate provider key to prove production alert delivery without corrupting the real cursor or revoking live OAuth.
 
 ## Sydney and Hermes CRM Bridge
+
+`backend/main.py` must import and include exactly once `admin_integrations.router`, `command_task_suggestions.router`, and `agent_control_crm.router`. A real-app route-inventory test asserts every documented admin, Command, and `/api/v1/agent-control/crm/*` method/path appears once with unique operation IDs, and unauthenticated smoke requests reach the intended authentication boundary rather than `404`/`405`. Router unit tests without this registration proof do not satisfy delivery.
 
 ### Agent-control actions
 
@@ -464,25 +527,25 @@ Add typed actions under `/api/v1/agent-control/crm/*` and advertise them in the 
 | `crm.task_clarifications.answer` | Submit Brandon's structured answer | Human-originated write |
 | `crm.task_drafts.create` | Create a reviewable draft from a direct Sydney request | Internal reversible write |
 | `crm.task_suggestions.approval_link` | Issue a short-lived Command review link | Read/review handoff |
-| `crm.task_suggestions.dismiss` | Dismiss a suggestion | Reversible workflow write |
+| `crm.task_suggestions.dismiss_proposal` | Record a bounded review proposal without changing suggestion/suppression state | Untrusted proposal-only write |
 | `crm.task_suggestions.approve` | Apply the exact previewed suggestion; disabled for Hermes initially | Trusted-channel confirmed write |
 | `crm.tasks.create_confirmed` | Create an explicitly requested manual task; disabled for Hermes initially | Trusted-channel confirmed write |
 | `crm.tasks.archive` | Archive a named task; disabled for Hermes initially | Trusted-channel confirmed reversible write |
 | `crm.tasks.restore` | Restore an archived task; disabled for Hermes initially | Trusted-channel confirmed reversible write |
 
-Tool descriptions must say exactly which actions require a suggestion version, payload hash, authenticated Command approval, or trusted Telegram channel assertion. A `confirmed_by_brandon` boolean alone is never sufficient. Disabled actions remain out of the advertised runtime action registry until their authentication gate is satisfied.
+Tool descriptions must say exactly which actions require a suggestion version, payload hash, authenticated Command approval, or trusted Telegram channel assertion. A `confirmed_by_brandon` boolean alone is never sufficient. Untrusted Hermes cannot dismiss, suppress, release a clarification, or change a suggestion version; dismiss-proposal only appends an idempotent bounded proposal/event for Command review. Actual dismissal and suppression are authenticated Command-only. Disabled actions remain out of the advertised runtime action registry until their authentication gate is satisfied.
 
 ### MCP bridge and Hermes scheduling
 
-Extend `hermes/atlas_backend_mcp.py` with one MCP tool per enabled allowlisted action. The bridge continues to hold only `AGENT_CONTROL_TOKEN` and the backend URL.
+Extend `hermes/atlas_backend_mcp.py` without removing or renaming its exact existing 16 tools: `status_read`, `actions_list`, `leads_recent`, `bookings_recent`, `workspace_status`, `drive_search`, `drive_file_read`, `gmail_search`, `gmail_thread_read`, `gmail_draft_create`, `gmail_send`, `docs_create`, `sheets_append`, `calendar_events_read`, `calendar_event_create`, and `contacts_search`. Add exactly six: `crm_tasks_read`, `crm_task_suggestions_read`, `crm_task_clarifications_answer`, `crm_task_drafts_create`, `crm_task_suggestions_approval_link`, and `crm_task_suggestions_dismiss_proposal`. The final registry is exactly 22 unique names; `gmail_send` gains required UUID `request_id`. The bridge continues to hold only `AGENT_CONTROL_TOKEN` and the backend URL.
 
 The deployed Hermes template also has a hardcoded `tools.include` allowlist in its boot overlay. Implementation must update the repo-owned overlay/bootstrap source and `docs/deployment/hermes-railway.md` with the exact enabled CRM tool names, redeploy `atlas-agent`, and then call live MCP `tools/list`. A code-level bridge test or backend action-registry response is not sufficient; production acceptance requires the expected CRM tools to appear in Hermes and every disabled trusted-write tool to remain absent.
 
-Automatic question delivery uses a repo-owned dispatcher inside `integration-worker`, not an assumed Hermes cron callback. The worker holds `SYDNEY_TELEGRAM_BOT_TOKEN`, `SYDNEY_TELEGRAM_BRANDON_CHAT_ID`, and `SYDNEY_TELEGRAM_BRANDON_USER_ID` as Railway secrets and calls Telegram Bot API `sendMessage` only for that allowlisted chat. It never calls `getUpdates`, so Hermes remains the sole inbound long-polling consumer. A successful response supplies the real chat/message IDs, which the worker persists on the clarification row.
+Automatic question delivery uses a repo-owned dispatcher inside `integration-worker`, not an assumed Hermes cron callback. The worker holds `SYDNEY_TELEGRAM_BOT_TOKEN` and `SYDNEY_TELEGRAM_BRANDON_CHAT_ID` as Railway secrets and calls Telegram Bot API `sendMessage` only for that configured chat. `SYDNEY_TELEGRAM_BRANDON_USER_ID` may be retained only as future signed-adapter configuration; it grants no authority in the initial flow. The worker never calls `getUpdates`, so Hermes remains the sole inbound long-polling consumer. A successful response supplies the real chat/message IDs, which the worker persists on the clarification row.
 
-The dispatcher commits `sending` before the external call. A known pre-send failure is retryable. A timeout, worker crash, or unknown response after dispatch becomes `delivery_uncertain` and is not automatically resent; Command exposes Reconcile/Retry so an operator can avoid duplicate questions. A known Telegram success commits `sent`, and the partial unique chat constraint prevents the next question from leaving until the current one resolves or times out. This is at-least-once durable intent with fail-closed uncertain delivery, not a false exactly-once claim about Telegram.
+Each dispatcher attempt is an immutable outbox row and commits `sending` before the executor-offloaded, deadline-bounded external call. A known initial failure may be retried only after authenticated reconciliation and as a new attempt. Timeout/crash/unknown becomes `delivery_uncertain` and is never auto-retried. The reminder is its own deterministic attempt and is never retried. The partial unique chat constraint holds until resolution or the fixed 48-hour deadline; failed attempts cannot extend it. This is durable intent with fail-closed uncertain delivery, not a false exactly-once claim.
 
-Incoming Telegram answers remain ordinary Sydney conversations handled by Hermes. Sydney calls the clarification-answer tool only with the opaque code for the one correlated active thread. A direct request such as `add a task to call Jane Friday` first uses `crm.task_drafts.create`; that draft passes through the same missing-field evaluator, Sydney questions, final preview, and Command approval path as an email suggestion.
+Incoming Telegram answers remain ordinary Sydney conversations handled by Hermes. The model/tool layer cannot provide trustworthy inbound chat, user, update, or reply identity, so the backend treats every answer as `untrusted_hermes_input`. Sydney calls the clarification-answer tool only with the opaque code, expected suggestion version, and bounded answer for the one active row. This bounded write may update a review draft but can never approve or create a task. A direct request such as `add a task to call Jane Friday` first uses `crm.task_drafts.create`; that Brandon-owned draft passes through the same missing-field evaluator, Sydney questions, final preview, and authenticated Command approval path as an email suggestion.
 
 Telegram-native final approval is a later gated enhancement. It may be enabled only if a verified Hermes channel hook exposes trustworthy inbound chat ID, user ID, and update/message ID outside model-supplied arguments. A repo-owned adapter must sign that context with a key distinct from `AGENT_CONTROL_TOKEN`; the backend verifies the signature, allowlist, one-time inbound update ID, suggestion version, nonce, and payload hash. If Hermes cannot provide that contract, Command remains the final approval surface permanently.
 
@@ -573,9 +636,12 @@ The `integration-worker` runs the daily Instagram check under a PostgreSQL advis
 | Workspace OAuth revoked or worker/backlog stalled | Mark Gmail intake unhealthy, stop unsafe advancement, and enqueue one deduplicated administrator alert. |
 | Worker crash during History pagination | Resume the durable run/page checkpoint; the committed sync cursor never skips undiscovered messages. |
 | Worker crash after receipt insert | Resume extraction from durable pending receipt state; unique constraints prevent duplicate suggestion. |
+| Agent Gmail send timeout/crash/unknown result | Preserve `sending` or mark `delivery_uncertain`; never auto-resend, and require authenticated not-delivered reconciliation plus a new UUID. |
 | Gemini invalid output | Record failed extraction safely; retry with bounded count; surface for review without creating a task. |
 | Ambiguous task | Create one pending clarification; Sydney asks rather than guessing. |
-| No answer from Brandon | One reminder after 24 hours, then leave in review queue. |
+| No answer from Brandon | One reminder at 24 hours; time out and release the one-chat slot at 48 hours, then leave in review queue. |
+| Late or superseded clarification answer | Return `409 stale_clarification`; do not mutate the suggestion or claim a new chat slot. |
+| More than five consequential questions | Stop delivery and mark manual review required. |
 | Duplicate Telegram delivery | Dedupe key and asked state prevent a second question. |
 | Telegram delivery result uncertain | Do not auto-resend; expose operator reconciliation so the question cannot be duplicated blindly. |
 | Uncertain task-create response | Reconcile by idempotency key before retry. |
@@ -601,6 +667,8 @@ The `integration-worker` runs the daily Instagram check under a PostgreSQL advis
 
 ### Phase 2: Gmail suggestion engine and Command review queue
 
+Prerequisite: start only after Tasks 7 and 8 of `docs/superpowers/plans/2026-08-18-crm-task-archive-foundation.md` are complete and green, including contact-workspace reconciliation and lifecycle E2E evidence.
+
 1. Add sync-run, receipt, multi-action suggestion, many-source, clarification, and outbox tables.
 2. Add the worker-specific Docker/Railway target and health server, then build lossless paginated History discovery plus separate receipt extraction in `integration-worker`, with feature flag `GMAIL_TASK_INTAKE_ENABLED=false` by default.
 3. Build bounded thread-context obligation reconciliation, structured extraction, and the Command suggestion review UI.
@@ -610,12 +678,13 @@ The `integration-worker` runs the daily Instagram check under a PostgreSQL advis
 
 ### Phase 3: Sydney CRM bridge and questions
 
-1. Add agent-control actions and MCP tools with tests, and update the Hermes `tools.include` boot overlay plus deployment documentation.
-2. Deploy the bridge and `atlas-agent` with trusted write actions disabled.
-3. Verify the exact enabled CRM tools through live Hermes `tools/list`, then exercise read-only task and suggestion tools from Sydney.
-4. Configure the repo-owned Telegram dispatcher secrets only on `integration-worker`, verify one-chat serialization and uncertain-delivery handling, then enable the clarification outbox.
-5. Verify ask, answer, resume, signed Command review link, authenticated approval, and idempotent create end to end.
-6. Keep Telegram-native approval actions absent from the registry unless the separately verified signed channel-assertion contract exists.
+1. Deploy and verify the authenticated Command task-suggestion workspace, including blocker review, handoff exchange, URL token removal, exact preview, and separate stage-two approval.
+2. Add agent-control actions and MCP tools with tests, and update the Hermes `tools.include` boot overlay plus deployment documentation. Overlay code may be prepared earlier, but no write/review-handoff tool is advertised before step 1 is live.
+3. Deploy the bridge and `atlas-agent` with trusted write actions disabled.
+4. Verify the exact enabled CRM tools through live Hermes `tools/list`, then exercise read-only task and suggestion tools from Sydney.
+5. Configure the repo-owned Telegram dispatcher secrets only on `integration-worker`, verify one-chat serialization, 24-hour reminder, 48-hour release, five-round ceiling, stale late-answer handling, and uncertain-delivery handling, then enable the clarification outbox.
+6. Verify ask, answer, resume, two-stage Command handoff, authenticated explicit approval, and idempotent create end to end.
+7. Keep Telegram-native approval actions absent from the registry unless the separately verified signed channel-assertion contract exists.
 
 ### Phase 4: Instagram cutover
 
@@ -638,19 +707,22 @@ Deliver every top-level record and child/relationship action in the two inventor
 - legacy `status=archived` rows migrate without loss, recovered source-only items remain read-only, and open/in-progress/completed/cancelled/archived counts follow one contract everywhere;
 - idempotency-key payload mismatch fails closed;
 - Gmail direction detection covers inbox, sent, self-copy, draft, spam, and automation loops;
+- agent Gmail send requires UUID, commits a pre-send `sending` intent/audit before the provider call, uses the exact NULL-safe unresolved partial-index predicate, permits only one of two simultaneous first intents with NULL outcomes to call the provider, rejects a later fresh-UUID same-hash bypass, permits only one predecessor-bound successor after authenticated `not_delivered`, never auto-retries uncertain delivery, and rejects/quarantines delivered IDs that fail account/message/SENT/thread/envelope/body verification;
 - one message with two actions produces two stable suggestions, while two same-title messages remain two distinct source-backed tasks;
 - an inbound request plus Brandon's sent commitment in the same thread reconciles to one obligation with two sources;
-- History multi-page restart, crash before/after page checkpoint, duplicate receipt, cursor expiry, and worker lease cases;
+- real-PostgreSQL two-connection tests prove per-account History exclusion, per-thread reconciliation serialization, different-thread parallelism, multi-page restart, crash before/after page checkpoint, duplicate receipt, cursor expiry, and worker lease cases;
 - client-facing Sydney sends remain eligible, internal operational automation is suppressed by durable origin metadata, and later History delivery deduplicates both;
 - extraction schema validation and raw-body non-persistence;
 - ambiguous suggestions enter `needs_clarification`;
 - optional missing fields do not trigger needless questions;
-- one-outstanding-question constraint, Telegram success/failure/uncertain delivery, answer correlation, and one-reminder ceiling;
-- direct Sydney drafts use the same evaluator; stale versions, approval nonce/hash, replay, dismissal, and exact-once task application fail closed;
+- one-outstanding-question constraint, immutable initial/retry/reminder attempts, Telegram success/failure/uncertain delivery, one reminder at 24 hours, fixed release at 48 hours, stale late answer, no repeated field/version, and five-round ceiling;
+- real two-session barriers prove answer-versus-timeout and answer-versus-edit/source-update have exactly one winner;
+- direct Sydney drafts use the same evaluator; untrusted Hermes input cannot assert identity, approval, dismissal, or suppression; unsupported owner/link blockers, stale versions, fragment hygiene, both approval issuance paths, `secrets.token_urlsafe(32)` source/decoded length, unique hash-only storage, malformed-before-lookup rejection, nonce/hash/kind/path/parent, replay, Command dismissal, and exact-once task application fail closed;
 - write mutations roll back when transactional audit persistence fails;
 - dismissed obligations remain suppressed across extractor upgrades unless an authenticated audited reprocess overrides them;
-- worker `/health` and `/ready`, OAuth failure, stale heartbeat/cursor, backlog thresholds, alert dedupe/recovery, and synthetic alert canary;
-- every new agent action appears in the registry and enforces the correct risk tier;
+- exact worker `/health` and read-only `/ready`, `FIRST_COMPLETED` peer failure, stalled synchronous provider responsiveness, no curl/wget/Dockerfile healthcheck dependency, OAuth failure, stale heartbeat/cursor, backlog thresholds, alert dedupe/recovery, and synthetic alert canary;
+- the real `backend/main.py` route inventory proves all three new routers are registered exactly once before route behavior can be considered green;
+- the exact existing 16 MCP tools remain unchanged, exactly six CRM tools are added, and the final 22-tool registry/risk tiers exclude actual dismiss and trusted writes;
 - Instagram bearer-header use, token redaction, response normalization, cache freshness, stale fallback, auth failure, rate limit, and timeout behavior.
 
 ### Frontend tests
@@ -662,14 +734,16 @@ Deliver every top-level record and child/relationship action in the two inventor
 - Instagram live, stale-cache, empty, and authored-fallback rendering;
 - no token, Graph URL, or provider error appears in generated client assets.
 
+The Gmail/Sydney workflow triggers on all backend files above, `hermes/**`, the MCP/overlay tests and deployment doc, both frontend package/lock files, and every Task-suggestion page/library/workspace/navigation source and test. Task 7 adds exact focused Vitest, typecheck, and scoped ESLint for only those touched files. The repository-wide `npm run lint` is currently a known-red informational baseline, recorded separately and never called green; it is not the Task 7 gate. Task 8 expands, rather than replaces, CI with the exact MCP/overlay/22-tool tests, and Task 9 retains both frontend and Hermes jobs alongside the full PostgreSQL/E2E job.
+
 ### End-to-end acceptance cases
 
 1. A received email with a clear request becomes one reviewable suggestion and one task only after approval.
 2. A sent email containing a commitment becomes one reviewable suggestion.
 3. An ambiguous due time causes Sydney to ask one clear question; Brandon's reply updates the same suggestion and produces a final preview.
-4. An unanswered question produces at most one reminder and remains visible in Command.
+4. An unanswered question produces one reminder at 24 hours, releases the chat slot at 48 hours, rejects a late answer, and remains visible in Command.
 5. Replaying Gmail history, Telegram delivery, approval, or task creation produces no duplicates.
-6. A direct Sydney request follows the same clarification flow, opens a signed Command review, and creates the same task shape after authenticated approval.
+6. A direct Sydney request follows the same clarification flow, opens a two-stage Command handoff, and creates the same Brandon-owned task shape only after an authenticated explicit approval click.
 7. Archiving removes a task from active UI and every active count; restoring returns it with its prior status and relationships.
 8. A valid Instagram credential returns real media through FastAPI and renders those exact permalinks in production.
 9. Revoking the credential produces a visible admin health failure and alert while the public page uses the bounded last-good cache or explicit fallback.
@@ -680,12 +754,13 @@ Deliver every top-level record and child/relationship action in the two inventor
 The work is complete only when all of the following are demonstrated against production, not inferred from local code:
 
 - Railway backend, `integration-worker`, and Hermes deployments are healthy at the intended commit.
-- The worker's own `/health` and `/ready` pass, and live Hermes `tools/list` contains exactly the enabled CRM tools without disabled trusted-write tools.
+- CRM task-foundation Tasks 7 and 8 are green before Gmail/Sydney implementation begins, and the authenticated task-suggestion UI is deployed before Hermes advertises answer/draft/handoff tools.
+- The worker's exact `/health` and `/ready` responses pass through the repo-owned non-curl probe, and live Hermes `tools/list` contains exactly the enabled CRM tools without disabled trusted-write tools.
 - Database reports a single expected Alembic head and new uniqueness constraints are active.
 - A controlled received-email fixture and sent-email fixture reach the review queue once.
 - A controlled inbound request plus Sydney-sent client commitment in the same Gmail thread reconciles to one obligation with both source messages.
 - A protected Gmail status check is healthy and the synthetic alert canary is delivered without changing the real mailbox cursor.
-- Sydney asks a controlled ambiguity question in Brandon's Telegram chat, accepts the answer, resumes the same suggestion, hands off to authenticated Command approval, and creates exactly one task.
+- Sydney asks a controlled ambiguity question in Brandon's Telegram chat, accepts the bounded untrusted answer, resumes the same suggestion, exchanges a handoff in authenticated Command, requires the separate approval click, and creates exactly one task.
 - The created task is visible in Command with source provenance and audit.
 - Archive and Restore reconcile the task workspace, contact view, overview, and reports.
 - The production homepage renders real Instagram media returned by the backend.
