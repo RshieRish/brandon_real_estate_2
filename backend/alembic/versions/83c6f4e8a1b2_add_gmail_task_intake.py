@@ -180,6 +180,107 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "gmail_missing_message_incidents",
+        _uuid_id(),
+        sa.Column("account_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("gmail_message_id", sa.String(length=255), nullable=False),
+        sa.Column("gmail_thread_id", sa.String(length=255), nullable=False),
+        sa.Column("start_history_id", sa.String(length=64), nullable=False),
+        sa.Column("page_number", sa.Integer(), nullable=False),
+        sa.Column("request_page_token", sa.String(length=1024), nullable=True),
+        sa.Column(
+            "state",
+            sa.String(length=32),
+            server_default="pending",
+            nullable=False,
+        ),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
+        sa.Column(
+            "alert_state",
+            sa.String(length=32),
+            server_default="pending",
+            nullable=False,
+        ),
+        sa.Column("alerted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("acknowledged_by_admin_id", sa.Integer(), nullable=True),
+        sa.Column("acknowledgement_reason", sa.String(length=500), nullable=True),
+        sa.Column("action_audit_id", sa.Integer(), nullable=True),
+        _now("created_at"),
+        _now("updated_at"),
+        sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "state IN ('pending', 'acknowledged')",
+            name="ck_gmail_missing_message_incidents_state",
+        ),
+        sa.CheckConstraint(
+            "page_number > 0",
+            name="ck_gmail_missing_message_incidents_page_positive",
+        ),
+        sa.CheckConstraint(
+            "version > 0",
+            name="ck_gmail_missing_message_incidents_version_positive",
+        ),
+        sa.CheckConstraint(
+            "alert_state IN ('pending', 'sent') AND ((alert_state = 'pending' "
+            "AND alerted_at IS NULL) OR (alert_state = 'sent' AND alerted_at "
+            "IS NOT NULL))",
+            name="ck_gmail_missing_message_incidents_alert_shape",
+        ),
+        sa.CheckConstraint(
+            "(state = 'pending' AND acknowledged_by_admin_id IS NULL AND "
+            "acknowledgement_reason IS NULL AND action_audit_id IS NULL AND "
+            "acknowledged_at IS NULL) OR (state = 'acknowledged' AND "
+            "acknowledged_by_admin_id IS NOT NULL AND acknowledgement_reason "
+            "IS NOT NULL AND acknowledgement_reason = "
+            "trim(acknowledgement_reason) AND acknowledgement_reason <> '' "
+            "AND action_audit_id IS NOT NULL AND acknowledged_at IS NOT NULL "
+            "AND alert_state = 'sent')",
+            name="ck_gmail_missing_message_incidents_ack_shape",
+        ),
+        sa.ForeignKeyConstraint(
+            ["account_id"],
+            ["gmail_sync_accounts.id"],
+            name="fk_gmail_missing_message_incidents_account_id",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["run_id", "account_id"],
+            ["gmail_sync_runs.id", "gmail_sync_runs.account_id"],
+            name="fk_gmail_missing_message_incidents_run_account",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["acknowledged_by_admin_id"],
+            ["admin_users.id"],
+            name="fk_gmail_missing_message_incidents_admin_id",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["action_audit_id"],
+            ["agent_action_audits.id"],
+            name="fk_gmail_missing_message_incidents_audit_id",
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "account_id",
+            "run_id",
+            "gmail_message_id",
+            "gmail_thread_id",
+            "page_number",
+            name="uq_gmail_missing_message_incidents_run_message_thread_page",
+        ),
+    )
+    op.create_index(
+        "ix_gmail_missing_message_incidents_pending",
+        "gmail_missing_message_incidents",
+        ["account_id", "created_at", "id"],
+        unique=False,
+        postgresql_where=sa.text("state = 'pending'"),
+    )
+
+    op.create_table(
         "gmail_message_receipts",
         _uuid_id(),
         sa.Column(
@@ -938,7 +1039,8 @@ def downgrade() -> None:
     op.execute(
         sa.text(
             "LOCK TABLE gmail_sync_accounts, gmail_sync_runs, "
-            "gmail_sync_page_checkpoints, gmail_message_receipts, "
+            "gmail_sync_page_checkpoints, gmail_missing_message_incidents, "
+            "gmail_message_receipts, "
             "gmail_message_origins, gmail_extraction_attempts, "
             "gmail_extracted_obligations, crm_task_suggestions, "
             "crm_task_suggestion_sources, "
@@ -954,6 +1056,7 @@ def downgrade() -> None:
                 IF EXISTS (SELECT 1 FROM gmail_sync_accounts LIMIT 1)
                     OR EXISTS (SELECT 1 FROM gmail_sync_runs LIMIT 1)
                     OR EXISTS (SELECT 1 FROM gmail_sync_page_checkpoints LIMIT 1)
+                    OR EXISTS (SELECT 1 FROM gmail_missing_message_incidents LIMIT 1)
                     OR EXISTS (SELECT 1 FROM gmail_message_receipts LIMIT 1)
                     OR EXISTS (SELECT 1 FROM gmail_message_origins LIMIT 1)
                     OR EXISTS (SELECT 1 FROM gmail_extraction_attempts LIMIT 1)
@@ -1012,6 +1115,11 @@ def downgrade() -> None:
         table_name="gmail_message_receipts",
     )
     op.drop_table("gmail_message_receipts")
+    op.drop_index(
+        "ix_gmail_missing_message_incidents_pending",
+        table_name="gmail_missing_message_incidents",
+    )
+    op.drop_table("gmail_missing_message_incidents")
     op.drop_table("gmail_sync_page_checkpoints")
     op.drop_index(
         "uq_gmail_sync_runs_active_account",

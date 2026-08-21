@@ -1,39 +1,86 @@
 """Google Workspace OAuth routes for Brandon's full-access agent connector."""
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from html import escape
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
 from middleware.auth import require_admin
+from models.gmail_task_intake import GmailSyncAccount
 from models.setting import Setting
 from services.workspace_service import (
-    WorkspaceIntegrationError,
-    exchange_code,
+    WorkspaceOAuthIdentity,
+    bind_workspace_refresh_token_for_request,
     get_auth_url,
-    get_workspace_connection_status,
+    get_workspace_connection_status_bounded,
+    run_workspace_oauth_exchange,
+    validate_workspace_oauth_identity,
+    workspace_oauth_client_id,
 )
 
 router = APIRouter()
 WORKSPACE_OAUTH_STATE_TTL_MINUTES = 10
 WORKSPACE_REFRESH_TOKEN_KEY = "google_workspace_refresh_token"
+WORKSPACE_GMAIL_ACCOUNT_BINDING_KEY = "google_workspace_gmail_account_id"
+_WORKSPACE_GMAIL_BINDING_LOCK_KEY = 5_921_914_720_764_681_105
 
 
 async def load_workspace_refresh_token_from_db(db: AsyncSession) -> str:
-    if settings.GOOGLE_WORKSPACE_REFRESH_TOKEN:
-        return settings.GOOGLE_WORKSPACE_REFRESH_TOKEN
-
     result = await db.execute(select(Setting).where(Setting.key == WORKSPACE_REFRESH_TOKEN_KEY))
     token_setting = result.scalar_one_or_none()
+    binding_result = await db.execute(
+        select(Setting).where(
+            Setting.key == WORKSPACE_GMAIL_ACCOUNT_BINDING_KEY
+        )
+    )
+    binding_setting = binding_result.scalar_one_or_none()
+    if binding_setting is not None:
+        try:
+            bound_account_id = UUID(binding_setting.value)
+        except (TypeError, ValueError, AttributeError):
+            bind_workspace_refresh_token_for_request("")
+            return ""
+        bound_account = await db.get(GmailSyncAccount, bound_account_id)
+        if (
+            bound_account is None
+            or not bound_account.workspace_email
+            or bound_account.workspace_email
+            != bound_account.workspace_email.strip().lower()
+        ):
+            bind_workspace_refresh_token_for_request("")
+            return ""
+        database_token = (
+            token_setting.value
+            if token_setting
+            and token_setting.key == WORKSPACE_REFRESH_TOKEN_KEY
+            and token_setting.value
+            else ""
+        )
+        bind_workspace_refresh_token_for_request(database_token)
+        return database_token
+
+    if settings.GOOGLE_WORKSPACE_REFRESH_TOKEN:
+        bind_workspace_refresh_token_for_request(
+            settings.GOOGLE_WORKSPACE_REFRESH_TOKEN
+        )
+        return settings.GOOGLE_WORKSPACE_REFRESH_TOKEN
+
     if token_setting and token_setting.value:
+        # Preserve the legacy unbound Workspace path until every caller passes
+        # an explicit database credential. Bound Gmail accounts never enter it.
         settings.GOOGLE_WORKSPACE_REFRESH_TOKEN = token_setting.value
+        bind_workspace_refresh_token_for_request(token_setting.value)
         return token_setting.value
 
+    bind_workspace_refresh_token_for_request(None)
     return ""
 
 
@@ -89,12 +136,14 @@ def is_workspace_oauth_state(state: str | None) -> bool:
 
 
 def render_workspace_oauth_page(title: str, message: str) -> str:
+    safe_title = escape(title)
+    safe_message = escape(message)
     return f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
+    <title>{safe_title}</title>
     <style>
       :root {{
         color-scheme: dark;
@@ -130,11 +179,111 @@ def render_workspace_oauth_page(title: str, message: str) -> str:
   </head>
   <body>
     <main>
-      <h1>{title}</h1>
-      <p>{message}</p>
+      <h1>{safe_title}</h1>
+      <p>{safe_message}</p>
     </main>
   </body>
 </html>"""
+
+
+async def bind_workspace_gmail_identity(
+    db: AsyncSession,
+    identity: WorkspaceOAuthIdentity,
+    *,
+    before_binding_lock: Callable[[], Awaitable[None]] | None = None,
+) -> GmailSyncAccount:
+    """Bind one verified mailbox and token in the caller's transaction."""
+
+    canonical_email = validate_workspace_oauth_identity(identity)
+    if before_binding_lock is not None:
+        await before_binding_lock()
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _WORKSPACE_GMAIL_BINDING_LOCK_KEY},
+    )
+
+    binding = await db.scalar(
+        select(Setting)
+        .where(Setting.key == WORKSPACE_GMAIL_ACCOUNT_BINDING_KEY)
+        .with_for_update()
+    )
+    account: GmailSyncAccount | None = None
+    if binding is not None:
+        try:
+            account_id = UUID(binding.value)
+        except (AttributeError, TypeError, ValueError):
+            raise RuntimeError("workspace_binding_invalid") from None
+        account = await db.scalar(
+            select(GmailSyncAccount)
+            .where(GmailSyncAccount.id == account_id)
+            .with_for_update()
+        )
+        if account is None:
+            raise RuntimeError("workspace_binding_invalid")
+        if account.workspace_email != canonical_email:
+            raise RuntimeError("workspace_account_rebind_forbidden")
+    else:
+        existing_accounts = list(
+            (
+                await db.scalars(
+                    select(GmailSyncAccount)
+                    .order_by(GmailSyncAccount.created_at, GmailSyncAccount.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        account = next(
+            (
+                row
+                for row in existing_accounts
+                if row.workspace_email == canonical_email
+            ),
+            None,
+        )
+        if account is None and existing_accounts:
+            raise RuntimeError("workspace_account_rebind_forbidden")
+        if account is None:
+            account = GmailSyncAccount(
+                workspace_email=canonical_email,
+                committed_history_id=None,
+                mode="shadow",
+            )
+            db.add(account)
+            await db.flush()
+        binding = Setting(
+            key=WORKSPACE_GMAIL_ACCOUNT_BINDING_KEY,
+            value=str(account.id),
+        )
+        db.add(binding)
+
+    token_setting = await db.scalar(
+        select(Setting)
+        .where(Setting.key == WORKSPACE_REFRESH_TOKEN_KEY)
+        .with_for_update()
+    )
+    if token_setting is None:
+        db.add(
+            Setting(
+                key=WORKSPACE_REFRESH_TOKEN_KEY,
+                value=identity.refresh_token,
+            )
+        )
+    else:
+        token_setting.value = identity.refresh_token
+
+    if account.blocked_reason == "oauth_revoked":
+        account.blocked_reason = None
+        account.last_error_category = None
+        account.last_error_message = None
+    await db.flush()
+    return account
+
+
+async def _rollback_workspace_oauth(db: AsyncSession) -> None:
+    try:
+        await db.rollback()
+    except Exception:
+        return
 
 
 async def complete_workspace_oauth_callback(
@@ -142,12 +291,15 @@ async def complete_workspace_oauth_callback(
     state: str | None,
     error: str | None,
     db: AsyncSession,
+    *,
+    oauth_exchange=None,
 ) -> HTMLResponse:
     if error:
         return HTMLResponse(
             render_workspace_oauth_page(
                 "Workspace Not Connected",
-                f"Google returned an error: {error}. Please close this tab and try again from Settings.",
+                "Google authorization was not completed. Please close this tab "
+                "and try again from Settings.",
             ),
             status_code=400,
         )
@@ -163,16 +315,65 @@ async def complete_workspace_oauth_callback(
 
     try:
         decode_workspace_oauth_state(state)
-        refresh_token = exchange_code(code, state)
-        await persist_workspace_refresh_token_to_db(db, refresh_token)
     except HTTPException as exc:
         return HTMLResponse(
             render_workspace_oauth_page("Workspace Not Connected", exc.detail),
             status_code=exc.status_code,
         )
-    except WorkspaceIntegrationError as exc:
+
+    try:
+        if oauth_exchange is None:
+            identity = await run_workspace_oauth_exchange(
+                code=code,
+                state=state,
+                client_id=workspace_oauth_client_id(),
+                deadline_seconds=settings.INTEGRATION_PROVIDER_DEADLINE_SECONDS,
+                socket_timeout_seconds=(
+                    settings.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS
+                ),
+            )
+        else:
+            identity = await oauth_exchange(code=code, state=state)
+    except Exception:
+        await _rollback_workspace_oauth(db)
         return HTMLResponse(
-            render_workspace_oauth_page("Workspace Not Connected", str(exc)),
+            render_workspace_oauth_page(
+                "Workspace Not Connected",
+                "Workspace authorization could not be verified. Please close "
+                "this tab and try again from Settings.",
+            ),
+            status_code=503,
+        )
+
+    try:
+        await bind_workspace_gmail_identity(db, identity)
+        await db.commit()
+    except RuntimeError as exc:
+        await _rollback_workspace_oauth(db)
+        if str(exc) == "workspace_account_rebind_forbidden":
+            return HTMLResponse(
+                render_workspace_oauth_page(
+                    "Workspace Not Connected",
+                    "Workspace is already bound to a different Gmail mailbox.",
+                ),
+                status_code=409,
+            )
+        return HTMLResponse(
+            render_workspace_oauth_page(
+                "Workspace Not Connected",
+                "Workspace authorization could not be saved. Please close this "
+                "tab and try again from Settings.",
+            ),
+            status_code=503,
+        )
+    except Exception:
+        await _rollback_workspace_oauth(db)
+        return HTMLResponse(
+            render_workspace_oauth_page(
+                "Workspace Not Connected",
+                "Workspace authorization could not be saved. Please close this "
+                "tab and try again from Settings.",
+            ),
             status_code=503,
         )
 
@@ -190,7 +391,12 @@ async def workspace_status(
     db: AsyncSession = Depends(get_db),
 ):
     await load_workspace_refresh_token_from_db(db)
-    return get_workspace_connection_status()
+    return await get_workspace_connection_status_bounded(
+        deadline_seconds=settings.INTEGRATION_PROVIDER_DEADLINE_SECONDS,
+        socket_timeout_seconds=(
+            settings.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS
+        ),
+    )
 
 
 @router.get("/auth-url")

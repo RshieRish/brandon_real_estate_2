@@ -188,6 +188,22 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         "path": "/api/v1/agent-control/workspace/gmail/send",
         "inputSchema": _object_schema(
             {
+                "request_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": (
+                        "Caller-supplied idempotency UUID; the bridge never "
+                        "creates or replaces it."
+                    ),
+                },
+                "retry_of_request_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": (
+                        "Optional caller-supplied UUID of a prior intent "
+                        "authenticated as not-delivered."
+                    ),
+                },
                 "to": _array_of_strings("Recipient email addresses.", min_items=1),
                 "subject": {"type": "string", "minLength": 1, "maxLength": 300},
                 "body_text": {"type": "string", "minLength": 1, "maxLength": 20000},
@@ -196,7 +212,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "confirmed_by_brandon": {"type": "boolean"},
                 "confirmation_note": {"type": "string", "maxLength": 500},
             },
-            ["to", "subject", "body_text", "confirmed_by_brandon"],
+            ["request_id", "to", "subject", "body_text", "confirmed_by_brandon"],
         ),
     },
     "docs_create": {

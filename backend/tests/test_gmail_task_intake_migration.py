@@ -40,6 +40,7 @@ TABLES = (
     "gmail_sync_accounts",
     "gmail_sync_runs",
     "gmail_sync_page_checkpoints",
+    "gmail_missing_message_incidents",
     "gmail_message_receipts",
     "gmail_message_origins",
     "gmail_extraction_attempts",
@@ -74,6 +75,14 @@ NULLABLE_COLUMNS = {
         "next_page_token",
         "discovered_history_id_min",
         "discovered_history_id_max",
+    },
+    "gmail_missing_message_incidents": {
+        "request_page_token",
+        "alerted_at",
+        "acknowledged_by_admin_id",
+        "acknowledgement_reason",
+        "action_audit_id",
+        "acknowledged_at",
     },
     "gmail_message_receipts": {
         "sender_hmac",
@@ -157,6 +166,32 @@ EXPECTED_FOREIGN_KEYS = {
             ("id",),
             "RESTRICT",
         )
+    },
+    "gmail_missing_message_incidents": {
+        "fk_gmail_missing_message_incidents_account_id": (
+            ("account_id",),
+            "gmail_sync_accounts",
+            ("id",),
+            "RESTRICT",
+        ),
+        "fk_gmail_missing_message_incidents_run_account": (
+            ("run_id", "account_id"),
+            "gmail_sync_runs",
+            ("id", "account_id"),
+            "RESTRICT",
+        ),
+        "fk_gmail_missing_message_incidents_admin_id": (
+            ("acknowledged_by_admin_id",),
+            "admin_users",
+            ("id",),
+            "RESTRICT",
+        ),
+        "fk_gmail_missing_message_incidents_audit_id": (
+            ("action_audit_id",),
+            "agent_action_audits",
+            ("id",),
+            "RESTRICT",
+        ),
     },
     "gmail_message_receipts": {
         "fk_gmail_message_receipts_account_id": (
@@ -362,6 +397,28 @@ TYPE_GROUPS = {
             ),
         },
     },
+    "gmail_missing_message_incidents": {
+        "uuid": ("id", "account_id", "run_id"),
+        "integer": (
+            "page_number",
+            "version",
+            "acknowledged_by_admin_id",
+            "action_audit_id",
+        ),
+        "datetime": (
+            "alerted_at",
+            "created_at",
+            "updated_at",
+            "acknowledged_at",
+        ),
+        "strings": {
+            255: ("gmail_message_id", "gmail_thread_id"),
+            64: ("start_history_id",),
+            1024: ("request_page_token",),
+            32: ("state", "alert_state"),
+            500: ("acknowledgement_reason",),
+        },
+    },
     "gmail_message_receipts": {
         "uuid": ("id", "account_id"),
         "text": ("recipient_hmacs_json", "labels_json"),
@@ -531,6 +588,14 @@ EXPECTED_SERVER_DEFAULTS = {
         "receipt_count": "0",
         "committed_at": "now",
     },
+    "gmail_missing_message_incidents": {
+        "id": "uuid",
+        "state": "pending",
+        "version": "1",
+        "alert_state": "pending",
+        "created_at": "now",
+        "updated_at": "now",
+    },
     "gmail_message_receipts": {
         "id": "uuid",
         "recipient_hmacs_json": "[]",
@@ -663,6 +728,7 @@ def _model_tables() -> dict[str, sa.Table]:
         module.GmailSyncAccount,
         module.GmailSyncRun,
         module.GmailSyncPageCheckpoint,
+        module.GmailMissingMessageIncident,
         module.GmailMessageReceipt,
         module.GmailMessageOrigin,
         module.GmailExtractionAttempt,
@@ -993,6 +1059,20 @@ def _seed_all_intake_tables(connection: sa.Connection) -> dict[str, UUID]:
     )
     connection.execute(
         sa.text(
+            "INSERT INTO gmail_missing_message_incidents "
+            "(id, account_id, run_id, gmail_message_id, gmail_thread_id, "
+            "start_history_id, page_number) VALUES "
+            "(:id, :account_id, :run_id, 'missing-message-guard', "
+            "'missing-thread-guard', 'history-1', 1)"
+        ),
+        {
+            "id": ids["gmail_missing_message_incidents"],
+            "account_id": ids["gmail_sync_accounts"],
+            "run_id": ids["gmail_sync_runs"],
+        },
+    )
+    connection.execute(
+        sa.text(
             "INSERT INTO gmail_message_receipts "
             "(id, account_id, gmail_message_id, gmail_thread_id, direction, "
             "message_at, sender_hmac, body_hash) VALUES "
@@ -1153,7 +1233,7 @@ def test_revision_83_is_the_sole_serial_head_after_revision_82() -> None:
     assert scripts.get_revision(REVISION).down_revision == DOWN_REVISION
 
 
-def test_all_eleven_models_have_exact_columns_defaults_and_no_raw_secrets() -> None:
+def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> None:
     tables = _model_tables()
     assert tuple(tables) == TABLES
     assert {
@@ -1201,6 +1281,26 @@ def test_all_eleven_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "discovered_history_id_max",
             "receipt_count",
             "committed_at",
+        ),
+        "gmail_missing_message_incidents": (
+            "id",
+            "account_id",
+            "run_id",
+            "gmail_message_id",
+            "gmail_thread_id",
+            "start_history_id",
+            "page_number",
+            "request_page_token",
+            "state",
+            "version",
+            "alert_state",
+            "alerted_at",
+            "acknowledged_by_admin_id",
+            "acknowledgement_reason",
+            "action_audit_id",
+            "created_at",
+            "updated_at",
+            "acknowledged_at",
         ),
         "gmail_message_receipts": (
             "id",
@@ -1393,6 +1493,15 @@ def test_all_eleven_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
     assert checkpoint.columns["receipt_count"].default.arg == 0
     assert str(checkpoint.columns["receipt_count"].server_default.arg) == "0"
 
+    incident = tables["gmail_missing_message_incidents"]
+    assert incident.columns["state"].default.arg == "pending"
+    assert str(incident.columns["state"].server_default.arg) == "pending"
+    assert incident.columns["version"].default.arg == 1
+    assert str(incident.columns["version"].server_default.arg) == "1"
+    assert incident.columns["alert_state"].default.arg == "pending"
+    assert str(incident.columns["alert_state"].server_default.arg) == "pending"
+    assert incident.columns["acknowledgement_reason"].type.length == 500
+
     receipt = tables["gmail_message_receipts"]
     assert receipt.columns["subject_preview"].type.length == 255
     assert receipt.columns["failure_message"].type.length == 500
@@ -1468,6 +1577,15 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     }
     assert _named_unique_columns(tables["gmail_sync_page_checkpoints"]) == {
         "uq_gmail_sync_page_checkpoints_run_page": ("run_id", "page_number")
+    }
+    assert _named_unique_columns(tables["gmail_missing_message_incidents"]) == {
+        "uq_gmail_missing_message_incidents_run_message_thread_page": (
+            "account_id",
+            "run_id",
+            "gmail_message_id",
+            "gmail_thread_id",
+            "page_number",
+        )
     }
     assert _named_unique_columns(tables["gmail_sync_runs"]) == {
         "uq_gmail_sync_runs_id_account": ("id", "account_id")
@@ -1634,6 +1752,13 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
             )
         },
         "gmail_sync_page_checkpoints": {},
+        "gmail_missing_message_incidents": {
+            "ix_gmail_missing_message_incidents_pending": (
+                ("account_id", "created_at", "id"),
+                False,
+                "state = 'pending'",
+            )
+        },
         "gmail_message_receipts": {
             "ix_gmail_message_receipts_account_thread": (
                 ("account_id", "gmail_thread_id"),
@@ -1715,6 +1840,28 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
         "ck_gmail_sync_page_checkpoints_page_positive": "page_number > 0",
         "ck_gmail_sync_page_checkpoints_receipts_nonnegative": (
             "receipt_count >= 0"
+        ),
+    }
+    assert _named_checks(tables["gmail_missing_message_incidents"]) == {
+        "ck_gmail_missing_message_incidents_state": (
+            "state IN ('pending', 'acknowledged')"
+        ),
+        "ck_gmail_missing_message_incidents_page_positive": "page_number > 0",
+        "ck_gmail_missing_message_incidents_version_positive": "version > 0",
+        "ck_gmail_missing_message_incidents_alert_shape": (
+            "alert_state IN ('pending', 'sent') AND ((alert_state = 'pending' "
+            "AND alerted_at IS NULL) OR (alert_state = 'sent' AND alerted_at "
+            "IS NOT NULL))"
+        ),
+        "ck_gmail_missing_message_incidents_ack_shape": (
+            "(state = 'pending' AND acknowledged_by_admin_id IS NULL AND "
+            "acknowledgement_reason IS NULL AND action_audit_id IS NULL AND "
+            "acknowledged_at IS NULL) OR (state = 'acknowledged' AND "
+            "acknowledged_by_admin_id IS NOT NULL AND acknowledgement_reason "
+            "IS NOT NULL AND acknowledgement_reason = "
+            "trim(acknowledgement_reason) AND acknowledgement_reason <> '' "
+            "AND action_audit_id IS NOT NULL AND acknowledged_at IS NOT NULL "
+            "AND alert_state = 'sent')"
         ),
     }
     assert _named_checks(tables["gmail_message_receipts"]) == {
@@ -1988,6 +2135,7 @@ def test_models_are_registered_for_application_and_alembic() -> None:
         "GmailSyncAccount",
         "GmailSyncRun",
         "GmailSyncPageCheckpoint",
+        "GmailMissingMessageIncident",
         "GmailMessageReceipt",
         "GmailMessageOrigin",
         "GmailExtractionAttempt",
@@ -3378,7 +3526,126 @@ def test_backfill_window_and_origin_versions_fail_closed_on_real_postgresql() ->
         engine.dispose()
 
 
-def test_task2_is_appended_to_the_dedicated_workflow_command_only() -> None:
+def test_missing_message_ack_shape_fails_closed_on_real_postgresql() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-000000008341")
+            run_id = UUID("00000000-0000-4000-8000-000000008342")
+            now = datetime(2026, 8, 20, tzinfo=timezone.utc)
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'incident-shape@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_runs "
+                        "(id, account_id, start_history_id, run_kind, state) "
+                        "VALUES (:id, :account_id, '8300', 'poll', 'failed')"
+                    ),
+                    {"id": run_id, "account_id": account_id},
+                )
+                admin_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO admin_users (email, hashed_password) "
+                        "VALUES ('incident-shape-admin@example.test', "
+                        "'test-only') RETURNING id"
+                    )
+                )
+                audit_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO agent_action_audits "
+                        "(actor, action_id, method, path, status_code, allowed, "
+                        "request_meta, response_meta) VALUES "
+                        "('command_admin', 'gmail.missing.ack', 'POST', "
+                        "'/test', 200, true, '{}', '{}') RETURNING id"
+                    )
+                )
+
+            invalid_shapes = (
+                ("", "sent", now),
+                ("   ", "sent", now),
+                (" padded reason ", "sent", now),
+                ("Canonical reason", "pending", None),
+            )
+            for index, (reason, alert_state, alerted_at) in enumerate(
+                invalid_shapes,
+                start=1,
+            ):
+                with pytest.raises(sa.exc.IntegrityError):
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(
+                                "INSERT INTO gmail_missing_message_incidents "
+                                "(account_id, run_id, gmail_message_id, "
+                                "gmail_thread_id, start_history_id, page_number, "
+                                "state, alert_state, alerted_at, "
+                                "acknowledged_by_admin_id, acknowledgement_reason, "
+                                "action_audit_id, acknowledged_at) VALUES "
+                                "(:account_id, :run_id, :message_id, "
+                                "'incident-thread', '8300', :page_number, "
+                                "'acknowledged', :alert_state, :alerted_at, "
+                                ":admin_id, :reason, :audit_id, :now)"
+                            ),
+                            {
+                                "account_id": account_id,
+                                "run_id": run_id,
+                                "message_id": f"invalid-incident-{index}",
+                                "page_number": index,
+                                "alert_state": alert_state,
+                                "alerted_at": alerted_at,
+                                "admin_id": admin_id,
+                                "reason": reason,
+                                "audit_id": audit_id,
+                                "now": now,
+                            },
+                        )
+
+            valid_id = UUID("00000000-0000-4000-8000-000000008343")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_missing_message_incidents "
+                        "(id, account_id, run_id, gmail_message_id, "
+                        "gmail_thread_id, start_history_id, page_number, state, "
+                        "alert_state, alerted_at, acknowledged_by_admin_id, "
+                        "acknowledgement_reason, action_audit_id, "
+                        "acknowledged_at) VALUES "
+                        "(:id, :account_id, :run_id, 'valid-incident', "
+                        "'incident-thread', '8300', 5, 'acknowledged', 'sent', "
+                        ":now, :admin_id, 'Canonical reason', :audit_id, :now)"
+                    ),
+                    {
+                        "id": valid_id,
+                        "account_id": account_id,
+                        "run_id": run_id,
+                        "now": now,
+                        "admin_id": admin_id,
+                        "audit_id": audit_id,
+                    },
+                )
+                assert connection.scalar(
+                    sa.text(
+                        "SELECT acknowledgement_reason FROM "
+                        "gmail_missing_message_incidents WHERE id = :id"
+                    ),
+                    {"id": valid_id},
+                ) == "Canonical reason"
+    finally:
+        engine.dispose()
+
+
+def test_task2_is_included_once_before_task3_in_the_dedicated_workflow() -> None:
     workflow = (
         _backend_root().parent
         / ".github"
@@ -3386,9 +3653,14 @@ def test_task2_is_appended_to_the_dedicated_workflow_command_only() -> None:
         / "gmail-sydney-task-intake.yml"
     ).read_text(encoding="utf-8")
     assert workflow.count("tests/test_gmail_task_intake_migration.py") == 1
-    assert "name: Run the Task 1 and Task 2 persistence contracts" in workflow
+    step_name = (
+        "name: Run the Task 1 through Task 3 persistence and compatibility "
+        "contracts"
+    )
+    assert step_name in workflow
     command = workflow.split(
-        "name: Run the Task 1 and Task 2 persistence contracts", 1
+        step_name, 1
     )[1].split("- name:", 1)[0]
-    assert command.rstrip().endswith("tests/test_gmail_task_intake_migration.py")
-    assert "test_gmail_history_adapter.py" not in command
+    assert command.index("tests/test_gmail_task_intake_migration.py") < command.index(
+        "tests/test_gmail_history_adapter.py"
+    )

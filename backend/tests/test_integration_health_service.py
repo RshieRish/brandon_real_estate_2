@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.gmail_task_postgres import (
@@ -294,3 +295,48 @@ async def test_synchronous_provider_deadline_keeps_event_loop_responsive() -> No
         release.set()
         await executor.wait_for_tracked_calls()
         executor.shutdown()
+
+
+async def test_timed_out_provider_late_exception_is_consumed_without_loop_leak() -> None:
+    from services.integration_health_service import (
+        BoundedProviderExecutor,
+        ProviderCallTimedOut,
+    )
+
+    executor = BoundedProviderExecutor(max_workers=1)
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    loop_contexts: list[dict[str, object]] = []
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    raw_canary = "PRIVATE-PROVIDER-SECRET"
+
+    def late_failure() -> None:
+        started.set()
+        release.wait(timeout=5)
+        completed.set()
+        raise RuntimeError(raw_canary)
+
+    loop.set_exception_handler(lambda _loop, context: loop_contexts.append(context))
+    try:
+        with pytest.raises(ProviderCallTimedOut, match="provider_timeout"):
+            await executor.run(
+                key="gmail:late-private-failure",
+                function=late_failure,
+                deadline_seconds=0.01,
+            )
+        assert await asyncio.to_thread(started.wait, 1)
+        release.set()
+        assert await asyncio.to_thread(completed.wait, 1)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+        await executor.wait_for_tracked_calls()
+        executor.shutdown()
+        loop.set_exception_handler(original_handler)
+
+    assert loop_contexts == []

@@ -1,7 +1,9 @@
 import json
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -66,14 +68,27 @@ class AgentControlWorkspaceActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.message_id, "msg-123")
         self.assertEqual(db.added[0].action_id, "workspace.gmail.draft.create")
 
+    @patch("routers.agent_control._audit", new_callable=AsyncMock)
     @patch("routers.agent_control.load_workspace_refresh_token_from_db", new_callable=AsyncMock)
-    @patch("routers.agent_control.send_gmail_message")
-    async def test_gmail_send_route_requires_confirmation(self, mock_send, mock_load):
+    @patch("routers.agent_control.send_gmail_message", create=True)
+    @patch(
+        "routers.agent_control.send_agent_gmail_with_origin",
+        new_callable=AsyncMock,
+        create=True,
+    )
+    async def test_gmail_send_route_requires_confirmation_before_any_send_path(
+        self,
+        durable_send,
+        legacy_send,
+        legacy_token_load,
+        legacy_audit,
+    ):
         db = _FakeDB()
 
         with self.assertRaises(HTTPException) as raised:
             await agent_control.workspace_gmail_send(
                 payload=WorkspaceGmailSendRequest(
+                    request_id=uuid4(),
                     to=["client@example.com"],
                     subject="Confirmed",
                     body_text="We are confirmed.",
@@ -85,34 +100,68 @@ class AgentControlWorkspaceActionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(raised.exception.status_code, 422)
-        mock_load.assert_not_awaited()
-        mock_send.assert_not_called()
+        durable_send.assert_not_awaited()
+        legacy_token_load.assert_not_awaited()
+        legacy_send.assert_not_called()
+        legacy_audit.assert_not_awaited()
         self.assertEqual(db.added, [])
 
+    @patch("routers.agent_control._audit", new_callable=AsyncMock)
     @patch("routers.agent_control.load_workspace_refresh_token_from_db", new_callable=AsyncMock)
-    @patch("routers.agent_control.send_gmail_message")
-    async def test_gmail_send_route_sends_when_confirmed_and_audits(self, mock_send, mock_load):
-        mock_send.return_value = {"id": "sent-123", "thread_id": "thread-123"}
+    @patch("routers.agent_control.send_gmail_message", create=True)
+    @patch(
+        "routers.agent_control.send_agent_gmail_with_origin",
+        new_callable=AsyncMock,
+        create=True,
+    )
+    async def test_gmail_send_route_delegates_to_durable_origin_only(
+        self,
+        durable_send,
+        legacy_send,
+        legacy_token_load,
+        legacy_audit,
+    ):
+        request_id = uuid4()
+        durable_send.return_value = SimpleNamespace(
+            request_id=request_id,
+            message_id="sent-123",
+            thread_id="thread-123",
+            delivery_state="succeeded",
+            replayed=False,
+        )
         db = _FakeDB()
+        request = _FakeRequest("/api/v1/agent-control/workspace/gmail/send")
+        payload = WorkspaceGmailSendRequest(
+            request_id=request_id,
+            to=["client@example.com"],
+            subject="Confirmed",
+            body_text="We are confirmed.",
+            confirmed_by_brandon=True,
+            confirmation_note="Approved in Telegram by Brandon.",
+        )
 
         result = await agent_control.workspace_gmail_send(
-            payload=WorkspaceGmailSendRequest(
-                to=["client@example.com"],
-                subject="Confirmed",
-                body_text="We are confirmed.",
-                confirmed_by_brandon=True,
-                confirmation_note="Approved in Telegram by Brandon.",
-            ),
-            request=_FakeRequest("/api/v1/agent-control/workspace/gmail/send"),
+            payload=payload,
+            request=request,
             db=db,
             agent={"actor": "hermes"},
         )
 
-        mock_load.assert_awaited_once_with(db)
-        mock_send.assert_called_once()
+        durable_send.assert_awaited_once_with(
+            db=db,
+            payload=payload,
+            request=request,
+            actor="hermes",
+        )
+        legacy_token_load.assert_not_awaited()
+        legacy_send.assert_not_called()
+        legacy_audit.assert_not_awaited()
+        self.assertEqual(result.request_id, request_id)
         self.assertEqual(result.message_id, "sent-123")
         self.assertEqual(result.thread_id, "thread-123")
-        self.assertEqual(db.added[0].action_id, "workspace.gmail.send")
+        self.assertEqual(result.delivery_state, "succeeded")
+        self.assertFalse(result.replayed)
+        self.assertEqual(db.added, [])
 
     @patch("routers.agent_control.load_workspace_refresh_token_from_db", new_callable=AsyncMock)
     @patch("routers.agent_control.search_drive_files")

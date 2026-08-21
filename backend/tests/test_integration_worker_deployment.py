@@ -21,6 +21,32 @@ TASK1_TESTS = (
     "tests/test_integration_worker_deployment.py",
 )
 TASK2_TESTS = TASK1_TESTS + ("tests/test_gmail_task_intake_migration.py",)
+TASK3_TESTS = TASK2_TESTS + (
+    "tests/test_gmail_history_adapter.py",
+    "tests/test_gmail_history_service.py",
+    "tests/test_gmail_history_cursor_recovery.py",
+    "tests/test_gmail_message_processing.py",
+    "tests/test_gmail_agent_control_origins.py",
+    "tests/test_workspace_oauth.py",
+    "tests/test_atlas_backend_mcp.py",
+    "tests/test_agent_control_workspace_actions.py",
+    "tests/test_agent_control_router.py",
+    "tests/test_workspace_actions.py",
+)
+TASK3_EXPLICIT_TRIGGER_PATHS = (
+    "backend/tests/test_atlas_backend_mcp.py",
+    "backend/tests/test_agent_control_router.py",
+    "backend/tests/test_agent_control_workspace_actions.py",
+    "backend/tests/test_gmail_agent_control_origins.py",
+    "backend/tests/test_gmail_history_adapter.py",
+    "backend/tests/test_gmail_history_cursor_recovery.py",
+    "backend/tests/test_gmail_history_service.py",
+    "backend/tests/test_gmail_message_processing.py",
+    "backend/tests/test_integration_worker.py",
+    "backend/tests/test_integration_worker_deployment.py",
+    "backend/tests/test_workspace_actions.py",
+    "backend/tests/test_workspace_oauth.py",
+)
 
 
 def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> None:
@@ -222,7 +248,7 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
-def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task2() -> None:
+def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task3() -> None:
     workflow_path = (
         REPOSITORY_ROOT
         / ".github"
@@ -237,6 +263,9 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task2() -> Non
         "GMAIL_TASK_TEST_DATABASE_NAME: brandon_gmail_sydney_ci_test",
         "GMAIL_TASK_TEST_DATABASE_URL:",
         "DATABASE_URL:",
+        "GMAIL_HISTORY_DATABASE_URL:",
+        "GMAIL_PARTICIPANT_HASH_KEY: gmail-sydney-ci-participant-hash-key-only",
+        'INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: "10"',
         "CI: \"true\"",
         "SSL_CERT_FILE:",
         "ALTER SYSTEM SET ssl = 'on'",
@@ -286,17 +315,18 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task2() -> Non
     ):
         assert required in workflow
     pytest_step = re.search(
-        r"name: Run the Task 1 and Task 2 persistence contracts(?P<body>.*?)"
+        r"name: Run the Task 1 through Task 3 persistence and compatibility contracts"
+        r"(?P<body>.*?)"
         r"\n\s+- name:",
         workflow,
         flags=re.DOTALL,
     )
     assert pytest_step is not None
     assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK2_TESTS
+        TASK3_TESTS
     )
     for future_test in (
-        "tests/test_gmail_history_adapter.py",
+        "tests/test_gmail_task_extractor.py",
         "tests/test_sydney_clarifications.py",
         "tests/test_agent_control_crm.py",
         "tests/test_gmail_task_intake_e2e.py",
@@ -309,6 +339,23 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task2() -> Non
         in workflow
     )
     assert workflow.count('"backend/tests/gmail_task_postgres.py"') == 2
+    for path in TASK3_EXPLICIT_TRIGGER_PATHS:
+        assert workflow.count(f'"{path}"') == 2
+
+    env_urls = {
+        name: re.search(rf"^\s+{name}: (?P<url>\S+)$", workflow, re.MULTILINE)
+        for name in (
+            "DATABASE_URL",
+            "GMAIL_HISTORY_DATABASE_URL",
+            "GMAIL_TASK_TEST_DATABASE_URL",
+        )
+    }
+    assert all(match is not None for match in env_urls.values())
+    rendered_urls = {match.group("url") for match in env_urls.values() if match}
+    assert len(rendered_urls) == 1
+    assert next(iter(rendered_urls)).endswith(
+        "/brandon_gmail_sydney_ci_test?ssl=require"
+    )
 
 
 def test_existing_crm_workflow_still_runs_the_revision81_ancestor_contract() -> None:

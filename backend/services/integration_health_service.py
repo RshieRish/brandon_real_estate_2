@@ -203,6 +203,11 @@ class BoundedProviderExecutor:
         self._tracked[key] = future
 
         def remove_finished(completed: asyncio.Future[object]) -> None:
+            # A provider thread can finish after its caller timed out. Retrieve
+            # and discard that late exception so asyncio never emits raw
+            # provider details through "Future exception was never retrieved".
+            if not completed.cancelled():
+                completed.exception()
             if self._tracked.get(key) is completed:
                 self._tracked.pop(key, None)
 

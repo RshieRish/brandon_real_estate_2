@@ -1,5 +1,6 @@
 import json
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import desc, select
@@ -9,6 +10,11 @@ from config import settings
 from database import get_db
 from middleware.agent_control import require_agent_control
 from models.booking import Booking
+from models.gmail_task_intake import (
+    GmailBackfillRequest,
+    GmailMissingMessageIncident,
+    GmailSyncRun,
+)
 from models.lead import Lead
 from schemas.agent_control import (
     AgentAction,
@@ -46,20 +52,34 @@ from schemas.agent_control import (
     WorkspaceSheetsAppendRequest,
     WorkspaceSheetsAppendResponse,
 )
+from schemas.gmail_task_intake import (
+    GmailMissingMessageAcknowledgeRequest,
+    GmailMissingMessageAcknowledgeResponse,
+    GmailMissingMessageIncidentDetail,
+)
+from middleware.auth import AdminSubject
 from services.agent_control_audit import write_agent_audit
+from services.gmail_origin_service import (
+    GmailSendConflict,
+    send_agent_gmail_with_origin,
+)
+from services.gmail_history_service import (
+    GmailMissingMessageAcknowledgementError,
+    acknowledge_missing_message_incident,
+)
 from services.workspace_service import (
     append_sheet_values,
     create_gmail_draft,
     create_google_doc,
     create_workspace_calendar_event,
     get_gmail_thread,
-    get_workspace_connection_status,
+    get_workspace_connection_status_bounded,
     list_calendar_events,
     read_drive_file,
     search_contacts,
     search_drive_files,
     search_gmail_messages,
-    send_gmail_message,
+    send_gmail_message,  # noqa: F401 - legacy patch seam proves route bypass
 )
 from routers.workspace import load_workspace_refresh_token_from_db
 
@@ -295,7 +315,12 @@ async def workspace_status(
     agent: dict = Depends(require_agent_control),
 ):
     await load_workspace_refresh_token_from_db(db)
-    response = get_workspace_connection_status()
+    response = await get_workspace_connection_status_bounded(
+        deadline_seconds=settings.INTEGRATION_PROVIDER_DEADLINE_SECONDS,
+        socket_timeout_seconds=(
+            settings.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS
+        ),
+    )
     await _audit(
         db,
         request=request,
@@ -421,37 +446,141 @@ async def workspace_gmail_send(
             detail="Direct Gmail send requires confirmed_by_brandon=true.",
         )
 
-    await load_workspace_refresh_token_from_db(db)
-    result = send_gmail_message(
-        to=payload.to,
-        subject=payload.subject,
-        body_text=payload.body_text,
-        cc=payload.cc,
-        bcc=payload.bcc,
-    )
+    try:
+        result = await send_agent_gmail_with_origin(
+            db=db,
+            payload=payload,
+            request=request,
+            actor=agent["actor"],
+        )
+    except GmailSendConflict as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.category,
+        ) from None
+    except RuntimeError as error:
+        if str(error) == "gmail_send_delivery_uncertain":
+            raise HTTPException(
+                status_code=503,
+                detail="gmail_send_delivery_uncertain",
+            ) from None
+        raise
     response = WorkspaceGmailSendResponse(
-        message_id=result.get("id", ""),
-        thread_id=result.get("thread_id", ""),
+        request_id=result.request_id,
+        message_id=result.message_id or "",
+        thread_id=result.thread_id or "",
+        delivery_state=result.delivery_state,
+        replayed=result.replayed,
         to_count=len(payload.to),
         subject=payload.subject,
     )
-    await _audit(
-        db,
-        request=request,
-        actor=agent["actor"],
-        action_id="workspace.gmail.send",
-        request_meta={
-            "to_count": len(payload.to),
-            "cc_count": len(payload.cc),
-            "bcc_count": len(payload.bcc),
-            "subject_length": len(payload.subject),
-            "body_length": len(payload.body_text),
-            "confirmed_by_brandon": payload.confirmed_by_brandon,
-            "confirmation_note_length": len(payload.confirmation_note),
-        },
-        response_meta={"message_id": response.message_id, "thread_id": response.thread_id},
-    )
     return response
+
+
+@router.post(
+    "/gmail/missing-message/acknowledge",
+    response_model=GmailMissingMessageAcknowledgeResponse,
+)
+async def acknowledge_gmail_missing_message(
+    payload: GmailMissingMessageAcknowledgeRequest,
+    request: Request,
+    administrator_subject: AdminSubject,
+    db: AsyncSession = Depends(get_db),
+) -> GmailMissingMessageAcknowledgeResponse:
+    try:
+        incident = await acknowledge_missing_message_incident(
+            db,
+            request=request,
+            administrator_id=int(administrator_subject),
+            incident_id=payload.incident_id,
+            account_id=payload.account_id,
+            run_id=payload.run_id,
+            gmail_message_id=payload.gmail_message_id,
+            gmail_thread_id=payload.gmail_thread_id,
+            expected_start_history_id=payload.expected_start_history_id,
+            expected_page_number=payload.expected_page_number,
+            expected_request_page_token=payload.expected_request_page_token,
+            expected_version=payload.expected_version,
+            reason=payload.reason,
+            backfill_request_id=payload.backfill_request_id,
+            expected_reseed_history_id=payload.expected_reseed_history_id,
+        )
+    except GmailMissingMessageAcknowledgementError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.category,
+        ) from None
+    return GmailMissingMessageAcknowledgeResponse(
+        incident_id=incident.id,
+        state="acknowledged",
+        version=incident.version,
+        run_id=incident.run_id,
+    )
+
+
+@router.get(
+    "/gmail/missing-message/incidents/{incident_id}",
+    response_model=GmailMissingMessageIncidentDetail,
+)
+async def get_gmail_missing_message_incident(
+    incident_id: UUID,
+    _administrator_subject: AdminSubject,
+    db: AsyncSession = Depends(get_db),
+) -> GmailMissingMessageIncidentDetail:
+    incident = await db.scalar(
+        select(GmailMissingMessageIncident).where(
+            GmailMissingMessageIncident.id == incident_id,
+            GmailMissingMessageIncident.state == "pending",
+        )
+    )
+    if incident is None:
+        raise HTTPException(
+            status_code=404,
+            detail="gmail_missing_message_incident_not_found",
+        )
+    run = await db.scalar(
+        select(GmailSyncRun).where(
+            GmailSyncRun.id == incident.run_id,
+            GmailSyncRun.account_id == incident.account_id,
+        )
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail="gmail_missing_message_incident_not_found",
+        )
+    backfill_request = None
+    if run.run_kind == "backfill":
+        backfill_request = await db.scalar(
+            select(GmailBackfillRequest).where(
+                GmailBackfillRequest.run_id == run.id,
+                GmailBackfillRequest.account_id == incident.account_id,
+            )
+        )
+        if backfill_request is None:
+            raise HTTPException(
+                status_code=404,
+                detail="gmail_missing_message_incident_not_found",
+            )
+    return GmailMissingMessageIncidentDetail(
+        incident_id=incident.id,
+        account_id=incident.account_id,
+        run_id=incident.run_id,
+        gmail_message_id=incident.gmail_message_id,
+        gmail_thread_id=incident.gmail_thread_id,
+        expected_start_history_id=incident.start_history_id,
+        expected_page_number=incident.page_number,
+        expected_request_page_token=incident.request_page_token,
+        expected_version=incident.version,
+        backfill_request_id=(
+            backfill_request.id if backfill_request is not None else None
+        ),
+        expected_reseed_history_id=(
+            backfill_request.reseed_history_id
+            if backfill_request is not None
+            else None
+        ),
+    )
 
 
 @router.post("/workspace/drive/search", response_model=WorkspaceDriveSearchResponse)

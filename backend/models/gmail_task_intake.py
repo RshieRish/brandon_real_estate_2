@@ -250,6 +250,129 @@ class GmailSyncPageCheckpoint(Base):
     )
 
 
+class GmailMissingMessageIncident(Base):
+    __tablename__ = "gmail_missing_message_incidents"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "run_id",
+            "gmail_message_id",
+            "gmail_thread_id",
+            "page_number",
+            name="uq_gmail_missing_message_incidents_run_message_thread_page",
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'acknowledged')",
+            name="ck_gmail_missing_message_incidents_state",
+        ),
+        CheckConstraint(
+            "page_number > 0",
+            name="ck_gmail_missing_message_incidents_page_positive",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_gmail_missing_message_incidents_version_positive",
+        ),
+        CheckConstraint(
+            "alert_state IN ('pending', 'sent') AND ((alert_state = 'pending' "
+            "AND alerted_at IS NULL) OR (alert_state = 'sent' AND alerted_at "
+            "IS NOT NULL))",
+            name="ck_gmail_missing_message_incidents_alert_shape",
+        ),
+        CheckConstraint(
+            "(state = 'pending' AND acknowledged_by_admin_id IS NULL AND "
+            "acknowledgement_reason IS NULL AND action_audit_id IS NULL AND "
+            "acknowledged_at IS NULL) OR (state = 'acknowledged' AND "
+            "acknowledged_by_admin_id IS NOT NULL AND acknowledgement_reason "
+            "IS NOT NULL AND acknowledgement_reason = "
+            "trim(acknowledgement_reason) AND acknowledgement_reason <> '' "
+            "AND action_audit_id IS NOT NULL AND acknowledged_at IS NOT NULL "
+            "AND alert_state = 'sent')",
+            name="ck_gmail_missing_message_incidents_ack_shape",
+        ),
+        ForeignKeyConstraint(
+            ("run_id", "account_id"),
+            ("gmail_sync_runs.id", "gmail_sync_runs.account_id"),
+            name="fk_gmail_missing_message_incidents_run_account",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_gmail_missing_message_incidents_pending",
+            "account_id",
+            "created_at",
+            "id",
+            postgresql_where=text("state = 'pending'"),
+        ).ddl_if(dialect="postgresql"),
+    )
+
+    id: Mapped[UUID] = _uuid_primary_key()
+    account_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "gmail_sync_accounts.id",
+            name="fk_gmail_missing_message_incidents_account_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    run_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        nullable=False,
+    )
+    gmail_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    gmail_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    start_history_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_page_token: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    alert_state: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending", nullable=False
+    )
+    alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    acknowledged_by_admin_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "admin_users.id",
+            name="fk_gmail_missing_message_incidents_admin_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    acknowledgement_reason: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    action_audit_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "agent_action_audits.id",
+            name="fk_gmail_missing_message_incidents_audit_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class GmailMessageReceipt(Base):
     __tablename__ = "gmail_message_receipts"
     __table_args__ = (
@@ -1109,6 +1232,7 @@ __all__ = [
     "GmailExtractionAttempt",
     "GmailMessageOrigin",
     "GmailMessageReceipt",
+    "GmailMissingMessageIncident",
     "GmailSyncAccount",
     "GmailSyncPageCheckpoint",
     "GmailSyncRun",

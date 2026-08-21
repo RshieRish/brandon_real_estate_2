@@ -22,7 +22,18 @@ on:
       - "backend/tests/gmail_task_postgres.py"
       - "backend/tests/test_*.py"
       - "backend/tests/test_atlas_backend_mcp.py"
+      - "backend/tests/test_agent_control_router.py"
+      - "backend/tests/test_agent_control_workspace_actions.py"
+      - "backend/tests/test_gmail_agent_control_origins.py"
+      - "backend/tests/test_gmail_history_adapter.py"
+      - "backend/tests/test_gmail_history_cursor_recovery.py"
+      - "backend/tests/test_gmail_history_service.py"
+      - "backend/tests/test_gmail_message_processing.py"
       - "backend/tests/test_hermes_overlay.py"
+      - "backend/tests/test_integration_worker.py"
+      - "backend/tests/test_integration_worker_deployment.py"
+      - "backend/tests/test_workspace_actions.py"
+      - "backend/tests/test_workspace_oauth.py"
       - "backend/requirements.txt"
       - "backend/Dockerfile.worker"
       - "backend/railway.integration-worker.json"
@@ -62,7 +73,18 @@ on:
       - "backend/tests/gmail_task_postgres.py"
       - "backend/tests/test_*.py"
       - "backend/tests/test_atlas_backend_mcp.py"
+      - "backend/tests/test_agent_control_router.py"
+      - "backend/tests/test_agent_control_workspace_actions.py"
+      - "backend/tests/test_gmail_agent_control_origins.py"
+      - "backend/tests/test_gmail_history_adapter.py"
+      - "backend/tests/test_gmail_history_cursor_recovery.py"
+      - "backend/tests/test_gmail_history_service.py"
+      - "backend/tests/test_gmail_message_processing.py"
       - "backend/tests/test_hermes_overlay.py"
+      - "backend/tests/test_integration_worker.py"
+      - "backend/tests/test_integration_worker_deployment.py"
+      - "backend/tests/test_workspace_actions.py"
+      - "backend/tests/test_workspace_oauth.py"
       - "backend/requirements.txt"
       - "backend/Dockerfile.worker"
       - "backend/railway.integration-worker.json"
@@ -100,6 +122,12 @@ jobs:
       GMAIL_TASK_TEST_DATABASE_NAME: brandon_gmail_sydney_ci_test
       GMAIL_TASK_TEST_DATABASE_URL: postgresql+asyncpg://gmail_sydney_ci_fixture:gmail_sydney_ci_fixture_only@localhost:55433/brandon_gmail_sydney_ci_test?ssl=require
       DATABASE_URL: postgresql+asyncpg://gmail_sydney_ci_fixture:gmail_sydney_ci_fixture_only@localhost:55433/brandon_gmail_sydney_ci_test?ssl=require
+      GMAIL_HISTORY_DATABASE_URL: postgresql+asyncpg://gmail_sydney_ci_fixture:gmail_sydney_ci_fixture_only@localhost:55433/brandon_gmail_sydney_ci_test?ssl=require
+      GMAIL_PARTICIPANT_HASH_KEY: gmail-sydney-ci-participant-hash-key-only
+      INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: "10"
+      GOOGLE_WORKSPACE_CLIENT_ID: gmail-sydney-ci-client-id
+      GOOGLE_WORKSPACE_CLIENT_SECRET: gmail-sydney-ci-client-secret-only
+      GOOGLE_WORKSPACE_REDIRECT_URI: http://localhost:3000/api/v1/workspace/oauth/callback
       SSL_CERT_FILE: ${{ runner.temp }}/gmail-sydney-postgres-tls/server.crt
       JWT_SECRET: gmail-sydney-ci-fixture-only
       CI: "true"
@@ -229,7 +257,7 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the Task 1 and Task 2 persistence contracts
+      - name: Run the Task 1 through Task 3 persistence and compatibility contracts
         working-directory: backend
         run: |
           python -m pytest -q \
@@ -239,7 +267,17 @@ jobs:
             tests/test_notification_claims.py \
             tests/test_integration_worker.py \
             tests/test_integration_worker_deployment.py \
-            tests/test_gmail_task_intake_migration.py
+            tests/test_gmail_task_intake_migration.py \
+            tests/test_gmail_history_adapter.py \
+            tests/test_gmail_history_service.py \
+            tests/test_gmail_history_cursor_recovery.py \
+            tests/test_gmail_message_processing.py \
+            tests/test_gmail_agent_control_origins.py \
+            tests/test_workspace_oauth.py \
+            tests/test_atlas_backend_mcp.py \
+            tests/test_agent_control_workspace_actions.py \
+            tests/test_agent_control_router.py \
+            tests/test_workspace_actions.py
 
       - name: Remove the exact disposable fixtures
         if: always()

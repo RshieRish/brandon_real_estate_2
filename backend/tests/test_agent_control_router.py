@@ -1,12 +1,21 @@
 import json
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
+
+from database import get_db
+from middleware.agent_control import require_agent_control
 from models.agent_action_audit import AgentActionAudit
 from models.booking import Booking
 from models.lead import Lead
 from routers import agent_control
+from schemas.agent_control import WorkspaceGmailSendResponse
 from services.agent_control_audit import write_agent_audit
 
 
@@ -75,6 +84,168 @@ class AgentControlAuditTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentControlRouterTests(unittest.IsolatedAsyncioTestCase):
+    def test_gmail_send_route_openapi_requires_uuid_and_keeps_agent_auth_dependency(self):
+        app = FastAPI()
+        app.include_router(
+            agent_control.router,
+            prefix="/api/v1/agent-control",
+            tags=["agent-control"],
+        )
+
+        schema = app.openapi()
+        operation = schema["paths"][
+            "/api/v1/agent-control/workspace/gmail/send"
+        ]["post"]
+        request_schema = schema["components"]["schemas"]["WorkspaceGmailSendRequest"]
+        required = set(request_schema["required"])
+        self.assertIn("request_id", required)
+        self.assertNotIn("retry_of_request_id", required)
+        request_id_schema = request_schema["properties"]["request_id"]
+        self.assertEqual(request_id_schema["type"], "string")
+        self.assertEqual(request_id_schema["format"], "uuid")
+        retry_schema = request_schema["properties"]["retry_of_request_id"]
+        self.assertIn(
+            {"type": "string", "format": "uuid"},
+            retry_schema["anyOf"],
+        )
+        self.assertIn({"type": "null"}, retry_schema["anyOf"])
+        self.assertTrue(operation["requestBody"]["required"])
+        self.assertEqual(operation["tags"], ["agent-control"])
+
+        route = next(
+            route
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/api/v1/agent-control/workspace/gmail/send"
+        )
+        dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+        self.assertIn(require_agent_control, dependency_calls)
+        self.assertIs(route.response_model, WorkspaceGmailSendResponse)
+
+    def test_real_gmail_send_route_rejects_missing_agent_bearer_before_handler(self):
+        app = FastAPI()
+        app.include_router(agent_control.router, prefix="/api/v1/agent-control")
+        app.dependency_overrides[get_db] = lambda: SimpleNamespace()
+
+        with (
+            patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+            patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "agent-secret"),
+            TestClient(app) as client,
+        ):
+            response = client.post(
+                "/api/v1/agent-control/workspace/gmail/send",
+                json={
+                    "request_id": str(uuid4()),
+                    "to": ["client@example.com"],
+                    "subject": "Authenticated route",
+                    "body_text": "This request has no bearer token.",
+                    "confirmed_by_brandon": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Invalid agent control credentials."},
+        )
+
+    def test_authenticated_http_rejects_missing_and_malformed_request_uuid_before_send(self):
+        app = FastAPI()
+        app.include_router(agent_control.router, prefix="/api/v1/agent-control")
+        app.dependency_overrides[get_db] = lambda: SimpleNamespace()
+        base_payload = {
+            "to": ["client@example.com"],
+            "subject": "Caller idempotency",
+            "body_text": "This must not send without a valid caller UUID.",
+            "confirmed_by_brandon": True,
+        }
+
+        with (
+            patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+            patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "agent-secret"),
+            patch(
+                "routers.agent_control.send_agent_gmail_with_origin",
+                new_callable=AsyncMock,
+                create=True,
+            ) as durable_send,
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            missing = client.post(
+                "/api/v1/agent-control/workspace/gmail/send",
+                json=base_payload,
+                headers={"Authorization": "Bearer agent-secret"},
+            )
+            malformed = client.post(
+                "/api/v1/agent-control/workspace/gmail/send",
+                json={**base_payload, "request_id": "not-a-uuid"},
+                headers={"Authorization": "Bearer agent-secret"},
+            )
+
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(malformed.status_code, 422)
+        durable_send.assert_not_awaited()
+
+    def test_authenticated_http_passes_valid_uuid_to_durable_send_and_returns_state(self):
+        app = FastAPI()
+        app.include_router(agent_control.router, prefix="/api/v1/agent-control")
+        db = SimpleNamespace()
+        app.dependency_overrides[get_db] = lambda: db
+        request_id = uuid4()
+        result = SimpleNamespace(
+            request_id=request_id,
+            message_id="provider-message",
+            thread_id="provider-thread",
+            delivery_state="succeeded",
+            replayed=True,
+        )
+
+        with (
+            patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+            patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "agent-secret"),
+            patch(
+                "routers.agent_control.send_agent_gmail_with_origin",
+                new_callable=AsyncMock,
+                return_value=result,
+                create=True,
+            ) as durable_send,
+            patch(
+                "routers.agent_control.send_gmail_message",
+                side_effect=AssertionError("legacy Gmail send must not run"),
+                create=True,
+            ),
+            patch(
+                "routers.agent_control.load_workspace_refresh_token_from_db",
+                new_callable=AsyncMock,
+                side_effect=AssertionError("legacy token loader must not run"),
+                create=True,
+            ),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            response = client.post(
+                "/api/v1/agent-control/workspace/gmail/send",
+                json={
+                    "request_id": str(request_id),
+                    "to": ["client@example.com"],
+                    "subject": "Durable send",
+                    "body_text": "Route through the durable origin state machine.",
+                    "confirmed_by_brandon": True,
+                },
+                headers={"Authorization": "Bearer agent-secret"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["request_id"], str(request_id))
+        self.assertEqual(payload["message_id"], "provider-message")
+        self.assertEqual(payload["thread_id"], "provider-thread")
+        self.assertEqual(payload["delivery_state"], "succeeded")
+        self.assertTrue(payload["replayed"])
+        durable_send.assert_awaited_once()
+        call = durable_send.await_args.kwargs
+        self.assertIs(call["db"], db)
+        self.assertEqual(call["payload"].request_id, request_id)
+        self.assertEqual(call["actor"], "hermes")
+
     async def test_status_returns_workspace_action_capabilities_and_audits(self):
         db = _FakeDB()
         result = await agent_control.agent_status(

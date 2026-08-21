@@ -3,6 +3,7 @@
 from datetime import datetime
 import re
 from typing import Annotated, Literal, TypeAlias
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -81,10 +82,107 @@ class GmailTaskPayload(BaseModel):
         return value
 
 
+class GmailMissingMessageAcknowledgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: UUID
+    account_id: UUID
+    run_id: UUID
+    gmail_message_id: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[!-~]+$",
+    )
+    gmail_thread_id: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[!-~]+$",
+    )
+    expected_start_history_id: str = Field(
+        min_length=1,
+        max_length=20,
+        pattern=r"^[1-9][0-9]*$",
+    )
+    expected_page_number: int = Field(ge=1, le=1_000_000, strict=True)
+    expected_request_page_token: str | None = Field(
+        min_length=1,
+        max_length=1024,
+        pattern=r"^[!-~]+$",
+    )
+    expected_version: int = Field(ge=1, le=2_147_483_647, strict=True)
+    backfill_request_id: UUID | None = None
+    expected_reseed_history_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[1-9][0-9]*$",
+    )
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def require_acknowledgement_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("reason cannot be blank")
+        return reason
+
+
+class GmailMissingMessageAcknowledgeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: UUID
+    state: Literal["acknowledged"]
+    version: int
+    run_id: UUID
+
+
+class GmailMissingMessageIncidentDetail(BaseModel):
+    """Body-free values required to acknowledge one exact incident."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: UUID
+    account_id: UUID
+    run_id: UUID
+    gmail_message_id: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[!-~]+$",
+    )
+    gmail_thread_id: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[!-~]+$",
+    )
+    expected_start_history_id: str = Field(
+        min_length=1,
+        max_length=20,
+        pattern=r"^[1-9][0-9]*$",
+    )
+    expected_page_number: int = Field(ge=1, le=1_000_000, strict=True)
+    expected_request_page_token: str | None = Field(
+        min_length=1,
+        max_length=1024,
+        pattern=r"^[!-~]+$",
+    )
+    expected_version: int = Field(ge=1, le=2_147_483_647, strict=True)
+    backfill_request_id: UUID | None = None
+    expected_reseed_history_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[1-9][0-9]*$",
+    )
+
+
 __all__ = [
     "BlockerCode",
     "ClarificationState",
     "GmailTaskPayload",
+    "GmailMissingMessageAcknowledgeRequest",
+    "GmailMissingMessageAcknowledgeResponse",
+    "GmailMissingMessageIncidentDetail",
     "SuggestionState",
     "TaskPriority",
 ]

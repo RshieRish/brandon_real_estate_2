@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -75,7 +76,27 @@ class WorkspaceGmailDraftRequest(BaseModel):
         cleaned = [value.strip() for value in values if value and value.strip()]
         if not cleaned and values:
             raise ValueError("Recipient entries cannot be blank.")
+        for value in cleaned:
+            if (
+                len(value) > 320
+                or any(character.isspace() for character in value)
+                or value.count("@") != 1
+                or value.startswith("@")
+                or value.endswith("@")
+                or any(character in value for character in "<>\r\n")
+            ):
+                raise ValueError("Recipient entries must be valid email addresses.")
         return cleaned
+
+    @field_validator("subject")
+    @classmethod
+    def reject_subject_header_injection(cls, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError("Subject cannot contain line breaks.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Subject cannot be blank.")
+        return normalized
 
 
 class WorkspaceGmailDraftResponse(BaseModel):
@@ -86,13 +107,18 @@ class WorkspaceGmailDraftResponse(BaseModel):
 
 
 class WorkspaceGmailSendRequest(WorkspaceGmailDraftRequest):
+    request_id: UUID
+    retry_of_request_id: UUID | None = None
     confirmed_by_brandon: bool = False
     confirmation_note: str = Field(default="", max_length=500)
 
 
 class WorkspaceGmailSendResponse(BaseModel):
+    request_id: UUID
     message_id: str
     thread_id: str
+    delivery_state: str
+    replayed: bool
     to_count: int
     subject: str
 
