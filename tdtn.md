@@ -3,6 +3,14 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-08-20
 
+### 2026-08-20 - Gmail and Sydney Intake Contract Hardening
+- Hardened the approved Gmail/Sydney plan before implementation after repository preflight and adversarial review exposed concurrency, delivery-uncertainty, trust-boundary, migration, and rollout ambiguities. Documentation commit: `0a4c1fa`.
+- Gmail sends now require durable pre-send intent, zero transport retries, per-account canonical unresolved-send uniqueness, and predecessor-bound retry only after authenticated `not_delivered`; per-account History and per-account/thread reconciliation use versioned PostgreSQL advisory locks. Delivered reconciliation must verify the configured Gmail account, `SENT` label, thread, and canonical envelope/body before an intent becomes eligible.
+- Sydney clarification is one-at-a-time, with immutable delivery attempts, one reminder at 24 hours, fixed release at 48 hours, no repeated field/version, and at most five consequential rounds. Hermes input remains untrusted draft evidence: actual dismissal/suppression and final task creation remain authenticated Command-only.
+- Approval uses separate handoff-exchange and ordinary Command-prepare paths. Handoff secrets live only in a cleared URL fragment; both handoff and approval nonces use `secrets.token_urlsafe(32)`, hash-only persistence, strict pre-lookup validation, and a separate explicit Approve click. Hermes preserves the exact existing 16 MCP tools and adds exactly six bounded CRM review/proposal tools.
+- Implementation gates require a fail-closed disposable real PostgreSQL 16 CI database, serial Alembic heads, two-session race coverage, bounded/offloaded synchronous provider calls, a `FIRST_COMPLETED` worker supervisor, read-only readiness, exact route registration, Task 7/8 frontend/Hermes CI, and live rollout evidence. Independent review result: **SPEC PASS** and **QUALITY APPROVED**.
+- This was documentation hardening only. `GMAIL_TASK_INTAKE_ENABLED=false`, `SYDNEY_TASK_QUESTIONS_ENABLED=false`, and `CRM_TASK_ARCHIVE_ENABLED=false` remain unchanged; no migration, provider call, live deployment, or production enablement occurred.
+
 ### 2026-08-18 - Sydney CRM, Gmail, Instagram, and CRM Lifecycle Implementation Plans
 - Converted the approved design into four dependency-ordered, test-first plans under `docs/superpowers/plans/`: CRM task foundation, Gmail/Sydney task intake, Instagram reliability, and remaining CRM record lifecycles.
 - Reserved one serial Alembic chain from current head `7d1f3a5b6c8e`: task lifecycle `81a4d2c6e9f0`, shared integration runtime `82b5e3d7f0a1`, Gmail intake `83c6f4e8a1b2`, Sydney review `84d7a5f9b2c3`, and Instagram cache `85e8b6a0c3d4`; later CRM migrations follow that head.
