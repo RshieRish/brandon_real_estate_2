@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, TypeVar
@@ -188,7 +189,12 @@ class BoundedProviderExecutor:
         function: Callable[[], T],
         deadline_seconds: float,
     ) -> T:
-        if deadline_seconds <= 0:
+        if (
+            isinstance(deadline_seconds, bool)
+            or not isinstance(deadline_seconds, (int, float))
+            or not math.isfinite(float(deadline_seconds))
+            or deadline_seconds <= 0
+        ):
             raise ValueError("deadline_seconds must be positive")
         existing = self._tracked.get(key)
         if existing is not None and not existing.done():
@@ -200,6 +206,7 @@ class BoundedProviderExecutor:
 
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(self._executor, function)
+        del function
         self._tracked[key] = future
 
         def remove_finished(completed: asyncio.Future[object]) -> None:
@@ -217,6 +224,9 @@ class BoundedProviderExecutor:
                 asyncio.shield(future),
                 timeout=deadline_seconds,
             )
+        except asyncio.CancelledError:
+            del future
+            raise
         except TimeoutError as exc:
             raise ProviderCallTimedOut("provider_timeout") from exc
 

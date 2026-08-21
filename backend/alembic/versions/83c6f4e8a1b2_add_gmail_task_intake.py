@@ -565,10 +565,31 @@ def upgrade() -> None:
         sa.Column("requested_link_type", sa.String(length=64), nullable=True),
         sa.Column("requested_link_id", sa.String(length=255), nullable=True),
         sa.Column("contact_hint", sa.String(length=255), nullable=True),
+        sa.Column("taxonomy_fallback", sa.Boolean(), nullable=False),
         sa.Column(
             "obligation_fingerprint",
             sa.String(length=64),
             nullable=False,
+        ),
+        sa.Column(
+            "identity_instance_digest",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "reconciliation_material_hash",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "reconciled_suggestion_id",
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
+        ),
+        sa.Column(
+            "reconciled_suppression_id",
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
         ),
         sa.Column(
             "confidence",
@@ -597,6 +618,19 @@ def upgrade() -> None:
             "confidence >= 0 AND confidence <= 1",
             name="ck_gmail_extracted_obligations_confidence",
         ),
+        sa.CheckConstraint(
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_gmail_extracted_obligations_instance_digest",
+        ),
+        sa.CheckConstraint(
+            "reconciliation_material_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_gmail_extracted_obligations_material_hash",
+        ),
+        sa.CheckConstraint(
+            "(reconciled_suggestion_id IS NOT NULL) <> "
+            "(reconciled_suppression_id IS NOT NULL)",
+            name="ck_gmail_extracted_obligations_disposition",
+        ),
         sa.ForeignKeyConstraint(
             ["receipt_id"],
             ["gmail_message_receipts.id"],
@@ -620,6 +654,12 @@ def upgrade() -> None:
             "id",
             "receipt_id",
             name="uq_gmail_extracted_obligations_id_receipt",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "receipt_id",
+            "reconciled_suggestion_id",
+            name="uq_gmail_extracted_obligations_source_disposition",
         ),
     )
 
@@ -691,6 +731,11 @@ def upgrade() -> None:
             "obligation_fingerprint",
             sa.String(length=64),
             nullable=False,
+        ),
+        sa.Column(
+            "primary_instance_digest",
+            sa.String(length=64),
+            nullable=True,
         ),
         sa.Column(
             "confidence",
@@ -772,6 +817,21 @@ def upgrade() -> None:
             "'applied' AND applied_task_id IS NULL)",
             name="ck_crm_task_suggestions_applied_result",
         ),
+        sa.CheckConstraint(
+            "duplicate_of_suggestion_id IS NULL OR "
+            "duplicate_of_suggestion_id <> id",
+            name="ck_crm_task_suggestions_duplicate_not_self",
+        ),
+        sa.CheckConstraint(
+            "primary_instance_digest IS NULL OR "
+            "primary_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_crm_task_suggestions_primary_instance_digest",
+        ),
+        sa.CheckConstraint(
+            "source_type <> 'gmail_message' OR "
+            "primary_instance_digest IS NOT NULL",
+            name="ck_crm_task_suggestions_gmail_instance_digest",
+        ),
         sa.ForeignKeyConstraint(
             ["gmail_account_id"],
             ["gmail_sync_accounts.id"],
@@ -782,6 +842,34 @@ def upgrade() -> None:
             ["duplicate_of_suggestion_id"],
             ["crm_task_suggestions.id"],
             name="fk_crm_task_suggestions_duplicate_id",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "duplicate_of_suggestion_id",
+                "gmail_account_id",
+                "gmail_thread_id",
+            ],
+            [
+                "crm_task_suggestions.id",
+                "crm_task_suggestions.gmail_account_id",
+                "crm_task_suggestions.gmail_thread_id",
+            ],
+            name="fk_crm_task_suggestions_duplicate_gmail_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "duplicate_of_suggestion_id",
+                "source_type",
+                "source_scope_key",
+            ],
+            [
+                "crm_task_suggestions.id",
+                "crm_task_suggestions.source_type",
+                "crm_task_suggestions.source_scope_key",
+            ],
+            name="fk_crm_task_suggestions_duplicate_source_scope",
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
@@ -811,6 +899,12 @@ def upgrade() -> None:
             "gmail_thread_id",
             name="uq_crm_task_suggestions_gmail_identity",
         ),
+        sa.UniqueConstraint(
+            "id",
+            "source_type",
+            "source_scope_key",
+            name="uq_crm_task_suggestions_source_identity",
+        ),
     )
     op.create_index(
         "ix_crm_task_suggestions_gmail_reconciliation",
@@ -818,6 +912,18 @@ def upgrade() -> None:
         ["gmail_account_id", "gmail_thread_id", "source_action_key", "id"],
         unique=False,
         postgresql_where=sa.text("source_type = 'gmail_message'"),
+    )
+    op.create_index(
+        "ix_crm_task_suggestions_gmail_thread_order",
+        "crm_task_suggestions",
+        [
+            "gmail_account_id",
+            "gmail_thread_id",
+            "source_type",
+            "created_at",
+            "id",
+        ],
+        unique=False,
     )
     op.create_index(
         "ix_crm_task_suggestions_review_state",
@@ -873,6 +979,18 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
+            ["obligation_id", "receipt_id", "suggestion_id"],
+            [
+                "gmail_extracted_obligations.id",
+                "gmail_extracted_obligations.receipt_id",
+                "gmail_extracted_obligations.reconciled_suggestion_id",
+            ],
+            name=(
+                "fk_crm_task_suggestion_sources_obligation_disposition"
+            ),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
             [
                 "receipt_id",
                 "gmail_account_id",
@@ -894,6 +1012,10 @@ def upgrade() -> None:
             "obligation_id",
             name="uq_crm_task_suggestion_sources_suggestion_obligation",
         ),
+        sa.UniqueConstraint(
+            "obligation_id",
+            name="uq_crm_task_suggestion_sources_obligation",
+        ),
     )
     op.create_index(
         "ix_crm_task_suggestion_sources_receipt",
@@ -913,12 +1035,22 @@ def upgrade() -> None:
             sa.String(length=64),
             nullable=False,
         ),
+        sa.Column(
+            "identity_instance_digest",
+            sa.String(length=64),
+            nullable=False,
+        ),
         sa.Column("dismissal_reason", sa.String(length=500), nullable=False),
         sa.Column("dismissed_by_admin_id", sa.Integer(), nullable=False),
         sa.Column("dismissal_audit_id", sa.Integer(), nullable=False),
         _now("dismissed_at"),
         sa.Column(
             "reprocess_override_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+        sa.Column(
+            "reprocess_override_consumed_at",
             sa.DateTime(timezone=True),
             nullable=True,
         ),
@@ -929,12 +1061,20 @@ def upgrade() -> None:
             name="ck_crm_task_suggestion_suppressions_source_type",
         ),
         sa.CheckConstraint(
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_crm_task_suggestion_suppressions_instance_digest",
+        ),
+        sa.CheckConstraint(
             "(reprocess_override_at IS NULL AND "
             "reprocess_override_by_admin_id IS NULL AND "
-            "reprocess_override_audit_id IS NULL) OR "
+            "reprocess_override_audit_id IS NULL AND "
+            "reprocess_override_consumed_at IS NULL) OR "
             "(reprocess_override_at IS NOT NULL AND "
             "reprocess_override_by_admin_id IS NOT NULL AND "
-            "reprocess_override_audit_id IS NOT NULL)",
+            "reprocess_override_audit_id IS NOT NULL AND "
+            "reprocess_override_at >= dismissed_at AND "
+            "(reprocess_override_consumed_at IS NULL OR "
+            "reprocess_override_consumed_at >= reprocess_override_at))",
             name="ck_crm_task_suggestion_suppressions_override_shape",
         ),
         sa.ForeignKeyConstraint(
@@ -967,7 +1107,12 @@ def upgrade() -> None:
             "source_scope_key",
             "source_action_key",
             "obligation_fingerprint",
+            "identity_instance_digest",
             name="uq_crm_task_suggestion_suppressions_scope",
+        ),
+        sa.UniqueConstraint(
+            "reprocess_override_audit_id",
+            name="uq_crm_task_suggestion_suppressions_override_audit",
         ),
     )
 
@@ -1034,6 +1179,133 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
 
+    # These two evidence dispositions intentionally point at tables created
+    # after gmail_extracted_obligations, so add the circular-safe FKs last.
+    op.create_foreign_key(
+        "fk_gmail_extracted_obligations_suggestion_id",
+        "gmail_extracted_obligations",
+        "crm_task_suggestions",
+        ["reconciled_suggestion_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_index(
+        "ix_gmail_extracted_obligations_suggestion_instance",
+        "gmail_extracted_obligations",
+        [
+            "reconciled_suggestion_id",
+            "identity_instance_digest",
+            "reconciliation_material_hash",
+            "id",
+        ],
+        unique=False,
+    )
+    op.create_index(
+        "ix_gmail_extracted_obligations_suggestion_taxonomy",
+        "gmail_extracted_obligations",
+        ["reconciled_suggestion_id", "taxonomy_fallback", "id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_gmail_extracted_obligations_suggestion_contact_hint",
+        "gmail_extracted_obligations",
+        ["reconciled_suggestion_id", "contact_hint", "id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_gmail_extracted_obligations_attempt_replay",
+        "gmail_extracted_obligations",
+        ["extraction_attempt_id", "created_at", "id"],
+        unique=False,
+    )
+    op.create_foreign_key(
+        "fk_gmail_extracted_obligations_suppression_id",
+        "gmail_extracted_obligations",
+        "crm_task_suggestion_suppressions",
+        ["reconciled_suppression_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+
+    op.execute(
+        sa.text(
+            """
+            CREATE FUNCTION gmail_task_intake_reject_evidence_mutation()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'gmail_task_intake_evidence_append_only'
+                    USING ERRCODE = '23514';
+            END;
+            $$
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TRIGGER trg_gmail_extracted_obligations_append_only
+            BEFORE UPDATE OR DELETE ON gmail_extracted_obligations
+            FOR EACH ROW
+            EXECUTE FUNCTION gmail_task_intake_reject_evidence_mutation()
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TRIGGER trg_crm_task_suggestion_sources_append_only
+            BEFORE UPDATE OR DELETE ON crm_task_suggestion_sources
+            FOR EACH ROW
+            EXECUTE FUNCTION gmail_task_intake_reject_evidence_mutation()
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE FUNCTION gmail_task_intake_guard_suppression_identity()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    RAISE EXCEPTION
+                        'gmail_task_intake_suppression_identity_immutable'
+                        USING ERRCODE = '23514';
+                END IF;
+                IF OLD.id IS DISTINCT FROM NEW.id
+                    OR OLD.source_type IS DISTINCT FROM NEW.source_type
+                    OR OLD.source_scope_key IS DISTINCT FROM NEW.source_scope_key
+                    OR OLD.source_action_key IS DISTINCT FROM NEW.source_action_key
+                    OR OLD.obligation_fingerprint IS DISTINCT FROM
+                        NEW.obligation_fingerprint
+                    OR OLD.identity_instance_digest IS DISTINCT FROM
+                        NEW.identity_instance_digest
+                THEN
+                    RAISE EXCEPTION
+                        'gmail_task_intake_suppression_identity_immutable'
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TRIGGER
+                trg_crm_task_suggestion_suppressions_identity_immutable
+            BEFORE UPDATE OR DELETE ON crm_task_suggestion_suppressions
+            FOR EACH ROW
+            EXECUTE FUNCTION gmail_task_intake_guard_suppression_identity()
+            """
+        )
+    )
+
 
 def downgrade() -> None:
     op.execute(
@@ -1075,6 +1347,35 @@ def downgrade() -> None:
         )
     )
 
+    op.execute(
+        sa.text(
+            "DROP TRIGGER "
+            "trg_crm_task_suggestion_suppressions_identity_immutable "
+            "ON crm_task_suggestion_suppressions"
+        )
+    )
+    op.execute(
+        sa.text(
+            "DROP TRIGGER trg_crm_task_suggestion_sources_append_only "
+            "ON crm_task_suggestion_sources"
+        )
+    )
+    op.execute(
+        sa.text(
+            "DROP TRIGGER trg_gmail_extracted_obligations_append_only "
+            "ON gmail_extracted_obligations"
+        )
+    )
+    op.drop_constraint(
+        "fk_gmail_extracted_obligations_suppression_id",
+        "gmail_extracted_obligations",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "fk_gmail_extracted_obligations_suggestion_id",
+        "gmail_extracted_obligations",
+        type_="foreignkey",
+    )
     op.drop_table("gmail_backfill_requests")
     op.drop_table("crm_task_suggestion_suppressions")
     op.drop_index(
@@ -1087,10 +1388,30 @@ def downgrade() -> None:
         table_name="crm_task_suggestions",
     )
     op.drop_index(
+        "ix_crm_task_suggestions_gmail_thread_order",
+        table_name="crm_task_suggestions",
+    )
+    op.drop_index(
         "ix_crm_task_suggestions_gmail_reconciliation",
         table_name="crm_task_suggestions",
     )
     op.drop_table("crm_task_suggestions")
+    op.drop_index(
+        "ix_gmail_extracted_obligations_attempt_replay",
+        table_name="gmail_extracted_obligations",
+    )
+    op.drop_index(
+        "ix_gmail_extracted_obligations_suggestion_contact_hint",
+        table_name="gmail_extracted_obligations",
+    )
+    op.drop_index(
+        "ix_gmail_extracted_obligations_suggestion_taxonomy",
+        table_name="gmail_extracted_obligations",
+    )
+    op.drop_index(
+        "ix_gmail_extracted_obligations_suggestion_instance",
+        table_name="gmail_extracted_obligations",
+    )
     op.drop_table("gmail_extracted_obligations")
     op.drop_table("gmail_extraction_attempts")
     op.drop_index(
@@ -1131,3 +1452,7 @@ def downgrade() -> None:
         table_name="gmail_sync_accounts",
     )
     op.drop_table("gmail_sync_accounts")
+    op.execute(
+        sa.text("DROP FUNCTION gmail_task_intake_guard_suppression_identity")
+    )
+    op.execute(sa.text("DROP FUNCTION gmail_task_intake_reject_evidence_mutation"))

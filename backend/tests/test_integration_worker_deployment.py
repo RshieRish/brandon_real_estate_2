@@ -33,7 +33,11 @@ TASK3_TESTS = TASK2_TESTS + (
     "tests/test_agent_control_router.py",
     "tests/test_workspace_actions.py",
 )
-TASK3_EXPLICIT_TRIGGER_PATHS = (
+TASK4_TESTS = TASK3_TESTS + (
+    "tests/test_gmail_task_extractor.py",
+    "tests/test_crm_task_suggestions.py",
+)
+TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
     "backend/tests/test_agent_control_workspace_actions.py",
@@ -42,8 +46,10 @@ TASK3_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_gmail_history_cursor_recovery.py",
     "backend/tests/test_gmail_history_service.py",
     "backend/tests/test_gmail_message_processing.py",
+    "backend/tests/test_gmail_task_extractor.py",
     "backend/tests/test_integration_worker.py",
     "backend/tests/test_integration_worker_deployment.py",
+    "backend/tests/test_crm_task_suggestions.py",
     "backend/tests/test_workspace_actions.py",
     "backend/tests/test_workspace_oauth.py",
 )
@@ -248,7 +254,7 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
-def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task3() -> None:
+def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task4() -> None:
     workflow_path = (
         REPOSITORY_ROOT
         / ".github"
@@ -315,7 +321,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task3() -> Non
     ):
         assert required in workflow
     pytest_step = re.search(
-        r"name: Run the Task 1 through Task 3 persistence and compatibility contracts"
+        r"name: Run the Task 1 through Task 4 persistence and compatibility contracts"
         r"(?P<body>.*?)"
         r"\n\s+- name:",
         workflow,
@@ -323,10 +329,9 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task3() -> Non
     )
     assert pytest_step is not None
     assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK3_TESTS
+        TASK4_TESTS
     )
     for future_test in (
-        "tests/test_gmail_task_extractor.py",
         "tests/test_sydney_clarifications.py",
         "tests/test_agent_control_crm.py",
         "tests/test_gmail_task_intake_e2e.py",
@@ -339,7 +344,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task3() -> Non
         in workflow
     )
     assert workflow.count('"backend/tests/gmail_task_postgres.py"') == 2
-    for path in TASK3_EXPLICIT_TRIGGER_PATHS:
+    for path in TASK4_EXPLICIT_TRIGGER_PATHS:
         assert workflow.count(f'"{path}"') == 2
 
     env_urls = {

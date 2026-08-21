@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -702,6 +703,12 @@ class GmailExtractedObligation(Base):
             "receipt_id",
             name="uq_gmail_extracted_obligations_id_receipt",
         ),
+        UniqueConstraint(
+            "id",
+            "receipt_id",
+            "reconciled_suggestion_id",
+            name="uq_gmail_extracted_obligations_source_disposition",
+        ),
         ForeignKeyConstraint(
             ("extraction_attempt_id", "receipt_id"),
             ("gmail_extraction_attempts.id", "gmail_extraction_attempts.receipt_id"),
@@ -715,6 +722,44 @@ class GmailExtractedObligation(Base):
         CheckConstraint(
             "confidence >= 0 AND confidence <= 1",
             name="ck_gmail_extracted_obligations_confidence",
+        ),
+        CheckConstraint(
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_gmail_extracted_obligations_instance_digest",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "reconciliation_material_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_gmail_extracted_obligations_material_hash",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "(reconciled_suggestion_id IS NOT NULL) <> "
+            "(reconciled_suppression_id IS NOT NULL)",
+            name="ck_gmail_extracted_obligations_disposition",
+        ),
+        Index(
+            "ix_gmail_extracted_obligations_suggestion_instance",
+            "reconciled_suggestion_id",
+            "identity_instance_digest",
+            "reconciliation_material_hash",
+            "id",
+        ),
+        Index(
+            "ix_gmail_extracted_obligations_suggestion_taxonomy",
+            "reconciled_suggestion_id",
+            "taxonomy_fallback",
+            "id",
+        ),
+        Index(
+            "ix_gmail_extracted_obligations_suggestion_contact_hint",
+            "reconciled_suggestion_id",
+            "contact_hint",
+            "id",
+        ),
+        Index(
+            "ix_gmail_extracted_obligations_attempt_replay",
+            "extraction_attempt_id",
+            "created_at",
+            "id",
         ),
     )
 
@@ -759,8 +804,33 @@ class GmailExtractedObligation(Base):
     contact_hint: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
+    taxonomy_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False)
     obligation_fingerprint: Mapped[str] = mapped_column(
         String(64), nullable=False
+    )
+    identity_instance_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    reconciliation_material_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    reconciled_suggestion_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "crm_task_suggestions.id",
+            name="fk_gmail_extracted_obligations_suggestion_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    reconciled_suppression_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "crm_task_suggestion_suppressions.id",
+            name="fk_gmail_extracted_obligations_suppression_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
     )
     confidence: Mapped[float] = mapped_column(
         Numeric(5, 4), default=0, server_default="0", nullable=False
@@ -792,6 +862,40 @@ class CRMTaskSuggestion(Base):
             "gmail_account_id",
             "gmail_thread_id",
             name="uq_crm_task_suggestions_gmail_identity",
+        ),
+        UniqueConstraint(
+            "id",
+            "source_type",
+            "source_scope_key",
+            name="uq_crm_task_suggestions_source_identity",
+        ),
+        ForeignKeyConstraint(
+            (
+                "duplicate_of_suggestion_id",
+                "gmail_account_id",
+                "gmail_thread_id",
+            ),
+            (
+                "crm_task_suggestions.id",
+                "crm_task_suggestions.gmail_account_id",
+                "crm_task_suggestions.gmail_thread_id",
+            ),
+            name="fk_crm_task_suggestions_duplicate_gmail_scope",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            (
+                "duplicate_of_suggestion_id",
+                "source_type",
+                "source_scope_key",
+            ),
+            (
+                "crm_task_suggestions.id",
+                "crm_task_suggestions.source_type",
+                "crm_task_suggestions.source_scope_key",
+            ),
+            name="fk_crm_task_suggestions_duplicate_source_scope",
+            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "source_type IN ('gmail_message', 'sydney_chat')",
@@ -858,6 +962,21 @@ class CRMTaskSuggestion(Base):
             "'applied' AND applied_task_id IS NULL)",
             name="ck_crm_task_suggestions_applied_result",
         ),
+        CheckConstraint(
+            "duplicate_of_suggestion_id IS NULL OR "
+            "duplicate_of_suggestion_id <> id",
+            name="ck_crm_task_suggestions_duplicate_not_self",
+        ),
+        CheckConstraint(
+            "primary_instance_digest IS NULL OR "
+            "primary_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_crm_task_suggestions_primary_instance_digest",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "source_type <> 'gmail_message' OR "
+            "primary_instance_digest IS NOT NULL",
+            name="ck_crm_task_suggestions_gmail_instance_digest",
+        ),
         Index(
             "ix_crm_task_suggestions_review_state",
             "state",
@@ -872,6 +991,14 @@ class CRMTaskSuggestion(Base):
             "id",
             postgresql_where=text("source_type = 'gmail_message'"),
         ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_crm_task_suggestions_gmail_thread_order",
+            "gmail_account_id",
+            "gmail_thread_id",
+            "source_type",
+            "created_at",
+            "id",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_primary_key()
@@ -961,6 +1088,9 @@ class CRMTaskSuggestion(Base):
     obligation_fingerprint: Mapped[str] = mapped_column(
         String(64), nullable=False
     )
+    primary_instance_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     confidence: Mapped[float] = mapped_column(
         Numeric(5, 4), default=0, server_default="0", nullable=False
     )
@@ -989,6 +1119,10 @@ class CRMTaskSuggestionSource(Base):
             "obligation_id",
             name="uq_crm_task_suggestion_sources_suggestion_obligation",
         ),
+        UniqueConstraint(
+            "obligation_id",
+            name="uq_crm_task_suggestion_sources_obligation",
+        ),
         ForeignKeyConstraint(
             ("suggestion_id", "gmail_account_id", "gmail_thread_id"),
             (
@@ -1006,6 +1140,18 @@ class CRMTaskSuggestionSource(Base):
                 "gmail_extracted_obligations.receipt_id",
             ),
             name="fk_crm_task_suggestion_sources_obligation_receipt",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ("obligation_id", "receipt_id", "suggestion_id"),
+            (
+                "gmail_extracted_obligations.id",
+                "gmail_extracted_obligations.receipt_id",
+                "gmail_extracted_obligations.reconciled_suggestion_id",
+            ),
+            name=(
+                "fk_crm_task_suggestion_sources_obligation_disposition"
+            ),
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -1068,19 +1214,32 @@ class CRMTaskSuggestionSuppression(Base):
             "source_scope_key",
             "source_action_key",
             "obligation_fingerprint",
+            "identity_instance_digest",
             name="uq_crm_task_suggestion_suppressions_scope",
+        ),
+        UniqueConstraint(
+            "reprocess_override_audit_id",
+            name="uq_crm_task_suggestion_suppressions_override_audit",
         ),
         CheckConstraint(
             "source_type IN ('gmail_message', 'sydney_chat')",
             name="ck_crm_task_suggestion_suppressions_source_type",
         ),
         CheckConstraint(
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_crm_task_suggestion_suppressions_instance_digest",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
             "(reprocess_override_at IS NULL AND "
             "reprocess_override_by_admin_id IS NULL AND "
-            "reprocess_override_audit_id IS NULL) OR "
+            "reprocess_override_audit_id IS NULL AND "
+            "reprocess_override_consumed_at IS NULL) OR "
             "(reprocess_override_at IS NOT NULL AND "
             "reprocess_override_by_admin_id IS NOT NULL AND "
-            "reprocess_override_audit_id IS NOT NULL)",
+            "reprocess_override_audit_id IS NOT NULL AND "
+            "reprocess_override_at >= dismissed_at AND "
+            "(reprocess_override_consumed_at IS NULL OR "
+            "reprocess_override_consumed_at >= reprocess_override_at))",
             name="ck_crm_task_suggestion_suppressions_override_shape",
         ),
     )
@@ -1090,6 +1249,9 @@ class CRMTaskSuggestionSuppression(Base):
     source_scope_key: Mapped[str] = mapped_column(String(512), nullable=False)
     source_action_key: Mapped[str] = mapped_column(String(128), nullable=False)
     obligation_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    identity_instance_digest: Mapped[str] = mapped_column(
         String(64), nullable=False
     )
     dismissal_reason: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -1115,6 +1277,9 @@ class CRMTaskSuggestionSuppression(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     reprocess_override_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reprocess_override_consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     reprocess_override_by_admin_id: Mapped[int | None] = mapped_column(

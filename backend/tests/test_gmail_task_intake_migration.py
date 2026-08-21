@@ -123,6 +123,8 @@ NULLABLE_COLUMNS = {
         "requested_link_type",
         "requested_link_id",
         "contact_hint",
+        "reconciled_suggestion_id",
+        "reconciled_suppression_id",
     },
     "crm_task_suggestions": {
         "gmail_account_id",
@@ -133,10 +135,12 @@ NULLABLE_COLUMNS = {
         "source_request_id",
         "application_idempotency_key",
         "applied_task_id",
+        "primary_instance_digest",
     },
     "crm_task_suggestion_sources": set(),
     "crm_task_suggestion_suppressions": {
         "reprocess_override_at",
+        "reprocess_override_consumed_at",
         "reprocess_override_by_admin_id",
         "reprocess_override_audit_id",
     },
@@ -242,6 +246,18 @@ EXPECTED_FOREIGN_KEYS = {
             ("id", "receipt_id"),
             "RESTRICT",
         ),
+        "fk_gmail_extracted_obligations_suggestion_id": (
+            ("reconciled_suggestion_id",),
+            "crm_task_suggestions",
+            ("id",),
+            "RESTRICT",
+        ),
+        "fk_gmail_extracted_obligations_suppression_id": (
+            ("reconciled_suppression_id",),
+            "crm_task_suggestion_suppressions",
+            ("id",),
+            "RESTRICT",
+        ),
     },
     "crm_task_suggestions": {
         "fk_crm_task_suggestions_gmail_account_id": (
@@ -254,6 +270,26 @@ EXPECTED_FOREIGN_KEYS = {
             ("duplicate_of_suggestion_id",),
             "crm_task_suggestions",
             ("id",),
+            "RESTRICT",
+        ),
+        "fk_crm_task_suggestions_duplicate_gmail_scope": (
+            (
+                "duplicate_of_suggestion_id",
+                "gmail_account_id",
+                "gmail_thread_id",
+            ),
+            "crm_task_suggestions",
+            ("id", "gmail_account_id", "gmail_thread_id"),
+            "RESTRICT",
+        ),
+        "fk_crm_task_suggestions_duplicate_source_scope": (
+            (
+                "duplicate_of_suggestion_id",
+                "source_type",
+                "source_scope_key",
+            ),
+            "crm_task_suggestions",
+            ("id", "source_type", "source_scope_key"),
             "RESTRICT",
         ),
         "fk_crm_task_suggestions_contact_id": (
@@ -280,6 +316,12 @@ EXPECTED_FOREIGN_KEYS = {
             ("obligation_id", "receipt_id"),
             "gmail_extracted_obligations",
             ("id", "receipt_id"),
+            "RESTRICT",
+        ),
+        "fk_crm_task_suggestion_sources_obligation_disposition": (
+            ("obligation_id", "receipt_id", "suggestion_id"),
+            "gmail_extracted_obligations",
+            ("id", "receipt_id", "reconciled_suggestion_id"),
             "RESTRICT",
         ),
         "fk_crm_task_suggestion_sources_receipt_origin": (
@@ -474,8 +516,15 @@ TYPE_GROUPS = {
         },
     },
     "gmail_extracted_obligations": {
-        "uuid": ("id", "receipt_id", "extraction_attempt_id"),
+        "uuid": (
+            "id",
+            "receipt_id",
+            "extraction_attempt_id",
+            "reconciled_suggestion_id",
+            "reconciled_suppression_id",
+        ),
         "text": ("description", "evaluator_result_json"),
+        "boolean": ("taxonomy_fallback",),
         "numeric_5_4": ("confidence",),
         "datetime": ("due_at", "created_at"),
         "strings": {
@@ -485,6 +534,8 @@ TYPE_GROUPS = {
                 "timezone_basis",
                 "requested_link_type",
                 "obligation_fingerprint",
+                "identity_instance_digest",
+                "reconciliation_material_hash",
             ),
             255: ("title", "requested_link_id", "contact_hint"),
             32: ("priority",),
@@ -512,6 +563,7 @@ TYPE_GROUPS = {
                 "payload_hash",
                 "model_schema_version",
                 "obligation_fingerprint",
+                "primary_instance_digest",
             ),
             512: ("source_scope_key",),
             128: ("source_action_key",),
@@ -540,9 +592,17 @@ TYPE_GROUPS = {
             "reprocess_override_by_admin_id",
             "reprocess_override_audit_id",
         ),
-        "datetime": ("dismissed_at", "reprocess_override_at"),
+        "datetime": (
+            "dismissed_at",
+            "reprocess_override_at",
+            "reprocess_override_consumed_at",
+        ),
         "strings": {
-            64: ("source_type", "obligation_fingerprint"),
+            64: (
+                "source_type",
+                "obligation_fingerprint",
+                "identity_instance_digest",
+            ),
             512: ("source_scope_key",),
             128: ("source_action_key",),
             500: ("dismissal_reason",),
@@ -756,6 +816,8 @@ def _type_signature(column_type: sa.types.TypeEngine) -> tuple[object, ...]:
         return ("uuid", column_type.as_uuid)
     if isinstance(column_type, sa.Text):
         return ("text",)
+    if isinstance(column_type, sa.Boolean):
+        return ("boolean",)
     if isinstance(column_type, sa.String):
         return ("string", column_type.length)
     if isinstance(column_type, sa.Integer):
@@ -778,6 +840,8 @@ def _expected_type_signatures(table_name: str) -> dict[str, tuple[object, ...]]:
         expected[name] = ("datetime", True)
     for name in groups.get("text", ()):
         expected[name] = ("text",)
+    for name in groups.get("boolean", ()):
+        expected[name] = ("boolean",)
     for name in groups.get("numeric_5_4", ()):
         expected[name] = ("numeric", 5, 4)
     for name in groups.get("array_string_64", ()):
@@ -1115,35 +1179,43 @@ def _seed_all_intake_tables(connection: sa.Connection) -> dict[str, UUID]:
     )
     connection.execute(
         sa.text(
-            "INSERT INTO gmail_extracted_obligations "
-            "(id, receipt_id, extraction_attempt_id, action_key, "
-            "schema_version, title, obligation_fingerprint) VALUES "
-            "(:id, :receipt_id, :attempt_id, 'guard-action', "
-            "'gmail-task-v1', 'Guard obligation', :fingerprint)"
-        ),
-        {
-            "id": ids["gmail_extracted_obligations"],
-            "receipt_id": ids["gmail_message_receipts"],
-            "attempt_id": ids["gmail_extraction_attempts"],
-            "fingerprint": "c" * 64,
-        },
-    )
-    connection.execute(
-        sa.text(
             "INSERT INTO crm_task_suggestions "
-            "(id, gmail_account_id, gmail_thread_id, source_type, source_scope_key, "
-            "source_action_key, title, payload_hash, model_schema_version, "
-            "obligation_fingerprint) VALUES "
+            "(id, gmail_account_id, gmail_thread_id, source_type, "
+            "source_scope_key, source_action_key, title, payload_hash, "
+            "model_schema_version, obligation_fingerprint, "
+            "primary_instance_digest) VALUES "
             "(:id, :account_id, 'thread-guard', 'gmail_message', "
             "'gmail:guard-account:thread-guard', 'guard-action', "
-            "'Guard suggestion', :payload_hash, "
-            "'gmail-task-v1', :fingerprint)"
+            "'Guard suggestion', :payload_hash, 'gmail-task-v1', "
+            ":fingerprint, :instance_digest)"
         ),
         {
             "id": ids["crm_task_suggestions"],
             "account_id": ids["gmail_sync_accounts"],
             "payload_hash": "d" * 64,
             "fingerprint": "c" * 64,
+            "instance_digest": "e" * 64,
+        },
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO gmail_extracted_obligations "
+            "(id, receipt_id, extraction_attempt_id, action_key, "
+            "schema_version, title, taxonomy_fallback, "
+            "obligation_fingerprint, identity_instance_digest, "
+            "reconciliation_material_hash, reconciled_suggestion_id) VALUES "
+            "(:id, :receipt_id, :attempt_id, 'guard-action', "
+            "'gmail-task-v1', 'Guard obligation', false, :fingerprint, "
+            ":instance_digest, :material_hash, :suggestion_id)"
+        ),
+        {
+            "id": ids["gmail_extracted_obligations"],
+            "receipt_id": ids["gmail_message_receipts"],
+            "attempt_id": ids["gmail_extraction_attempts"],
+            "fingerprint": "c" * 64,
+            "instance_digest": "e" * 64,
+            "material_hash": "f" * 64,
+            "suggestion_id": ids["crm_task_suggestions"],
         },
     )
     connection.execute(
@@ -1167,14 +1239,16 @@ def _seed_all_intake_tables(connection: sa.Connection) -> dict[str, UUID]:
         sa.text(
             "INSERT INTO crm_task_suggestion_suppressions "
             "(id, source_type, source_scope_key, source_action_key, "
-            "obligation_fingerprint, dismissal_reason, dismissed_by_admin_id, "
-            "dismissal_audit_id) VALUES "
+            "obligation_fingerprint, identity_instance_digest, "
+            "dismissal_reason, dismissed_by_admin_id, dismissal_audit_id) VALUES "
             "(:id, 'gmail_message', 'account:thread-guard', 'guard-action', "
-            ":fingerprint, 'Guard suppression', :admin_id, :audit_id)"
+            ":fingerprint, :instance_digest, 'Guard suppression', :admin_id, "
+            ":audit_id)"
         ),
         {
             "id": ids["crm_task_suggestion_suppressions"],
             "fingerprint": "c" * 64,
+            "instance_digest": "e" * 64,
             "admin_id": admin_id,
             "audit_id": audit_id,
         },
@@ -1373,7 +1447,12 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "requested_link_type",
             "requested_link_id",
             "contact_hint",
+            "taxonomy_fallback",
             "obligation_fingerprint",
+            "identity_instance_digest",
+            "reconciliation_material_hash",
+            "reconciled_suggestion_id",
+            "reconciled_suppression_id",
             "confidence",
             "evaluator_result_json",
             "evidence_preview",
@@ -1402,6 +1481,7 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "applied_task_id",
             "model_schema_version",
             "obligation_fingerprint",
+            "primary_instance_digest",
             "confidence",
             "rationale",
             "version",
@@ -1425,11 +1505,13 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "source_scope_key",
             "source_action_key",
             "obligation_fingerprint",
+            "identity_instance_digest",
             "dismissal_reason",
             "dismissed_by_admin_id",
             "dismissal_audit_id",
             "dismissed_at",
             "reprocess_override_at",
+            "reprocess_override_consumed_at",
             "reprocess_override_by_admin_id",
             "reprocess_override_audit_id",
         ),
@@ -1624,6 +1706,11 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
             "schema_version",
         ),
         "uq_gmail_extracted_obligations_id_receipt": ("id", "receipt_id"),
+        "uq_gmail_extracted_obligations_source_disposition": (
+            "id",
+            "receipt_id",
+            "reconciled_suggestion_id",
+        ),
     }
     assert _named_unique_columns(tables["crm_task_suggestions"]) == {
         "uq_crm_task_suggestions_application_key": (
@@ -1637,12 +1724,18 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
             "gmail_account_id",
             "gmail_thread_id",
         ),
+        "uq_crm_task_suggestions_source_identity": (
+            "id",
+            "source_type",
+            "source_scope_key",
+        ),
     }
     assert _named_unique_columns(tables["crm_task_suggestion_sources"]) == {
         "uq_crm_task_suggestion_sources_suggestion_obligation": (
             "suggestion_id",
             "obligation_id",
-        )
+        ),
+        "uq_crm_task_suggestion_sources_obligation": ("obligation_id",),
     }
     assert _named_unique_columns(tables["crm_task_suggestion_suppressions"]) == {
         "uq_crm_task_suggestion_suppressions_scope": (
@@ -1650,7 +1743,11 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
             "source_scope_key",
             "source_action_key",
             "obligation_fingerprint",
-        )
+            "identity_instance_digest",
+        ),
+        "uq_crm_task_suggestion_suppressions_override_audit": (
+            "reprocess_override_audit_id",
+        ),
     }
     assert _named_unique_columns(tables["gmail_backfill_requests"]) == {}
     for table_name, table in tables.items():
@@ -1711,6 +1808,43 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     )
     assert "!=" not in predicate and "<>" not in predicate
 
+    obligation_indexes = _indexes(tables["gmail_extracted_obligations"])
+    assert _compiled_index(
+        obligation_indexes[
+            "ix_gmail_extracted_obligations_suggestion_instance"
+        ]
+    ) == (
+        "CREATE INDEX ix_gmail_extracted_obligations_suggestion_instance ON "
+        "gmail_extracted_obligations (reconciled_suggestion_id, "
+        "identity_instance_digest, reconciliation_material_hash, id)"
+    )
+    assert _compiled_index(
+        obligation_indexes[
+            "ix_gmail_extracted_obligations_suggestion_taxonomy"
+        ]
+    ) == (
+        "CREATE INDEX ix_gmail_extracted_obligations_suggestion_taxonomy ON "
+        "gmail_extracted_obligations (reconciled_suggestion_id, "
+        "taxonomy_fallback, id)"
+    )
+    assert _compiled_index(
+        obligation_indexes[
+            "ix_gmail_extracted_obligations_suggestion_contact_hint"
+        ]
+    ) == (
+        "CREATE INDEX ix_gmail_extracted_obligations_suggestion_contact_hint "
+        "ON gmail_extracted_obligations (reconciled_suggestion_id, "
+        "contact_hint, id)"
+    )
+    assert _compiled_index(
+        obligation_indexes[
+            "ix_gmail_extracted_obligations_attempt_replay"
+        ]
+    ) == (
+        "CREATE INDEX ix_gmail_extracted_obligations_attempt_replay ON "
+        "gmail_extracted_obligations (extraction_attempt_id, created_at, id)"
+    )
+
     suggestion_indexes = _indexes(tables["crm_task_suggestions"])
     assert tuple(
         column.name
@@ -1724,6 +1858,13 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
         "CREATE INDEX ix_crm_task_suggestions_gmail_reconciliation ON "
         "crm_task_suggestions (gmail_account_id, gmail_thread_id, "
         "source_action_key, id) WHERE source_type = 'gmail_message'"
+    )
+    assert _compiled_index(
+        suggestion_indexes["ix_crm_task_suggestions_gmail_thread_order"]
+    ) == (
+        "CREATE INDEX ix_crm_task_suggestions_gmail_thread_order ON "
+        "crm_task_suggestions (gmail_account_id, gmail_thread_id, "
+        "source_type, created_at, id)"
     )
     source_indexes = _indexes(tables["crm_task_suggestion_sources"])
     assert tuple(
@@ -1790,7 +1931,41 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
             ),
         },
         "gmail_extraction_attempts": {},
-        "gmail_extracted_obligations": {},
+        "gmail_extracted_obligations": {
+            "ix_gmail_extracted_obligations_suggestion_instance": (
+                (
+                    "reconciled_suggestion_id",
+                    "identity_instance_digest",
+                    "reconciliation_material_hash",
+                    "id",
+                ),
+                False,
+                None,
+            ),
+            "ix_gmail_extracted_obligations_suggestion_taxonomy": (
+                (
+                    "reconciled_suggestion_id",
+                    "taxonomy_fallback",
+                    "id",
+                ),
+                False,
+                None,
+            ),
+            "ix_gmail_extracted_obligations_suggestion_contact_hint": (
+                (
+                    "reconciled_suggestion_id",
+                    "contact_hint",
+                    "id",
+                ),
+                False,
+                None,
+            ),
+            "ix_gmail_extracted_obligations_attempt_replay": (
+                ("extraction_attempt_id", "created_at", "id"),
+                False,
+                None,
+            ),
+        },
         "crm_task_suggestions": {
             "ix_crm_task_suggestions_review_state": (
                 ("state", "updated_at", "id"),
@@ -1806,6 +1981,17 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
                 ),
                 False,
                 "source_type = 'gmail_message'",
+            ),
+            "ix_crm_task_suggestions_gmail_thread_order": (
+                (
+                    "gmail_account_id",
+                    "gmail_thread_id",
+                    "source_type",
+                    "created_at",
+                    "id",
+                ),
+                False,
+                None,
             ),
         },
         "crm_task_suggestion_sources": {
@@ -1926,6 +2112,16 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
         "ck_gmail_extracted_obligations_confidence": (
             "confidence >= 0 AND confidence <= 1"
         ),
+        "ck_gmail_extracted_obligations_instance_digest": (
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'"
+        ),
+        "ck_gmail_extracted_obligations_material_hash": (
+            "reconciliation_material_hash ~ '^[0-9a-f]{64}$'"
+        ),
+        "ck_gmail_extracted_obligations_disposition": (
+            "(reconciled_suggestion_id IS NOT NULL) <> "
+            "(reconciled_suppression_id IS NOT NULL)"
+        ),
     }
     suggestion_checks = _named_checks(tables["crm_task_suggestions"])
     assert suggestion_checks == {
@@ -1979,6 +2175,18 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "application_idempotency_key IS NOT NULL) OR (state <> "
             "'applied' AND applied_task_id IS NULL)"
         ),
+        "ck_crm_task_suggestions_duplicate_not_self": (
+            "duplicate_of_suggestion_id IS NULL OR "
+            "duplicate_of_suggestion_id <> id"
+        ),
+        "ck_crm_task_suggestions_primary_instance_digest": (
+            "primary_instance_digest IS NULL OR "
+            "primary_instance_digest ~ '^[0-9a-f]{64}$'"
+        ),
+        "ck_crm_task_suggestions_gmail_instance_digest": (
+            "source_type <> 'gmail_message' OR "
+            "primary_instance_digest IS NOT NULL"
+        ),
     }
     assert _named_checks(tables["crm_task_suggestion_sources"]) == {
         "ck_crm_task_suggestion_sources_direction": (
@@ -1989,13 +2197,20 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
         "ck_crm_task_suggestion_suppressions_source_type": (
             "source_type IN ('gmail_message', 'sydney_chat')"
         ),
+        "ck_crm_task_suggestion_suppressions_instance_digest": (
+            "identity_instance_digest ~ '^[0-9a-f]{64}$'"
+        ),
         "ck_crm_task_suggestion_suppressions_override_shape": (
             "(reprocess_override_at IS NULL AND "
             "reprocess_override_by_admin_id IS NULL AND "
-            "reprocess_override_audit_id IS NULL) OR "
+            "reprocess_override_audit_id IS NULL AND "
+            "reprocess_override_consumed_at IS NULL) OR "
             "(reprocess_override_at IS NOT NULL AND "
             "reprocess_override_by_admin_id IS NOT NULL AND "
-            "reprocess_override_audit_id IS NOT NULL)"
+            "reprocess_override_audit_id IS NOT NULL AND "
+            "reprocess_override_at >= dismissed_at AND "
+            "(reprocess_override_consumed_at IS NULL OR "
+            "reprocess_override_consumed_at >= reprocess_override_at))"
         )
     }
     assert _named_checks(tables["gmail_backfill_requests"]) == {
@@ -2203,6 +2418,13 @@ def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade
     assert "gmail_history_runs" not in upgrade
     assert "crm_task_email_sources" not in upgrade
     assert "gmail_obligation_suppressions" not in upgrade
+    assert "gmail_task_intake_reject_evidence_mutation" in upgrade
+    assert "trg_gmail_extracted_obligations_append_only" in upgrade
+    assert "trg_crm_task_suggestion_sources_append_only" in upgrade
+    assert "gmail_task_intake_guard_suppression_identity" in upgrade
+    assert (
+        "trg_crm_task_suggestion_suppressions_identity_immutable" in upgrade
+    )
     for forbidden in (
         "raw_body",
         "body_text",
@@ -2223,6 +2445,8 @@ def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade
         assert f"DROP TABLE {table}" in downgrade
     assert downgrade.index(expected_lock) < downgrade.index("EXISTS (SELECT 1")
     assert downgrade.index("EXISTS (SELECT 1") < downgrade.index("DROP TABLE")
+    assert "DROP FUNCTION gmail_task_intake_reject_evidence_mutation" in downgrade
+    assert "DROP FUNCTION gmail_task_intake_guard_suppression_identity" in downgrade
 
 
 def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
@@ -2783,15 +3007,17 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         sa.text(
                             "INSERT INTO crm_task_suggestion_suppressions "
                             "(source_type, source_scope_key, source_action_key, "
-                            "obligation_fingerprint, dismissal_reason, "
+                            "obligation_fingerprint, identity_instance_digest, "
+                            "dismissal_reason, "
                             "dismissed_by_admin_id, dismissal_audit_id) VALUES "
                             "('gmail_message', :scope, 'send-disclosure', "
-                            ":fingerprint, "
+                            ":fingerprint, :instance_digest, "
                             "'Not a task', :admin_id, :audit_id)"
                         ),
                         {
                             "scope": scope,
                             "fingerprint": "f" * 64,
+                            "instance_digest": "e" * 64,
                             "admin_id": admin_id,
                             "audit_id": audit_id,
                         },
@@ -2803,6 +3029,161 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                     ),
                     {"fingerprint": "f" * 64},
                 ) == 2
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_suppressions "
+                        "(source_type, source_scope_key, source_action_key, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "dismissal_reason, dismissed_by_admin_id, "
+                        "dismissal_audit_id) VALUES "
+                        "('gmail_message', :scope, 'send-disclosure', "
+                        ":fingerprint, :instance_digest, 'Different instance', "
+                        ":admin_id, :audit_id)"
+                    ),
+                    {
+                        "scope": (
+                            "gmail:00000000-0000-4000-8000-000000008321:"
+                            "thread-a"
+                        ),
+                        "fingerprint": "f" * 64,
+                        "instance_digest": "d" * 64,
+                        "admin_id": admin_id,
+                        "audit_id": audit_id,
+                    },
+                )
+                assert connection.scalar(
+                    sa.text(
+                        "SELECT count(*) FROM "
+                        "crm_task_suggestion_suppressions WHERE "
+                        "obligation_fingerprint = :fingerprint"
+                    ),
+                    {"fingerprint": "f" * 64},
+                ) == 3
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO crm_task_suggestion_suppressions "
+                            "(source_type, source_scope_key, source_action_key, "
+                            "obligation_fingerprint, identity_instance_digest, "
+                            "dismissal_reason, dismissed_by_admin_id, "
+                            "dismissal_audit_id) VALUES "
+                            "('gmail_message', :scope, 'send-disclosure', "
+                            ":fingerprint, :instance_digest, 'Exact duplicate', "
+                            ":admin_id, :audit_id)"
+                        ),
+                        {
+                            "scope": (
+                                "gmail:00000000-0000-4000-8000-000000008321:"
+                                "thread-a"
+                            ),
+                            "fingerprint": "f" * 64,
+                            "instance_digest": "e" * 64,
+                            "admin_id": admin_id,
+                            "audit_id": audit_id,
+                        },
+                    )
+            with engine.begin() as connection:
+                override_audit_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO agent_action_audits "
+                        "(actor, action_id, method, path, status_code, allowed, "
+                        "request_meta, response_meta) VALUES "
+                        "('admin', 'gmail_task_intake.reprocess', 'POST', "
+                        "'/api/v1/admin/integrations/gmail-task-intake/reprocess/"
+                        "00000000-0000-4000-8000-000000008322', 200, true, "
+                        "'{}', '{}') RETURNING id"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "UPDATE crm_task_suggestion_suppressions SET "
+                        "reprocess_override_at = CURRENT_TIMESTAMP, "
+                        "reprocess_override_by_admin_id = :admin_id, "
+                        "reprocess_override_audit_id = :audit_id "
+                        "WHERE source_scope_key = :scope AND "
+                        "identity_instance_digest = :instance_digest"
+                    ),
+                    {
+                        "admin_id": admin_id,
+                        "audit_id": override_audit_id,
+                        "instance_digest": "e" * 64,
+                        "scope": (
+                            "gmail:00000000-0000-4000-8000-000000008321:"
+                            "thread-a"
+                        ),
+                    },
+                )
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE crm_task_suggestion_suppressions SET "
+                        "reprocess_override_consumed_at = CURRENT_TIMESTAMP "
+                        "WHERE source_scope_key = :scope AND "
+                        "identity_instance_digest = :instance_digest"
+                    ),
+                    {
+                        "scope": (
+                            "gmail:00000000-0000-4000-8000-000000008321:"
+                            "thread-a"
+                        ),
+                        "instance_digest": "e" * 64,
+                    },
+                )
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE crm_task_suggestion_suppressions SET "
+                            "reprocess_override_consumed_at = "
+                            "reprocess_override_at - INTERVAL '1 second' "
+                            "WHERE source_scope_key = :scope AND "
+                            "identity_instance_digest = :instance_digest"
+                        ),
+                        {
+                            "scope": (
+                                "gmail:00000000-0000-4000-8000-000000008321:"
+                                "thread-a"
+                            ),
+                            "instance_digest": "e" * 64,
+                        },
+                    )
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE crm_task_suggestion_suppressions SET "
+                            "dismissed_at = reprocess_override_at + "
+                            "INTERVAL '1 second' WHERE source_scope_key = :scope "
+                            "AND identity_instance_digest = :instance_digest"
+                        ),
+                        {
+                            "scope": (
+                                "gmail:00000000-0000-4000-8000-000000008321:"
+                                "thread-a"
+                            ),
+                            "instance_digest": "e" * 64,
+                        },
+                    )
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE crm_task_suggestion_suppressions SET "
+                            "reprocess_override_at = CURRENT_TIMESTAMP, "
+                            "reprocess_override_by_admin_id = :admin_id, "
+                            "reprocess_override_audit_id = :audit_id "
+                            "WHERE source_scope_key = :scope"
+                        ),
+                        {
+                            "admin_id": admin_id,
+                            "audit_id": override_audit_id,
+                            "scope": (
+                                "gmail:00000000-0000-4000-8000-000000008321:"
+                                "thread-b"
+                            ),
+                        },
+                    )
             with pytest.raises(sa.exc.IntegrityError):
                 with engine.begin() as connection:
                     connection.execute(
@@ -2972,6 +3353,8 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
             obligation_two = UUID("00000000-0000-4000-8000-000000008367")
             obligation_three = UUID("00000000-0000-4000-8000-000000008375")
             suggestion_id = UUID("00000000-0000-4000-8000-000000008368")
+            suggestion_two = UUID("00000000-0000-4000-8000-000000008377")
+            suggestion_three = UUID("00000000-0000-4000-8000-000000008378")
             now = datetime(2026, 8, 20, tzinfo=timezone.utc)
             with engine.begin() as connection:
                 _seed_existing_crm(connection)
@@ -3023,15 +3406,61 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                 )
                 connection.execute(
                     sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "VALUES (:one, :account_id, 'thread-one', "
+                        "'gmail_message', 'gmail:provenance:thread-one', "
+                        "'action-one', 'Suggestion one', :payload_one, "
+                        "'gmail-task-v1', :fingerprint_one, :digest_one), "
+                        "(:two, :account_id, 'thread-two', 'gmail_message', "
+                        "'gmail:provenance:thread-two', 'action-two', "
+                        "'Suggestion two', :payload_two, 'gmail-task-v1', "
+                        ":fingerprint_two, :digest_two), "
+                        "(:three, :other_account_id, 'thread-one', "
+                        "'gmail_message', 'gmail:other-provenance:thread-one', "
+                        "'action-three', 'Suggestion three', :payload_three, "
+                        "'gmail-task-v1', :fingerprint_three, :digest_three)"
+                    ),
+                    {
+                        "one": suggestion_id,
+                        "two": suggestion_two,
+                        "three": suggestion_three,
+                        "account_id": account_id,
+                        "other_account_id": other_account_id,
+                        "payload_one": "c" * 64,
+                        "payload_two": "d" * 64,
+                        "payload_three": "e" * 64,
+                        "fingerprint_one": "a" * 64,
+                        "fingerprint_two": "b" * 64,
+                        "fingerprint_three": "8" * 64,
+                        "digest_one": "1" * 64,
+                        "digest_two": "2" * 64,
+                        "digest_three": "3" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
                         "INSERT INTO gmail_extracted_obligations "
                         "(id, receipt_id, extraction_attempt_id, action_key, "
-                        "schema_version, title, obligation_fingerprint) VALUES "
+                        "schema_version, title, taxonomy_fallback, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) VALUES "
                         "(:one, :receipt_one, :attempt_one, 'action-one', "
-                        "'gmail-task-v1', 'First obligation', :fingerprint_one), "
+                        "'gmail-task-v1', 'First obligation', false, "
+                        ":fingerprint_one, :digest_one, :material_one, "
+                        ":suggestion_one), "
                         "(:two, :receipt_two, :attempt_two, 'action-two', "
-                        "'gmail-task-v1', 'Second obligation', :fingerprint_two), "
-                        "(:three, :receipt_three, :attempt_three, 'action-three', "
-                        "'gmail-task-v1', 'Third obligation', :fingerprint_three)"
+                        "'gmail-task-v1', 'Second obligation', false, "
+                        ":fingerprint_two, :digest_two, :material_two, "
+                        ":suggestion_two), "
+                        "(:three, :receipt_three, :attempt_three, "
+                        "'action-three', 'gmail-task-v1', 'Third obligation', "
+                        "false, :fingerprint_three, :digest_three, "
+                        ":material_three, :suggestion_three)"
                     ),
                     {
                         "one": obligation_one,
@@ -3046,43 +3475,39 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                         "fingerprint_one": "a" * 64,
                         "fingerprint_two": "b" * 64,
                         "fingerprint_three": "8" * 64,
+                        "digest_one": "1" * 64,
+                        "digest_two": "2" * 64,
+                        "digest_three": "3" * 64,
+                        "material_one": "4" * 64,
+                        "material_two": "5" * 64,
+                        "material_three": "6" * 64,
+                        "suggestion_one": suggestion_id,
+                        "suggestion_two": suggestion_two,
+                        "suggestion_three": suggestion_three,
                     },
                 )
-                connection.execute(
-                    sa.text(
-                        "INSERT INTO crm_task_suggestions "
-                        "(id, gmail_account_id, gmail_thread_id, source_type, "
-                        "source_scope_key, "
-                        "source_action_key, title, payload_hash, "
-                        "model_schema_version, obligation_fingerprint) VALUES "
-                        "(:id, :account_id, 'thread-one', 'gmail_message', "
-                        "'gmail:provenance:thread-one', 'action-one', "
-                        "'Suggestion', :payload_hash, "
-                        "'gmail-task-v1', :fingerprint)"
-                    ),
-                    {
-                        "id": suggestion_id,
-                        "account_id": account_id,
-                        "payload_hash": "c" * 64,
-                        "fingerprint": "a" * 64,
-                    },
-                )
-
             with pytest.raises(sa.exc.IntegrityError):
                 with engine.begin() as connection:
                     connection.execute(
                         sa.text(
                             "INSERT INTO gmail_extracted_obligations "
                             "(receipt_id, extraction_attempt_id, action_key, "
-                            "schema_version, title, obligation_fingerprint) "
+                            "schema_version, title, taxonomy_fallback, "
+                            "obligation_fingerprint, identity_instance_digest, "
+                            "reconciliation_material_hash, "
+                            "reconciled_suggestion_id) "
                             "VALUES (:receipt_two, :attempt_one, 'cross-wired', "
-                            "'gmail-task-v1', 'Cross-wired obligation', "
-                            ":fingerprint)"
+                            "'gmail-task-v1', 'Cross-wired obligation', false, "
+                            ":fingerprint, :digest, :material_hash, "
+                            ":suggestion_id)"
                         ),
                         {
                             "receipt_two": receipt_two,
                             "attempt_one": attempt_one,
                             "fingerprint": "d" * 64,
+                            "digest": "7" * 64,
+                            "material_hash": "9" * 64,
+                            "suggestion_id": suggestion_two,
                         },
                     )
 
@@ -3164,6 +3589,67 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                         },
                     )
 
+            second_suggestion_id = UUID(
+                "00000000-0000-4000-8000-000000008376"
+            )
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES "
+                        "(:id, :account_id, 'thread-one', 'gmail_message', "
+                        "'gmail:provenance:thread-one', 'action-successor', "
+                        "'Second suggestion', :payload_hash, 'gmail-task-v1', "
+                        ":fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "id": second_suggestion_id,
+                        "account_id": account_id,
+                        "payload_hash": "9" * 64,
+                        "fingerprint": "a" * 64,
+                        "instance_digest": "1" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_sources "
+                        "(suggestion_id, obligation_id, receipt_id, "
+                        "gmail_account_id, gmail_thread_id, direction, "
+                        "source_label) VALUES "
+                        "(:suggestion_id, :obligation_id, :receipt_id, "
+                        ":account_id, 'thread-one', 'received', 'First source')"
+                    ),
+                    {
+                        "suggestion_id": suggestion_id,
+                        "obligation_id": obligation_one,
+                        "receipt_id": receipt_one,
+                        "account_id": account_id,
+                    },
+                )
+
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO crm_task_suggestion_sources "
+                            "(suggestion_id, obligation_id, receipt_id, "
+                            "gmail_account_id, gmail_thread_id, direction, "
+                            "source_label) VALUES "
+                            "(:suggestion_id, :obligation_id, :receipt_id, "
+                            ":account_id, 'thread-one', 'received', "
+                            "'Second source for one obligation')"
+                        ),
+                        {
+                            "suggestion_id": second_suggestion_id,
+                            "obligation_id": obligation_one,
+                            "receipt_id": receipt_one,
+                            "account_id": account_id,
+                        },
+                    )
+
             with pytest.raises(sa.exc.IntegrityError):
                 with engine.begin() as connection:
                     connection.execute(
@@ -3173,12 +3659,13 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                             "source_scope_key, "
                             "source_action_key, title, state, applied_task_id, "
                             "payload_hash, model_schema_version, "
-                            "obligation_fingerprint) VALUES "
+                            "obligation_fingerprint, primary_instance_digest) "
+                            "VALUES "
                             "(:account_id, 'applied-without-key', 'gmail_message', "
                             "'gmail:provenance:applied-without-key', "
                             "'invalid-applied', 'Invalid applied', "
                             "'applied', 8302, :payload_hash, 'gmail-task-v1', "
-                            ":fingerprint)"
+                            ":fingerprint, repeat('a', 64))"
                         ),
                         {
                             "account_id": account_id,
@@ -3196,13 +3683,15 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                             "source_scope_key, "
                             "source_action_key, title, state, applied_task_id, "
                             "application_idempotency_key, payload_hash, "
-                            "model_schema_version, obligation_fingerprint) "
+                            "model_schema_version, obligation_fingerprint, "
+                            "primary_instance_digest) "
                             "VALUES (:account_id, 'pending-with-task', "
                             "'gmail_message', "
                             "'gmail:provenance:pending-with-task', "
                             "'invalid-pending', 'Invalid pending', "
                             "'pending_review', 8302, :application_key, "
-                            ":payload_hash, 'gmail-task-v1', :fingerprint)"
+                            ":payload_hash, 'gmail-task-v1', :fingerprint, "
+                            "repeat('a', 64))"
                         ),
                         {
                             "application_key": UUID(
@@ -3222,13 +3711,14 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                             "(gmail_account_id, gmail_thread_id, source_type, "
                             "source_scope_key, "
                             "source_action_key, title, blocker_codes, payload_hash, "
-                            "model_schema_version, obligation_fingerprint) VALUES "
+                            "model_schema_version, obligation_fingerprint, "
+                            "primary_instance_digest) VALUES "
                             "(:account_id, 'duplicate-blockers', 'gmail_message', "
                             "'gmail:provenance:duplicate-blockers', "
                             "'invalid-blockers', 'Invalid blockers', "
                             "ARRAY['unsupported_owner', 'unsupported_owner']"
                             "::varchar[], :payload_hash, 'gmail-task-v1', "
-                            ":fingerprint)"
+                            ":fingerprint, repeat('a', 64))"
                         ),
                         {
                             "account_id": account_id,
@@ -3245,17 +3735,18 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                         "source_scope_key, "
                         "source_action_key, title, state, "
                         "application_idempotency_key, applied_task_id, payload_hash, "
-                        "model_schema_version, obligation_fingerprint) VALUES "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES "
                         "(:account_id, 'failed-keyed', 'gmail_message', "
                         "'gmail:provenance:failed-keyed', 'failed-action', "
                         "'Failed keyed result', 'failed', "
                         ":failed_key, NULL, :failed_hash, 'gmail-task-v1', "
-                        ":failed_fingerprint), "
+                        ":failed_fingerprint, repeat('a', 64)), "
                         "(:account_id, 'applied-complete', 'gmail_message', "
                         "'gmail:provenance:applied-complete', 'applied-action', "
                         "'Applied result', 'applied', "
                         ":applied_key, 8302, :applied_hash, 'gmail-task-v1', "
-                        ":applied_fingerprint)"
+                        ":applied_fingerprint, repeat('b', 64))"
                     ),
                     {
                         "account_id": account_id,
@@ -3308,15 +3799,17 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                         "(gmail_account_id, gmail_thread_id, source_type, "
                         "source_scope_key, source_action_key, "
                         "source_request_id, title, payload_hash, "
-                        "model_schema_version, obligation_fingerprint) VALUES "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES "
                         "(NULL, NULL, 'sydney_chat', 'agent-control:sydney', "
                         "'draft-task', "
                         ":request_id, 'Direct Sydney draft', :payload_hash, "
-                        "'gmail-task-v1', :fingerprint), "
+                        "'gmail-task-v1', :fingerprint, NULL), "
                         "(:account_id, 'thread-one', 'gmail_message', "
                         "'gmail:account-one:thread-one', "
                         "'action-one', NULL, 'Gmail suggestion', :gmail_hash, "
-                        "'gmail-task-v1', :gmail_fingerprint)"
+                        "'gmail-task-v1', :gmail_fingerprint, "
+                        ":gmail_instance_digest)"
                     ),
                     {
                         "request_id": request_id,
@@ -3325,6 +3818,7 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                         "fingerprint": "9" * 64,
                         "gmail_hash": "c" * 64,
                         "gmail_fingerprint": "d" * 64,
+                        "gmail_instance_digest": "1" * 64,
                     },
                 )
             with pytest.raises(sa.exc.IntegrityError):
@@ -3393,12 +3887,14 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                                 "(gmail_account_id, gmail_thread_id, source_type, "
                                 "source_scope_key, source_action_key, "
                                 "source_request_id, title, payload_hash, "
-                                "model_schema_version, obligation_fingerprint) "
+                                "model_schema_version, obligation_fingerprint, "
+                                "primary_instance_digest) "
                                 "VALUES (:gmail_account_id, :gmail_thread_id, "
                                 ":source_type, "
                                 ":source_scope, :source_action, "
                                 ":source_request_id, :title, :payload_hash, "
-                                "'gmail-task-v1', :fingerprint)"
+                                "'gmail-task-v1', :fingerprint, "
+                                ":instance_digest)"
                             ),
                             {
                                 **shape,
@@ -3407,8 +3903,1427 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                                 "title": f"Invalid source shape {index}",
                                 "payload_hash": f"{index:x}" * 64,
                                 "fingerprint": f"{index + 4:x}" * 64,
+                                "instance_digest": (
+                                    "a" * 64
+                                    if shape["source_type"] == "gmail_message"
+                                    else None
+                                ),
                             },
                         )
+    finally:
+        engine.dispose()
+
+
+def test_duplicate_suggestions_are_source_scope_safe_and_never_self_reference() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            first_account = UUID("00000000-0000-4000-8000-0000000083a1")
+            second_account = UUID("00000000-0000-4000-8000-0000000083a2")
+            root_id = UUID("00000000-0000-4000-8000-0000000083a3")
+            sydney_root_id = UUID("00000000-0000-4000-8000-0000000083a4")
+            sydney_root_request_id = UUID(
+                "00000000-0000-4000-8000-0000000083a5"
+            )
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:first, 'duplicate-scope-a@example.test'), "
+                        "(:second, 'duplicate-scope-b@example.test')"
+                    ),
+                    {"first": first_account, "second": second_account},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES "
+                        "(:id, :account_id, 'thread-safe', 'gmail_message', "
+                        "'gmail:duplicate-scope:thread-safe', 'root-action', "
+                        "'Root suggestion', :payload_hash, 'gmail-task-v1', "
+                        ":fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "id": root_id,
+                        "account_id": first_account,
+                        "payload_hash": "a" * 64,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, source_type, source_scope_key, source_action_key, "
+                        "source_request_id, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint) VALUES "
+                        "(:id, 'sydney_chat', 'sydney:chat:root', "
+                        "'sydney-root-action', :request_id, 'Sydney root', "
+                        ":payload_hash, 'gmail-task-v1', :fingerprint)"
+                    ),
+                    {
+                        "id": sydney_root_id,
+                        "request_id": sydney_root_request_id,
+                        "payload_hash": "c" * 64,
+                        "fingerprint": "d" * 64,
+                    },
+                )
+
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE crm_task_suggestions "
+                            "SET duplicate_of_suggestion_id = id WHERE id = :id"
+                        ),
+                        {"id": root_id},
+                    )
+
+            invalid_scopes = (
+                (second_account, "thread-safe", "cross-account"),
+                (first_account, "thread-other", "cross-thread"),
+            )
+            for index, (account_id, thread_id, label) in enumerate(
+                invalid_scopes,
+                start=1,
+            ):
+                with pytest.raises(sa.exc.IntegrityError):
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(
+                                "INSERT INTO crm_task_suggestions "
+                                "(gmail_account_id, gmail_thread_id, source_type, "
+                                "source_scope_key, source_action_key, "
+                                "duplicate_of_suggestion_id, title, payload_hash, "
+                                "model_schema_version, obligation_fingerprint, "
+                                "primary_instance_digest) "
+                                "VALUES (:account_id, :thread_id, 'gmail_message', "
+                                ":scope, :action, :root_id, :title, :payload_hash, "
+                                "'gmail-task-v1', :fingerprint, "
+                                ":instance_digest)"
+                            ),
+                            {
+                                "account_id": account_id,
+                                "thread_id": thread_id,
+                                "scope": f"gmail:duplicate-scope:{label}",
+                                "action": f"invalid-{label}",
+                                "root_id": root_id,
+                                "title": f"Invalid {label} duplicate",
+                                "payload_hash": f"{index + 1:x}" * 64,
+                                "fingerprint": f"{index + 3:x}" * 64,
+                                "instance_digest": "d" * 64,
+                            },
+                        )
+
+            with engine.begin() as connection:
+                valid_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, "
+                        "duplicate_of_suggestion_id, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) "
+                        "VALUES (:account_id, 'thread-safe', 'gmail_message', "
+                        "'gmail:duplicate-scope:thread-safe', 'valid-child', "
+                        ":root_id, "
+                        "'Valid scoped duplicate', :payload_hash, "
+                        "'gmail-task-v1', :fingerprint, :instance_digest) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "account_id": first_account,
+                        "root_id": root_id,
+                        "payload_hash": "6" * 64,
+                        "fingerprint": "7" * 64,
+                        "instance_digest": "8" * 64,
+                    },
+                )
+                assert valid_id is not None
+
+            invalid_source_scopes = (
+                (
+                    "sydney_chat",
+                    "gmail:duplicate-scope:thread-safe",
+                    root_id,
+                    UUID("00000000-0000-4000-8000-0000000083a6"),
+                    "cross-source",
+                ),
+                (
+                    "sydney_chat",
+                    "sydney:chat:other",
+                    sydney_root_id,
+                    UUID("00000000-0000-4000-8000-0000000083a7"),
+                    "cross-sydney-scope",
+                ),
+            )
+            for (
+                source_type,
+                source_scope,
+                duplicate_id,
+                request_id,
+                label,
+            ) in invalid_source_scopes:
+                with pytest.raises(sa.exc.IntegrityError):
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(
+                                "INSERT INTO crm_task_suggestions "
+                                "(source_type, source_scope_key, "
+                                "source_action_key, source_request_id, "
+                                "duplicate_of_suggestion_id, title, "
+                                "payload_hash, model_schema_version, "
+                                "obligation_fingerprint) VALUES "
+                                "(:source_type, :source_scope, :action, "
+                                ":request_id, :duplicate_id, :title, "
+                                ":payload_hash, 'gmail-task-v1', :fingerprint)"
+                            ),
+                            {
+                                "source_type": source_type,
+                                "source_scope": source_scope,
+                                "action": f"invalid-{label}",
+                                "request_id": request_id,
+                                "duplicate_id": duplicate_id,
+                                "title": f"Invalid {label} duplicate",
+                                "payload_hash": "e" * 64,
+                                "fingerprint": "f" * 64,
+                            },
+                        )
+
+            with engine.begin() as connection:
+                valid_sydney_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(source_type, source_scope_key, source_action_key, "
+                        "source_request_id, duplicate_of_suggestion_id, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint) VALUES "
+                        "('sydney_chat', 'sydney:chat:root', 'sydney-child', "
+                        ":request_id, :root_id, 'Valid Sydney duplicate', "
+                        ":payload_hash, 'gmail-task-v1', :fingerprint) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "request_id": UUID(
+                            "00000000-0000-4000-8000-0000000083a8"
+                        ),
+                        "root_id": sydney_root_id,
+                        "payload_hash": "1" * 64,
+                        "fingerprint": "2" * 64,
+                    },
+                )
+                assert valid_sydney_id is not None
+    finally:
+        engine.dispose()
+
+
+def test_task_intake_evidence_rows_are_append_only_on_real_postgresql() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083c1")
+            receipt_id = UUID("00000000-0000-4000-8000-0000000083c2")
+            attempt_id = UUID("00000000-0000-4000-8000-0000000083c3")
+            suggestion_id = UUID("00000000-0000-4000-8000-0000000083c4")
+            obligation_id = UUID("00000000-0000-4000-8000-0000000083c5")
+            source_id = UUID("00000000-0000-4000-8000-0000000083c6")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'append-only@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification, body_hash) VALUES "
+                        "(:id, :account_id, 'append-only-message', "
+                        "'append-only-thread', 'received', CURRENT_TIMESTAMP, "
+                        "'processed', 'eligible', :body_hash)"
+                    ),
+                    {
+                        "id": receipt_id,
+                        "account_id": account_id,
+                        "body_hash": "a" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES "
+                        "(:id, :receipt_id, 'gmail-task-v1', 1, 'succeeded', "
+                        "CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": attempt_id, "receipt_id": receipt_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "VALUES (:id, :account_id, 'append-only-thread', "
+                        "'gmail_message', :scope, 'append-only-action', "
+                        "'Append-only suggestion', :payload_hash, "
+                        "'gmail-task-v1', :fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "id": suggestion_id,
+                        "account_id": account_id,
+                        "scope": f"gmail:{account_id}:append-only-thread",
+                        "payload_hash": "b" * 64,
+                        "fingerprint": "c" * 64,
+                        "instance_digest": "d" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(id, receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, obligation_fingerprint, "
+                        "taxonomy_fallback, "
+                        "identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) "
+                        "VALUES (:id, :receipt_id, :attempt_id, "
+                        "'append-only-action', 'gmail-task-v1', "
+                        "'Append-only obligation', :fingerprint, false, "
+                        ":instance_digest, :material_hash, :suggestion_id)"
+                    ),
+                    {
+                        "id": obligation_id,
+                        "receipt_id": receipt_id,
+                        "attempt_id": attempt_id,
+                        "fingerprint": "c" * 64,
+                        "instance_digest": "d" * 64,
+                        "material_hash": "e" * 64,
+                        "suggestion_id": suggestion_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_sources "
+                        "(id, suggestion_id, obligation_id, receipt_id, "
+                        "gmail_account_id, gmail_thread_id, direction, "
+                        "source_label) VALUES (:id, :suggestion_id, "
+                        ":obligation_id, :receipt_id, :account_id, "
+                        "'append-only-thread', 'received', 'gmail:received:test')"
+                    ),
+                    {
+                        "id": source_id,
+                        "suggestion_id": suggestion_id,
+                        "obligation_id": obligation_id,
+                        "receipt_id": receipt_id,
+                        "account_id": account_id,
+                    },
+                )
+
+            for mutation in (
+                "UPDATE gmail_extracted_obligations SET title = "
+                "'Rewritten' WHERE id = :id",
+                "UPDATE gmail_extracted_obligations SET "
+                "reconciliation_material_hash = repeat('f', 64) "
+                "WHERE id = :id",
+                "DELETE FROM gmail_extracted_obligations WHERE id = :id",
+            ):
+                with pytest.raises(sa.exc.DBAPIError) as raised:
+                    with engine.begin() as connection:
+                        connection.execute(sa.text(mutation), {"id": obligation_id})
+                assert "gmail_task_intake_evidence_append_only" in str(
+                    raised.value.orig
+                )
+            for mutation in (
+                "UPDATE crm_task_suggestion_sources SET source_label = "
+                "'rewritten' WHERE id = :id",
+                "DELETE FROM crm_task_suggestion_sources WHERE id = :id",
+            ):
+                with pytest.raises(sa.exc.DBAPIError) as raised:
+                    with engine.begin() as connection:
+                        connection.execute(sa.text(mutation), {"id": source_id})
+                assert "gmail_task_intake_evidence_append_only" in str(
+                    raised.value.orig
+                )
+    finally:
+        engine.dispose()
+
+
+def test_suggestion_source_must_match_obligation_disposition_on_postgresql() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083f1")
+            receipt_id = UUID("00000000-0000-4000-8000-0000000083f2")
+            attempt_id = UUID("00000000-0000-4000-8000-0000000083f3")
+            suggestion_a = UUID("00000000-0000-4000-8000-0000000083f4")
+            suggestion_b = UUID("00000000-0000-4000-8000-0000000083f5")
+            obligation_id = UUID("00000000-0000-4000-8000-0000000083f6")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'source-disposition@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) VALUES (:id, :account_id, "
+                        "'source-disposition-message', "
+                        "'source-disposition-thread', 'received', "
+                        "CURRENT_TIMESTAMP, 'processed', 'eligible')"
+                    ),
+                    {"id": receipt_id, "account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES (:id, :receipt_id, "
+                        "'gmail-task-v1', 1, 'succeeded', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": attempt_id, "receipt_id": receipt_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "VALUES (:suggestion_a, :account_id, :thread_id, "
+                        "'gmail_message', :scope, 'source-disposition-a', "
+                        "'Suggestion A', :payload_a, 'gmail-task-v1', "
+                        ":fingerprint, :instance_digest), "
+                        "(:suggestion_b, :account_id, :thread_id, "
+                        "'gmail_message', :scope, 'source-disposition-b', "
+                        "'Suggestion B', :payload_b, 'gmail-task-v1', "
+                        ":fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "suggestion_a": suggestion_a,
+                        "suggestion_b": suggestion_b,
+                        "account_id": account_id,
+                        "thread_id": "source-disposition-thread",
+                        "scope": f"gmail:{account_id}:source-disposition-thread",
+                        "payload_a": "a" * 64,
+                        "payload_b": "b" * 64,
+                        "fingerprint": "c" * 64,
+                        "instance_digest": "d" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(id, receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, obligation_fingerprint, "
+                        "taxonomy_fallback, "
+                        "identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) VALUES (:id, :receipt_id, "
+                        ":attempt_id, 'source-disposition-action', "
+                        "'gmail-task-v1', 'Source disposition obligation', "
+                        ":fingerprint, false, :instance_digest, :material_hash, "
+                        ":suggestion_id)"
+                    ),
+                    {
+                        "id": obligation_id,
+                        "receipt_id": receipt_id,
+                        "attempt_id": attempt_id,
+                        "fingerprint": "c" * 64,
+                        "instance_digest": "d" * 64,
+                        "material_hash": "e" * 64,
+                        "suggestion_id": suggestion_a,
+                    },
+                )
+
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO crm_task_suggestion_sources "
+                            "(suggestion_id, obligation_id, receipt_id, "
+                            "gmail_account_id, gmail_thread_id, direction, "
+                            "source_label) VALUES (:suggestion_id, "
+                            ":obligation_id, :receipt_id, :account_id, "
+                            "'source-disposition-thread', 'received', "
+                            "'Cross-wired same-scope source')"
+                        ),
+                        {
+                            "suggestion_id": suggestion_b,
+                            "obligation_id": obligation_id,
+                            "receipt_id": receipt_id,
+                            "account_id": account_id,
+                        },
+                    )
+
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_sources "
+                        "(suggestion_id, obligation_id, receipt_id, "
+                        "gmail_account_id, gmail_thread_id, direction, "
+                        "source_label) VALUES (:suggestion_id, :obligation_id, "
+                        ":receipt_id, :account_id, "
+                        "'source-disposition-thread', 'received', "
+                        "'Correctly bound source')"
+                    ),
+                    {
+                        "suggestion_id": suggestion_a,
+                        "obligation_id": obligation_id,
+                        "receipt_id": receipt_id,
+                        "account_id": account_id,
+                    },
+                )
+                assert connection.scalar(
+                    sa.text(
+                        "SELECT suggestion_id FROM crm_task_suggestion_sources "
+                        "WHERE obligation_id = :obligation_id"
+                    ),
+                    {"obligation_id": obligation_id},
+                ) == suggestion_a
+    finally:
+        engine.dispose()
+
+
+def test_suppression_identity_is_immutable_but_redismissal_fields_remain_mutable() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            suppression_id = UUID("00000000-0000-4000-8000-0000000083e1")
+            with engine.begin() as connection:
+                admin_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO admin_users (email, hashed_password) "
+                        "VALUES ('immutable-suppression@example.test', "
+                        "'test-only') RETURNING id"
+                    )
+                )
+                audit_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO agent_action_audits "
+                        "(actor, action_id, method, path, status_code, allowed, "
+                        "request_meta, response_meta) VALUES "
+                        "('admin', 'suggestion.dismiss', 'POST', '/test', 200, "
+                        "true, '{}', '{}') RETURNING id"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_suppressions "
+                        "(id, source_type, source_scope_key, source_action_key, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "dismissal_reason, dismissed_by_admin_id, "
+                        "dismissal_audit_id) VALUES (:id, 'gmail_message', "
+                        "'gmail:immutable:thread', 'action-v1:immutable', "
+                        ":fingerprint, :instance_digest, 'Handled', :admin_id, "
+                        ":audit_id)"
+                    ),
+                    {
+                        "id": suppression_id,
+                        "fingerprint": "a" * 64,
+                        "instance_digest": "b" * 64,
+                        "admin_id": admin_id,
+                        "audit_id": audit_id,
+                    },
+                )
+
+            for mutation in (
+                "UPDATE crm_task_suggestion_suppressions SET "
+                "identity_instance_digest = :replacement WHERE id = :id",
+                "UPDATE crm_task_suggestion_suppressions SET "
+                "source_action_key = 'action-v1:rewritten' WHERE id = :id",
+                "DELETE FROM crm_task_suggestion_suppressions WHERE id = :id",
+            ):
+                with pytest.raises(sa.exc.DBAPIError) as raised:
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(mutation),
+                            {
+                                "id": suppression_id,
+                                "replacement": "c" * 64,
+                            },
+                        )
+                assert "gmail_task_intake_suppression_identity_immutable" in str(
+                    raised.value.orig
+                )
+
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE crm_task_suggestion_suppressions SET "
+                        "dismissal_reason = 'Dismissed again under audited "
+                        "authority' WHERE id = :id"
+                    ),
+                    {"id": suppression_id},
+                )
+                assert connection.scalar(
+                    sa.text(
+                        "SELECT dismissal_reason FROM "
+                        "crm_task_suggestion_suppressions WHERE id = :id"
+                    ),
+                    {"id": suppression_id},
+                ) == "Dismissed again under audited authority"
+    finally:
+        engine.dispose()
+
+
+def test_instance_digest_and_disposition_shapes_fail_closed_on_postgresql() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083d1")
+            receipt_id = UUID("00000000-0000-4000-8000-0000000083d2")
+            attempt_id = UUID("00000000-0000-4000-8000-0000000083d3")
+            suggestion_id = UUID("00000000-0000-4000-8000-0000000083d4")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'instance-shape@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) VALUES (:id, :account_id, "
+                        "'instance-shape-message', 'instance-shape-thread', "
+                        "'received', CURRENT_TIMESTAMP, 'processed', 'eligible')"
+                    ),
+                    {"id": receipt_id, "account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES (:id, :receipt_id, "
+                        "'gmail-task-v1', 1, 'succeeded', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": attempt_id, "receipt_id": receipt_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "VALUES (:id, :account_id, 'instance-shape-thread', "
+                        "'gmail_message', :scope, 'instance-shape-action', "
+                        "'Instance shape', :payload_hash, 'gmail-task-v1', "
+                        ":fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "id": suggestion_id,
+                        "account_id": account_id,
+                        "scope": f"gmail:{account_id}:instance-shape-thread",
+                        "payload_hash": "a" * 64,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                    },
+                )
+                admin_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO admin_users (email, hashed_password) "
+                        "VALUES ('instance-admin@example.test', 'test-only') "
+                        "RETURNING id"
+                    )
+                )
+                audit_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO agent_action_audits "
+                        "(actor, action_id, method, path, status_code, allowed, "
+                        "request_meta, response_meta) VALUES "
+                        "('admin', 'suggestion.dismiss', 'POST', '/test', 200, "
+                        "true, '{}', '{}') RETURNING id"
+                    )
+                )
+                suppression_id = connection.scalar(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestion_suppressions "
+                        "(source_type, source_scope_key, source_action_key, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "dismissal_reason, dismissed_by_admin_id, "
+                        "dismissal_audit_id) VALUES ('gmail_message', :scope, "
+                        "'instance-shape-action', :fingerprint, "
+                        ":instance_digest, 'Handled', :admin_id, :audit_id) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "scope": f"gmail:{account_id}:instance-shape-thread",
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                        "admin_id": admin_id,
+                        "audit_id": audit_id,
+                    },
+                )
+
+            invalid_suggestions = (None, "C" * 64, "c" * 63)
+            for index, digest in enumerate(invalid_suggestions, start=1):
+                with pytest.raises(sa.exc.IntegrityError):
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(
+                                "INSERT INTO crm_task_suggestions "
+                                "(gmail_account_id, gmail_thread_id, source_type, "
+                                "source_scope_key, source_action_key, title, "
+                                "payload_hash, model_schema_version, "
+                                "obligation_fingerprint, "
+                                "primary_instance_digest) VALUES "
+                                "(:account_id, 'instance-shape-thread', "
+                                "'gmail_message', :scope, :action, :title, "
+                                ":payload_hash, 'gmail-task-v1', :fingerprint, "
+                                ":instance_digest)"
+                            ),
+                            {
+                                "account_id": account_id,
+                                "scope": f"gmail:{account_id}:instance-shape-thread",
+                                "action": f"invalid-suggestion-{index}",
+                                "title": f"Invalid suggestion {index}",
+                                "payload_hash": f"{index}" * 64,
+                                "fingerprint": "d" * 64,
+                                "instance_digest": digest,
+                            },
+                        )
+
+            invalid_obligations = (
+                ("c" * 64, "d" * 64, None, None),
+                ("c" * 64, "d" * 64, suggestion_id, suppression_id),
+                ("C" * 64, "d" * 64, suggestion_id, None),
+                ("c" * 64, "D" * 64, suggestion_id, None),
+            )
+            for index, (
+                digest,
+                material_hash,
+                reconciled_suggestion_id,
+                reconciled_suppression_id,
+            ) in enumerate(invalid_obligations, start=1):
+                with pytest.raises(sa.exc.IntegrityError):
+                    with engine.begin() as connection:
+                        connection.execute(
+                            sa.text(
+                                "INSERT INTO gmail_extracted_obligations "
+                                "(receipt_id, extraction_attempt_id, action_key, "
+                                "schema_version, title, obligation_fingerprint, "
+                                "taxonomy_fallback, "
+                                "identity_instance_digest, "
+                                "reconciliation_material_hash, "
+                                "reconciled_suggestion_id, "
+                                "reconciled_suppression_id) VALUES "
+                                "(:receipt_id, :attempt_id, :action, "
+                                "'gmail-task-v1', :title, :fingerprint, "
+                                "false, :instance_digest, :material_hash, "
+                                ":suggestion_id, "
+                                ":suppression_id)"
+                            ),
+                            {
+                                "receipt_id": receipt_id,
+                                "attempt_id": attempt_id,
+                                "action": f"invalid-obligation-{index}",
+                                "title": f"Invalid obligation {index}",
+                                "fingerprint": "e" * 64,
+                                "instance_digest": digest,
+                                "material_hash": material_hash,
+                                "suggestion_id": reconciled_suggestion_id,
+                                "suppression_id": reconciled_suppression_id,
+                            },
+                        )
+    finally:
+        engine.dispose()
+
+
+def test_gmail_thread_candidate_limit_uses_generic_plan_safe_ordered_index() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083b1")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'candidate-index@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest, created_at) "
+                        "SELECT gen_random_uuid(), :account_id, 'thread-indexed', "
+                        "'gmail_message', 'gmail:candidate-index:thread-indexed', "
+                        "'action-' || value::text, 'Candidate ' || value::text, "
+                        "md5(value::text) || md5(value::text), 'gmail-task-v1', "
+                        "md5((value + 1000)::text) || md5((value + 1000)::text), "
+                        "repeat('f', 64), "
+                        "TIMESTAMPTZ '2026-08-21T00:00:00Z' + "
+                        "value * INTERVAL '1 second' FROM generate_series(1, 256) "
+                        "AS value"
+                    ),
+                    {"account_id": account_id},
+                )
+                connection.execute(sa.text("ANALYZE crm_task_suggestions"))
+                connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
+                connection.execute(
+                    sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_thread_candidates "
+                        "(text, uuid, text, integer) AS SELECT id FROM "
+                        "crm_task_suggestions WHERE source_type = $1 AND "
+                        "gmail_account_id = $2 AND gmail_thread_id = $3 "
+                        "ORDER BY created_at, id LIMIT $4 FOR UPDATE"
+                    )
+                )
+                plan_rows = connection.execute(
+                    sa.text(
+                        "EXPLAIN (COSTS OFF) EXECUTE gmail_thread_candidates "
+                        "('gmail_message', "
+                        "'00000000-0000-4000-8000-0000000083b1', "
+                        "'thread-indexed', 11)"
+                    )
+                ).all()
+                connection.execute(
+                    sa.text("DEALLOCATE gmail_thread_candidates")
+                )
+            plan = "\n".join(str(row[0]) for row in plan_rows)
+            assert "ix_crm_task_suggestions_gmail_thread_order" in plan
+            assert "Sort" not in plan
+    finally:
+        engine.dispose()
+
+
+def test_instance_material_membership_uses_bounded_generic_index_probe() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083e1")
+            receipt_id = UUID("00000000-0000-4000-8000-0000000083e2")
+            attempt_id = UUID("00000000-0000-4000-8000-0000000083e3")
+            suggestion_id = UUID("00000000-0000-4000-8000-0000000083e4")
+            instance_digest = "c" * 64
+            material_hash = "d" * 64
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'membership-index@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) VALUES (:id, :account_id, "
+                        "'membership-index-message', 'membership-index-thread', "
+                        "'received', CURRENT_TIMESTAMP, 'processed', 'eligible')"
+                    ),
+                    {"id": receipt_id, "account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES (:id, :receipt_id, "
+                        "'gmail-task-v1', 1, 'succeeded', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": attempt_id, "receipt_id": receipt_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES (:id, :account_id, "
+                        "'membership-index-thread', 'gmail_message', :scope, "
+                        "'membership-index-action', 'Membership index', "
+                        ":payload_hash, 'gmail-task-v1', :fingerprint, "
+                        ":instance_digest)"
+                    ),
+                    {
+                        "id": suggestion_id,
+                        "account_id": account_id,
+                        "scope": f"gmail:{account_id}:membership-index-thread",
+                        "payload_hash": "a" * 64,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": instance_digest,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "SELECT :account_id, 'membership-unrelated-' || "
+                        "value::text, 'gmail_message', "
+                        "'gmail:membership-unrelated:' || value::text, "
+                        "'membership-unrelated-' || value::text, "
+                        "'Membership unrelated ' || value::text, "
+                        "md5(value::text) || md5(value::text), "
+                        "'gmail-task-v1', md5((value + 2048)::text) || "
+                        "md5((value + 2048)::text), repeat('e', 64) "
+                        "FROM generate_series(1, 2048) AS value"
+                    ),
+                    {"account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, obligation_fingerprint, "
+                        "taxonomy_fallback, "
+                        "identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) SELECT :receipt_id, "
+                        ":attempt_id, 'membership-' || value::text, "
+                        "'gmail-task-v1', 'Membership ' || value::text, "
+                        ":fingerprint, false, CASE WHEN value = 1 THEN "
+                        ":instance_digest ELSE md5(value::text) || "
+                        "md5(value::text) END, CASE WHEN value = 1 THEN "
+                        ":material_hash ELSE md5((value + 1000)::text) || "
+                        "md5((value + 1000)::text) END, "
+                        ":suggestion_id FROM generate_series(1, 256) AS value"
+                    ),
+                    {
+                        "receipt_id": receipt_id,
+                        "attempt_id": attempt_id,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": instance_digest,
+                        "material_hash": material_hash,
+                        "suggestion_id": suggestion_id,
+                    },
+                )
+                connection.execute(
+                    sa.text("ANALYZE gmail_extracted_obligations")
+                )
+                connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
+                connection.execute(
+                    sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_instance_material_membership "
+                        "(uuid, varchar, varchar) AS SELECT EXISTS "
+                        "(SELECT id FROM gmail_extracted_obligations WHERE "
+                        "reconciled_suggestion_id = $1 AND "
+                        "identity_instance_digest = $2 AND "
+                        "reconciliation_material_hash = $3 LIMIT 1)"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_instance_candidate_membership "
+                        "(uuid[], varchar) AS SELECT "
+                        "candidate_ids.suggestion_id FROM unnest($1) AS "
+                        "candidate_ids(suggestion_id) WHERE EXISTS "
+                        "(SELECT id FROM gmail_extracted_obligations WHERE "
+                        "reconciled_suggestion_id = "
+                        "candidate_ids.suggestion_id AND "
+                        "identity_instance_digest = $2)"
+                    )
+                )
+                plan_rows = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_instance_material_membership "
+                        "('00000000-0000-4000-8000-0000000083e4', "
+                        ":instance_digest, :material_hash)"
+                    ),
+                    {
+                        "instance_digest": instance_digest,
+                        "material_hash": material_hash,
+                    },
+                ).all()
+                candidate_plan_rows = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_instance_candidate_membership "
+                        "(ARRAY['00000000-0000-4000-8000-0000000083e4'::uuid], "
+                        ":instance_digest)"
+                    ),
+                    {"instance_digest": instance_digest},
+                ).all()
+                connection.execute(
+                    sa.text("DEALLOCATE gmail_instance_material_membership")
+                )
+                connection.execute(
+                    sa.text("DEALLOCATE gmail_instance_candidate_membership")
+                )
+            plan = "\n".join(str(row[0]) for row in plan_rows)
+            assert (
+                "ix_gmail_extracted_obligations_suggestion_instance" in plan
+            )
+            assert "Seq Scan on gmail_extracted_obligations" not in plan
+            index_lines = [
+                line
+                for line in plan.splitlines()
+                if "ix_gmail_extracted_obligations_suggestion_instance" in line
+            ]
+            assert len(index_lines) == 1
+            assert "rows=1 loops=1" in index_lines[0]
+            candidate_plan = "\n".join(
+                str(row[0]) for row in candidate_plan_rows
+            )
+            assert (
+                "ix_gmail_extracted_obligations_suggestion_instance"
+                in candidate_plan
+            )
+            assert "Seq Scan on gmail_extracted_obligations" not in (
+                candidate_plan
+            )
+            assert "Seq Scan on crm_task_suggestions" not in candidate_plan
+            assert "Function Scan on unnest candidate_ids" in candidate_plan
+            candidate_index_line = next(
+                line
+                for line in candidate_plan.splitlines()
+                if "ix_gmail_extracted_obligations_suggestion_instance" in line
+            )
+            assert "rows=1 loops=1" in candidate_index_line
+    finally:
+        engine.dispose()
+
+
+def test_obligation_authority_queries_use_bounded_generic_index_probes() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-0000000083f1")
+            receipt_id = UUID("00000000-0000-4000-8000-0000000083f2")
+            attempt_id = UUID("00000000-0000-4000-8000-0000000083f3")
+            suggestion_id = UUID("00000000-0000-4000-8000-0000000083f4")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'authority-index@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) VALUES (:id, :account_id, "
+                        "'authority-index-message', 'authority-index-thread', "
+                        "'received', CURRENT_TIMESTAMP, 'processed', 'eligible')"
+                    ),
+                    {"id": receipt_id, "account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES (:id, :receipt_id, "
+                        "'gmail-task-v1', 1, 'succeeded', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": attempt_id, "receipt_id": receipt_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES (:id, :account_id, "
+                        "'authority-index-thread', 'gmail_message', :scope, "
+                        "'authority-index-action', 'Authority index', "
+                        ":payload_hash, 'gmail-task-v1', :fingerprint, "
+                        ":instance_digest)"
+                    ),
+                    {
+                        "id": suggestion_id,
+                        "account_id": account_id,
+                        "scope": f"gmail:{account_id}:authority-index-thread",
+                        "payload_hash": "a" * 64,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, "
+                        "payload_hash, model_schema_version, "
+                        "obligation_fingerprint, primary_instance_digest) "
+                        "SELECT :account_id, 'unrelated-' || value::text, "
+                        "'gmail_message', 'gmail:unrelated:' || value::text, "
+                        "'unrelated-' || value::text, "
+                        "'Unrelated ' || value::text, "
+                        "md5(value::text) || md5(value::text), "
+                        "'gmail-task-v1', md5((value + 4096)::text) || "
+                        "md5((value + 4096)::text), repeat('e', 64) "
+                        "FROM generate_series(1, 2048) AS value"
+                    ),
+                    {"account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, contact_hint, "
+                        "taxonomy_fallback, obligation_fingerprint, "
+                        "identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) SELECT :receipt_id, "
+                        ":attempt_id, 'authority-' || value::text, "
+                        "'gmail-task-v1', 'Authority ' || value::text, "
+                        "'client-' || lpad(value::text, 4, '0') || "
+                        "'@example.test', value = 2048, :fingerprint, "
+                        ":instance_digest, :material_hash, :suggestion_id "
+                        "FROM generate_series(1, 2048) AS value"
+                    ),
+                    {
+                        "receipt_id": receipt_id,
+                        "attempt_id": attempt_id,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                        "material_hash": "d" * 64,
+                        "suggestion_id": suggestion_id,
+                    },
+                )
+                connection.execute(
+                    sa.text("ANALYZE gmail_extracted_obligations")
+                )
+                connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
+                connection.execute(
+                    sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_taxonomy_fallback_authority "
+                        "(uuid[]) AS SELECT "
+                        "candidate_ids.suggestion_id FROM unnest($1) AS "
+                        "candidate_ids(suggestion_id) WHERE EXISTS "
+                        "(SELECT id FROM gmail_extracted_obligations WHERE "
+                        "reconciled_suggestion_id = "
+                        "candidate_ids.suggestion_id AND "
+                        "taxonomy_fallback IS TRUE)"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_contact_hint_first (uuid) AS SELECT "
+                        "contact_hint FROM gmail_extracted_obligations WHERE "
+                        "reconciled_suggestion_id = $1 AND "
+                        "contact_hint IS NOT NULL ORDER BY contact_hint ASC, "
+                        "id ASC LIMIT 1"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_contact_hint_last (uuid) AS SELECT "
+                        "contact_hint FROM gmail_extracted_obligations WHERE "
+                        "reconciled_suggestion_id = $1 AND "
+                        "contact_hint IS NOT NULL ORDER BY contact_hint DESC, "
+                        "id DESC LIMIT 1"
+                    )
+                )
+                taxonomy_plan = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_taxonomy_fallback_authority "
+                        "(ARRAY['00000000-0000-4000-8000-0000000083f4'::uuid])"
+                    )
+                ).all()
+                first_plan = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_contact_hint_first "
+                        "('00000000-0000-4000-8000-0000000083f4')"
+                    )
+                ).all()
+                last_plan = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_contact_hint_last "
+                        "('00000000-0000-4000-8000-0000000083f4')"
+                    )
+                ).all()
+                for prepared in (
+                    "gmail_taxonomy_fallback_authority",
+                    "gmail_contact_hint_first",
+                    "gmail_contact_hint_last",
+                ):
+                    connection.execute(sa.text(f"DEALLOCATE {prepared}"))
+
+            plans = (
+                (
+                    "\n".join(str(row[0]) for row in taxonomy_plan),
+                    "ix_gmail_extracted_obligations_suggestion_taxonomy",
+                ),
+                (
+                    "\n".join(str(row[0]) for row in first_plan),
+                    "ix_gmail_extracted_obligations_suggestion_contact_hint",
+                ),
+                (
+                    "\n".join(str(row[0]) for row in last_plan),
+                    "ix_gmail_extracted_obligations_suggestion_contact_hint",
+                ),
+            )
+            for plan, index_name in plans:
+                assert index_name in plan
+                assert "Seq Scan on gmail_extracted_obligations" not in plan
+                assert "Seq Scan on crm_task_suggestions" not in plan
+                index_lines = [
+                    line for line in plan.splitlines() if index_name in line
+                ]
+                assert len(index_lines) == 1
+                assert "rows=1 loops=1" in index_lines[0]
+            assert "Function Scan on unnest candidate_ids" in plans[0][0]
+            assert "rows=1 loops=1" in next(
+                line
+                for line in plans[0][0].splitlines()
+                if "Function Scan on unnest candidate_ids" in line
+            )
+    finally:
+        engine.dispose()
+
+
+def test_succeeded_attempt_replay_uses_bounded_ordered_index() -> None:
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            account_id = UUID("00000000-0000-4000-8000-000000008401")
+            target_receipt_id = UUID("00000000-0000-4000-8000-000000008403")
+            target_attempt_id = UUID("00000000-0000-4000-8000-000000008405")
+            suggestion_id = UUID("00000000-0000-4000-8000-000000008406")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_sync_accounts (id, workspace_email) "
+                        "VALUES (:id, 'attempt-replay-index@example.test')"
+                    ),
+                    {"id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) VALUES (:target_id, :account_id, "
+                        "'replay-target-message', "
+                        "'replay-index-thread', 'received', CURRENT_TIMESTAMP, "
+                        "'processed', 'eligible')"
+                    ),
+                    {
+                        "target_id": target_receipt_id,
+                        "account_id": account_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_message_receipts "
+                        "(id, account_id, gmail_message_id, gmail_thread_id, "
+                        "direction, message_at, processing_state, "
+                        "classification) SELECT "
+                        "md5('replay-receipt-' || value::text)::uuid, "
+                        ":account_id, 'replay-unrelated-message-' || "
+                        "value::text, 'replay-unrelated-thread-' || value::text, "
+                        "'received', CURRENT_TIMESTAMP, 'processed', 'eligible' "
+                        "FROM generate_series(1, 2048) AS value"
+                    ),
+                    {"account_id": account_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) VALUES (:target_id, "
+                        ":target_receipt_id, 'gmail-task-v1', 1, "
+                        "'succeeded', CURRENT_TIMESTAMP)"
+                    ),
+                    {
+                        "target_id": target_attempt_id,
+                        "target_receipt_id": target_receipt_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extraction_attempts "
+                        "(id, receipt_id, schema_version, attempt_number, "
+                        "state, completed_at) SELECT "
+                        "md5('replay-attempt-' || value::text)::uuid, "
+                        "md5('replay-receipt-' || value::text)::uuid, "
+                        "'gmail-task-v1', 1, 'succeeded', CURRENT_TIMESTAMP "
+                        "FROM generate_series(1, 2048) AS value"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO crm_task_suggestions "
+                        "(id, gmail_account_id, gmail_thread_id, source_type, "
+                        "source_scope_key, source_action_key, title, payload_hash, "
+                        "model_schema_version, obligation_fingerprint, "
+                        "primary_instance_digest) VALUES (:id, :account_id, "
+                        "'replay-index-thread', 'gmail_message', :scope, "
+                        "'replay-index-action', 'Replay index', :payload_hash, "
+                        "'gmail-task-v1', :fingerprint, :instance_digest)"
+                    ),
+                    {
+                        "id": suggestion_id,
+                        "account_id": account_id,
+                        "scope": f"gmail:{account_id}:replay-index-thread",
+                        "payload_hash": "a" * 64,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, taxonomy_fallback, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) SELECT "
+                        "md5('replay-receipt-' || value::text)::uuid, "
+                        "md5('replay-attempt-' || value::text)::uuid, "
+                        "'unrelated', 'gmail-task-v1', 'Replay unrelated ' || "
+                        "value::text, false, :fingerprint, :instance_digest, "
+                        ":material_hash, :suggestion_id "
+                        "FROM generate_series(1, 2048) AS value"
+                    ),
+                    {
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                        "material_hash": "d" * 64,
+                        "suggestion_id": suggestion_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO gmail_extracted_obligations "
+                        "(receipt_id, extraction_attempt_id, action_key, "
+                        "schema_version, title, taxonomy_fallback, "
+                        "obligation_fingerprint, identity_instance_digest, "
+                        "reconciliation_material_hash, "
+                        "reconciled_suggestion_id) SELECT :receipt_id, "
+                        ":attempt_id, 'target-' || value::text, "
+                        "'gmail-task-v1', 'Replay target ' || value::text, "
+                        "false, :fingerprint, :instance_digest, :material_hash, "
+                        ":suggestion_id FROM generate_series(1, 20) AS value"
+                    ),
+                    {
+                        "receipt_id": target_receipt_id,
+                        "attempt_id": target_attempt_id,
+                        "fingerprint": "b" * 64,
+                        "instance_digest": "c" * 64,
+                        "material_hash": "d" * 64,
+                        "suggestion_id": suggestion_id,
+                    },
+                )
+                connection.execute(
+                    sa.text("ANALYZE gmail_extracted_obligations")
+                )
+                connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
+                connection.execute(
+                    sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
+                )
+                connection.execute(
+                    sa.text(
+                        "PREPARE gmail_succeeded_attempt_replay (uuid) AS "
+                        "SELECT id FROM gmail_extracted_obligations WHERE "
+                        "extraction_attempt_id = $1 ORDER BY created_at, id"
+                    )
+                )
+                plan_rows = connection.execute(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, COSTS OFF) EXECUTE "
+                        "gmail_succeeded_attempt_replay "
+                        "('00000000-0000-4000-8000-000000008405')"
+                    )
+                ).all()
+                connection.execute(
+                    sa.text("DEALLOCATE gmail_succeeded_attempt_replay")
+                )
+            plan = "\n".join(str(row[0]) for row in plan_rows)
+            assert "ix_gmail_extracted_obligations_attempt_replay" in plan
+            assert "Seq Scan on gmail_extracted_obligations" not in plan
+            assert "Sort" not in plan
+            index_line = next(
+                line
+                for line in plan.splitlines()
+                if "ix_gmail_extracted_obligations_attempt_replay" in line
+            )
+            assert "rows=20 loops=1" in index_line
     finally:
         engine.dispose()
 
@@ -3645,7 +5560,7 @@ def test_missing_message_ack_shape_fails_closed_on_real_postgresql() -> None:
         engine.dispose()
 
 
-def test_task2_is_included_once_before_task3_in_the_dedicated_workflow() -> None:
+def test_task2_is_included_once_before_task4_in_the_dedicated_workflow() -> None:
     workflow = (
         _backend_root().parent
         / ".github"
@@ -3654,7 +5569,7 @@ def test_task2_is_included_once_before_task3_in_the_dedicated_workflow() -> None
     ).read_text(encoding="utf-8")
     assert workflow.count("tests/test_gmail_task_intake_migration.py") == 1
     step_name = (
-        "name: Run the Task 1 through Task 3 persistence and compatibility "
+        "name: Run the Task 1 through Task 4 persistence and compatibility "
         "contracts"
     )
     assert step_name in workflow
@@ -3663,4 +5578,10 @@ def test_task2_is_included_once_before_task3_in_the_dedicated_workflow() -> None
     )[1].split("- name:", 1)[0]
     assert command.index("tests/test_gmail_task_intake_migration.py") < command.index(
         "tests/test_gmail_history_adapter.py"
+    )
+    assert command.index("tests/test_gmail_history_adapter.py") < command.index(
+        "tests/test_gmail_task_extractor.py"
+    )
+    assert command.index("tests/test_gmail_task_extractor.py") < command.index(
+        "tests/test_crm_task_suggestions.py"
     )

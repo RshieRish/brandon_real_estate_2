@@ -542,7 +542,7 @@ def sanitize_gmail_message(
     headers = _normalized_headers(content.headers)
     senders = _header_addresses(headers, ("from",))
     recipients = _header_addresses(headers, ("to", "cc", "bcc"))
-    sender = senders[0] if senders else None
+    sender = senders[0] if len(senders) == 1 else None
 
     normalized_labels = tuple(
         dict.fromkeys(

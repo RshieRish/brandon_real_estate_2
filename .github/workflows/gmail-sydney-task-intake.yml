@@ -29,6 +29,8 @@ on:
       - "backend/tests/test_gmail_history_cursor_recovery.py"
       - "backend/tests/test_gmail_history_service.py"
       - "backend/tests/test_gmail_message_processing.py"
+      - "backend/tests/test_gmail_task_extractor.py"
+      - "backend/tests/test_crm_task_suggestions.py"
       - "backend/tests/test_hermes_overlay.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
@@ -80,6 +82,8 @@ on:
       - "backend/tests/test_gmail_history_cursor_recovery.py"
       - "backend/tests/test_gmail_history_service.py"
       - "backend/tests/test_gmail_message_processing.py"
+      - "backend/tests/test_gmail_task_extractor.py"
+      - "backend/tests/test_crm_task_suggestions.py"
       - "backend/tests/test_hermes_overlay.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
@@ -257,7 +261,7 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the Task 1 through Task 3 persistence and compatibility contracts
+      - name: Run the Task 1 through Task 4 persistence and compatibility contracts
         working-directory: backend
         run: |
           python -m pytest -q \
@@ -277,7 +281,9 @@ jobs:
             tests/test_atlas_backend_mcp.py \
             tests/test_agent_control_workspace_actions.py \
             tests/test_agent_control_router.py \
-            tests/test_workspace_actions.py
+            tests/test_workspace_actions.py \
+            tests/test_gmail_task_extractor.py \
+            tests/test_crm_task_suggestions.py
 
       - name: Remove the exact disposable fixtures
         if: always()

@@ -639,6 +639,65 @@ async def test_adapter_to_sanitizer_preserves_plain_angles_and_strips_html_once(
     assert sanitized.transient_body_text == expected
 
 
+async def test_adapter_to_sanitizer_does_not_choose_one_of_multiple_from_addresses(
+) -> None:
+    from services.gmail_history_adapter import GmailHistoryAdapter
+    from services.gmail_message_sanitizer import sanitize_gmail_message
+    from services.integration_health_service import BoundedProviderExecutor
+
+    body = "Please schedule the inspection."
+    encoded = base64.urlsafe_b64encode(body.encode()).decode().rstrip("=")
+    responses = _responses()
+    responses["message_full"] = _Response(
+        {
+            "id": "multiple-from-message",
+            "threadId": "multiple-from-thread",
+            "labelIds": ["INBOX"],
+            "internalDate": "1787328000000",
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "Subject", "value": "Inspection request"},
+                    {
+                        "name": "From",
+                        "value": (
+                            "Alice <alice@example.test>, "
+                            "Bob <bob@example.test>"
+                        ),
+                    },
+                    {"name": "To", "value": "brandon@example.test"},
+                ],
+                "body": {"data": encoded},
+            },
+        }
+    )
+    executor = BoundedProviderExecutor(max_workers=1)
+    adapter = GmailHistoryAdapter(
+        executor=executor,
+        service_factory=lambda: _Gmail(responses),
+        deadline_seconds=1,
+        socket_timeout_seconds=0.25,
+    )
+    try:
+        content = await adapter.get_message_content(
+            account_key="multiple-from-account",
+            message_id="multiple-from-message",
+        )
+    finally:
+        await executor.wait_for_tracked_calls()
+        executor.shutdown()
+
+    sanitized = sanitize_gmail_message(
+        content,
+        mailbox_email="brandon@example.test",
+        participant_hash_key=b"0123456789abcdef0123456789abcdef",
+    )
+
+    assert sanitized.sender_hmac is None
+    assert "alice@example.test" not in repr(sanitized)
+    assert "bob@example.test" not in repr(sanitized)
+
+
 @pytest.mark.parametrize(
     "invalid_history_id",
     [
