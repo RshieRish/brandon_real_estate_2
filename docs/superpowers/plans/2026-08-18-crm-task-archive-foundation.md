@@ -1022,10 +1022,11 @@ Actual outcome: commit `0a124a3` added the authoritative ten-field contact lifec
 
 - Create: `frontend/e2e/command-tasks.spec.ts`
 - Modify: `frontend/playwright.config.ts`
+- Modify: `frontend/src/components/command/TasksWorkspace.tsx`
 - Modify: `tdtn.md`
 - Modify: `memory.md`
 
-- [ ] **Step 1: Add stateful authenticated Playwright coverage**
+- [x] **Step 1: Add stateful authenticated Playwright coverage**
 
 The fixture must model GET active/archived/all, archive ACK, restore ACK, stale version conflict, and uncertain response reconciliation. Test desktop and mobile keyboard/focus behavior and run axe on Active, confirmation dialog, Archived, and conflict states.
 
@@ -1059,7 +1060,7 @@ Modify the existing explicit project allowlists so the new file actually runs in
 },
 ```
 
-- [ ] **Step 2: Run the focused browser suite**
+- [x] **Step 2: Run the focused browser suite**
 
 ```bash
 cd frontend
@@ -1068,7 +1069,7 @@ npm exec playwright test -- --project=command-desktop --project=command-mobile -
 
 Expected: all selected projects pass with zero browser errors.
 
-- [ ] **Step 3: Run the full phase verification**
+- [x] **Step 3: Run the full phase verification**
 
 ```bash
 cd backend
@@ -1086,14 +1087,42 @@ git diff --check
 
 Expected: backend/frontend tests, typecheck, lint, and build pass; Alembic reports exactly `81a4d2c6e9f0` before the next plan starts.
 
-- [ ] **Step 4: Update project history and commit**
+- [x] **Step 4: Update project history and commit**
 
 Record exact test counts and migration head in `tdtn.md` and the durable architecture choice in `memory.md`.
 
 ```bash
-git add frontend/e2e frontend/playwright.config.ts tdtn.md memory.md
+git add frontend/e2e frontend/playwright.config.ts \
+  frontend/src/components/command/TasksWorkspace.tsx tdtn.md memory.md
 git commit -m "test: verify CRM task archive foundation"
 ```
+
+Actual outcome: commit `011a183` added a stateful authenticated task-lifecycle
+fixture with exact active/archived/all reads, ACK/conflict/uncertain-applied and
+uncertain-unchanged outcomes, strict UUID/version/body checks, and immutable
+historical replay snapshots that cannot double-apply after authoritative state
+advances. The happy journey proves whitespace-trimmed archive reason, preserved
+`in_progress` workflow status, versions `1 -> 2 -> 3`, a fresh Restore UUID,
+and cleared archive metadata. Desktop/mobile coverage includes keyboard, focus,
+touch-target, and overflow behavior. Axe scans Active, the confirmation dialog,
+Archived, and conflict states. The Archived scan exposed a real contrast
+blocker, so the production scope also raises explanatory copy from `text-white/45`
+to `text-white/60` and removes the tab's color transition so black/gold/white
+contrast is stable while the selected state changes.
+
+Scoped verification is green: the three-project Playwright run executed `7`
+passing tests with `14` intentional cross-project skips; the real TLS PostgreSQL
+task contract passed `164` tests; Alembic reported the sole head
+`81a4d2c6e9f0`; the full frontend suite passed `614` tests; TypeScript, the
+Task-8-only ESLint run, the `35`-page production build, and diff checks passed.
+The repository-wide backend and lint commands were run but are not green: full
+backend pytest reported `1822 passed, 1 skipped, 3 deselected, 11 failed` from
+unrelated legacy Calendar environment, notification scheduling/schema, and
+brokerage-marker tests. Supplying dummy `GOOGLE_CALENDAR_*` credentials made the
+Calendar file pass `3/3`. Full ESLint reported `20 errors and 20 warnings`, all
+outside the three Task 8 implementation files; the scoped Task 8 lint is clean.
+No live deployment or authenticated target-environment verification occurred,
+and `CRM_TASK_ARCHIVE_ENABLED` remains `false`.
 
 ## Rollout Gate
 
