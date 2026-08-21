@@ -53,6 +53,7 @@ from services.command_contact_contracts import (
 )
 
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
+DatabasePositiveInt = Annotated[StrictInt, Field(ge=1, le=2_147_483_647)]
 NonnegativeInt = Annotated[StrictInt, Field(ge=0)]
 BoundedPageSize = Annotated[StrictInt, Field(ge=1, le=100)]
 _DATE_ONLY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
@@ -735,7 +736,10 @@ class LegacyTaskOut(ContactBoundaryModel):
     description: str
     priority: str
     due_at: datetime | None
-    status: str
+    status: Literal["open", "in_progress", "completed", "cancelled"]
+    archived_at: datetime | None
+    archive_reason: str | None = Field(max_length=500)
+    version: DatabasePositiveInt
 
 
 class LegacyNoteOut(ContactBoundaryModel):

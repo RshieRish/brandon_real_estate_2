@@ -10,6 +10,7 @@ import type {
   ContactDirectoryRow,
   ContactEvidence,
   ContactInternalWorkspace,
+  ContactLifecycleInternalTask,
   ContactMaterialization,
   ContactSectionName,
   ContactSectionPage,
@@ -21,7 +22,11 @@ import { CommandToastProvider } from '../ui/CommandToastProvider';
 import { ContactDetailWorkspace } from './ContactDetailWorkspace';
 import { canonicalContactId } from '@/app/admin/command/contacts/[contactId]/page';
 import { CommandHttpError } from '@/lib/command/http';
-import { CommandOutcomeUncertainError, type Task } from '@/lib/command/tasks';
+import {
+  CommandConflictError,
+  CommandOutcomeUncertainError,
+  type Task,
+} from '@/lib/command/tasks';
 
 const navigation = vi.hoisted(() => ({
   pathname: '/admin/command/contacts/7',
@@ -38,6 +43,7 @@ vi.mock('next/navigation', () => ({
 
 const hash = 'a'.repeat(64);
 const artifactHash = 'b'.repeat(64);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const contact: ContactDirectoryRow = {
   id: 7,
@@ -149,6 +155,9 @@ const internalWorkspace: ContactInternalWorkspace = {
       priority: 'normal',
       due_at: '2026-08-21T14:00:00Z',
       status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
     },
     {
       id: 101,
@@ -158,6 +167,9 @@ const internalWorkspace: ContactInternalWorkspace = {
       priority: 'high',
       due_at: '2026-08-21T14:00:00Z',
       status: 'open',
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
     },
     {
       id: 103,
@@ -167,6 +179,9 @@ const internalWorkspace: ContactInternalWorkspace = {
       priority: 'low',
       due_at: null,
       status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 2,
     },
     {
       id: 104,
@@ -175,7 +190,10 @@ const internalWorkspace: ContactInternalWorkspace = {
       description: '',
       priority: 'normal',
       due_at: null,
-      status: 'archived',
+      status: 'completed',
+      archived_at: '2026-08-19T15:30:00Z',
+      archive_reason: 'Superseded reminder',
+      version: 4,
     },
   ],
   notes: [{
@@ -213,6 +231,26 @@ const internalWorkspace: ContactInternalWorkspace = {
     },
   ],
   tags: [{ id: 999, name: 'Decoded duplicate tag is not rendered' }],
+};
+
+const archivedInternalTask = internalWorkspace.tasks.find(
+  (task): task is ContactLifecycleInternalTask => task.id === 104 && 'archived_at' in task,
+)!;
+const restoredInternalTask: ContactLifecycleInternalTask = {
+  ...archivedInternalTask,
+  archived_at: null,
+  archive_reason: null,
+  version: 5,
+};
+const restoredInternalWorkspace: ContactInternalWorkspace = {
+  ...internalWorkspace,
+  tasks: internalWorkspace.tasks.map((task) => task.id === 104 ? restoredInternalTask : task),
+};
+const restoredSummary: ContactWorkspaceSummary = {
+  ...expandedSummary,
+  completed_tasks: 3,
+  archived_tasks: 1,
+  archived_mutable_tasks: 0,
 };
 
 const timeline: ContactTimelinePage = {
@@ -479,6 +517,18 @@ function fakeApi(): ContactsApi {
       archive_reason: null,
       version: 1,
     }),
+    restoreTask: vi.fn().mockResolvedValue({
+      id: 104,
+      title: 'Internal archived task',
+      contact_id: 7,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 5,
+    }),
     artifactBlob: vi.fn().mockResolvedValue(new Blob(['archive evidence'], { type: 'text/html' })),
   };
 }
@@ -504,6 +554,14 @@ function workspace(api: ContactsApi, contactId = 7) {
 function renderWorkspace(api: ContactsApi, contactId = 7, strict = false) {
   const content = workspace(api, contactId);
   return render(strict ? <StrictMode>{content}</StrictMode> : content);
+}
+
+async function openArchivedInternalTask(api: ContactsApi) {
+  renderWorkspace(api);
+  await screen.findByRole('heading', { name: 'Ada Lovelace' });
+  await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+  await userEvent.click(screen.getByRole('tab', { name: 'Archived' }));
+  return screen.findByRole('button', { name: 'Restore Internal archived task' });
 }
 
 describe('ContactDetailWorkspace', () => {
@@ -551,7 +609,7 @@ describe('ContactDetailWorkspace', () => {
     expect(document.querySelector('.command-contact-profile-column')).not.toBeNull();
   });
 
-  it('keeps additive summary counters out of the legacy count strip', async () => {
+  it('renders one visible archived total with accessible mutable and recovered subtotals', async () => {
     const api = fakeApi();
     vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
 
@@ -559,19 +617,33 @@ describe('ContactDetailWorkspace', () => {
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
 
     const countStrip = screen.getByRole('complementary', { name: 'Contact workspace counts' });
-    const labels = Array.from(countStrip.querySelectorAll('span'), (row) =>
-      row.textContent?.replace(/^\d+/, ''),
+    expect(within(countStrip).getByText('active tasks')).toBeVisible();
+    expect(within(countStrip).getByText('cancelled tasks')).toBeVisible();
+    expect(within(countStrip).queryByText('open tasks')).not.toBeInTheDocument();
+    const archived = within(countStrip).getByText('archived tasks').closest('span');
+    expect(archived).not.toBeNull();
+    expect(within(archived as HTMLElement).getByText('1 restorable SWS task')).toHaveClass(
+      'command-visually-hidden',
     );
-    expect(labels).toEqual([
-      'open tasks',
-      'completed tasks',
-      'archived tasks',
-      'active smart plans',
-      'opportunities',
-      'notes',
-      'saved searches',
-      'bookings',
-    ]);
+    expect(within(archived as HTMLElement).getByText('1 recovered evidence task')).toHaveClass(
+      'command-visually-hidden',
+    );
+    expect(Array.from(countStrip.querySelectorAll(':scope > span')).filter((row) => (
+      row.textContent?.includes('archived tasks')
+    ))).toHaveLength(1);
+  });
+
+  it('does not fabricate archived subtotals for the rolling legacy summary', async () => {
+    renderWorkspace(fakeApi());
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    const archived = within(screen.getByRole('complementary', {
+      name: 'Contact workspace counts',
+    })).getByText('archived tasks').closest('span');
+    expect(within(archived as HTMLElement).getByText(
+      'Archived task breakdown unavailable during update',
+    )).toHaveClass('command-visually-hidden');
+    expect(within(archived as HTMLElement).queryByText(/restorable SWS task/)).not.toBeInTheDocument();
   });
 
   it('exposes seven source views, nested task states, and an auxiliary SWS booking view as ARIA tabs', async () => {
@@ -894,10 +966,236 @@ describe('ContactDetailWorkspace', () => {
     expect(await screen.findByText('Send market report')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Archived' }));
     expect(await screen.findByText('Old reminder')).toBeInTheDocument();
+    const recovered = screen.getByText('Old reminder').closest('article');
+    expect(within(recovered as HTMLElement).getByText('Recovered evidence')).toBeInTheDocument();
+    expect(within(recovered as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
+    const mutable = screen.getByText('Internal archived task').closest('article');
+    expect(within(mutable as HTMLElement).getByText('Superseded reminder')).toBeInTheDocument();
+    expect(within(mutable as HTMLElement).getByText('completed')).toBeInTheDocument();
+    expect(within(mutable as HTMLElement).getByRole('button', {
+      name: 'Restore Internal archived task',
+    })).toBeInTheDocument();
+    expect(within(mutable as HTMLElement).getAllByRole('button')).toHaveLength(1);
 
     expect(vi.mocked(api.section).mock.calls.map((call) => call[1])).toEqual([
       'smart_plans', 'tasks_to_do', 'tasks_completed', 'tasks_archived',
     ]);
+  });
+
+  it('keeps a rolling legacy archived row visible but read-only without inventing a version', async () => {
+    const api = fakeApi();
+    vi.mocked(api.internalWorkspace).mockResolvedValue({
+      ...internalWorkspace,
+      tasks: [{
+        id: 901,
+        title: 'Legacy archived row',
+        contact_id: 7,
+        description: '',
+        priority: 'normal',
+        due_at: null,
+        status: 'archived',
+      }],
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Archived' }));
+
+    const row = (await screen.findByText('Legacy archived row')).closest('article');
+    expect(within(row as HTMLElement).getByText(
+      'Restore is unavailable until task lifecycle data is refreshed.',
+    )).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByRole('button', { name: /restore/i })).not.toBeInTheDocument();
+    expect(api.restoreTask).not.toHaveBeenCalled();
+  });
+
+  it('restores a mutable archived task with one protected UUID and verifies internal plus summary state', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce(restoredInternalWorkspace);
+    vi.mocked(api.workspace).mockResolvedValueOnce(restoredSummary);
+
+    await userEvent.click(restore);
+
+    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledTimes(1));
+    expect(api.restoreTask).toHaveBeenCalledWith(104, {
+      request_id: expect.stringMatching(UUID_PATTERN),
+      expected_version: 4,
+    }, { signal: expect.any(AbortSignal) });
+    expect(await screen.findByRole('status')).toHaveTextContent('Restore confirmed after refreshing.');
+    expect(screen.queryByRole('button', { name: 'Restore Internal archived task' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Archived' })).toHaveFocus();
+    expect(api.internalWorkspace).toHaveBeenCalledTimes(2);
+    expect(api.workspace).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reconcile a definite Restore rejection and returns focus to the surviving control', async () => {
+    const api = fakeApi();
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.restoreTask).mockRejectedValueOnce(
+      new CommandHttpError(422, 'Restore request was rejected'),
+    );
+    const internalReads = vi.mocked(api.internalWorkspace).mock.calls.length;
+    const summaryReads = vi.mocked(api.workspace).mock.calls.length;
+
+    await userEvent.click(restore);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Restore request was rejected');
+    expect(api.internalWorkspace).toHaveBeenCalledTimes(internalReads);
+    expect(api.workspace).toHaveBeenCalledTimes(summaryReads);
+    expect(restore).toBeEnabled();
+    expect(restore).toHaveFocus();
+  });
+
+  it('offers an exact same-request Restore retry only when uncertainty finds the original task unchanged', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+    const retryAck = deferred<Task>();
+    vi.mocked(api.restoreTask)
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockReturnValueOnce(retryAck.promise);
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce(internalWorkspace);
+    vi.mocked(api.workspace).mockResolvedValueOnce(expandedSummary);
+
+    await userEvent.click(restore);
+
+    const retry = await screen.findByRole('button', { name: 'Retry Restore' });
+    expect(retry).toHaveFocus();
+    expect(api.restoreTask).toHaveBeenCalledTimes(1);
+    const originalRequest = { ...vi.mocked(api.restoreTask).mock.calls[0]?.[1] };
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce(restoredInternalWorkspace);
+    vi.mocked(api.workspace).mockResolvedValueOnce(restoredSummary);
+    await userEvent.click(retry);
+
+    const progress = screen.getByRole('status');
+    expect(progress).toHaveTextContent('Retrying Restore for Internal archived task…');
+    expect(progress).toHaveAttribute('aria-live', 'polite');
+    expect(progress).toHaveAttribute('aria-atomic', 'true');
+    expect(progress).toHaveAttribute('tabindex', '-1');
+    expect(progress).toHaveFocus();
+    await act(async () => retryAck.resolve(restoredInternalTask as Task));
+    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.restoreTask).mock.calls[1]?.[1]).toStrictEqual(originalRequest);
+    expect(await screen.findByText('Restore confirmed after refreshing.')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Archived' })).toHaveFocus();
+  });
+
+  it('adopts a Restore conflict and requires a fresh UUID with the authoritative version', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+    const changed = {
+      ...archivedInternalTask,
+      archive_reason: 'Reviewed by another administrator',
+      version: 6,
+    };
+    const changedWorkspace = {
+      ...internalWorkspace,
+      tasks: internalWorkspace.tasks.map((task) => task.id === 104 ? changed : task),
+    };
+    vi.mocked(api.restoreTask)
+      .mockRejectedValueOnce(new CommandConflictError({
+        code: 'task_version_conflict',
+        current_version: 6,
+        current_task: changed as Task,
+      }))
+      .mockResolvedValueOnce({ ...restoredInternalTask, version: 7 } as Task);
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce(changedWorkspace);
+    vi.mocked(api.workspace).mockResolvedValueOnce(expandedSummary);
+
+    await userEvent.click(restore);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/changed elsewhere.*fresh action/i);
+    expect(screen.queryByRole('button', { name: 'Retry Restore' })).not.toBeInTheDocument();
+    expect(screen.getByText('Reviewed by another administrator')).toBeInTheDocument();
+    const firstRequest = vi.mocked(api.restoreTask).mock.calls[0]?.[1];
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce({
+      ...restoredInternalWorkspace,
+      tasks: restoredInternalWorkspace.tasks.map((task) => task.id === 104
+        ? { ...restoredInternalTask, version: 7 }
+        : task),
+    });
+    vi.mocked(api.workspace).mockResolvedValueOnce(restoredSummary);
+    await userEvent.click(screen.getByRole('button', { name: 'Restore Internal archived task' }));
+
+    await waitFor(() => expect(api.restoreTask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.restoreTask).mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      expected_version: 6,
+      request_id: expect.stringMatching(UUID_PATTERN),
+    }));
+    expect(vi.mocked(api.restoreTask).mock.calls[1]?.[1].request_id).not.toBe(firstRequest?.request_id);
+  });
+
+  it('keeps every contact mutation locked when Restore uncertainty cannot be authoritatively refreshed', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+    vi.mocked(api.restoreTask).mockRejectedValueOnce(
+      new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')),
+    );
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.internalWorkspace).mockRejectedValueOnce(new Error('Synthetic internal refresh failure'));
+    vi.mocked(api.workspace).mockRejectedValueOnce(new Error('Synthetic summary refresh failure'));
+
+    await userEvent.click(restore);
+
+    const refresh = await screen.findByRole('button', { name: 'Retry contact refresh' });
+    expect(refresh).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore Internal archived task' })).toBeDisabled();
+    const internalReadCount = vi.mocked(api.internalWorkspace).mock.calls.length;
+    const pendingInternal = deferred<ContactInternalWorkspace>();
+    const pendingSummary = deferred<ContactWorkspaceSummary>();
+    vi.mocked(api.internalWorkspace).mockReturnValueOnce(pendingInternal.promise);
+    vi.mocked(api.workspace).mockReturnValueOnce(pendingSummary.promise);
+    fireEvent.click(refresh);
+    fireEvent.click(refresh);
+
+    await waitFor(() => expect(api.internalWorkspace).toHaveBeenCalledTimes(internalReadCount + 1));
+    expect(refresh).toBeInTheDocument();
+    expect(refresh).toHaveFocus();
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveTextContent('Refreshing…');
+    await act(async () => {
+      pendingInternal.resolve(internalWorkspace);
+      pendingSummary.resolve(expandedSummary);
+      await Promise.all([pendingInternal.promise, pendingSummary.promise]);
+    });
+    expect(await screen.findByRole('button', { name: 'Retry Restore' })).toHaveFocus();
+    expect(api.restoreTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a historical Restore retry ACK when the authoritative task changed again', async () => {
+    const api = fakeApi();
+    vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
+    vi.mocked(api.restoreTask)
+      .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
+      .mockResolvedValueOnce(restoredInternalTask as Task);
+    const restore = await openArchivedInternalTask(api);
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce(internalWorkspace);
+    vi.mocked(api.workspace).mockResolvedValueOnce(expandedSummary);
+    await userEvent.click(restore);
+    const retry = await screen.findByRole('button', { name: 'Retry Restore' });
+    const newerArchive = {
+      ...archivedInternalTask,
+      description: 'Restored and then archived again',
+      archive_reason: 'Newer archive decision',
+      version: 6,
+    };
+    vi.mocked(api.internalWorkspace).mockResolvedValueOnce({
+      ...internalWorkspace,
+      tasks: internalWorkspace.tasks.map((task) => task.id === 104 ? newerArchive : task),
+    });
+    vi.mocked(api.workspace).mockResolvedValueOnce(expandedSummary);
+
+    await userEvent.click(retry);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/changed again.*fresh action/i);
+    expect(screen.queryByText('Restore confirmed after refreshing.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry Restore' })).not.toBeInTheDocument();
+    expect(screen.getByText('Newer archive decision')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Archived' })).toHaveFocus();
   });
 
   it('persists SWS-only note mutations by refetching internal workspace, summary, and timeline', async () => {

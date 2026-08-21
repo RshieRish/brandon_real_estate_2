@@ -96,14 +96,17 @@ export function CapturedSection({
           {page.rows.map((row) => {
             const title = row.value.title;
             const targetExists = internalTargetExists(row, internal);
+            const recoveredArchivedEvidence = section === 'tasks_archived'
+              && row.status === 'source_only'
+              && row.value.kind === 'task';
             return (
               <article key={`${row.source_record_id}-${row.source_key_hash}-${row.section}-${row.occurrence_ordinal}`} className="command-contact-record-card">
                 <div className="command-contact-record-heading"><h4>{title}</h4><span>{row.capture_quality} capture</span></div>
                 {occurrenceDetails(row).map((detail) => <p key={detail}>{detail}</p>)}
                 {row.status === 'source_only' ? (
                   <div className="command-contact-record-status">
-                    <strong>Source evidence only</strong>
-                    <button type="button" className="command-inline-button" onClick={onViewEvidence}>View source evidence</button>
+                    <strong>{recoveredArchivedEvidence ? 'Recovered evidence' : 'Source evidence only'}</strong>
+                    {recoveredArchivedEvidence ? null : <button type="button" className="command-inline-button" onClick={onViewEvidence}>View source evidence</button>}
                   </div>
                 ) : targetExists ? (
                   <div className="command-contact-record-status">

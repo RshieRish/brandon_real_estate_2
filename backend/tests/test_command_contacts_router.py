@@ -25,7 +25,7 @@ from main import app as main_app
 from middleware import auth as auth_middleware
 from middleware.auth import require_admin_subject
 from models.booking import Booking
-from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact
+from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact, CRMTask
 from models.command_contacts import CRMContactMethod
 from models.lead import Lead
 from routers import command as command_router
@@ -58,6 +58,7 @@ from schemas.command_contacts import (
     ContactTimelinePageOut,
     ContactUpdateIn,
     LegacyContactWorkspaceOut,
+    LegacyTaskOut,
     canonical_saved_search_criteria,
 )
 from services.command_contact_contracts import (
@@ -1048,6 +1049,91 @@ def test_legacy_workspace_boundary_has_only_the_existing_typed_wire_keys():
         )
 
 
+@pytest.mark.parametrize(
+    ("status", "archived_at"),
+    [
+        ("open", None),
+        ("open", NOW),
+        ("completed", NOW),
+    ],
+)
+def test_legacy_workspace_task_boundary_exposes_exact_lifecycle_state(
+    status,
+    archived_at,
+):
+    output = LegacyTaskOut.model_validate(
+        {
+            "id": 4,
+            "title": "Follow up",
+            "contact_id": 1,
+            "description": "",
+            "priority": "normal",
+            "due_at": None,
+            "status": status,
+            "archived_at": archived_at,
+            "archive_reason": (
+                "No longer needed" if archived_at is not None else None
+            ),
+            "version": 3,
+        }
+    )
+
+    assert output.status == status
+    assert output.archived_at == archived_at
+    assert output.archive_reason == (
+        "No longer needed" if archived_at is not None else None
+    )
+    assert output.version == 3
+    assert set(output.model_dump()) == {
+        "id",
+        "title",
+        "contact_id",
+        "description",
+        "priority",
+        "due_at",
+        "status",
+        "archived_at",
+        "archive_reason",
+        "version",
+    }
+
+
+def test_legacy_workspace_task_boundary_requires_complete_safe_lifecycle_wire():
+    valid = {
+        "id": 4,
+        "title": "Follow up",
+        "contact_id": 1,
+        "description": "",
+        "priority": "normal",
+        "due_at": None,
+        "status": "open",
+        "archived_at": NOW,
+        "archive_reason": "No longer needed",
+        "version": 3,
+    }
+
+    for missing in ("archived_at", "archive_reason", "version"):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate(
+                {key: value for key, value in valid.items() if key != missing}
+            )
+    for field, value in (
+        ("status", "archived"),
+        ("status", "snoozed"),
+        ("version", True),
+        ("version", 0),
+        ("version", 2_147_483_648),
+        ("archive_reason", "x" * 501),
+    ):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate({**valid, field: value})
+    for private_field in ("archived_by_id", "private_payload"):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate(
+                {**valid, private_field: "PLANTED_PRIVATE_TASK_VALUE"}
+            )
+
+
 def test_legacy_workspace_validates_every_populated_nested_wire_row():
     payload = {
         "contact": {
@@ -1071,6 +1157,9 @@ def test_legacy_workspace_validates_every_populated_nested_wire_row():
                 "priority": "normal",
                 "due_at": None,
                 "status": "open",
+                "archived_at": None,
+                "archive_reason": None,
+                "version": 1,
             }
         ],
         "notes": [
@@ -2107,6 +2196,73 @@ async def test_legacy_workspace_uses_exact_booking_ownership_and_two_opportuniti
     assert len(opportunity_ids) == 2
     assert sorted(opportunity_ids) == [10, 11]
     assert ambiguous_workspace["bookings"] == []
+
+
+async def test_legacy_workspace_returns_authoritative_task_lifecycle_fields(
+    contact_router_db,
+):
+    contact = CRMContact(
+        id=1,
+        first_name="Lifecycle",
+        last_name="Owner",
+        stage="lead",
+    )
+    contact_router_db.add(contact)
+    await contact_router_db.flush()
+    contact_router_db.add_all(
+        [
+            CRMTask(
+                id=101,
+                contact_id=contact.id,
+                title="Active task",
+                status="open",
+                version=1,
+            ),
+            CRMTask(
+                id=102,
+                contact_id=contact.id,
+                title="Archived open task",
+                status="open",
+                archived_at=NOW,
+                archived_by_type="admin",
+                archived_by_id="PLANTED_PRIVATE_TASK_ACTOR",
+                archive_reason="No longer needed",
+                version=3,
+            ),
+            CRMTask(
+                id=103,
+                contact_id=contact.id,
+                title="Archived completed task",
+                status="completed",
+                archived_at=NOW,
+                archive_reason=None,
+                version=5,
+            ),
+        ]
+    )
+    await contact_router_db.flush()
+
+    raw = await contact_router._legacy_contact_workspace(
+        contact_router_db,
+        contact_id=contact.id,
+    )
+    output = LegacyContactWorkspaceOut.model_validate(raw)
+    tasks = {task.title: task for task in output.tasks}
+
+    assert tasks["Active task"].archived_at is None
+    assert tasks["Active task"].archive_reason is None
+    assert tasks["Active task"].version == 1
+    assert tasks["Archived open task"].status == "open"
+    # SQLite drops timezone metadata; PostgreSQL preserves it in production.
+    assert tasks["Archived open task"].archived_at == NOW.replace(tzinfo=None)
+    assert tasks["Archived open task"].archive_reason == "No longer needed"
+    assert tasks["Archived open task"].version == 3
+    assert tasks["Archived completed task"].status == "completed"
+    assert tasks["Archived completed task"].archived_at == NOW.replace(tzinfo=None)
+    assert tasks["Archived completed task"].version == 5
+    encoded = output.model_dump_json()
+    assert "PLANTED_PRIVATE_TASK_ACTOR" not in encoded
+    assert "archived_by" not in encoded
 
 
 async def test_legacy_workspace_missing_lead_and_booking_drift_fail_safe(

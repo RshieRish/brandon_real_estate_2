@@ -125,7 +125,7 @@ function contactApi(): ContactsApi {
     section: vi.fn(), evidence: vi.fn(), celebrations: vi.fn(), create: vi.fn(),
     update: vi.fn(), bulk: vi.fn(), createNote: vi.fn(), deleteNote: vi.fn(),
     createSavedSearch: vi.fn(), createTag: vi.fn(), assignTag: vi.fn(),
-    removeTag: vi.fn(), createTask: vi.fn(), artifactBlob: vi.fn(),
+    removeTag: vi.fn(), createTask: vi.fn(), restoreTask: vi.fn(), artifactBlob: vi.fn(),
   };
 }
 

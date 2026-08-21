@@ -1,7 +1,9 @@
 import { commandBlob, commandJson, CommandDecodeError, type Decoder } from './http';
 import {
   createTask as createLifecycleTask,
+  restoreTask as restoreLifecycleTask,
   type Task,
+  type TaskLifecycleRequest,
   type TaskRequestOptions,
 } from './tasks';
 
@@ -292,15 +294,30 @@ export type ContactInternalTimelineEntry = Readonly<{
   created_at: string;
 }>;
 
-export type ContactInternalTask = Readonly<{
+type ContactInternalTaskBase = Readonly<{
   id: number;
   title: string;
   contact_id: number;
   description: string;
   priority: string;
   due_at: string | null;
-  status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'archived';
 }>;
+
+export type ContactLegacyInternalTask = ContactInternalTaskBase & Readonly<{
+  status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'archived';
+  archived_at?: never;
+  archive_reason?: never;
+  version?: never;
+}>;
+
+export type ContactLifecycleInternalTask = ContactInternalTaskBase & Readonly<{
+  status: 'open' | 'in_progress' | 'completed' | 'cancelled';
+  archived_at: string | null;
+  archive_reason: string | null;
+  version: number;
+}>;
+
+export type ContactInternalTask = ContactLegacyInternalTask | ContactLifecycleInternalTask;
 
 export type ContactInternalNote = Readonly<{
   id: number;
@@ -1192,23 +1209,54 @@ function internalTimelineValue(input: unknown, path: string): ContactInternalTim
 }
 
 function internalTaskValue(input: unknown, path: string): ContactInternalTask {
+  const lifecycleKeys = ['archived_at', 'archive_reason', 'version'] as const;
+  const lifecycle = typeof input === 'object'
+    && input !== null
+    && !Array.isArray(input)
+    && lifecycleKeys.some((key) => Object.hasOwn(input, key));
   const read = objectReader(
     input,
-    ['id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status'],
+    lifecycle
+      ? [
+          'id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status',
+          ...lifecycleKeys,
+        ]
+      : ['id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status'],
     path,
   );
-  return {
-    id: positiveInteger(read('id'), `${path}.id`),
+  const common = {
+    id: integer(read('id'), `${path}.id`, 1, 2_147_483_647),
     title: stringValue(read('title'), `${path}.title`, 1, 255),
-    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    contact_id: integer(read('contact_id'), `${path}.contact_id`, 1, 2_147_483_647),
     description: stringValue(read('description'), `${path}.description`),
     priority: stringValue(read('priority'), `${path}.priority`),
     due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
+  };
+  if (!lifecycle) {
+    return {
+      ...common,
+      status: enumValue(
+        read('status'),
+        ['open', 'in_progress', 'completed', 'cancelled', 'archived'],
+        `${path}.status`,
+      ),
+    };
+  }
+  const archivedAt = nullableRfc3339(read('archived_at'), `${path}.archived_at`);
+  const rawReason = read('archive_reason');
+  const archiveReason = rawReason === null
+    ? null
+    : stringValue(rawReason, `${path}.archive_reason`, 0, 500);
+  return {
+    ...common,
     status: enumValue(
       read('status'),
-      ['open', 'in_progress', 'completed', 'cancelled', 'archived'],
+      ['open', 'in_progress', 'completed', 'cancelled'],
       `${path}.status`,
     ),
+    archived_at: archivedAt,
+    archive_reason: archiveReason,
+    version: integer(read('version'), `${path}.version`, 1, 2_147_483_647),
   };
 }
 
@@ -1763,6 +1811,11 @@ export type ContactsApi = Readonly<{
     idempotencyKey: string,
     options?: TaskRequestOptions,
   ) => Promise<Task>;
+  restoreTask: (
+    taskId: number,
+    input: TaskLifecycleRequest,
+    options?: TaskRequestOptions,
+  ) => Promise<Task>;
   artifactBlob: (artifactId: number, options?: CommandRequestOptions) => Promise<Blob>;
 }>;
 
@@ -2052,6 +2105,7 @@ export const contactsApi: ContactsApi = {
     const body = decodeContactTaskCreateInput(input);
     return createLifecycleTask(body, idempotencyKey, options);
   },
+  restoreTask: (taskId, input, options) => restoreLifecycleTask(taskId, input, options),
   artifactBlob: async (artifactId, options) => commandBlob({
     path: `/archive/artifacts/${validId(artifactId, 'request.artifact_id')}/content`,
     signal: options?.signal,

@@ -119,6 +119,7 @@ function fakeApi(directoryResult: ContactDirectoryPage | Promise<ContactDirector
     assignTag: vi.fn(),
     removeTag: vi.fn(),
     createTask: vi.fn(),
+    restoreTask: vi.fn(),
     artifactBlob: vi.fn(),
   };
 }
