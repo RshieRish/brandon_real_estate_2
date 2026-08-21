@@ -1,7 +1,15 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-20
+Last Updated: 2026-08-21
+
+### 2026-08-21 - Gmail Task Intake Persistence
+- Completed Gmail/Sydney plan Task 2 in implementation commit `1a691157` (`feat: persist Gmail task intake`). Alembic revision `83c6f4e8a1b2` is the sole head with direct parent `82b5e3d7f0a1` and adds the eleven locked account, run, checkpoint, receipt, origin, extraction, obligation, suggestion, source, suppression, and backfill tables. ORM metadata remains compatible with both PostgreSQL and the legacy SQLite bootstrap, and no raw email body, OAuth token, or credential column was added.
+- Final integrity rules bind Gmail suggestion evidence to the same account and thread through composite keys, keep Gmail reconciliation indexes nonunique and queryable, require canonical lowercase/trimmed workspace email identities, restrict suggestion and suppression sources to `gmail_message|sydney_chat`, globally deduplicate Sydney draft request UUIDs, and bind a backfill request's optional run to the same account. History-inferred human sends are born succeeded; unresolved sends use the exact NULL-safe partial uniqueness predicate; application, obligation, receipt, and direction provenance fail closed when cross-wired.
+- Downgrade acquires one deterministic all-table `ACCESS EXCLUSIVE` lock before inspecting evidence, refuses any nonempty owned table without losing intake or existing CRM rows, and permits the empty downgrade. The disposable PostgreSQL helper requires the exact TLS PostgreSQL 16 `_test` database and ownership marker, including optimized-Python cleanup regressions.
+- Exact nine-file implementation scope: `.github/workflows/gmail-sydney-task-intake.yml`, `backend/alembic/env.py`, `backend/alembic/versions/83c6f4e8a1b2_add_gmail_task_intake.py`, `backend/models/__init__.py`, `backend/models/gmail_task_intake.py`, `backend/schemas/gmail_task_intake.py`, `backend/tests/test_gmail_task_intake_migration.py`, `backend/tests/test_integration_runtime_migration.py`, and `backend/tests/test_integration_worker_deployment.py`.
+- Verification: real PostgreSQL 16/TLS Task 2 `29 passed`; exact dedicated Task 1+Task 2 workflow command `95 passed`; real PostgreSQL CRM lifecycle suite `13 passed`; Ruff, Python compilation, cached diff, and diff checks clean; sole Alembic head `83c6f4e8a1b2`. Independent reviews returned **SPEC PASS** and **QUALITY APPROVED**; quality independently reran `29 passed` and verified zero public relations.
+- Cleanup and rollout boundary: the exact disposable database was verified as `brandon_gmail_sydney_task2_test` with zero public relations, its PostgreSQL cluster was stopped, port `55434` closed, and the validated cluster directory was moved recoverably out of `/tmp`. `GMAIL_TASK_INTAKE_ENABLED=false`, `SYDNEY_TASK_QUESTIONS_ENABLED=false`, and `INSTAGRAM_INTEGRATION_ENABLED=false`; no Task 3 adapter/routes, worker registration, production migration, deployment, provider call, or live enablement occurred.
 
 ### 2026-08-20 - Shared Integration Worker Runtime
 - Completed Gmail/Sydney plan Task 1 in implementation commit `4ffed4c`. Alembic now has sole head `82b5e3d7f0a1` with direct parent `81a4d2c6e9f0`; the generalized revision-81 migration contract remains exact and passes at the later repository head.
