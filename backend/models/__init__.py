@@ -1,4 +1,5 @@
 from models.agent_action_audit import AgentActionAudit
+from models.admin_user import AdminUser
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
     CRMContactAddress,
@@ -32,9 +33,23 @@ from models.integration_health import (
     IntegrationHealthState,
     IntegrationWorkerHeartbeat,
 )
+from models.gmail_task_intake import (
+    CRMTaskSuggestion,
+    CRMTaskSuggestionSource,
+    CRMTaskSuggestionSuppression,
+    GmailBackfillRequest,
+    GmailExtractedObligation,
+    GmailExtractionAttempt,
+    GmailMessageOrigin,
+    GmailMessageReceipt,
+    GmailSyncAccount,
+    GmailSyncPageCheckpoint,
+    GmailSyncRun,
+)
 
 __all__ = [
     "AgentActionAudit",
+    "AdminUser",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",
@@ -57,8 +72,19 @@ __all__ = [
     "CRMTask",
     "CRMTaskCreationRequest",
     "CRMTaskSource",
+    "CRMTaskSuggestion",
+    "CRMTaskSuggestionSource",
+    "CRMTaskSuggestionSuppression",
     "CaptureQuality",
     "EvidenceLevel",
     "IntegrationHealthState",
     "IntegrationWorkerHeartbeat",
+    "GmailBackfillRequest",
+    "GmailExtractedObligation",
+    "GmailExtractionAttempt",
+    "GmailMessageOrigin",
+    "GmailMessageReceipt",
+    "GmailSyncAccount",
+    "GmailSyncPageCheckpoint",
+    "GmailSyncRun",
 ]

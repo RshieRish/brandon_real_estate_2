@@ -20,6 +20,7 @@ TASK1_TESTS = (
     "tests/test_integration_worker.py",
     "tests/test_integration_worker_deployment.py",
 )
+TASK2_TESTS = TASK1_TESTS + ("tests/test_gmail_task_intake_migration.py",)
 
 
 def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> None:
@@ -221,7 +222,7 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
-def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_and_current_task1_only() -> None:
+def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task2() -> None:
     workflow_path = (
         REPOSITORY_ROOT
         / ".github"
@@ -285,17 +286,16 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_and_current_task1_only
     ):
         assert required in workflow
     pytest_step = re.search(
-        r"name: Run the Task 1 persistence and runtime contract(?P<body>.*?)"
+        r"name: Run the Task 1 and Task 2 persistence contracts(?P<body>.*?)"
         r"\n\s+- name:",
         workflow,
         flags=re.DOTALL,
     )
     assert pytest_step is not None
     assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK1_TESTS
+        TASK2_TESTS
     )
     for future_test in (
-        "tests/test_gmail_task_intake_migration.py",
         "tests/test_gmail_history_adapter.py",
         "tests/test_sydney_clarifications.py",
         "tests/test_agent_control_crm.py",

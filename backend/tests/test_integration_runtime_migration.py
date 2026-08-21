@@ -79,14 +79,23 @@ def _render(function_name: str) -> str:
     return " ".join(output.getvalue().upper().split())
 
 
-def test_revision_82_is_the_only_head_and_directly_follows_revision_81() -> None:
+def test_revision_82_directly_follows_81_and_remains_in_the_serial_history() -> None:
     revision = _load_revision()
     assert revision.revision == REVISION
     assert revision.down_revision == DOWN_REVISION
     assert revision.branch_labels is None
     assert revision.depends_on is None
     script_directory = _script_directory()
-    assert script_directory.get_heads() == [REVISION]
+    heads = script_directory.get_heads()
+    assert len(heads) == 1
+    ancestor_revisions = {
+        candidate.revision
+        for candidate in script_directory.walk_revisions(
+            base="base",
+            head=heads[0],
+        )
+    }
+    assert REVISION in ancestor_revisions
     assert script_directory.get_revision(REVISION).down_revision == DOWN_REVISION
 
 
@@ -461,6 +470,8 @@ def test_revision_82_upgrades_existing_notification_rows_on_real_postgresql() ->
                     1,
                 )
             heads_output = run_alembic(url, "heads")
-            assert heads_output.count(f"{REVISION} (head)") == 1
+            repository_heads = _script_directory().get_heads()
+            assert len(repository_heads) == 1
+            assert heads_output.count(f"{repository_heads[0]} (head)") == 1
     finally:
         engine.dispose()

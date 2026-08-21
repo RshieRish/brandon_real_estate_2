@@ -28,6 +28,7 @@ import models.command_contacts  # noqa: F401
 import models.command_provenance  # noqa: F401
 import models.crm_task_lifecycle  # noqa: F401
 import models.integration_health  # noqa: F401
+import models.gmail_task_intake  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

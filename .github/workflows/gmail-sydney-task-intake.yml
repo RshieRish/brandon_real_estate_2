@@ -229,7 +229,7 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the Task 1 persistence and runtime contract
+      - name: Run the Task 1 and Task 2 persistence contracts
         working-directory: backend
         run: |
           python -m pytest -q \
@@ -238,7 +238,8 @@ jobs:
             tests/test_integration_health_service.py \
             tests/test_notification_claims.py \
             tests/test_integration_worker.py \
-            tests/test_integration_worker_deployment.py
+            tests/test_integration_worker_deployment.py \
+            tests/test_gmail_task_intake_migration.py
 
       - name: Remove the exact disposable fixtures
         if: always()
