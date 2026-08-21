@@ -154,6 +154,21 @@ describe('TasksWorkspace archive lifecycle', () => {
     expect(screen.queryByText('Send market report')).not.toBeInTheDocument();
   });
 
+  it('renders as a labelled section without nesting another main landmark', async () => {
+    apiMocks.tasks.mockResolvedValueOnce([activeTask]);
+    render(
+      <main aria-label="Command workspace">
+        <TasksWorkspace />
+      </main>,
+    );
+
+    await screen.findByText('Call Jane');
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    const workspace = screen.getByRole('region', { name: 'Tasks' });
+    expect(workspace).toBeInTheDocument();
+    expect(within(workspace).getByRole('heading', { name: 'Tasks', level: 1 })).toBeInTheDocument();
+  });
+
   it('removes every mutation, assignment, edit, and link affordance from archived rows', async () => {
     const user = await renderWorkspace();
     await user.click(screen.getByRole('button', { name: 'Archived' }));
@@ -207,12 +222,25 @@ describe('TasksWorkspace archive lifecycle', () => {
   });
 
   it('opens a heading-named portal dialog, traps focus, and returns focus on Escape', async () => {
-    const user = await renderWorkspace();
+    apiMocks.tasks.mockResolvedValueOnce(fixtureTasks);
+    const user = userEvent.setup();
+    render(
+      <main aria-label="Command workspace">
+        <TasksWorkspace />
+      </main>,
+    );
+    await screen.findByText('Call Jane');
     const { trigger, dialog } = await openArchiveDialog(user);
 
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(document.body.contains(dialog)).toBe(true);
-    expect(screen.getByRole('main').contains(dialog)).toBe(false);
+    expect(screen.getByRole('main', { name: 'Command workspace' }).contains(dialog)).toBe(false);
+    expect(dialog).toHaveClass(
+      'max-h-[calc(100dvh-2rem)]',
+      'overflow-y-auto',
+      'overscroll-contain',
+      'rounded-2xl',
+    );
     expect(screen.getByRole('heading', { name: 'Archive Call Jane' })).toBeInTheDocument();
     const reason = screen.getByRole('textbox', { name: 'Archive reason (optional)' });
     const cancel = screen.getByRole('button', { name: 'Cancel' });
@@ -332,9 +360,17 @@ describe('TasksWorkspace archive lifecycle', () => {
       expected_version: 3,
     });
     expect(apiMocks.restoreTask.mock.calls[0]?.[1].request_id).not.toBe(archiveRequest.request_id);
+    const progress = screen.getByRole('status');
+    expect(progress).toHaveTextContent('Restoring Call Jane…');
+    expect(progress).toHaveAttribute('aria-live', 'polite');
+    expect(progress).toHaveAttribute('tabindex', '-1');
+    expect(progress).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
 
     await act(async () => restore.resolve({ ...activeTask, version: 4 }));
     expect(await screen.findByText('Call Jane')).toBeInTheDocument();
+    expect(screen.queryByText('Restoring Call Jane…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Active' })).toHaveFocus();
   });
 
   it('offers same-request retry only when uncertainty refetches the exact original task', async () => {
@@ -387,8 +423,16 @@ describe('TasksWorkspace archive lifecycle', () => {
     await user.dblClick(retry);
 
     expect(apiMocks.archiveTask).toHaveBeenCalledTimes(2);
+    const progress = screen.getByRole('status');
+    expect(progress).toHaveTextContent('Retrying Archive for Call Jane…');
+    expect(progress).toHaveAttribute('aria-live', 'polite');
+    expect(progress).toHaveAttribute('tabindex', '-1');
+    expect(progress).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
     await act(async () => retryAck.resolve(archivedTask));
     await waitFor(() => expect(apiMocks.tasks).toHaveBeenCalledTimes(3));
+    expect(screen.queryByText('Retrying Archive for Call Jane…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toHaveFocus();
   });
 
   it('adopts an already-applied archive after uncertainty without exposing Retry', async () => {
@@ -786,13 +830,18 @@ describe('TasksWorkspace archive lifecycle', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toHaveFocus();
   });
 
-  it('never briefly installs a historical Archive retry ACK while authoritative reconciliation is pending', async () => {
+  it('does not confirm a historical Archive retry ACK when a newer archive is authoritative', async () => {
     const retryAck = deferred<Task>();
     const authoritativeRefresh = deferred<readonly Task[]>();
-    const newerTask = {
-      ...activeTask,
-      title: 'Call Jane with revised terms',
-      description: 'A later server-side change',
+    const historicalAck = {
+      ...archivedTask,
+      archive_reason: 'Original cleanup reason',
+      version: 4,
+    };
+    const newerArchive = {
+      ...historicalAck,
+      description: 'Restored at version 5, then archived again',
+      archive_reason: 'Newer archive decision',
       version: 6,
     };
     apiMocks.archiveTask
@@ -811,26 +860,30 @@ describe('TasksWorkspace archive lifecycle', () => {
 
     expect(screen.getByText('Call Jane')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
-    await act(async () => retryAck.resolve(archivedTask));
+    await act(async () => retryAck.resolve(historicalAck));
     await waitFor(() => expect(apiMocks.tasks).toHaveBeenCalledTimes(3));
     expect(screen.getByText('Call Jane')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
 
-    await act(async () => authoritativeRefresh.resolve([newerTask]));
-    expect(await screen.findByText('Call Jane with revised terms')).toBeInTheDocument();
+    await act(async () => authoritativeRefresh.resolve([newerArchive]));
+    expect(screen.queryByText(/Archive confirmed after refreshing/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent(/changed again.*review/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/changed again.*review.*fresh action/i);
     expect(screen.getByRole('button', { name: 'Active' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Archived' }));
+    expect(screen.getByText('Restored at version 5, then archived again')).toBeInTheDocument();
+    expect(screen.getByText('Newer archive decision')).toBeInTheDocument();
   });
 
-  it('never briefly installs a historical Restore retry ACK over a newer archived task', async () => {
+  it('does not confirm a historical Restore retry ACK when a newer restore is authoritative', async () => {
     const retryAck = deferred<Task>();
     const authoritativeRefresh = deferred<readonly Task[]>();
-    const newerArchive = {
-      ...archivedTask,
-      archive_reason: 'Still archived after later review',
-      version: 6,
+    const historicalAck = { ...activeTask, description: 'First restore', version: 5 };
+    const newerRestore = {
+      ...historicalAck,
+      description: 'Archived at version 6, then restored again',
+      version: 7,
     };
     apiMocks.restoreTask
       .mockRejectedValueOnce(new CommandOutcomeUncertainError(new TypeError('Synthetic disconnect')))
@@ -847,15 +900,18 @@ describe('TasksWorkspace archive lifecycle', () => {
     await user.click(await screen.findByRole('button', { name: 'Retry' }));
 
     expect(screen.getByText('Call Jane')).toBeInTheDocument();
-    await act(async () => retryAck.resolve({ ...activeTask, version: 5 }));
+    await act(async () => retryAck.resolve(historicalAck));
     await waitFor(() => expect(apiMocks.tasks).toHaveBeenCalledTimes(3));
     expect(screen.getByText('Call Jane')).toBeInTheDocument();
 
-    await act(async () => authoritativeRefresh.resolve([newerArchive]));
-    expect(await screen.findByText('Still archived after later review')).toBeInTheDocument();
+    await act(async () => authoritativeRefresh.resolve([newerRestore]));
+    expect(screen.queryByText(/Restore confirmed after refreshing/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent(/changed again.*review/i);
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/changed again.*review.*fresh action/i);
     expect(screen.getByRole('button', { name: 'Archived' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Active' }));
+    expect(screen.getByText('Archived at version 6, then restored again')).toBeInTheDocument();
   });
 
   it('carries restored ACK and PATCH versions through the next existing link mutation', async () => {

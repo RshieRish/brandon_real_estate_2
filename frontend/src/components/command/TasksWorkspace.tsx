@@ -56,8 +56,14 @@ type RefreshContext = Readonly<{
   kind: 'lifecycle';
   attempt: TaskLifecycleAttempt;
   phase: 'uncertain' | 'retry-acknowledged';
+  acknowledgedTask: Task | null;
 }> | Readonly<{
   kind: 'generic';
+}>;
+
+type LifecycleProgress = Readonly<{
+  kind: 'undo' | 'retry';
+  message: string;
 }>;
 
 type TaskCreateAttempt = Readonly<{
@@ -139,7 +145,8 @@ export function TasksWorkspace({
   const [lifecycleRetry, setLifecycleRetry] = useState<TaskLifecycleAttempt | null>(null);
   const [undoArchive, setUndoArchive] = useState<Task | null>(null);
   const [refreshContext, setRefreshContext] = useState<RefreshContext | null>(null);
-  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'undo' | 'retry' | 'refresh' | null>(null);
+  const [lifecycleProgress, setLifecycleProgress] = useState<LifecycleProgress | null>(null);
+  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'undo' | 'retry' | 'refresh' | 'progress' | null>(null);
 
   const mutationPendingRef = useRef(false);
   const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
@@ -154,6 +161,7 @@ export function TasksWorkspace({
   const undoRef = useRef<HTMLButtonElement>(null);
   const lifecycleRetryRef = useRef<HTMLButtonElement>(null);
   const refreshTasksRef = useRef<HTMLButtonElement>(null);
+  const lifecycleProgressRef = useRef<HTMLDivElement>(null);
 
   const beginTaskMutation = useCallback(() => {
     if (mutationPendingRef.current) return false;
@@ -165,6 +173,7 @@ export function TasksWorkspace({
     setMutationRefreshRequired(false);
     setRefreshContext(null);
     setLifecycleRetry(null);
+    setLifecycleProgress(null);
     setMutationsLocked(true);
     return true;
   }, []);
@@ -173,6 +182,7 @@ export function TasksWorkspace({
     mutationPendingRef.current = false;
     setMutationRefreshRequired(false);
     setRefreshContext(null);
+    setLifecycleProgress(null);
     setMutationsLocked(false);
   }, []);
 
@@ -219,7 +229,9 @@ export function TasksWorkspace({
         ? lifecycleRetryRef.current
         : focusTarget === 'refresh'
           ? refreshTasksRef.current
-      : focusTarget === 'archived'
+          : focusTarget === 'progress'
+            ? lifecycleProgressRef.current
+            : focusTarget === 'archived'
             ? archivedVisibilityRef.current
             : focusTarget === 'active'
               ? activeVisibilityRef.current
@@ -227,7 +239,7 @@ export function TasksWorkspace({
     if (target === null) return;
     target.focus();
     setFocusTarget(null);
-  }, [focusTarget, undoArchive]);
+  }, [focusTarget, lifecycleProgress, lifecycleRetry, mutationRefreshRequired, undoArchive]);
 
   useEffect(() => {
     if (menuTaskId === null) return;
@@ -251,13 +263,20 @@ export function TasksWorkspace({
     attempt: TaskLifecycleAttempt,
     rows: readonly Task[],
     phase: 'uncertain' | 'retry-acknowledged',
+    acknowledgedTask: Task | null,
   ) {
     const authoritative = rows.find((task) => task.id === attempt.intent.task_id);
     const label = actionLabel(attempt.intent.action);
     closeTransientTaskUi();
     setUndoArchive(null);
 
-    if (authoritative !== undefined && reachedDesiredState(attempt.intent, authoritative)) {
+    const retryAckStillAuthoritative = phase === 'uncertain'
+      || (acknowledgedTask !== null && sameTask(authoritative, acknowledgedTask));
+    if (
+      authoritative !== undefined
+      && reachedDesiredState(attempt.intent, authoritative)
+      && retryAckStillAuthoritative
+    ) {
       setLifecycleRetry(null);
       setMutationError(null);
       setMutationNotice(`${label} confirmed after refreshing.`);
@@ -290,19 +309,22 @@ export function TasksWorkspace({
   async function reconcileLifecycle(
     attempt: TaskLifecycleAttempt,
     phase: 'uncertain' | 'retry-acknowledged',
+    acknowledgedTask: Task | null = null,
   ) {
     try {
       const rows = await refetchAllTasks(true);
       if (rows === null) {
+        setLifecycleProgress(null);
         setMutationRefreshRequired(true);
-        setRefreshContext({ kind: 'lifecycle', attempt, phase });
+        setRefreshContext({ kind: 'lifecycle', attempt, phase, acknowledgedTask });
         setFocusTarget('refresh');
         return;
       }
-      resolveLifecycleRows(attempt, rows, phase);
+      resolveLifecycleRows(attempt, rows, phase, acknowledgedTask);
     } catch {
+      setLifecycleProgress(null);
       setMutationRefreshRequired(true);
-      setRefreshContext({ kind: 'lifecycle', attempt, phase });
+      setRefreshContext({ kind: 'lifecycle', attempt, phase, acknowledgedTask });
       setFocusTarget('refresh');
     }
   }
@@ -312,13 +334,17 @@ export function TasksWorkspace({
       try {
         const reconciled = await refetchAllTasks(true);
         if (reconciled === null) {
+          closeTransientTaskUi();
           setMutationRefreshRequired(true);
           setRefreshContext({ kind: 'generic' });
+          setFocusTarget('refresh');
           return;
         }
       } catch {
+        closeTransientTaskUi();
         setMutationRefreshRequired(true);
         setRefreshContext({ kind: 'generic' });
+        setFocusTarget('refresh');
         return;
       }
       setMutationError(`${caught.message} Review the refreshed task and start a fresh action.`);
@@ -467,10 +493,23 @@ export function TasksWorkspace({
     }
   }
 
-  async function runLifecycle(attempt: TaskLifecycleAttempt, retrying = false) {
+  async function runLifecycle(
+    attempt: TaskLifecycleAttempt,
+    retrying = false,
+    progressKind?: LifecycleProgress['kind'],
+  ) {
     if (!beginTaskMutation()) return;
     setUndoArchive(null);
     setMenuTaskId(null);
+    if (progressKind !== undefined) {
+      setLifecycleProgress({
+        kind: progressKind,
+        message: progressKind === 'undo'
+          ? `Restoring ${attempt.originalTask.title}…`
+          : `Retrying ${actionLabel(attempt.intent.action)} for ${attempt.originalTask.title}…`,
+      });
+      setFocusTarget('progress');
+    }
     const request = apiLifecycleRequest(attempt.intent);
     try {
       const updated = attempt.intent.action === 'archive'
@@ -478,7 +517,7 @@ export function TasksWorkspace({
         : await commandApi.restoreTask(attempt.intent.task_id, request);
 
       if (retrying) {
-        await reconcileLifecycle(attempt, 'retry-acknowledged');
+        await reconcileLifecycle(attempt, 'retry-acknowledged', updated);
         return;
       }
 
@@ -555,14 +594,13 @@ export function TasksWorkspace({
   function undoLastArchive() {
     if (undoArchive === null || mutationPendingRef.current) return;
     const task = undoArchive;
-    setUndoArchive(null);
-    void runLifecycle(createLifecycleAttempt('restore', task));
+    void runLifecycle(createLifecycleAttempt('restore', task), false, 'undo');
   }
 
   function retryLifecycleRequest() {
     if (lifecycleRetry === null || mutationPendingRef.current) return;
     const attempt = lifecycleRetry;
-    void runLifecycle(attempt, true);
+    void runLifecycle(attempt, true, 'retry');
   }
 
   async function refreshAuthoritativeTasks() {
@@ -572,7 +610,12 @@ export function TasksWorkspace({
       const rows = await refetchAllTasks(true);
       if (rows === null) return;
       if (refreshContext?.kind === 'lifecycle') {
-        resolveLifecycleRows(refreshContext.attempt, rows, refreshContext.phase);
+        resolveLifecycleRows(
+          refreshContext.attempt,
+          rows,
+          refreshContext.phase,
+          refreshContext.acknowledgedTask,
+        );
       } else {
         setMutationError('Task state refreshed. Review the authoritative task and start a fresh action.');
         finishTaskMutation();
@@ -638,7 +681,7 @@ export function TasksWorkspace({
         aria-modal="true"
         aria-labelledby={`archive-task-title-${archiveCandidate.id}`}
         tabIndex={-1}
-        className="fixed left-1/2 top-1/2 z-[120] w-[min(92vw,34rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-[#eac469]/35 bg-[#12110f] text-white shadow-[0_28px_90px_rgba(0,0,0,.65)]"
+        className="fixed left-1/2 top-1/2 z-[120] max-h-[calc(100dvh-2rem)] w-[min(92vw,34rem)] -translate-x-1/2 -translate-y-1/2 overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-[#eac469]/35 bg-[#12110f] text-white shadow-[0_28px_90px_rgba(0,0,0,.65)]"
       >
         <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(234,196,105,.17),transparent_46%)] px-6 py-5">
           <p className="text-[10px] font-bold uppercase tracking-[.22em] text-[#eac469]">Task archive</p>
@@ -672,11 +715,11 @@ export function TasksWorkspace({
 
   return (
     <div className="min-h-[100dvh] bg-[#080807] p-4 text-white sm:p-6">
-      <main className="mx-auto max-w-5xl">
+      <section aria-labelledby="tasks-workspace-title" className="mx-auto max-w-5xl">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[.25em] text-[#eac469]">Internal CRM</p>
-            <h1 className="mt-1 text-3xl font-black">Tasks</h1>
+            <h1 id="tasks-workspace-title" className="mt-1 text-3xl font-black">Tasks</h1>
           </div>
           <div role="group" aria-label="Task visibility" className="inline-flex rounded-xl border border-white/10 bg-white/[.04] p-1">
             {(['active', 'archived'] as const).map((option) => (
@@ -730,6 +773,20 @@ export function TasksWorkspace({
           <div role="status" aria-live="polite" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#eac469]/25 bg-[#eac469]/10 p-3 text-sm text-[#f7dda0]">
             <Check aria-hidden="true" size={18} /><span>{mutationNotice}</span>
             {undoArchive ? <button ref={undoRef} type="button" disabled={mutationsLocked} onClick={undoLastArchive} className="command-touch-target ml-auto inline-flex items-center gap-2 rounded-lg border border-[#eac469]/40 px-3 font-black text-[#eac469] disabled:opacity-50"><ArrowCounterClockwise aria-hidden="true" size={17} />Undo</button> : null}
+          </div>
+        ) : null}
+
+        {lifecycleProgress ? (
+          <div
+            ref={lifecycleProgressRef}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            tabIndex={-1}
+            className="mt-4 flex items-center gap-3 rounded-xl border border-[#eac469]/25 bg-[#eac469]/10 p-3 text-sm text-[#f7dda0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#eac469]"
+          >
+            <ArrowCounterClockwise aria-hidden="true" size={18} />
+            <span>{lifecycleProgress.message}</span>
           </div>
         ) : null}
 
@@ -830,7 +887,7 @@ export function TasksWorkspace({
             onMutationError={(caught) => reconcileMutationFailure(caught, 'Unable to save task')}
           />
         ) : null}
-      </main>
+      </section>
       {archiveDialog}
     </div>
   );

@@ -383,6 +383,41 @@ describe('Command workspace deep links', () => {
   );
 
   it.each(['uncertain', 'conflict'] as const)(
+    'closes the editor and focuses authoritative refresh when %s PATCH reconciliation fails',
+    async (kind) => {
+      apiMocks.tasks.mockReset()
+        .mockResolvedValueOnce(tasks)
+        .mockRejectedValueOnce(new Error('Synthetic authoritative refresh failure'));
+      apiMocks.updateTask.mockRejectedValueOnce(outcomeError(kind));
+      const user = userEvent.setup();
+      render(<TasksWorkspace />);
+      await screen.findByText('Past open');
+
+      await user.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
+      const titleInput = screen.getByRole('textbox', { name: 'Task title' });
+      await user.clear(titleInput);
+      await user.type(titleInput, 'Stale local draft');
+      await user.click(screen.getByRole('button', { name: 'Save task' }));
+
+      const refresh = await screen.findByRole('button', { name: 'Refresh tasks' });
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit task' })).not.toBeInTheDocument());
+      expect(refresh).toHaveFocus();
+      expect(document.activeElement).not.toBe(document.body);
+      expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Toggle Past open' })).toBeDisabled();
+      expect(screen.getByRole('combobox', { name: 'Assign Past open contact' })).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Edit' })[0]).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Link record' })[0]).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Task actions for Past open' })).toBeDisabled();
+      expect(apiMocks.updateTask).toHaveBeenCalledTimes(1);
+
+      await user.click(screen.getByRole('button', { name: 'Archived' }));
+      expect(screen.getByRole('button', { name: 'Restore Archived open' })).toBeDisabled();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['uncertain', 'conflict'] as const)(
     'locks every task write while a %s link outcome is authoritatively reconciled without retry',
     async (kind) => {
       const refresh = deferred<readonly Task[]>();
