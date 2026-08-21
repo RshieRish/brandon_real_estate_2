@@ -76,6 +76,31 @@ LIFECYCLE_INDEXES = {
 OWNERSHIP_MARKER_TABLE = "_crm_task_lifecycle_test_ownership"
 
 
+def _fail_closed(message: str) -> None:
+    if os.getenv("CI", "").strip().lower() == "true":
+        pytest.fail(message)
+    raise RuntimeError(message)
+
+
+def _repository_script_directory() -> ScriptDirectory:
+    backend_root = Path(__file__).parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "alembic"))
+    return ScriptDirectory.from_config(config)
+
+
+def _repository_head() -> str:
+    script_directory = _repository_script_directory()
+    heads = script_directory.get_heads()
+    assert len(heads) == 1, (
+        "the repository must have exactly one Alembic head; found "
+        f"{heads}"
+    )
+    head = script_directory.get_current_head()
+    assert head is not None
+    return head
+
+
 def _public_schema_user_objects(connection: sa.Connection) -> list[str]:
     return list(
         connection.scalars(
@@ -181,16 +206,19 @@ def _cleanup_owned_test_schema(
     expected_database: str,
     ownership_marker: str,
 ) -> None:
-    assert connection.scalar(
-        sa.text("SELECT current_database()")
-    ) == expected_database
+    actual_database = connection.scalar(sa.text("SELECT current_database()"))
+    if actual_database != expected_database:
+        _fail_closed(
+            "refusing cleanup outside the exact configured test database"
+        )
     marker_table_oid = connection.scalar(
         sa.text("SELECT to_regclass(:table_name)::oid"),
         {"table_name": f"public.{OWNERSHIP_MARKER_TABLE}"},
     )
-    assert marker_table_oid is not None, (
-        "refusing cleanup without the test ownership marker table"
-    )
+    if marker_table_oid is None:
+        _fail_closed(
+            "refusing cleanup without the test ownership marker table"
+        )
     marker_counts = connection.execute(
         sa.text(
             f"SELECT count(*), count(*) FILTER (WHERE marker = :marker) "
@@ -198,9 +226,10 @@ def _cleanup_owned_test_schema(
         ),
         {"marker": ownership_marker},
     ).one()
-    assert marker_counts == (1, 1), (
-        "refusing cleanup without the exact test ownership marker"
-    )
+    if tuple(marker_counts) != (1, 1):
+        _fail_closed(
+            "refusing cleanup without the exact test ownership marker"
+        )
     connection.exec_driver_sql("DROP SCHEMA public CASCADE")
     connection.exec_driver_sql("CREATE SCHEMA public")
 
@@ -214,13 +243,19 @@ def _owned_empty_test_schema(
     cleanup_armed = False
     try:
         with engine.begin() as connection:
-            assert connection.scalar(
+            actual_database = connection.scalar(
                 sa.text("SELECT current_database()")
-            ) == expected_database
-            existing_objects = _public_schema_user_objects(connection)
-            assert not existing_objects, (
-                "public schema is not empty: " + ", ".join(existing_objects)
             )
+            if actual_database != expected_database:
+                _fail_closed(
+                    "refusing setup outside the exact configured test database"
+                )
+            existing_objects = _public_schema_user_objects(connection)
+            if existing_objects:
+                _fail_closed(
+                    "public schema is not empty: "
+                    + ", ".join(existing_objects)
+                )
             connection.exec_driver_sql(
                 f"CREATE TABLE public.{OWNERSHIP_MARKER_TABLE} "
                 "(marker text PRIMARY KEY)"
@@ -311,21 +346,25 @@ def _isolated_test_url() -> sa.engine.URL:
             )
         pytest.skip("CRM_TASK_TEST_DATABASE_URL is not provisioned")
     url = make_url(raw_url)
-    assert expected_database.endswith("_test"), (
-        "CRM_TASK_TEST_DATABASE_NAME must identify the disposable _test "
-        "database"
-    )
-    assert url.database == expected_database, (
-        "CRM_TASK_TEST_DATABASE_URL must target exactly "
-        "CRM_TASK_TEST_DATABASE_NAME"
-    )
-    assert url.database.endswith("_test"), (
-        "CRM task migration integration tests require a disposable PostgreSQL "
-        "database whose name ends in _test"
-    )
-    assert url.drivername.startswith("postgresql"), (
-        "CRM task migration integration tests require PostgreSQL"
-    )
+    if not expected_database.endswith("_test"):
+        _fail_closed(
+            "CRM_TASK_TEST_DATABASE_NAME must identify the disposable _test "
+            "database"
+        )
+    if url.database != expected_database:
+        _fail_closed(
+            "CRM_TASK_TEST_DATABASE_URL must target exactly "
+            "CRM_TASK_TEST_DATABASE_NAME"
+        )
+    if not (url.database or "").endswith("_test"):
+        _fail_closed(
+            "CRM task migration integration tests require a disposable "
+            "PostgreSQL database whose name ends in _test"
+        )
+    if not url.drivername.startswith("postgresql"):
+        _fail_closed(
+            "CRM task migration integration tests require PostgreSQL"
+        )
     return url
 
 
@@ -813,7 +852,7 @@ def test_populated_test_database_is_not_claimed_or_destroyed() -> None:
             )
             sentinel_created = True
 
-        with pytest.raises(AssertionError, match="public schema is not empty"):
+        with pytest.raises(BaseException, match="public schema is not empty"):
             with _owned_empty_test_schema(engine, expected_database):
                 pytest.fail("a populated test database must not be claimed")
 
@@ -840,10 +879,16 @@ def test_revision_metadata_and_generated_postgresql_ddl_are_explicit() -> None:
     assert revision.down_revision == DOWN_REVISION
     assert revision.branch_labels is None
     assert revision.depends_on is None
-    backend_root = Path(__file__).parents[1]
-    config = Config(str(backend_root / "alembic.ini"))
-    config.set_main_option("script_location", str(backend_root / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [REVISION]
+    script_directory = _repository_script_directory()
+    repository_head = _repository_head()
+    ancestor_revisions = {
+        candidate.revision
+        for candidate in script_directory.walk_revisions(
+            base="base",
+            head=repository_head,
+        )
+    }
+    assert REVISION in ancestor_revisions
 
     sql = _normalized_sql(_render_revision("upgrade"))
     lock_timeout_position = sql.index("SET LOCAL LOCK_TIMEOUT = '2S'")
@@ -900,6 +945,19 @@ def test_revision_metadata_and_generated_postgresql_ddl_are_explicit() -> None:
     assert "CRM_CONTACT_SOURCE_OCCURRENCES" in sql
     assert "SOURCE-ONLY RECOVERED EVIDENCE COUNT CHANGED" in sql
     assert "DROP INDEX IX_CRM_TASKS_CONTACT_STATUS_ID" not in sql
+
+
+def test_repository_has_one_serial_alembic_head_with_revision_81_as_ancestor() -> None:
+    script_directory = _repository_script_directory()
+    repository_head = _repository_head()
+    ancestor_revisions = {
+        candidate.revision
+        for candidate in script_directory.walk_revisions(
+            base="base",
+            head=repository_head,
+        )
+    }
+    assert REVISION in ancestor_revisions
 
 
 def test_generated_downgrade_restores_legacy_status_and_only_drops_new_indexes() -> None:
@@ -1083,9 +1141,10 @@ def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql
                 assert _source_evidence_row(connection) == source_before
 
             current_output = _run_alembic(url, "current")
-            assert f"{REVISION} (head)" in current_output
+            assert REVISION in current_output
             heads_output = _run_alembic(url, "heads")
-            assert heads_output.count(f"{REVISION} (head)") == 1
+            repository_head = _repository_head()
+            assert heads_output.count(f"{repository_head} (head)") == 1
 
             history_cases = (
                 ("crm_task_creation_requests", (1, 0, 0)),
@@ -1156,9 +1215,7 @@ def test_upgrade_downgrade_upgrade_reconciles_legacy_rows_on_isolated_postgresql
                         (4, "open"),
                     ]
                     assert _source_evidence_row(connection) == source_before
-                assert f"{REVISION} (head)" in _run_alembic(
-                    url, "current"
-                )
+                assert REVISION in _run_alembic(url, "current")
 
                 # This explicit clear models the separately approved operator
                 # recovery required before a deliberately lossy downgrade.

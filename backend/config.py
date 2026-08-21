@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     AGENT_CONTROL_ENABLED: bool = False
     AGENT_CONTROL_RECENT_LIMIT: int = 10
     CRM_TASK_ARCHIVE_ENABLED: bool = False
+    # Dedicated integration-worker rollout gates. They remain disabled until
+    # each provider-specific migration and live verification gate is complete.
+    GMAIL_TASK_INTAKE_ENABLED: bool = False
+    SYDNEY_TASK_QUESTIONS_ENABLED: bool = False
+    INSTAGRAM_INTEGRATION_ENABLED: bool = False
+    INTEGRATION_WORKER_HEARTBEAT_SECONDS: int = 30
+    INTEGRATION_WORKER_HEARTBEAT_MAX_AGE_SECONDS: int = 120
+    INTEGRATION_PROVIDER_MAX_WORKERS: int = 4
+    INTEGRATION_PROVIDER_DEADLINE_SECONDS: float = 30.0
 
 
 settings = Settings()

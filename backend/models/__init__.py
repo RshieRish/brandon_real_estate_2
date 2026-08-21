@@ -28,6 +28,10 @@ from models.crm_task_lifecycle import (
     CRMTaskCreationRequest,
     CRMTaskSource,
 )
+from models.integration_health import (
+    IntegrationHealthState,
+    IntegrationWorkerHeartbeat,
+)
 
 __all__ = [
     "AgentActionAudit",
@@ -55,4 +59,6 @@ __all__ = [
     "CRMTaskSource",
     "CaptureQuality",
     "EvidenceLevel",
+    "IntegrationHealthState",
+    "IntegrationWorkerHeartbeat",
 ]

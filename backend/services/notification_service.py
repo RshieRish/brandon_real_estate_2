@@ -1,9 +1,13 @@
+import asyncio
 import html
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal
@@ -12,6 +16,8 @@ from services.email_service import BRANDON_EMAIL, send_internal_email
 
 logger = logging.getLogger(__name__)
 NOTIFICATION_RETRY_INTERVAL_SECONDS = 60
+DEFAULT_NOTIFICATION_LEASE_DURATION = timedelta(minutes=2)
+DEFAULT_NOTIFICATION_DELIVERY_TIMEOUT = timedelta(seconds=30)
 
 
 def _titleize(value: str | None) -> str:
@@ -165,14 +171,59 @@ async def enqueue_notification(
     *,
     event_type: str,
     payload: dict,
+    provider_key: str | None = None,
+    dedupe_key: str | None = None,
 ) -> NotificationJob:
+    if (provider_key is None) != (dedupe_key is None):
+        raise ValueError("provider_key and dedupe_key must both be set or both be null")
+    if provider_key is not None and (not provider_key or len(provider_key) > 100):
+        raise ValueError("provider_key must contain 1 to 100 characters")
+    if dedupe_key is not None and (not dedupe_key or len(dedupe_key) > 255):
+        raise ValueError("dedupe_key must contain 1 to 255 characters")
     subject, _ = render_notification_email(event_type, payload)
+    values = {
+        "event_type": event_type,
+        "status": "pending",
+        "recipient": BRANDON_EMAIL,
+        "subject": subject,
+        "payload_json": json.dumps(payload),
+        "provider_key": provider_key,
+        "dedupe_key": dedupe_key,
+    }
+    if provider_key is not None and isinstance(db, AsyncSession):
+        statement = (
+            postgresql_insert(NotificationJob)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    NotificationJob.provider_key,
+                    NotificationJob.dedupe_key,
+                ],
+                index_where=and_(
+                    NotificationJob.provider_key.is_not(None),
+                    NotificationJob.dedupe_key.is_not(None),
+                ),
+            )
+            .returning(NotificationJob.id)
+        )
+        job_id = await db.scalar(statement)
+        if job_id is None:
+            job = await db.scalar(
+                select(NotificationJob).where(
+                    NotificationJob.provider_key == provider_key,
+                    NotificationJob.dedupe_key == dedupe_key,
+                )
+            )
+            if job is None:
+                raise RuntimeError("deduplicated notification is unavailable")
+            return job
+        job = await db.get(NotificationJob, job_id)
+        if job is None:
+            raise RuntimeError("inserted notification is unavailable")
+        return job
+
     job = NotificationJob(
-        event_type=event_type,
-        status="pending",
-        recipient=BRANDON_EMAIL,
-        subject=subject,
-        payload_json=json.dumps(payload),
+        **values,
     )
     db.add(job)
     await db.flush()
@@ -195,6 +246,8 @@ async def attempt_notification_delivery(db: AsyncSession, job: NotificationJob) 
         job.attempt_count += 1
         job.last_error = str(exc)
         job.next_attempt_at = calculate_next_attempt_at(job.attempt_count)
+        job.lease_owner = None
+        job.lease_expires_at = None
         await db.flush()
         return
 
@@ -203,27 +256,213 @@ async def attempt_notification_delivery(db: AsyncSession, job: NotificationJob) 
     job.delivered_at = datetime.now(timezone.utc)
     job.next_attempt_at = None
     job.last_error = None
+    job.lease_owner = None
+    job.lease_expires_at = None
     await db.flush()
 
 
-async def process_due_notification_jobs(db: AsyncSession, *, limit: int = 10) -> int:
-    now = datetime.now(timezone.utc)
+async def claim_due_notification_jobs(
+    db: AsyncSession,
+    *,
+    lease_owner: str,
+    limit: int,
+    now: datetime,
+    lease_duration: timedelta,
+) -> list[NotificationJob]:
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    if not lease_owner or len(lease_owner) > 128:
+        raise ValueError("lease_owner must contain 1 to 128 characters")
+    if lease_duration <= timedelta(0):
+        raise ValueError("lease_duration must be positive")
+    due_retry = and_(
+        NotificationJob.status.in_(["pending", "failed"]),
+        or_(
+            NotificationJob.next_attempt_at.is_(None),
+            NotificationJob.next_attempt_at <= now,
+        ),
+    )
+    stale_sending = and_(
+        NotificationJob.status == "sending",
+        NotificationJob.lease_expires_at.is_not(None),
+        NotificationJob.lease_expires_at <= now,
+    )
     result = await db.execute(
         select(NotificationJob)
-        .where(NotificationJob.status.in_(["pending", "failed"]))
-        .where(
-            or_(
-                NotificationJob.next_attempt_at.is_(None),
-                NotificationJob.next_attempt_at <= now,
-            )
-        )
-        .order_by(NotificationJob.created_at.asc())
+        .where(or_(due_retry, stale_sending))
+        .order_by(NotificationJob.created_at.asc(), NotificationJob.id.asc())
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
-    jobs = result.scalars().all()
+    jobs = list(result.scalars().all())
+    lease_expires_at = now + lease_duration
     for job in jobs:
-        await attempt_notification_delivery(db, job)
-    return len(jobs)
+        job.status = "sending"
+        job.lease_owner = lease_owner
+        job.lease_expires_at = lease_expires_at
+    await db.flush()
+    return jobs
+
+
+async def complete_notification_claim(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    lease_owner: str,
+    delivered_at: datetime,
+) -> bool:
+    result = await db.execute(
+        update(NotificationJob)
+        .where(
+            NotificationJob.id == job_id,
+            NotificationJob.status == "sending",
+            NotificationJob.lease_owner == lease_owner,
+        )
+        .values(
+            status="delivered",
+            delivered_at=delivered_at,
+            attempt_count=NotificationJob.attempt_count + 1,
+            next_attempt_at=None,
+            last_error=None,
+            lease_owner=None,
+            lease_expires_at=None,
+        )
+    )
+    return bool(result.rowcount == 1)
+
+
+async def renew_notification_claim(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    lease_owner: str,
+    now: datetime,
+    lease_duration: timedelta,
+) -> NotificationJob | None:
+    job = await db.scalar(
+        select(NotificationJob)
+        .where(
+            NotificationJob.id == job_id,
+            NotificationJob.status == "sending",
+            NotificationJob.lease_owner == lease_owner,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        return None
+    job.lease_expires_at = now + lease_duration
+    await db.flush()
+    return job
+
+
+async def _fail_notification_claim(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    lease_owner: str,
+) -> None:
+    job = await db.scalar(
+        select(NotificationJob).where(
+            NotificationJob.id == job_id,
+            NotificationJob.status == "sending",
+            NotificationJob.lease_owner == lease_owner,
+        )
+    )
+    if job is None:
+        return
+    job.status = "failed"
+    job.attempt_count += 1
+    job.last_error = "notification_delivery_failed"
+    job.next_attempt_at = calculate_next_attempt_at(job.attempt_count)
+    job.lease_owner = None
+    job.lease_expires_at = None
+    await db.flush()
+
+
+async def _deliver_claimed_notification(job: NotificationJob) -> None:
+    payload = json.loads(job.payload_json or "{}")
+    _, body_html = render_notification_email(
+        job.event_type,
+        payload,
+        subject_override=job.subject,
+    )
+    await send_internal_email(
+        subject=job.subject,
+        body_html=body_html,
+        to=job.recipient,
+    )
+
+
+async def process_due_notification_jobs(
+    db: AsyncSession,
+    *,
+    limit: int = 10,
+    lease_owner: str | None = None,
+    now: datetime | None = None,
+    lease_duration: timedelta = DEFAULT_NOTIFICATION_LEASE_DURATION,
+    delivery_timeout: timedelta = DEFAULT_NOTIFICATION_DELIVERY_TIMEOUT,
+    deliver: Callable[[NotificationJob], Awaitable[None]] | None = None,
+) -> int:
+    """Deliver bounded one-row claims with at-least-once crash semantics.
+
+    A lease prevents concurrent delivery while it is active. A process crash or
+    uncertain provider result can still be retried after lease expiry; this is
+    deliberately not an exactly-once delivery claim.
+    """
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    if delivery_timeout <= timedelta(0) or delivery_timeout >= lease_duration:
+        raise ValueError(
+            "delivery_timeout must be positive and strictly below lease_duration"
+        )
+    effective_owner = lease_owner or f"notification-{uuid4().hex}"
+    delivery = deliver or _deliver_claimed_notification
+    processed = 0
+    while processed < limit:
+        claim_now = now or datetime.now(timezone.utc)
+        jobs = await claim_due_notification_jobs(
+            db,
+            lease_owner=effective_owner,
+            limit=1,
+            now=claim_now,
+            lease_duration=lease_duration,
+        )
+        await db.commit()
+        if not jobs:
+            break
+        processed += 1
+        renewal_now = now or datetime.now(timezone.utc)
+        job = await renew_notification_claim(
+            db,
+            job_id=jobs[0].id,
+            lease_owner=effective_owner,
+            now=renewal_now,
+            lease_duration=lease_duration,
+        )
+        await db.commit()
+        if job is None:
+            continue
+        try:
+            await asyncio.wait_for(
+                delivery(job),
+                timeout=delivery_timeout.total_seconds(),
+            )
+        except Exception:
+            await _fail_notification_claim(
+                db,
+                job_id=job.id,
+                lease_owner=effective_owner,
+            )
+            await db.commit()
+            continue
+        await complete_notification_claim(
+            db,
+            job_id=job.id,
+            lease_owner=effective_owner,
+            delivered_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+    return processed
 
 
 async def enqueue_notification_in_new_session(
@@ -243,7 +482,6 @@ async def run_notification_retry_pass(*, limit: int = 20) -> int:
     async with AsyncSessionLocal() as db:
         try:
             processed = await process_due_notification_jobs(db, limit=limit)
-            await db.commit()
             return processed
         except Exception:
             await db.rollback()
