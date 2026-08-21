@@ -729,7 +729,7 @@ export function TasksWorkspace({
                 type="button"
                 aria-pressed={visibility === option}
                 onClick={() => setVisibility(option)}
-                className={`command-touch-target rounded-lg px-4 text-sm font-bold transition-colors ${visibility === option ? 'bg-[#eac469] text-black' : 'text-white/60 hover:text-white'}`}
+                className={`command-touch-target rounded-lg px-4 text-sm font-bold ${visibility === option ? 'bg-[#eac469] text-black' : 'text-white/60 hover:text-white'}`}
               >
                 {option === 'active' ? 'Active' : 'Archived'}
               </button>
@@ -759,7 +759,7 @@ export function TasksWorkspace({
               <option value="all">All due dates</option><option value="past">Past due</option>
             </select>
           </div>
-        ) : <p className="mt-4 max-w-2xl text-sm leading-6 text-white/45">Archived tasks stay available for audit history and can be restored directly.</p>}
+        ) : <p className="mt-4 max-w-2xl text-sm leading-6 text-white/60">Archived tasks stay available for audit history and can be restored directly.</p>}
 
         {displayedError ? (
           <div role="alert" aria-live="assertive" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-red-300/20 bg-red-950/25 p-3 text-sm text-red-200">
