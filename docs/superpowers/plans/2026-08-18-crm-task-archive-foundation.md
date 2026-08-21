@@ -978,35 +978,43 @@ git commit -m "feat: add task archive controls"
 
 **Files:**
 
+- Modify: `backend/schemas/command_contacts.py`
+- Modify: `backend/tests/test_command_contacts_router.py`
 - Modify: `frontend/src/lib/command/contacts.ts`
 - Modify: `frontend/src/lib/command/contacts.test.ts`
+- Modify: `frontend/src/components/command/CommandWorkspaceDeepLinks.test.tsx`
 - Modify: `frontend/src/components/command/contacts/ContactDetailWorkspace.tsx`
 - Modify: `frontend/src/components/command/contacts/ContactDetailWorkspace.test.tsx`
 - Modify: `frontend/src/components/command/contacts/ContactSectionSurface.tsx`
+- Modify: `frontend/src/components/command/contacts/ContactsWorkspace.test.tsx`
 
-- [ ] **Step 1: Write red decoder/render tests**
+- [x] **Step 1: Write red decoder/render tests**
 
 Assert mutable archived tasks expose Restore; recovered source-only archive evidence exposes a `Recovered evidence` label and no action. Assert all new summary keys decode exactly.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 ```bash
 cd frontend
 npm exec vitest run -- src/lib/command/contacts.test.ts src/components/command/contacts/ContactDetailWorkspace.test.tsx
 ```
 
-- [ ] **Step 3: Implement split counts and controls**
+- [x] **Step 3: Implement split counts and controls**
 
 Use `archived_mutable_tasks` for task records and `archived_recovered_evidence` for source-only occurrences. Keep their combined number visible only as a total with both subtotals in accessible text.
 
-- [ ] **Step 4: Run tests/typecheck and commit**
+- [x] **Step 4: Run tests/typecheck and commit**
 
 ```bash
 npm exec vitest run -- src/lib/command/contacts.test.ts src/components/command/contacts/ContactDetailWorkspace.test.tsx
 npm run typecheck
-git add frontend/src/lib/command/contacts* frontend/src/components/command/contacts
+git add backend/schemas/command_contacts.py backend/tests/test_command_contacts_router.py \
+  frontend/src/lib/command/contacts* frontend/src/components/command/CommandWorkspaceDeepLinks.test.tsx \
+  frontend/src/components/command/contacts
 git commit -m "fix: distinguish archived tasks from recovered evidence"
 ```
+
+Actual outcome: commit `0a124a3` added the authoritative ten-field contact lifecycle response plus an exact rolling seven/ten-field frontend decoder, `archived_at`-based presentation, immutable recovered-evidence labeling, accessible combined/subtotal counts, and server-authoritative contact Restore reconciliation. Verification passed `411` combined backend tests, `182` affected frontend tests, the prior full frontend suite at `614` tests, TypeScript, scoped ESLint, and diff checks. Release the compatible frontend before the additive backend; leave `CRM_TASK_ARCHIVE_ENABLED=false` until Task 8 and authenticated target verification pass.
 
 ## Task 8: Add browser coverage and verify the phase
 
