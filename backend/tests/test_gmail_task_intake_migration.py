@@ -793,8 +793,7 @@ def _named_unique_columns(table: sa.Table) -> dict[str, tuple[str, ...]]:
     return {
         constraint.name: tuple(column.name for column in constraint.columns)
         for constraint in table.constraints
-        if isinstance(constraint, sa.UniqueConstraint)
-        and constraint.name is not None
+        if isinstance(constraint, sa.UniqueConstraint) and constraint.name is not None
     }
 
 
@@ -802,8 +801,7 @@ def _named_checks(table: sa.Table) -> dict[str, str]:
     return {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in table.constraints
-        if isinstance(constraint, sa.CheckConstraint)
-        and constraint.name is not None
+        if isinstance(constraint, sa.CheckConstraint) and constraint.name is not None
     }
 
 
@@ -945,8 +943,7 @@ def _normalized_sql(value: object | None) -> str | None:
     )
     if binary_group:
         normalized = (
-            f"{binary_group.group(1)} {binary_group.group(2)} "
-            f"{binary_group.group(3)}"
+            f"{binary_group.group(1)} {binary_group.group(2)} {binary_group.group(3)}"
         )
     return normalized
 
@@ -993,9 +990,7 @@ def _inspector_index_contract(
         index["name"]: (
             tuple(index["column_names"]),
             bool(index["unique"]),
-            _normalized_sql(
-                index.get("dialect_options", {}).get("postgresql_where")
-            ),
+            _normalized_sql(index.get("dialect_options", {}).get("postgresql_where")),
         )
         for index in inspector.get_indexes(table_name)
         if index["name"] and not index.get("duplicates_constraint")
@@ -1066,9 +1061,7 @@ def _assert_real_schema_matches_models(
         )
         inspected_columns = inspector.get_columns(table_name)
         assert tuple(column["name"] for column in inspected_columns) == tuple(
-            name
-            for name in model_table.columns.keys()
-            if name not in omitted_columns
+            name for name in model_table.columns.keys() if name not in omitted_columns
         )
         assert {
             column["name"] for column in inspected_columns if column["nullable"]
@@ -1096,9 +1089,10 @@ def _assert_real_schema_matches_models(
         assert _inspector_unique_contract(
             inspector, table_name
         ) == _named_unique_columns(model_table)
-        assert _inspector_foreign_key_contract(
-            inspector, table_name
-        ) == EXPECTED_FOREIGN_KEYS[table_name]
+        assert (
+            _inspector_foreign_key_contract(inspector, table_name)
+            == EXPECTED_FOREIGN_KEYS[table_name]
+        )
         assert _inspector_check_contract(inspector, table_name) == {
             name: _normalized_check_sql(sqltext)
             for name, sqltext in _named_checks(model_table).items()
@@ -1379,9 +1373,7 @@ def test_revision_83_directly_follows_82_and_remains_in_serial_history() -> None
 def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> None:
     tables = _model_tables()
     assert tuple(tables) == TABLES
-    assert {
-        table.name for table in tables.values()
-    } == set(TABLES)
+    assert {table.name for table in tables.values()} == set(TABLES)
 
     expected_columns = {
         "gmail_sync_accounts": (
@@ -1616,14 +1608,11 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
         expected_types = _expected_type_signatures(name)
         assert set(expected_types) == set(expected)
         assert {
-            column.name: _type_signature(column.type)
-            for column in tables[name].columns
+            column.name: _type_signature(column.type) for column in tables[name].columns
         } == expected_types
         assert {
             column.name: _canonical_default(
-                None
-                if column.server_default is None
-                else column.server_default.arg
+                None if column.server_default is None else column.server_default.arg
             )
             for column in tables[name].columns
             if column.server_default is not None
@@ -1690,7 +1679,10 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
     assert suggestion.columns["state"].default.arg == "pending_review"
     assert str(suggestion.columns["state"].server_default.arg) == "pending_review"
     assert suggestion.columns["clarification_state"].default.arg == "not_required"
-    assert str(suggestion.columns["clarification_state"].server_default.arg) == "not_required"
+    assert (
+        str(suggestion.columns["clarification_state"].server_default.arg)
+        == "not_required"
+    )
     assert callable(suggestion.columns["blocker_codes"].default.arg)
     first_default = suggestion.columns["blocker_codes"].default.arg(None)
     second_default = suggestion.columns["blocker_codes"].default.arg(None)
@@ -1787,12 +1779,8 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
         ),
     }
     assert _named_unique_columns(tables["crm_task_suggestions"]) == {
-        "uq_crm_task_suggestions_application_key": (
-            "application_idempotency_key",
-        ),
-        "uq_crm_task_suggestions_source_request": (
-            "source_request_id",
-        ),
+        "uq_crm_task_suggestions_application_key": ("application_idempotency_key",),
+        "uq_crm_task_suggestions_source_request": ("source_request_id",),
         "uq_crm_task_suggestions_gmail_identity": (
             "id",
             "gmail_account_id",
@@ -1825,9 +1813,7 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     }
     assert _named_unique_columns(tables["gmail_backfill_requests"]) == {}
     for table_name, table in tables.items():
-        assert _model_foreign_key_contract(table) == EXPECTED_FOREIGN_KEYS[
-            table_name
-        ]
+        assert _model_foreign_key_contract(table) == EXPECTED_FOREIGN_KEYS[table_name]
 
     run_indexes = _indexes(tables["gmail_sync_runs"])
     assert _compiled_index(run_indexes["uq_gmail_sync_runs_active_account"]) == (
@@ -1857,9 +1843,7 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     assert origin_indexes["ix_gmail_message_origins_account_thread"].unique is False
     assert tuple(
         column.name
-        for column in origin_indexes[
-            "ix_gmail_message_origins_account_thread"
-        ].columns
+        for column in origin_indexes["ix_gmail_message_origins_account_thread"].columns
     ) == ("account_id", "gmail_thread_id")
     assert _compiled_index(
         origin_indexes["uq_gmail_message_origins_account_message"]
@@ -1884,27 +1868,21 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
 
     obligation_indexes = _indexes(tables["gmail_extracted_obligations"])
     assert _compiled_index(
-        obligation_indexes[
-            "ix_gmail_extracted_obligations_suggestion_instance"
-        ]
+        obligation_indexes["ix_gmail_extracted_obligations_suggestion_instance"]
     ) == (
         "CREATE INDEX ix_gmail_extracted_obligations_suggestion_instance ON "
         "gmail_extracted_obligations (reconciled_suggestion_id, "
         "identity_instance_digest, reconciliation_material_hash, id)"
     )
     assert _compiled_index(
-        obligation_indexes[
-            "ix_gmail_extracted_obligations_suggestion_taxonomy"
-        ]
+        obligation_indexes["ix_gmail_extracted_obligations_suggestion_taxonomy"]
     ) == (
         "CREATE INDEX ix_gmail_extracted_obligations_suggestion_taxonomy ON "
         "gmail_extracted_obligations (reconciled_suggestion_id, "
         "taxonomy_fallback, id)"
     )
     assert _compiled_index(
-        obligation_indexes[
-            "ix_gmail_extracted_obligations_suggestion_owner_ambiguous"
-        ]
+        obligation_indexes["ix_gmail_extracted_obligations_suggestion_owner_ambiguous"]
     ) == (
         "CREATE INDEX "
         "ix_gmail_extracted_obligations_suggestion_owner_ambiguous ON "
@@ -1912,18 +1890,14 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
         "owner_ambiguous, id)"
     )
     assert _compiled_index(
-        obligation_indexes[
-            "ix_gmail_extracted_obligations_suggestion_contact_hint"
-        ]
+        obligation_indexes["ix_gmail_extracted_obligations_suggestion_contact_hint"]
     ) == (
         "CREATE INDEX ix_gmail_extracted_obligations_suggestion_contact_hint "
         "ON gmail_extracted_obligations (reconciled_suggestion_id, "
         "contact_hint, id)"
     )
     assert _compiled_index(
-        obligation_indexes[
-            "ix_gmail_extracted_obligations_attempt_replay"
-        ]
+        obligation_indexes["ix_gmail_extracted_obligations_attempt_replay"]
     ) == (
         "CREATE INDEX ix_gmail_extracted_obligations_attempt_replay ON "
         "gmail_extracted_obligations (extraction_attempt_id, created_at, id)"
@@ -1932,9 +1906,7 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     suggestion_indexes = _indexes(tables["crm_task_suggestions"])
     assert tuple(
         column.name
-        for column in suggestion_indexes[
-            "ix_crm_task_suggestions_review_state"
-        ].columns
+        for column in suggestion_indexes["ix_crm_task_suggestions_review_state"].columns
     ) == ("state", "updated_at", "id")
     assert _compiled_index(
         suggestion_indexes["ix_crm_task_suggestions_gmail_reconciliation"]
@@ -1953,14 +1925,11 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     source_indexes = _indexes(tables["crm_task_suggestion_sources"])
     assert tuple(
         column.name
-        for column in source_indexes[
-            "ix_crm_task_suggestion_sources_receipt"
-        ].columns
+        for column in source_indexes["ix_crm_task_suggestion_sources_receipt"].columns
     ) == ("receipt_id", "id")
 
     assert {
-        table_name: _model_index_contract(table)
-        for table_name, table in tables.items()
+        table_name: _model_index_contract(table) for table_name, table in tables.items()
     } == {
         "gmail_sync_accounts": {
             "ix_gmail_sync_accounts_blocked": (
@@ -2104,8 +2073,7 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
     assert _named_checks(tables["gmail_sync_accounts"]) == {
         "ck_gmail_sync_accounts_mode": "mode IN ('shadow', 'live')",
         "ck_gmail_sync_accounts_workspace_email_canonical": (
-            "workspace_email = lower(trim(workspace_email)) AND "
-            "workspace_email <> ''"
+            "workspace_email = lower(trim(workspace_email)) AND workspace_email <> ''"
         ),
     }
     assert _named_checks(tables["gmail_sync_runs"]) == {
@@ -2117,9 +2085,7 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
     }
     assert _named_checks(tables["gmail_sync_page_checkpoints"]) == {
         "ck_gmail_sync_page_checkpoints_page_positive": "page_number > 0",
-        "ck_gmail_sync_page_checkpoints_receipts_nonnegative": (
-            "receipt_count >= 0"
-        ),
+        "ck_gmail_sync_page_checkpoints_receipts_nonnegative": ("receipt_count >= 0"),
     }
     assert _named_checks(tables["gmail_missing_message_incidents"]) == {
         "ck_gmail_missing_message_incidents_state": (
@@ -2155,12 +2121,10 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
     origin_checks = _named_checks(tables["gmail_message_origins"])
     assert origin_checks == {
         "ck_gmail_message_origins_kind": (
-            "origin_kind IN ('sydney_client_send', 'human_send', "
-            "'system_automation')"
+            "origin_kind IN ('sydney_client_send', 'human_send', 'system_automation')"
         ),
         "ck_gmail_message_origins_delivery_state": (
-            "delivery_state IN ('sending', 'succeeded', "
-            "'delivery_uncertain')"
+            "delivery_state IN ('sending', 'succeeded', 'delivery_uncertain')"
         ),
         "ck_gmail_message_origins_reconciled_outcome": (
             "reconciled_outcome IS NULL OR reconciled_outcome IN "
@@ -2227,9 +2191,7 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "OR (source_type = 'sydney_chat' AND gmail_account_id IS NULL AND "
             "gmail_thread_id IS NULL AND source_request_id IS NOT NULL)"
         ),
-        "ck_crm_task_suggestions_priority": (
-            "priority IN ('low', 'normal', 'high')"
-        ),
+        "ck_crm_task_suggestions_priority": ("priority IN ('low', 'normal', 'high')"),
         "ck_crm_task_suggestions_task_status": "task_status = 'open'",
         "ck_crm_task_suggestions_state": (
             "state IN ('needs_clarification', 'possible_duplicate', "
@@ -2277,9 +2239,7 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "contact_resolution_hash ~ '^[0-9a-f]{64}$' AND NOT "
             "('ambiguous_contact' = ANY(blocker_codes)))"
         ),
-        "ck_crm_task_suggestions_confidence": (
-            "confidence >= 0 AND confidence <= 1"
-        ),
+        "ck_crm_task_suggestions_confidence": ("confidence >= 0 AND confidence <= 1"),
         "ck_crm_task_suggestions_version_positive": "version > 0",
         "ck_crm_task_suggestions_applied_result": (
             "(state = 'applied' AND applied_task_id IS NOT NULL AND "
@@ -2287,16 +2247,14 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "'applied' AND applied_task_id IS NULL)"
         ),
         "ck_crm_task_suggestions_duplicate_not_self": (
-            "duplicate_of_suggestion_id IS NULL OR "
-            "duplicate_of_suggestion_id <> id"
+            "duplicate_of_suggestion_id IS NULL OR duplicate_of_suggestion_id <> id"
         ),
         "ck_crm_task_suggestions_primary_instance_digest": (
             "primary_instance_digest IS NULL OR "
             "primary_instance_digest ~ '^[0-9a-f]{64}$'"
         ),
         "ck_crm_task_suggestions_gmail_instance_digest": (
-            "source_type <> 'gmail_message' OR "
-            "primary_instance_digest IS NOT NULL"
+            "source_type <> 'gmail_message' OR primary_instance_digest IS NOT NULL"
         ),
     }
     assert _named_checks(tables["crm_task_suggestion_sources"]) == {
@@ -2322,7 +2280,7 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "reprocess_override_at >= dismissed_at AND "
             "(reprocess_override_consumed_at IS NULL OR "
             "reprocess_override_consumed_at >= reprocess_override_at))"
-        )
+        ),
     }
     assert _named_checks(tables["gmail_backfill_requests"]) == {
         "ck_gmail_backfill_requests_window": (
@@ -2442,9 +2400,7 @@ def test_gmail_intake_schemas_are_strict_bounded_and_separate_manual_review() ->
         due_at="2026-08-21T13:00:00Z",
         contact_id=2_147_483_647,
     )
-    assert rfc3339_payload.due_at == datetime(
-        2026, 8, 21, 13, 0, tzinfo=timezone.utc
-    )
+    assert rfc3339_payload.due_at == datetime(2026, 8, 21, 13, 0, tzinfo=timezone.utc)
     json_payload = schemas.GmailTaskPayload.model_validate_json(
         '{"title":"Valid JSON","due_at":"2026-08-21T13:00:00-04:00",'
         '"contact_id":2147483647}'
@@ -2479,9 +2435,7 @@ def test_models_are_registered_for_application_and_alembic() -> None:
         _backend_root() / "models" / "gmail_task_intake.py"
     ).read_text(encoding="utf-8")
     assert "import models.admin_user" not in gmail_model_source
-    env_source = (_backend_root() / "alembic" / "env.py").read_text(
-        encoding="utf-8"
-    )
+    env_source = (_backend_root() / "alembic" / "env.py").read_text(encoding="utf-8")
     assert env_source.count("import models.gmail_task_intake") == 1
 
 
@@ -2498,18 +2452,14 @@ def test_importing_models_preserves_legacy_sqlite_metadata_bootstrap() -> None:
                 database.Base.metadata.tables["gmail_sync_accounts"]
                 .insert()
                 .values(workspace_email="sqlite-default@example.test")
-                .returning(
-                    database.Base.metadata.tables[
-                        "gmail_sync_accounts"
-                    ].c.id
-                )
+                .returning(database.Base.metadata.tables["gmail_sync_accounts"].c.id)
             )
         with pytest.raises(sa.exc.IntegrityError):
             with engine.begin() as connection:
                 connection.execute(
-                    database.Base.metadata.tables[
-                        "gmail_sync_accounts"
-                    ].insert().values(workspace_email=" SQLite@example.test ")
+                    database.Base.metadata.tables["gmail_sync_accounts"]
+                    .insert()
+                    .values(workspace_email=" SQLite@example.test ")
                 )
         assert set(TABLES).issubset(table_names)
         assert isinstance(generated_id, UUID)
@@ -2517,7 +2467,9 @@ def test_importing_models_preserves_legacy_sqlite_metadata_bootstrap() -> None:
         engine.dispose()
 
 
-def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade() -> None:
+def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade() -> (
+    None
+):
     upgrade = _render("upgrade")
     for table in TABLES:
         assert f"CREATE TABLE {table}" in upgrade
@@ -2533,9 +2485,7 @@ def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade
     assert "trg_gmail_extracted_obligations_append_only" in upgrade
     assert "trg_crm_task_suggestion_sources_append_only" in upgrade
     assert "gmail_task_intake_guard_suppression_identity" in upgrade
-    assert (
-        "trg_crm_task_suggestion_suppressions_identity_immutable" in upgrade
-    )
+    assert "trg_crm_task_suggestion_suppressions_identity_immutable" in upgrade
     for forbidden in (
         "raw_body",
         "body_text",
@@ -2546,11 +2496,11 @@ def test_revision_83_generated_ddl_has_all_tables_and_refuses_nonempty_downgrade
         assert forbidden not in upgrade
 
     downgrade = _render("downgrade")
-    expected_lock = (
-        "LOCK TABLE " + ", ".join(TABLES) + " IN ACCESS EXCLUSIVE MODE"
-    )
+    expected_lock = "LOCK TABLE " + ", ".join(TABLES) + " IN ACCESS EXCLUSIVE MODE"
     assert expected_lock in downgrade
-    assert "revision 83 downgrade refused: Gmail task intake evidence exists" in downgrade
+    assert (
+        "revision 83 downgrade refused: Gmail task intake evidence exists" in downgrade
+    )
     for table in TABLES:
         assert f"EXISTS (SELECT 1 FROM {table} LIMIT 1)" in downgrade
         assert f"DROP TABLE {table}" in downgrade
@@ -2575,18 +2525,23 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
 
             run_alembic(url, "upgrade", REVISION)
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SHOW server_version_num")
-                ).startswith("16")
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT ssl FROM pg_stat_ssl "
-                        "WHERE pid = pg_backend_pid()"
+                assert connection.scalar(sa.text("SHOW server_version_num")).startswith(
+                    "16"
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
+                        )
                     )
-                ) is True
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
+                    is True
+                )
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == REVISION
+                )
                 _assert_real_schema_matches_models(
                     connection,
                     _model_tables(),
@@ -2609,21 +2564,26 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                     for index in inspector.get_indexes("gmail_message_origins")
                 }
                 unresolved_where = str(
-                    origin_indexes["uq_gmail_message_origins_unresolved_send"]
-                    ["dialect_options"]["postgresql_where"]
+                    origin_indexes["uq_gmail_message_origins_unresolved_send"][
+                        "dialect_options"
+                    ]["postgresql_where"]
                 )
                 assert "IS DISTINCT FROM 'not_delivered'" in unresolved_where
                 assert "<>" not in unresolved_where and "!=" not in unresolved_where
-                assert origin_indexes[
-                    "ix_gmail_message_origins_account_thread"
-                ]["unique"] is False
+                assert (
+                    origin_indexes["ix_gmail_message_origins_account_thread"]["unique"]
+                    is False
+                )
                 receipt_indexes = {
                     index["name"]: index
                     for index in inspector.get_indexes("gmail_message_receipts")
                 }
-                assert receipt_indexes[
-                    "ix_gmail_message_receipts_account_thread"
-                ]["unique"] is False
+                assert (
+                    receipt_indexes["ix_gmail_message_receipts_account_thread"][
+                        "unique"
+                    ]
+                    is False
+                )
 
             account_id = UUID("00000000-0000-4000-8000-000000008311")
             audit_id: int
@@ -2656,9 +2616,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                     ),
                     {
                         "account_id": account_id,
-                        "request_id": UUID(
-                            "00000000-0000-4000-8000-000000008312"
-                        ),
+                        "request_id": UUID("00000000-0000-4000-8000-000000008312"),
                         "send_hash": "c" * 64,
                         "envelope_hash": "d" * 64,
                         "body_hash": "e" * 64,
@@ -2679,9 +2637,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008313"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008313"),
                             "send_hash": "c" * 64,
                             "envelope_hash": "f" * 64,
                             "body_hash": "0" * 64,
@@ -2714,9 +2670,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                     ),
                     {
                         "account_id": account_id,
-                        "request_id": UUID(
-                            "00000000-0000-4000-8000-000000008314"
-                        ),
+                        "request_id": UUID("00000000-0000-4000-8000-000000008314"),
                         "retry_of_origin_id": original_origin_id,
                         "send_hash": "c" * 64,
                         "envelope_hash": "f" * 64,
@@ -2740,9 +2694,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008315"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008315"),
                             "retry_of_origin_id": original_origin_id,
                             "send_hash": "9" * 64,
                             "envelope_hash": "8" * 64,
@@ -2765,9 +2717,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008316"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008316"),
                             "retry_of_origin_id": UUID(
                                 "00000000-0000-4000-8000-000000009999"
                             ),
@@ -2789,9 +2739,7 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                     expected_database=expected_database,
                     run_marker=run_marker,
                 )
-                connection.execute(
-                    sa.text("DELETE FROM gmail_message_origins")
-                )
+                connection.execute(sa.text("DELETE FROM gmail_message_origins"))
                 connection.execute(sa.text("DELETE FROM gmail_sync_accounts"))
             run_owned_alembic_downgrade(
                 url,
@@ -2802,9 +2750,12 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
             with engine.connect() as connection:
                 inspector = sa.inspect(connection)
                 assert set(TABLES).isdisjoint(inspector.get_table_names())
-                assert connection.scalar(
-                    sa.text("SELECT title FROM crm_tasks WHERE id = 8302")
-                ) == "Preserve through Gmail intake"
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT title FROM crm_tasks WHERE id = 8302")
+                    )
+                    == "Preserve through Gmail intake"
+                )
     finally:
         engine.dispose()
 
@@ -2844,23 +2795,32 @@ def test_revision_83_refuses_each_nonempty_owned_table_without_data_loss(
                 )
 
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
-                assert connection.scalar(
-                    sa.text(f'SELECT count(*) FROM "{target_table}" WHERE id = :id'),
-                    {"id": evidence_ids[target_table]},
-                ) == 1
-                assert all(
+                assert (
                     connection.scalar(
-                        sa.text(f'SELECT count(*) FROM "{table_name}"')
+                        sa.text("SELECT version_num FROM alembic_version")
                     )
+                    == REVISION
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            f'SELECT count(*) FROM "{target_table}" WHERE id = :id'
+                        ),
+                        {"id": evidence_ids[target_table]},
+                    )
+                    == 1
+                )
+                assert all(
+                    connection.scalar(sa.text(f'SELECT count(*) FROM "{table_name}"'))
                     == (1 if table_name == target_table else 0)
                     for table_name in TABLES
                 )
-                assert connection.scalar(
-                    sa.text("SELECT title FROM crm_tasks WHERE id = 8302")
-                ) == "Preserve through Gmail intake"
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT title FROM crm_tasks WHERE id = 8302")
+                    )
+                    == "Preserve through Gmail intake"
+                )
     finally:
         engine.dispose()
 
@@ -2890,9 +2850,7 @@ def test_downgrade_lock_closes_the_concurrent_evidence_insert_race() -> None:
 
             with engine.connect() as writer:
                 writer_transaction = writer.begin()
-                evidence_id = UUID(
-                    "00000000-0000-4000-8000-000000008391"
-                )
+                evidence_id = UUID("00000000-0000-4000-8000-000000008391")
                 writer.execute(
                     sa.text(
                         "INSERT INTO gmail_sync_accounts (id, workspace_email) "
@@ -2926,9 +2884,7 @@ def test_downgrade_lock_closes_the_concurrent_evidence_insert_race() -> None:
                     if not waiting_for_exclusive_lock or future.done():
                         writer_transaction.rollback()
                         future.result(timeout=10)
-                        pytest.fail(
-                            "downgrade did not wait for the evidence writer"
-                        )
+                        pytest.fail("downgrade did not wait for the evidence writer")
                     writer_transaction.commit()
                     downgrade_error = future.result(timeout=10)
 
@@ -2937,15 +2893,21 @@ def test_downgrade_lock_closes_the_concurrent_evidence_insert_race() -> None:
                 in downgrade_error
             )
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT count(*) FROM gmail_sync_accounts WHERE id = :id"
-                    ),
-                    {"id": evidence_id},
-                ) == 1
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == REVISION
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM gmail_sync_accounts WHERE id = :id"
+                        ),
+                        {"id": evidence_id},
+                    )
+                    == 1
+                )
     finally:
         engine.dispose()
 
@@ -2984,9 +2946,7 @@ def test_unresolved_send_partial_index_serializes_two_null_outcome_sessions() ->
             def insert_origin(request_id: UUID) -> tuple[int, str]:
                 with engine.connect() as connection:
                     transaction = connection.begin()
-                    backend_pid = connection.scalar(
-                        sa.text("SELECT pg_backend_pid()")
-                    )
+                    backend_pid = connection.scalar(sa.text("SELECT pg_backend_pid()"))
                     barrier.wait(timeout=5)
                     try:
                         connection.execute(
@@ -3033,15 +2993,18 @@ def test_unresolved_send_partial_index_serializes_two_null_outcome_sessions() ->
                 "inserted",
             ]
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT count(*) FROM gmail_message_origins "
-                        "WHERE account_id = :account_id "
-                        "AND canonical_send_hash = :send_hash "
-                        "AND reconciled_outcome IS NULL"
-                    ),
-                    {"account_id": account_id, "send_hash": "a" * 64},
-                ) == 1
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM gmail_message_origins "
+                            "WHERE account_id = :account_id "
+                            "AND canonical_send_hash = :send_hash "
+                            "AND reconciled_outcome IS NULL"
+                        ),
+                        {"account_id": account_id, "send_hash": "a" * 64},
+                    )
+                    == 1
+                )
     finally:
         engine.dispose()
 
@@ -3139,13 +3102,16 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                             "audit_id": audit_id,
                         },
                     )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT count(*) FROM crm_task_suggestion_suppressions "
-                        "WHERE obligation_fingerprint = :fingerprint"
-                    ),
-                    {"fingerprint": "f" * 64},
-                ) == 2
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM crm_task_suggestion_suppressions "
+                            "WHERE obligation_fingerprint = :fingerprint"
+                        ),
+                        {"fingerprint": "f" * 64},
+                    )
+                    == 2
+                )
                 connection.execute(
                     sa.text(
                         "INSERT INTO crm_task_suggestion_suppressions "
@@ -3159,8 +3125,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                     ),
                     {
                         "scope": (
-                            "gmail:00000000-0000-4000-8000-000000008321:"
-                            "thread-a"
+                            "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                         ),
                         "fingerprint": "f" * 64,
                         "instance_digest": "d" * 64,
@@ -3168,14 +3133,17 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         "audit_id": audit_id,
                     },
                 )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT count(*) FROM "
-                        "crm_task_suggestion_suppressions WHERE "
-                        "obligation_fingerprint = :fingerprint"
-                    ),
-                    {"fingerprint": "f" * 64},
-                ) == 3
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM "
+                            "crm_task_suggestion_suppressions WHERE "
+                            "obligation_fingerprint = :fingerprint"
+                        ),
+                        {"fingerprint": "f" * 64},
+                    )
+                    == 3
+                )
             with pytest.raises(sa.exc.IntegrityError):
                 with engine.begin() as connection:
                     connection.execute(
@@ -3191,8 +3159,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         ),
                         {
                             "scope": (
-                                "gmail:00000000-0000-4000-8000-000000008321:"
-                                "thread-a"
+                                "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                             ),
                             "fingerprint": "f" * 64,
                             "instance_digest": "e" * 64,
@@ -3226,8 +3193,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         "audit_id": override_audit_id,
                         "instance_digest": "e" * 64,
                         "scope": (
-                            "gmail:00000000-0000-4000-8000-000000008321:"
-                            "thread-a"
+                            "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                         ),
                     },
                 )
@@ -3241,8 +3207,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                     ),
                     {
                         "scope": (
-                            "gmail:00000000-0000-4000-8000-000000008321:"
-                            "thread-a"
+                            "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                         ),
                         "instance_digest": "e" * 64,
                     },
@@ -3259,8 +3224,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         ),
                         {
                             "scope": (
-                                "gmail:00000000-0000-4000-8000-000000008321:"
-                                "thread-a"
+                                "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                             ),
                             "instance_digest": "e" * 64,
                         },
@@ -3276,8 +3240,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         ),
                         {
                             "scope": (
-                                "gmail:00000000-0000-4000-8000-000000008321:"
-                                "thread-a"
+                                "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                             ),
                             "instance_digest": "e" * 64,
                         },
@@ -3296,8 +3259,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                             "admin_id": admin_id,
                             "audit_id": override_audit_id,
                             "scope": (
-                                "gmail:00000000-0000-4000-8000-000000008321:"
-                                "thread-b"
+                                "gmail:00000000-0000-4000-8000-000000008321:thread-b"
                             ),
                         },
                     )
@@ -3315,8 +3277,7 @@ def test_suppression_scope_allows_same_fingerprint_in_unrelated_threads() -> Non
                         ),
                         {
                             "scope": (
-                                "gmail:00000000-0000-4000-8000-000000008321:"
-                                "thread-a"
+                                "gmail:00000000-0000-4000-8000-000000008321:thread-a"
                             ),
                             "fingerprint": "f" * 64,
                             "admin_id": admin_id,
@@ -3409,9 +3370,7 @@ def test_origin_kind_and_reconciliation_states_fail_closed_on_real_postgresql() 
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008352"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008352"),
                             "send_hash": "1" * 64,
                             "envelope_hash": "2" * 64,
                             "body_hash": "3" * 64,
@@ -3435,9 +3394,7 @@ def test_origin_kind_and_reconciliation_states_fail_closed_on_real_postgresql() 
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008353"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008353"),
                             "send_hash": "4" * 64,
                             "envelope_hash": "5" * 64,
                             "body_hash": "6" * 64,
@@ -3706,9 +3663,7 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                         },
                     )
 
-            second_suggestion_id = UUID(
-                "00000000-0000-4000-8000-000000008376"
-            )
+            second_suggestion_id = UUID("00000000-0000-4000-8000-000000008376")
             with engine.begin() as connection:
                 connection.execute(
                     sa.text(
@@ -3867,25 +3822,24 @@ def test_provenance_and_applied_result_shapes_fail_closed_on_real_postgresql() -
                     ),
                     {
                         "account_id": account_id,
-                        "failed_key": UUID(
-                            "00000000-0000-4000-8000-000000008370"
-                        ),
+                        "failed_key": UUID("00000000-0000-4000-8000-000000008370"),
                         "failed_hash": "4" * 64,
                         "failed_fingerprint": "5" * 64,
-                        "applied_key": UUID(
-                            "00000000-0000-4000-8000-000000008371"
-                        ),
+                        "applied_key": UUID("00000000-0000-4000-8000-000000008371"),
                         "applied_hash": "6" * 64,
                         "applied_fingerprint": "7" * 64,
                     },
                 )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT count(*) FROM crm_task_suggestions WHERE "
-                        "(state = 'failed' AND applied_task_id IS NULL) OR "
-                        "(state = 'applied' AND applied_task_id = 8302)"
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM crm_task_suggestions WHERE "
+                            "(state = 'failed' AND applied_task_id IS NULL) OR "
+                            "(state = 'applied' AND applied_task_id = 8302)"
+                        )
                     )
-                ) == 2
+                    == 2
+                )
     finally:
         engine.dispose()
 
@@ -3962,9 +3916,7 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                     "source_type": "sydney_chat",
                     "gmail_account_id": None,
                     "gmail_thread_id": "fabricated-thread",
-                    "source_request_id": UUID(
-                        "00000000-0000-4000-8000-000000008383"
-                    ),
+                    "source_request_id": UUID("00000000-0000-4000-8000-000000008383"),
                 },
                 {
                     "source_type": "sydney_chat",
@@ -3976,9 +3928,7 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                     "source_type": "gmail_message",
                     "gmail_account_id": account_id,
                     "gmail_thread_id": "thread-with-request",
-                    "source_request_id": UUID(
-                        "00000000-0000-4000-8000-000000008384"
-                    ),
+                    "source_request_id": UUID("00000000-0000-4000-8000-000000008384"),
                 },
                 {
                     "source_type": "gmail_message",
@@ -3990,9 +3940,7 @@ def test_direct_sydney_draft_source_identity_is_truthful_and_idempotent() -> Non
                     "source_type": "sydney_chat",
                     "gmail_account_id": account_id,
                     "gmail_thread_id": None,
-                    "source_request_id": UUID(
-                        "00000000-0000-4000-8000-000000008385"
-                    ),
+                    "source_request_id": UUID("00000000-0000-4000-8000-000000008385"),
                 },
             )
             for index, shape in enumerate(invalid_shapes, start=1):
@@ -4045,9 +3993,7 @@ def test_duplicate_suggestions_are_source_scope_safe_and_never_self_reference() 
             second_account = UUID("00000000-0000-4000-8000-0000000083a2")
             root_id = UUID("00000000-0000-4000-8000-0000000083a3")
             sydney_root_id = UUID("00000000-0000-4000-8000-0000000083a4")
-            sydney_root_request_id = UUID(
-                "00000000-0000-4000-8000-0000000083a5"
-            )
+            sydney_root_request_id = UUID("00000000-0000-4000-8000-0000000083a5")
             with engine.begin() as connection:
                 connection.execute(
                     sa.text(
@@ -4230,9 +4176,7 @@ def test_duplicate_suggestions_are_source_scope_safe_and_never_self_reference() 
                         "RETURNING id"
                     ),
                     {
-                        "request_id": UUID(
-                            "00000000-0000-4000-8000-0000000083a8"
-                        ),
+                        "request_id": UUID("00000000-0000-4000-8000-0000000083a8"),
                         "root_id": sydney_root_id,
                         "payload_hash": "1" * 64,
                         "fingerprint": "2" * 64,
@@ -4521,18 +4465,23 @@ def test_suggestion_source_must_match_obligation_disposition_on_postgresql() -> 
                         "account_id": account_id,
                     },
                 )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT suggestion_id FROM crm_task_suggestion_sources "
-                        "WHERE obligation_id = :obligation_id"
-                    ),
-                    {"obligation_id": obligation_id},
-                ) == suggestion_a
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT suggestion_id FROM crm_task_suggestion_sources "
+                            "WHERE obligation_id = :obligation_id"
+                        ),
+                        {"obligation_id": obligation_id},
+                    )
+                    == suggestion_a
+                )
     finally:
         engine.dispose()
 
 
-def test_suppression_identity_is_immutable_but_redismissal_fields_remain_mutable() -> None:
+def test_suppression_identity_is_immutable_but_redismissal_fields_remain_mutable() -> (
+    None
+):
     url = gmail_task_test_url()
     expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
     engine = sa.create_engine(sync_test_url(url))
@@ -4609,13 +4558,16 @@ def test_suppression_identity_is_immutable_but_redismissal_fields_remain_mutable
                     ),
                     {"id": suppression_id},
                 )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT dismissal_reason FROM "
-                        "crm_task_suggestion_suppressions WHERE id = :id"
-                    ),
-                    {"id": suppression_id},
-                ) == "Dismissed again under audited authority"
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT dismissal_reason FROM "
+                            "crm_task_suggestion_suppressions WHERE id = :id"
+                        ),
+                        {"id": suppression_id},
+                    )
+                    == "Dismissed again under audited authority"
+                )
     finally:
         engine.dispose()
 
@@ -4853,9 +4805,7 @@ def test_gmail_thread_candidate_limit_uses_generic_plan_safe_ordered_index() -> 
                         "'thread-indexed', 11)"
                     )
                 ).all()
-                connection.execute(
-                    sa.text("DEALLOCATE gmail_thread_candidates")
-                )
+                connection.execute(sa.text("DEALLOCATE gmail_thread_candidates"))
             plan = "\n".join(str(row[0]) for row in plan_rows)
             assert "ix_crm_task_suggestions_gmail_thread_order" in plan
             assert "Sort" not in plan
@@ -4974,9 +4924,7 @@ def test_instance_material_membership_uses_bounded_generic_index_probe() -> None
                         "suggestion_id": suggestion_id,
                     },
                 )
-                connection.execute(
-                    sa.text("ANALYZE gmail_extracted_obligations")
-                )
+                connection.execute(sa.text("ANALYZE gmail_extracted_obligations"))
                 connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
                 connection.execute(
                     sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
@@ -5031,9 +4979,7 @@ def test_instance_material_membership_uses_bounded_generic_index_probe() -> None
                     sa.text("DEALLOCATE gmail_instance_candidate_membership")
                 )
             plan = "\n".join(str(row[0]) for row in plan_rows)
-            assert (
-                "ix_gmail_extracted_obligations_suggestion_instance" in plan
-            )
+            assert "ix_gmail_extracted_obligations_suggestion_instance" in plan
             assert "Seq Scan on gmail_extracted_obligations" not in plan
             index_lines = [
                 line
@@ -5042,16 +4988,11 @@ def test_instance_material_membership_uses_bounded_generic_index_probe() -> None
             ]
             assert len(index_lines) == 1
             assert "rows=1 loops=1" in index_lines[0]
-            candidate_plan = "\n".join(
-                str(row[0]) for row in candidate_plan_rows
-            )
+            candidate_plan = "\n".join(str(row[0]) for row in candidate_plan_rows)
             assert (
-                "ix_gmail_extracted_obligations_suggestion_instance"
-                in candidate_plan
+                "ix_gmail_extracted_obligations_suggestion_instance" in candidate_plan
             )
-            assert "Seq Scan on gmail_extracted_obligations" not in (
-                candidate_plan
-            )
+            assert "Seq Scan on gmail_extracted_obligations" not in (candidate_plan)
             assert "Seq Scan on crm_task_suggestions" not in candidate_plan
             assert "Function Scan on unnest candidate_ids" in candidate_plan
             candidate_index_line = next(
@@ -5170,9 +5111,7 @@ def test_obligation_authority_queries_use_bounded_generic_index_probes() -> None
                         "suggestion_id": suggestion_id,
                     },
                 )
-                connection.execute(
-                    sa.text("ANALYZE gmail_extracted_obligations")
-                )
+                connection.execute(sa.text("ANALYZE gmail_extracted_obligations"))
                 connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
                 connection.execute(
                     sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
@@ -5253,9 +5192,7 @@ def test_obligation_authority_queries_use_bounded_generic_index_probes() -> None
                 assert index_name in plan
                 assert "Seq Scan on gmail_extracted_obligations" not in plan
                 assert "Seq Scan on crm_task_suggestions" not in plan
-                index_lines = [
-                    line for line in plan.splitlines() if index_name in line
-                ]
+                index_lines = [line for line in plan.splitlines() if index_name in line]
                 assert len(index_lines) == 1
                 assert "rows=1 loops=1" in index_lines[0]
             assert "Function Scan on unnest candidate_ids" in plans[0][0]
@@ -5407,9 +5344,7 @@ def test_succeeded_attempt_replay_uses_bounded_ordered_index() -> None:
                         "suggestion_id": suggestion_id,
                     },
                 )
-                connection.execute(
-                    sa.text("ANALYZE gmail_extracted_obligations")
-                )
+                connection.execute(sa.text("ANALYZE gmail_extracted_obligations"))
                 connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
                 connection.execute(
                     sa.text("SET LOCAL plan_cache_mode = force_generic_plan")
@@ -5428,9 +5363,7 @@ def test_succeeded_attempt_replay_uses_bounded_ordered_index() -> None:
                         "('00000000-0000-4000-8000-000000008405')"
                     )
                 ).all()
-                connection.execute(
-                    sa.text("DEALLOCATE gmail_succeeded_attempt_replay")
-                )
+                connection.execute(sa.text("DEALLOCATE gmail_succeeded_attempt_replay"))
             plan = "\n".join(str(row[0]) for row in plan_rows)
             assert "ix_gmail_extracted_obligations_attempt_replay" in plan
             assert "Seq Scan on gmail_extracted_obligations" not in plan
@@ -5545,9 +5478,7 @@ def test_backfill_window_and_origin_versions_fail_closed_on_real_postgresql() ->
                         ),
                         {
                             "account_id": account_id,
-                            "request_id": UUID(
-                                "00000000-0000-4000-8000-000000008332"
-                            ),
+                            "request_id": UUID("00000000-0000-4000-8000-000000008332"),
                             "send_hash": "1" * 64,
                             "envelope_hash": "2" * 64,
                             "body_hash": "3" * 64,
@@ -5666,13 +5597,16 @@ def test_missing_message_ack_shape_fails_closed_on_real_postgresql() -> None:
                         "audit_id": audit_id,
                     },
                 )
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT acknowledgement_reason FROM "
-                        "gmail_missing_message_incidents WHERE id = :id"
-                    ),
-                    {"id": valid_id},
-                ) == "Canonical reason"
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT acknowledgement_reason FROM "
+                            "gmail_missing_message_incidents WHERE id = :id"
+                        ),
+                        {"id": valid_id},
+                    )
+                    == "Canonical reason"
+                )
     finally:
         engine.dispose()
 
@@ -5686,13 +5620,10 @@ def test_task2_is_included_once_before_task5_in_the_dedicated_workflow() -> None
     ).read_text(encoding="utf-8")
     assert workflow.count("tests/test_gmail_task_intake_migration.py") == 1
     step_name = (
-        "name: Run the Task 1 through Task 5 persistence and compatibility "
-        "contracts"
+        "name: Run the Task 1 through Task 6 persistence and compatibility contracts"
     )
     assert step_name in workflow
-    command = workflow.split(
-        step_name, 1
-    )[1].split("- name:", 1)[0]
+    command = workflow.split(step_name, 1)[1].split("- name:", 1)[0]
     assert command.index("tests/test_gmail_task_intake_migration.py") < command.index(
         "tests/test_gmail_history_adapter.py"
     )

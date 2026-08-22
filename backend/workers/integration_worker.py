@@ -33,7 +33,7 @@ from workers.health_app import WorkerReadinessProbe, create_health_app
 from workers.jobs.gmail_history import run_gmail_history_job
 
 
-EXPECTED_MIGRATION = "83c6f4e8a1b2"
+EXPECTED_MIGRATION = "84d7a5f9b2c3"
 gmail_history_job_runner = run_gmail_history_job
 _FORBIDDEN_REGISTRY_NAME_PARTS = (
     "secret",
@@ -83,10 +83,7 @@ class JobRegistry:
     def readiness_snapshot(self) -> tuple[tuple[str, bool, int], ...]:
         if not self.initialized:
             return ()
-        return tuple(
-            (job.name, job.enabled, job.interval_seconds)
-            for job in self.jobs
-        )
+        return tuple((job.name, job.enabled, job.interval_seconds) for job in self.jobs)
 
     def due_jobs(self, cycle_at: datetime) -> tuple[JobDefinition, ...]:
         if not self.initialized:
@@ -160,8 +157,7 @@ def _validated_alert_payload(
     except (TypeError, ValueError):
         raise ValueError("gmail_alert_incident_invalid") from None
     expected_path = (
-        "/api/v1/agent-control/gmail/missing-message/incidents/"
-        f"{canonical_incident_id}"
+        f"/api/v1/agent-control/gmail/missing-message/incidents/{canonical_incident_id}"
     )
     if detail_path != expected_path:
         raise ValueError("gmail_alert_detail_path_invalid")
@@ -180,11 +176,7 @@ def _durable_gmail_alert_sink(sessionmaker):
         incident_id: str | None = None,
         detail_path: str | None = None,
     ) -> None:
-        if (
-            not isinstance(dedupe_key, str)
-            or not dedupe_key
-            or len(dedupe_key) > 255
-        ):
+        if not isinstance(dedupe_key, str) or not dedupe_key or len(dedupe_key) > 255:
             raise ValueError("gmail_alert_dedupe_invalid")
         payload = _validated_alert_payload(
             provider=provider,
@@ -455,19 +447,13 @@ async def supervise_worker_peers(
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
 
-        outcomes = {
-            task: task.exception()
-            for task in tasks
-            if task in done
-        }
+        outcomes = {task: task.exception() for task in tasks if task in done}
         for task in tasks:
             error = outcomes.get(task)
             if error is not None:
                 raise error
         winner = scheduler_task if scheduler_task in done else server_task
-        peer_name = (
-            "scheduler" if winner is scheduler_task else "server"
-        )
+        peer_name = "scheduler" if winner is scheduler_task else "server"
         raise RuntimeError(f"{peer_name} returned normally")
     finally:
         server.should_exit = True
@@ -480,9 +466,7 @@ async def supervise_worker_peers(
 async def run_worker() -> None:
     runtime = await initialize_worker_runtime()
     try:
-        worker_id = (
-            f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:12]}"
-        )[:128]
+        worker_id = (f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:12]}")[:128]
         readiness = WorkerReadinessProbe(
             sessionmaker=AsyncSessionLocal,
             worker_id=worker_id,

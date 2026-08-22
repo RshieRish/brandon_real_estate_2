@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from routers import (
+    admin_integrations,
     agent_control,
+    agent_control_crm,
     analytics,
     auth,
     blog,
@@ -20,6 +22,7 @@ from routers import (
     command,
     command_contacts,
     command_provenance,
+    command_task_suggestions,
     content,
     crm,
     evaluator,
@@ -78,14 +81,31 @@ app.include_router(content.router, prefix="/api/v1/content", tags=["content"])
 app.include_router(crm.router, prefix="/api/v1/crm", tags=["crm"])
 app.include_router(geocode.router, prefix="/api/v1/geocode", tags=["geocode"])
 app.include_router(blog.router, prefix="/api/v1/blog", tags=["blog"])
-app.include_router(agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"])
+app.include_router(
+    agent_control.router, prefix="/api/v1/agent-control", tags=["agent-control"]
+)
+app.include_router(
+    agent_control_crm.router,
+    prefix="/api/v1/agent-control",
+    tags=["agent-control-crm"],
+)
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
+app.include_router(
+    admin_integrations.router,
+    prefix="/api/v1/admin/integrations",
+    tags=["admin-integrations"],
+)
 app.include_router(
     command_contacts.router,
     prefix="/api/v1/command",
     tags=["command-contacts"],
 )
 app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
+app.include_router(
+    command_task_suggestions.router,
+    prefix="/api/v1/command",
+    tags=["command-task-suggestions"],
+)
 app.include_router(
     command_provenance.router,
     prefix="/api/v1/command",
@@ -111,6 +131,7 @@ def _try_claim_post_lock() -> bool:
     _release_post_lock()  # be tidy in case a previous iteration leaked
 
     import psycopg2
+
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     try:
         conn = psycopg2.connect(db_url)
@@ -168,18 +189,33 @@ async def _blog_auto_post_loop() -> None:
                         # just posted while we were acquiring it.
                         recheck = _seconds_since_last_posted_blog()
                         if recheck is None or recheck >= interval_seconds:
-                            logging.info("[blog-auto] Generating new auto-blog (lock held)…")
+                            logging.info(
+                                "[blog-auto] Generating new auto-blog (lock held)…"
+                            )
                             result = await BlogService.create_auto_blog()
-                            logging.info("[blog-auto] Posted: id=%s slug=%s", result.get("id"), result.get("slug"))
+                            logging.info(
+                                "[blog-auto] Posted: id=%s slug=%s",
+                                result.get("id"),
+                                result.get("slug"),
+                            )
                         else:
-                            logging.info("[blog-auto] Recheck: another worker posted %ss ago; skipping.", int(recheck))
+                            logging.info(
+                                "[blog-auto] Recheck: another worker posted %ss ago; skipping.",
+                                int(recheck),
+                            )
                     finally:
                         _release_post_lock()
                 else:
-                    logging.info("[blog-auto] Another worker holds the post lock; skipping this cycle.")
+                    logging.info(
+                        "[blog-auto] Another worker holds the post lock; skipping this cycle."
+                    )
             else:
                 sleep_for = interval_seconds - seconds_since_last
-                logging.info("[blog-auto] Last post was %ss ago — sleeping %ss until next.", int(seconds_since_last), int(sleep_for))
+                logging.info(
+                    "[blog-auto] Last post was %ss ago — sleeping %ss until next.",
+                    int(seconds_since_last),
+                    int(sleep_for),
+                )
         except Exception as exc:
             logging.error("[blog-auto] Generation pass failed: %s", exc)
             logging.error(traceback.format_exc())
@@ -189,12 +225,15 @@ async def _blog_auto_post_loop() -> None:
 def _seconds_since_last_posted_blog() -> float | None:
     """Return seconds since the most recent posted blog's created_at, or None if none exist."""
     import psycopg2
+
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     try:
         conn = psycopg2.connect(db_url)
         try:
             cur = conn.cursor()
-            cur.execute("SELECT created_at FROM blogs WHERE is_posted = TRUE ORDER BY created_at DESC LIMIT 1")
+            cur.execute(
+                "SELECT created_at FROM blogs WHERE is_posted = TRUE ORDER BY created_at DESC LIMIT 1"
+            )
             row = cur.fetchone()
             if not row:
                 return None
@@ -214,7 +253,9 @@ async def start_background_loops() -> None:
     global _notification_retry_task, _blog_auto_post_task
     if _notification_retry_task is None or _notification_retry_task.done():
         _notification_retry_task = asyncio.create_task(_notification_retry_loop())
-    if settings.BLOG_AUTO_POST_ENABLED and (_blog_auto_post_task is None or _blog_auto_post_task.done()):
+    if settings.BLOG_AUTO_POST_ENABLED and (
+        _blog_auto_post_task is None or _blog_auto_post_task.done()
+    ):
         _blog_auto_post_task = asyncio.create_task(_blog_auto_post_loop())
 
 

@@ -66,12 +66,8 @@ _ASKABLE_FIELDS = (
 # These public masks freeze the v1 wire encoding independently of later framing
 # changes. XOR is a bijection over the truncated HMAC output and does not reduce
 # its 128-bit unpredictability.
-_CLARIFICATION_CODE_V1_MASK = bytes.fromhex(
-    "dc288b24e02a783e48fd63c9126cd60c"
-)
-_CONTACT_OPTION_CODE_V1_MASK = bytes.fromhex(
-    "090e6f01fe73619fc7bf620c9ba6aeae"
-)
+_CLARIFICATION_CODE_V1_MASK = bytes.fromhex("dc288b24e02a783e48fd63c9126cd60c")
+_CONTACT_OPTION_CODE_V1_MASK = bytes.fromhex("090e6f01fe73619fc7bf620c9ba6aeae")
 
 
 class SydneyClarificationError(RuntimeError):
@@ -301,8 +297,10 @@ def _single_line(value: object, *, maximum: int) -> str:
     if type(value) is not str:
         raise ValueError("text_invalid")
     normalized = unicodedata.normalize("NFKC", value).strip()
-    if not normalized or len(normalized) > maximum or _has_unsafe_character(
-        normalized, multiline=False
+    if (
+        not normalized
+        or len(normalized) > maximum
+        or _has_unsafe_character(normalized, multiline=False)
     ):
         raise ValueError("text_invalid")
     return normalized
@@ -315,9 +313,7 @@ def _multiline(value: object, *, maximum: int) -> str:
     normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
     normalized = normalized.replace("\u2028", "\n").replace("\u2029", "\n")
     normalized = normalized.strip()
-    if len(normalized) > maximum or _has_unsafe_character(
-        normalized, multiline=True
-    ):
+    if len(normalized) > maximum or _has_unsafe_character(normalized, multiline=True):
         raise ValueError("text_invalid")
     return normalized
 
@@ -385,9 +381,7 @@ class ActionScopeSingleTask(_StrictModel):
     description: str
     priority: Literal["low", "normal", "high"]
 
-    _title = field_validator("title")(
-        lambda value: _single_line(value, maximum=255)
-    )
+    _title = field_validator("title")(lambda value: _single_line(value, maximum=255))
     _description = field_validator("description")(
         lambda value: _multiline(value, maximum=5000)
     )
@@ -494,9 +488,7 @@ class TaskDetailsReplace(_StrictModel):
     description: str
     priority: Literal["low", "normal", "high"]
 
-    _title = field_validator("title")(
-        lambda value: _single_line(value, maximum=255)
-    )
+    _title = field_validator("title")(lambda value: _single_line(value, maximum=255))
     _description = field_validator("description")(
         lambda value: _multiline(value, maximum=5000)
     )
@@ -799,14 +791,17 @@ class SydneyClarificationService:
             ),
             answered_fields=answered,
         )
-        round_number = int(
-            await session.scalar(
-                sa.select(sa.func.count(CRMTaskClarification.id)).where(
-                    CRMTaskClarification.suggestion_id == suggestion.id
+        round_number = (
+            int(
+                await session.scalar(
+                    sa.select(sa.func.count(CRMTaskClarification.id)).where(
+                        CRMTaskClarification.suggestion_id == suggestion.id
+                    )
                 )
+                or 0
             )
-            or 0
-        ) + 1
+            + 1
+        )
         if field_name is None:
             return EnqueueResult(
                 created=False,
@@ -874,8 +869,7 @@ class SydneyClarificationService:
             attempt_kind="initial",
             attempt_number=1,
             dedupe_key=(
-                f"clarification:{clarification_id}:"
-                f"v{suggestion.version}:initial:1"
+                f"clarification:{clarification_id}:v{suggestion.version}:initial:1"
             ),
             template_id="clarification_initial_v1",
             question_context_json=context_json,
@@ -1001,11 +995,8 @@ class SydneyClarificationService:
                 .select_from(SydneyQuestionOutbox)
                 .where(
                     SydneyQuestionOutbox.clarification_id == clarification_id,
-                    SydneyQuestionOutbox.attempt_kind.in_(
-                        ("initial", "initial_retry")
-                    ),
-                    SydneyQuestionOutbox.telegram_chat_id
-                    == self._brandon_chat_id,
+                    SydneyQuestionOutbox.attempt_kind.in_(("initial", "initial_retry")),
+                    SydneyQuestionOutbox.telegram_chat_id == self._brandon_chat_id,
                     SydneyQuestionOutbox.telegram_message_id.is_not(None),
                     sa.or_(
                         SydneyQuestionOutbox.state == "sent",
@@ -1107,7 +1098,7 @@ class SydneyClarificationService:
     async def answer(
         self,
         *,
-        code: str,
+        code: object,
         expected_suggestion_version: int,
         answer: object,
         now: datetime,
@@ -1158,8 +1149,7 @@ class SydneyClarificationService:
                 )
                 if (
                     clarification.state != "pending"
-                    or clarification.suggestion_version
-                    != expected_suggestion_version
+                    or clarification.suggestion_version != expected_suggestion_version
                     or suggestion.version != expected_suggestion_version
                     or parsed_answer.kind != clarification.field_name
                     or now >= clarification.slot_deadline_at
@@ -1300,7 +1290,9 @@ class SydneyClarificationService:
                         now=now,
                     )
                     next_clarification_id = queued.clarification_id
-                elif suggestion.blocker_codes or suggestion.state == "possible_duplicate":
+                elif (
+                    suggestion.blocker_codes or suggestion.state == "possible_duplicate"
+                ):
                     suggestion.state = (
                         "possible_duplicate"
                         if suggestion.state == "possible_duplicate"

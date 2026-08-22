@@ -42,6 +42,13 @@ TASK5_TESTS = TASK4_TESTS + (
     "tests/test_sydney_clarifications.py",
     "tests/test_sydney_telegram_dispatcher.py",
 )
+TASK6_TESTS = TASK5_TESTS + (
+    "tests/test_task_suggestion_approval.py",
+    "tests/test_gmail_task_intake_admin.py",
+    "tests/test_agent_control_crm.py",
+    "tests/test_agent_control_transactional_audit.py",
+    "tests/test_gmail_task_router_registration.py",
+)
 TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
@@ -82,9 +89,7 @@ def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> 
         "builder": "DOCKERFILE",
         "dockerfilePath": "Dockerfile.worker",
     }
-    assert railway["deploy"]["startCommand"] == (
-        "python -m workers.integration_worker"
-    )
+    assert railway["deploy"]["startCommand"] == ("python -m workers.integration_worker")
     assert railway["deploy"]["healthcheckPath"] == "/health"
     assert railway["deploy"]["restartPolicyType"] == "ON_FAILURE"
     assert "/ready" not in json.dumps(railway).lower()
@@ -95,9 +100,7 @@ def test_worker_build_inputs_resolve_from_documented_backend_context() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     assert "Set root directory to `backend/`" in readme
     railway = json.loads(
-        (BACKEND_ROOT / "railway.integration-worker.json").read_text(
-            encoding="utf-8"
-        )
+        (BACKEND_ROOT / "railway.integration-worker.json").read_text(encoding="utf-8")
     )
     context_root = BACKEND_ROOT
     dockerfile_path = context_root / railway["build"]["dockerfilePath"]
@@ -119,10 +122,12 @@ def test_worker_build_inputs_resolve_from_documented_backend_context() -> None:
             )
 
 
-def test_worker_source_uses_first_completed_and_web_source_has_no_worker_schedule() -> None:
-    worker_source = (
-        BACKEND_ROOT / "workers" / "integration_worker.py"
-    ).read_text(encoding="utf-8")
+def test_worker_source_uses_first_completed_and_web_source_has_no_worker_schedule() -> (
+    None
+):
+    worker_source = (BACKEND_ROOT / "workers" / "integration_worker.py").read_text(
+        encoding="utf-8"
+    )
     assert "asyncio.FIRST_COMPLETED" in worker_source
     assert "asyncio.wait(" in worker_source
     assert "server.should_exit = True" in worker_source
@@ -259,12 +264,9 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
-def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task5() -> None:
+def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> None:
     workflow_path = (
-        REPOSITORY_ROOT
-        / ".github"
-        / "workflows"
-        / "gmail-sydney-task-intake.yml"
+        REPOSITORY_ROOT / ".github" / "workflows" / "gmail-sydney-task-intake.yml"
     )
     assert workflow_path.is_file()
     workflow = workflow_path.read_text(encoding="utf-8")
@@ -277,7 +279,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task5() -> Non
         "GMAIL_HISTORY_DATABASE_URL:",
         "GMAIL_PARTICIPANT_HASH_KEY: gmail-sydney-ci-participant-hash-key-only",
         'INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: "10"',
-        "CI: \"true\"",
+        'CI: "true"',
         "SSL_CERT_FILE:",
         "ALTER SYSTEM SET ssl = 'on'",
         "hostnossl all all 0.0.0.0/0 reject",
@@ -322,11 +324,11 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task5() -> Non
         'rmdir -- "$(dirname "$SSL_CERT_FILE")"',
         "hostnossl all all ::/0 reject",
         "server.key",
-        "docker restart \"$POSTGRES_CONTAINER\"",
+        'docker restart "$POSTGRES_CONTAINER"',
     ):
         assert required in workflow
     pytest_step = re.search(
-        r"name: Run the Task 1 through Task 5 persistence and compatibility contracts"
+        r"name: Run the Task 1 through Task 6 persistence and compatibility contracts"
         r"(?P<body>.*?)"
         r"\n\s+- name:",
         workflow,
@@ -334,19 +336,13 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task5() -> Non
     )
     assert pytest_step is not None
     assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK5_TESTS
+        TASK6_TESTS
     )
-    for future_test in (
-        "tests/test_agent_control_crm.py",
-        "tests/test_gmail_task_intake_e2e.py",
-    ):
+    for future_test in ("tests/test_gmail_task_intake_e2e.py",):
         assert future_test not in workflow
 
     assert 'if [[ "$GMAIL_TASK_TEST_DATABASE_NAME" != *_test ]]' in workflow
-    assert (
-        'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]'
-        in workflow
-    )
+    assert 'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]' in workflow
     assert workflow.count('"backend/tests/gmail_task_postgres.py"') == 2
     for path in TASK4_EXPLICIT_TRIGGER_PATHS:
         assert workflow.count(f'"{path}"') == 2
@@ -369,10 +365,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task5() -> Non
 
 def test_existing_crm_workflow_still_runs_the_revision81_ancestor_contract() -> None:
     workflow = (
-        REPOSITORY_ROOT
-        / ".github"
-        / "workflows"
-        / "crm-task-lifecycle-migration.yml"
+        REPOSITORY_ROOT / ".github" / "workflows" / "crm-task-lifecycle-migration.yml"
     ).read_text(encoding="utf-8")
     assert '"backend/alembic/**"' in workflow
     assert "tests/test_crm_task_lifecycle_migration.py" in workflow

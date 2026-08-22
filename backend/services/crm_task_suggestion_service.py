@@ -11,12 +11,14 @@ from uuid import UUID
 from sqlalchemy import exists, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from models.agent_action_audit import AgentActionAudit
 from models.command import CRMContact
 from models.gmail_task_intake import (
     CRMTaskSuggestion,
     GmailExtractedObligation,
 )
 from schemas.gmail_task_intake import GmailTaskPayload
+from models.sydney_tasks import CRMTaskSuggestionEvent
 from services.command_contact_identity import canonical_email
 from services.gmail_history_adapter import parse_gmail_provider_id
 from services.integration_advisory_locks import (
@@ -42,12 +44,9 @@ def _canonical_due_at(value: datetime | None) -> str | None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("due_at must be timezone-aware")
     utc_value = value.astimezone(timezone.utc)
-    return (
-        utc_value.isoformat(
-            timespec=("microseconds" if utc_value.microsecond else "seconds")
-        )
-        .replace("+00:00", "Z")
-    )
+    return utc_value.isoformat(
+        timespec=("microseconds" if utc_value.microsecond else "seconds")
+    ).replace("+00:00", "Z")
 
 
 def canonical_task_payload_hash(
@@ -138,6 +137,116 @@ class CRMTaskSuggestionService:
             status=suggestion.task_status,
         )
 
+    @staticmethod
+    async def _has_current_duplicate_resolution(
+        *,
+        session: AsyncSession,
+        suggestion: CRMTaskSuggestion,
+    ) -> bool:
+        events = list(
+            (
+                await session.scalars(
+                    select(CRMTaskSuggestionEvent)
+                    .where(
+                        CRMTaskSuggestionEvent.suggestion_id == suggestion.id,
+                        CRMTaskSuggestionEvent.suggestion_version == suggestion.version,
+                        CRMTaskSuggestionEvent.event_type == "edit",
+                        CRMTaskSuggestionEvent.actor_type == "command_admin",
+                        CRMTaskSuggestionEvent.action_audit_id.is_not(None),
+                    )
+                    .order_by(CRMTaskSuggestionEvent.id)
+                    .limit(2)
+                )
+            ).all()
+        )
+        if len(events) != 1 or events[0].action_audit_id is None:
+            return False
+        event = events[0]
+        audit = await session.get(AgentActionAudit, event.action_audit_id)
+        if (
+            audit is None
+            or not audit.allowed
+            or not audit.actor.startswith("command_admin:")
+            or audit.action_id != "command.task_suggestions.edit"
+            or audit.method != "PATCH"
+            or audit.status_code != 200
+            or audit.path != f"/api/v1/command/task-suggestions/{suggestion.id}"
+        ):
+            return False
+        try:
+            event_data = json.loads(event.event_data_json)
+            request_meta = json.loads(audit.request_meta_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if type(event_data) is not dict or type(request_meta) is not dict:
+            return False
+        event_resolutions = event_data.get("explicit_resolutions")
+        request_resolutions = request_meta.get("explicit_resolutions")
+        return bool(
+            type(event_resolutions) is list
+            and all(type(value) is str for value in event_resolutions)
+            and "confirm_not_duplicate" in event_resolutions
+            and set(request_meta)
+            == {"suggestion_id", "expected_version", "explicit_resolutions"}
+            and request_meta.get("suggestion_id") == str(suggestion.id)
+            and request_meta.get("expected_version") == suggestion.version - 1
+            and type(request_resolutions) is list
+            and all(type(value) is str for value in request_resolutions)
+            and "confirm_not_duplicate" in request_resolutions
+        )
+
+    @staticmethod
+    async def resolve_contact_authority(
+        *,
+        session: AsyncSession,
+        contact_id: int | None,
+        none_state: str = "explicit_none",
+    ) -> tuple[str, str | None]:
+        """Resolve one contact while serialized with contact identity writes."""
+        if contact_id is None:
+            if none_state not in {"not_provided", "explicit_none"}:
+                raise _fixed_authority_error("contact_authority_changed")
+            return none_state, None
+        await contact_identity_transaction_lock(await session.connection())
+        selected = await session.scalar(
+            select(CRMContact).where(CRMContact.id == contact_id).with_for_update()
+        )
+        selected_email = (
+            canonical_email(selected.email) if selected is not None else None
+        )
+        if (
+            selected is None
+            or selected_email is None
+            or selected.normalized_email != selected_email
+        ):
+            raise _fixed_authority_error("contact_authority_changed")
+        candidates = list(
+            (
+                await session.execute(
+                    select(
+                        CRMContact.id,
+                        CRMContact.email,
+                        CRMContact.normalized_email,
+                    )
+                    .where(CRMContact.normalized_email == selected_email)
+                    .order_by(CRMContact.id)
+                    .limit(2)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if (
+            len(candidates) != 1
+            or candidates[0].id != contact_id
+            or candidates[0].normalized_email != selected_email
+            or canonical_email(candidates[0].email) != selected_email
+        ):
+            raise _fixed_authority_error("contact_authority_changed")
+        return "clarified_unique", _contact_resolution_hash(
+            contact_id=contact_id,
+            email=selected_email,
+        )
+
     @classmethod
     async def task_payload(
         cls,
@@ -206,8 +315,7 @@ class CRMTaskSuggestionService:
                         select(CRMTaskSuggestion.id)
                         .where(
                             CRMTaskSuggestion.id != current.id,
-                            CRMTaskSuggestion.source_type
-                            == literal("gmail_message"),
+                            CRMTaskSuggestion.source_type == literal("gmail_message"),
                             CRMTaskSuggestion.gmail_account_id
                             == current.gmail_account_id,
                             CRMTaskSuggestion.gmail_thread_id
@@ -229,31 +337,44 @@ class CRMTaskSuggestionService:
                 )
             )
         )
+        duplicate_resolution = (
+            await cls._has_current_duplicate_resolution(
+                session=session,
+                suggestion=current,
+            )
+            if has_live_conflicting_sibling
+            else False
+        )
         if (
             current.blocker_codes
             or current.clarification_state != "not_required"
-            or has_live_conflicting_sibling
+            or (has_live_conflicting_sibling and not duplicate_resolution)
         ):
             raise _fixed_authority_error("suggestion_blocked")
         if current.state != "approved":
             raise _fixed_authority_error("suggestion_not_approved")
-        if current.contact_id is not None:
-            await cls._require_current_contact_authority(
-                session=session,
-                suggestion=current,
-            )
+        await cls.require_current_contact_authority(
+            session=session,
+            suggestion=current,
+        )
         return cls.preview_payload(current)
 
     @staticmethod
-    async def _require_current_contact_authority(
+    async def require_current_contact_authority(
         *,
         session: AsyncSession,
         suggestion: CRMTaskSuggestion,
     ) -> None:
-        if (
-            suggestion.gmail_account_id is None
-            or suggestion.gmail_thread_id is None
-            or suggestion.contact_id is None
+        if suggestion.contact_id is None:
+            if (
+                suggestion.contact_resolution_state
+                not in {"not_provided", "explicit_none"}
+                or suggestion.contact_resolution_hash is not None
+            ):
+                raise _fixed_authority_error("contact_authority_changed")
+            return
+        if suggestion.source_type == "gmail_message" and (
+            suggestion.gmail_account_id is None or suggestion.gmail_thread_id is None
         ):
             raise _fixed_authority_error("contact_authority_changed")
         await contact_identity_transaction_lock(await session.connection())
@@ -283,10 +404,9 @@ class CRMTaskSuggestionService:
             raise _fixed_authority_error("contact_authority_changed")
         if suggestion.contact_resolution_state == "clarified_unique":
             authorized_email = selected_email
-        else:
+        elif suggestion.source_type == "gmail_message":
             hint_query = select(GmailExtractedObligation.contact_hint).where(
-                GmailExtractedObligation.reconciled_suggestion_id
-                == suggestion.id,
+                GmailExtractedObligation.reconciled_suggestion_id == suggestion.id,
                 GmailExtractedObligation.contact_hint.is_not(None),
             )
             first_hint = await session.scalar(
@@ -301,15 +421,13 @@ class CRMTaskSuggestionService:
                     GmailExtractedObligation.id.desc(),
                 ).limit(1)
             )
-            if (
-                first_hint is None
-                or last_hint is None
-                or first_hint != last_hint
-            ):
+            if first_hint is None or last_hint is None or first_hint != last_hint:
                 raise _fixed_authority_error("contact_authority_changed")
             authorized_email = canonical_email(first_hint)
             if authorized_email is None or authorized_email != selected_email:
                 raise _fixed_authority_error("contact_authority_changed")
+        else:
+            raise _fixed_authority_error("contact_authority_changed")
         candidates = list(
             (
                 await session.execute(

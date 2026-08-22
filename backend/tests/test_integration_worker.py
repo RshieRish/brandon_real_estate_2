@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
-REVISION = "83c6f4e8a1b2"
+REVISION = "84d7a5f9b2c3"
 UTC = timezone.utc
 
 
@@ -43,7 +43,9 @@ async def worker_database(runtime_database):
         await engine.dispose()
 
 
-def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop() -> None:
+def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop() -> (
+    None
+):
     from config import Settings
 
     settings = Settings(JWT_SECRET="test-secret")
@@ -51,27 +53,26 @@ def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop
     assert settings.SYDNEY_TASK_QUESTIONS_ENABLED is False
     assert settings.INSTAGRAM_INTEGRATION_ENABLED is False
 
-    main_source = (Path(__file__).parents[1] / "main.py").read_text(
-        encoding="utf-8"
-    )
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
     assert "workers.integration_worker" not in main_source
     assert "GMAIL_TASK_INTAKE_ENABLED" not in main_source
     assert "SYDNEY_TASK_QUESTIONS_ENABLED" not in main_source
     assert "INSTAGRAM_INTEGRATION_ENABLED" not in main_source
 
 
-def test_worker_targets_head_83_and_registers_real_gmail_job_symbol() -> None:
+def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
     from workers import integration_worker
     from workers.jobs.gmail_history import run_gmail_history_job
 
     assert integration_worker.EXPECTED_MIGRATION == REVISION
     assert integration_worker.gmail_history_job_runner is run_gmail_history_job
-    source = (Path(__file__).parents[1] / "workers" / "integration_worker.py").read_text(
-        encoding="utf-8"
+    source = (
+        Path(__file__).parents[1] / "workers" / "integration_worker.py"
+    ).read_text(encoding="utf-8")
+    assert (
+        "_disabled_until_provider_task_lands"
+        not in source.split('"gmail_history"', 1)[1].split('"sydney_questions"', 1)[0]
     )
-    assert "_disabled_until_provider_task_lands" not in source.split(
-        '"gmail_history"', 1
-    )[1].split('"sydney_questions"', 1)[0]
 
 
 def test_job_registry_validates_before_becoming_readiness_eligible() -> None:
@@ -113,17 +114,9 @@ def test_job_registry_validates_before_becoming_readiness_eligible() -> None:
             )
         ).initialize()
     with pytest.raises(ValueError, match="secret"):
-        JobRegistry(
-            (
-                JobDefinition("gmail_token", 60, True, no_op),
-            )
-        ).initialize()
+        JobRegistry((JobDefinition("gmail_token", 60, True, no_op),)).initialize()
     with pytest.raises(ValueError, match="interval"):
-        JobRegistry(
-            (
-                JobDefinition("invalid_interval", 0, True, no_op),
-            )
-        ).initialize()
+        JobRegistry((JobDefinition("invalid_interval", 0, True, no_op),)).initialize()
 
 
 def test_default_gmail_job_requires_a_runtime_participant_hash_key() -> None:
@@ -235,13 +228,18 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
             "gmail_job",
         ]
         assert runtime.registry.initialized is True
-        gmail_job = next(job for job in runtime.registry.jobs if job.name == "gmail_history")
+        gmail_job = next(
+            job for job in runtime.registry.jobs if job.name == "gmail_history"
+        )
         assert gmail_job.enabled is True
         assert gmail_job.runner is gmail_runner
         async with sessionmaker() as session:
-            assert await session.scalar(
-                sa.select(sa.func.count()).select_from(IntegrationWorkerHeartbeat)
-            ) == 0
+            assert (
+                await session.scalar(
+                    sa.select(sa.func.count()).select_from(IntegrationWorkerHeartbeat)
+                )
+                == 0
+            )
     finally:
         await runtime.close()
     assert calls[-3:] == ["executor_wait", "executor_shutdown", "dispose"]
@@ -342,8 +340,8 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             observed["profile_request"] = kwargs
             return _Request(
                 {
-                "emailAddress": account.workspace_email,
-                "historyId": "900",
+                    "emailAddress": account.workspace_email,
+                    "historyId": "900",
                 }
             )
 
@@ -496,8 +494,7 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             assert alert.dedupe_key
             incident_id = alert.payload_dict["incident_id"]
             incident_detail_path = (
-                "/api/v1/agent-control/gmail/missing-message/incidents/"
-                f"{incident_id}"
+                f"/api/v1/agent-control/gmail/missing-message/incidents/{incident_id}"
             )
             assert alert.status == "delivered"
             assert alert.payload_dict == {
@@ -556,9 +553,12 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
                 "incident_id": incident_id,
                 "detail_path": incident_detail_path,
             }
-            assert await session.scalar(
-                sa.select(sa.func.count()).select_from(NotificationJob)
-            ) == 1
+            assert (
+                await session.scalar(
+                    sa.select(sa.func.count()).select_from(NotificationJob)
+                )
+                == 1
+            )
         assert not {
             "message_id",
             "thread_id",
@@ -634,9 +634,7 @@ async def test_failed_gmail_affinity_probe_disposes_and_registers_nothing(
         calls.append("forbidden")
         raise AssertionError("provider/job construction must follow the probe")
 
-    with pytest.raises(
-        RuntimeError, match="^gmail_history_session_affinity_required$"
-    ):
+    with pytest.raises(RuntimeError, match="^gmail_history_session_affinity_required$"):
         await initialize_worker_runtime(
             config=config,
             sessionmaker=sessionmaker,
@@ -648,9 +646,12 @@ async def test_failed_gmail_affinity_probe_disposes_and_registers_nothing(
         )
     assert calls == ["history_engine", "probe", "dispose"]
     async with sessionmaker() as session:
-        assert await session.scalar(
-            sa.select(sa.func.count()).select_from(IntegrationWorkerHeartbeat)
-        ) == 0
+        assert (
+            await session.scalar(
+                sa.select(sa.func.count()).select_from(IntegrationWorkerHeartbeat)
+            )
+            == 0
+        )
 
 
 async def test_disabled_gmail_skips_direct_database_validation_probe_and_provider_setup(
@@ -683,7 +684,9 @@ async def test_disabled_gmail_skips_direct_database_validation_probe_and_provide
         gmail_job_factory=forbidden,
     )
     try:
-        gmail_job = next(job for job in runtime.registry.jobs if job.name == "gmail_history")
+        gmail_job = next(
+            job for job in runtime.registry.jobs if job.name == "gmail_history"
+        )
         assert gmail_job.enabled is False
         assert runtime.gmail_history_ready is False
     finally:
@@ -806,14 +809,10 @@ async def test_gmail_job_rejects_a_rotated_database_credential_generation(
                     sa.text("SELECT pg_advisory_xact_lock(:lock_key)"),
                     {"lock_key": route_lock_key},
                 )
-                current_results.append(
-                    await self._credential_is_current(session)
-                )
+                current_results.append(await self._credential_is_current(session))
                 await session.rollback()
 
-    def service_factory(
-        *, refresh_token, credential_is_current, **_kwargs
-    ):
+    def service_factory(*, refresh_token, credential_is_current, **_kwargs):
         assert refresh_token == "database-generation-one"
         return _Service(credential_is_current)
 
@@ -1361,9 +1360,7 @@ def test_health_is_exact_liveness_and_touches_no_dependency() -> None:
     async def exploding_readiness():
         nonlocal calls
         calls += 1
-        raise RuntimeError(
-            "database oauth registry provider secret@example.test"
-        )
+        raise RuntimeError("database oauth registry provider secret@example.test")
 
     client = TestClient(create_health_app(exploding_readiness))
     response = client.get("/health")
@@ -1622,10 +1619,13 @@ async def test_scheduler_validation_failure_writes_no_boot_row(
             cycle_at=datetime(2026, 8, 20, 13, 5, tzinfo=UTC),
         )
     async with sessionmaker() as session:
-        assert await session.get(
-            IntegrationWorkerHeartbeat,
-            "worker-invalid",
-        ) is None
+        assert (
+            await session.get(
+                IntegrationWorkerHeartbeat,
+                "worker-invalid",
+            )
+            is None
+        )
 
 
 async def test_ready_is_read_only_and_requires_current_head_fresh_scheduler_heartbeat_and_registry(
@@ -1860,7 +1860,10 @@ async def test_stalled_sync_provider_does_not_delay_liveness_probe() -> None:
 
 @pytest.mark.parametrize(
     ("winner", "message"),
-    (("scheduler", "scheduler returned normally"), ("server", "server returned normally")),
+    (
+        ("scheduler", "scheduler returned normally"),
+        ("server", "server returned normally"),
+    ),
 )
 async def test_first_completed_normal_return_cancels_and_awaits_peer(
     winner: str,
@@ -1960,7 +1963,9 @@ async def test_first_completed_prefers_peer_error_when_both_peers_are_done(
     assert server.should_exit is True
 
 
-async def test_first_completed_uses_deterministic_scheduler_error_precedence_when_both_fail() -> None:
+async def test_first_completed_uses_deterministic_scheduler_error_precedence_when_both_fail() -> (
+    None
+):
     from workers.integration_worker import supervise_worker_peers
 
     class Server:
