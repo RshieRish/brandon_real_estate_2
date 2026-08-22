@@ -8,13 +8,16 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from database import get_db
 from middleware.auth import AdminSubject, require_admin
+from models.agent_action_audit import AgentActionAudit
 from models.gmail_task_intake import (
     CRMTaskSuggestion,
+    CRMTaskSuggestionSource,
     CRMTaskSuggestionSuppression,
     GmailExtractedObligation,
 )
@@ -28,6 +31,8 @@ from schemas.agent_control_crm import (
     SuggestionVersion,
     TaskSuggestionEditRequest,
     TaskSuggestionList,
+    TaskSuggestionAuditEvent,
+    TaskSuggestionSourceEvidence,
     TaskSuggestionPreviewRequest,
     TaskSuggestionPreviewResponse,
     TaskSuggestionSummary,
@@ -63,10 +68,35 @@ _RESOLUTION_FIELDS = {
     "treat_as_single_action",
     "confirm_not_duplicate",
 }
+_RESOLUTION_ORDER = (
+    "resolve_owner_as_brandon",
+    "create_without_unsupported_link",
+    "accept_current_task_details",
+    "treat_as_single_action",
+    "confirm_not_duplicate",
+)
 
 
 def _ordered_blockers(blockers: set[str]) -> list[str]:
     return [code for code in _BLOCKER_ORDER if code in blockers]
+
+
+def _resolution_requirements(
+    row: CRMTaskSuggestion,
+    *,
+    duplicate_resolution_required: bool,
+) -> list[str]:
+    blockers = set(row.blocker_codes)
+    applicable = {
+        "resolve_owner_as_brandon": (
+            "unsupported_owner" in blockers or row.owner_clarification_pending
+        ),
+        "create_without_unsupported_link": "unsupported_link" in blockers,
+        "accept_current_task_details": row.task_details_clarification_pending,
+        "treat_as_single_action": "multiple_actions" in blockers,
+        "confirm_not_duplicate": duplicate_resolution_required,
+    }
+    return [name for name in _RESOLUTION_ORDER if applicable[name]]
 
 
 def _suppression_instance_digest(row: CRMTaskSuggestion) -> str:
@@ -166,7 +196,15 @@ async def _has_live_conflicting_sibling(
     )
 
 
-def _summary(row: CRMTaskSuggestion) -> TaskSuggestionSummary:
+def _summary(
+    row: CRMTaskSuggestion,
+    *,
+    sources: tuple[CRMTaskSuggestionSource, ...] = (),
+    audit_trail: tuple[CRMTaskSuggestionEvent, ...] = (),
+    duplicate_resolution_required: bool | None = None,
+) -> TaskSuggestionSummary:
+    if duplicate_resolution_required is None:
+        duplicate_resolution_required = row.state == "possible_duplicate"
     return TaskSuggestionSummary(
         id=row.id,
         source_type=row.source_type,
@@ -179,12 +217,219 @@ def _summary(row: CRMTaskSuggestion) -> TaskSuggestionSummary:
         state=row.state,
         clarification_state=row.clarification_state,
         blocker_codes=list(row.blocker_codes),
+        resolution_requirements=_resolution_requirements(
+            row,
+            duplicate_resolution_required=duplicate_resolution_required,
+        ),
+        confidence=float(row.confidence),
+        rationale=row.rationale,
+        model_schema_version=row.model_schema_version,
+        sources=[
+            TaskSuggestionSourceEvidence(
+                direction=source.direction,
+                source_label=source.source_label,
+                created_at=source.created_at,
+            )
+            for source in sources
+        ],
+        audit_trail=[
+            TaskSuggestionAuditEvent(
+                suggestion_version=event.suggestion_version,
+                event_type=event.event_type,
+                actor_type=event.actor_type,
+                action_audited=event.action_audit_id is not None,
+                created_at=event.created_at,
+            )
+            for event in audit_trail
+        ],
         payload_hash=row.payload_hash,
         version=row.version,
         applied_task_id=row.applied_task_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+async def _summaries(
+    db: AsyncSession,
+    rows: list[CRMTaskSuggestion],
+) -> list[TaskSuggestionSummary]:
+    if not rows:
+        return []
+    suggestion_ids = [row.id for row in rows]
+    candidate = aliased(CRMTaskSuggestion)
+    sibling = aliased(CRMTaskSuggestion)
+    duplicate_resolution_ids = set(
+        (
+            await db.scalars(
+                select(candidate.id)
+                .join(
+                    sibling,
+                    and_(
+                        sibling.id != candidate.id,
+                        sibling.source_type == "gmail_message",
+                        sibling.gmail_account_id == candidate.gmail_account_id,
+                        sibling.gmail_thread_id == candidate.gmail_thread_id,
+                        sibling.source_action_key == candidate.source_action_key,
+                        sibling.obligation_fingerprint
+                        != candidate.obligation_fingerprint,
+                        sibling.state.in_(
+                            (
+                                "pending_review",
+                                "needs_clarification",
+                                "possible_duplicate",
+                            )
+                        ),
+                    ),
+                )
+                .where(
+                    candidate.id.in_(suggestion_ids),
+                    candidate.source_type == "gmail_message",
+                    candidate.gmail_account_id.is_not(None),
+                    candidate.gmail_thread_id.is_not(None),
+                )
+                .distinct()
+            )
+        ).all()
+    )
+    resolution_candidate = aliased(CRMTaskSuggestion)
+    resolution_event_ranked = (
+        select(
+            CRMTaskSuggestionEvent,
+            func.row_number()
+            .over(
+                partition_by=CRMTaskSuggestionEvent.suggestion_id,
+                order_by=CRMTaskSuggestionEvent.id,
+            )
+            .label("resolution_rank"),
+        )
+        .join(
+            resolution_candidate,
+            and_(
+                resolution_candidate.id == CRMTaskSuggestionEvent.suggestion_id,
+                resolution_candidate.version
+                == CRMTaskSuggestionEvent.suggestion_version,
+            ),
+        )
+        .where(
+            resolution_candidate.id.in_(suggestion_ids),
+            CRMTaskSuggestionEvent.event_type == "edit",
+            CRMTaskSuggestionEvent.actor_type == "command_admin",
+            CRMTaskSuggestionEvent.action_audit_id.is_not(None),
+        )
+        .subquery()
+    )
+    resolution_event = aliased(CRMTaskSuggestionEvent, resolution_event_ranked)
+    resolution_rows = (
+        await db.execute(
+            select(resolution_event, AgentActionAudit)
+            .join(
+                AgentActionAudit,
+                AgentActionAudit.id == resolution_event.action_audit_id,
+            )
+            .where(resolution_event_ranked.c.resolution_rank <= 2)
+            .order_by(resolution_event.suggestion_id, resolution_event.id)
+        )
+    ).all()
+    resolution_evidence: dict[
+        UUID,
+        list[tuple[CRMTaskSuggestionEvent, AgentActionAudit]],
+    ] = {}
+    for event, audit in resolution_rows:
+        resolution_evidence.setdefault(event.suggestion_id, []).append((event, audit))
+    resolved_duplicate_ids: set[UUID] = set()
+    rows_by_id = {row.id: row for row in rows}
+    for suggestion_id, evidence in resolution_evidence.items():
+        if len(evidence) != 1:
+            continue
+        event, audit = evidence[0]
+        if CRMTaskSuggestionService.current_duplicate_resolution_evidence_is_valid(
+            suggestion=rows_by_id[suggestion_id],
+            event=event,
+            audit=audit,
+        ):
+            resolved_duplicate_ids.add(suggestion_id)
+    source_ranked = (
+        select(
+            CRMTaskSuggestionSource,
+            func.row_number()
+            .over(
+                partition_by=CRMTaskSuggestionSource.suggestion_id,
+                order_by=(
+                    CRMTaskSuggestionSource.created_at.desc(),
+                    CRMTaskSuggestionSource.id.desc(),
+                ),
+            )
+            .label("evidence_rank"),
+        )
+        .where(CRMTaskSuggestionSource.suggestion_id.in_(suggestion_ids))
+        .subquery()
+    )
+    source_alias = aliased(CRMTaskSuggestionSource, source_ranked)
+    sources = list(
+        (
+            await db.scalars(
+                select(source_alias)
+                .where(source_ranked.c.evidence_rank <= 20)
+                .order_by(
+                    source_alias.suggestion_id,
+                    source_alias.created_at.desc(),
+                    source_alias.id.desc(),
+                )
+            )
+        ).all()
+    )
+    event_ranked = (
+        select(
+            CRMTaskSuggestionEvent,
+            func.row_number()
+            .over(
+                partition_by=CRMTaskSuggestionEvent.suggestion_id,
+                order_by=(
+                    CRMTaskSuggestionEvent.created_at.desc(),
+                    CRMTaskSuggestionEvent.id.desc(),
+                ),
+            )
+            .label("evidence_rank"),
+        )
+        .where(CRMTaskSuggestionEvent.suggestion_id.in_(suggestion_ids))
+        .subquery()
+    )
+    event_alias = aliased(CRMTaskSuggestionEvent, event_ranked)
+    events = list(
+        (
+            await db.scalars(
+                select(event_alias)
+                .where(event_ranked.c.evidence_rank <= 20)
+                .order_by(
+                    event_alias.suggestion_id,
+                    event_alias.created_at.desc(),
+                    event_alias.id.desc(),
+                )
+            )
+        ).all()
+    )
+    sources_by_suggestion: dict[UUID, list[CRMTaskSuggestionSource]] = {}
+    for source in sources:
+        sources_by_suggestion.setdefault(source.suggestion_id, []).append(source)
+    events_by_suggestion: dict[UUID, list[CRMTaskSuggestionEvent]] = {}
+    for event in events:
+        events_by_suggestion.setdefault(event.suggestion_id, []).append(event)
+    return [
+        _summary(
+            row,
+            sources=tuple(sources_by_suggestion.get(row.id, [])),
+            audit_trail=tuple(events_by_suggestion.get(row.id, [])),
+            duplicate_resolution_required=(
+                row.state == "possible_duplicate"
+                or (
+                    row.id in duplicate_resolution_ids
+                    and row.id not in resolved_duplicate_ids
+                )
+            ),
+        )
+        for row in rows
+    ]
 
 
 def _approval_error(error: TaskSuggestionApprovalError) -> HTTPException:
@@ -228,7 +473,7 @@ async def list_task_suggestions(
             )
         ).all()
     )
-    return TaskSuggestionList(suggestions=[_summary(row) for row in rows])
+    return TaskSuggestionList(suggestions=await _summaries(db, rows))
 
 
 @router.get(
@@ -242,7 +487,7 @@ async def get_task_suggestion(
     row = await db.get(CRMTaskSuggestion, suggestion_id)
     if row is None:
         raise HTTPException(404, "suggestion_not_found")
-    return _summary(row)
+    return (await _summaries(db, [row]))[0]
 
 
 @router.patch(
@@ -407,7 +652,7 @@ async def edit_task_suggestion(
         )
         await db.flush()
         await db.refresh(row)
-        result = _summary(row)
+        result = (await _summaries(db, [row]))[0]
     return result
 
 
@@ -699,7 +944,7 @@ async def dismiss_task_suggestion(
         )
         await db.flush()
         await db.refresh(row)
-        result = _summary(row)
+        result = (await _summaries(db, [row]))[0]
     return result
 
 

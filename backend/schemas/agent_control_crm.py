@@ -20,6 +20,47 @@ class SuggestionVersion(StrictModel):
     expected_payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class TaskSuggestionSourceEvidence(StrictModel):
+    direction: Literal["received", "sent", "self_copy"]
+    source_label: str = Field(min_length=1, max_length=255)
+    created_at: datetime
+
+
+class TaskSuggestionAuditEvent(StrictModel):
+    suggestion_version: int = Field(ge=1, le=2_147_483_647, strict=True)
+    event_type: Literal[
+        "edit",
+        "clarification_asked",
+        "clarification_answered",
+        "clarification_timed_out",
+        "clarification_superseded",
+        "clarification_delivery_retry",
+        "dismiss",
+        "preview",
+        "approve",
+        "apply",
+        "reprocess",
+        "dismiss_proposed",
+    ]
+    actor_type: Literal[
+        "system",
+        "sydney",
+        "command_admin",
+        "untrusted_hermes_input",
+    ]
+    action_audited: bool
+    created_at: datetime
+
+
+TaskSuggestionResolutionRequirement = Literal[
+    "resolve_owner_as_brandon",
+    "create_without_unsupported_link",
+    "accept_current_task_details",
+    "treat_as_single_action",
+    "confirm_not_duplicate",
+]
+
+
 class TaskSuggestionSummary(StrictModel):
     id: UUID
     source_type: Literal["gmail_message", "sydney_chat"]
@@ -46,11 +87,35 @@ class TaskSuggestionSummary(StrictModel):
         "manual_review_required",
     ]
     blocker_codes: list[str]
+    resolution_requirements: list[TaskSuggestionResolutionRequirement] = Field(
+        max_length=5,
+    )
+    confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(max_length=500)
+    model_schema_version: str = Field(min_length=1, max_length=64)
+    sources: list[TaskSuggestionSourceEvidence] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    audit_trail: list[TaskSuggestionAuditEvent] = Field(
+        default_factory=list,
+        max_length=20,
+    )
     payload_hash: str
     version: int
     applied_task_id: int | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("resolution_requirements")
+    @classmethod
+    def _unique_resolution_requirements(
+        cls,
+        value: list[TaskSuggestionResolutionRequirement],
+    ) -> list[TaskSuggestionResolutionRequirement]:
+        if len(set(value)) != len(value):
+            raise ValueError("resolution requirements must be unique")
+        return value
 
 
 class TaskSuggestionList(StrictModel):

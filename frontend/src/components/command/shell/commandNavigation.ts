@@ -2,6 +2,7 @@ import {
   Archive,
   ChartBar,
   CheckCircle,
+  ClipboardText,
   FileText,
   Handshake,
   House,
@@ -53,6 +54,14 @@ export const commandNavigation: readonly CommandDestination[] = Object.freeze([
     group: 'core',
     icon: CheckCircle,
     searchTerms: ['todo', 'completed', 'archived'],
+  },
+  {
+    label: 'Task review',
+    shortLabel: 'Review',
+    href: '/admin/command/task-suggestions',
+    group: 'core',
+    icon: ClipboardText,
+    searchTerms: ['Sydney', 'Gmail', 'approval', 'suggestions'],
   },
   {
     label: 'Smart Plans',

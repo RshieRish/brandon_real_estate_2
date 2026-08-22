@@ -88,6 +88,43 @@ describe('CommandShell', () => {
     expect(screen.queryByRole('link', { name: 'Create task' })).not.toBeInTheDocument();
   });
 
+  it('drives task review through the desktop rail, expanded rail, mobile drawer, search, and utility context', async () => {
+    const user = userEvent.setup();
+    mockPathname = '/admin/command/task-suggestions';
+    render(
+      <CommandShell>
+        <p>Task review body</p>
+      </CommandShell>,
+    );
+
+    const desktop = screen.getByRole('navigation', { name: 'Command modules' });
+    expect(within(desktop).getByRole('link', { name: 'Task review' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByRole('banner')).toHaveTextContent('Review');
+
+    await user.click(screen.getByRole('button', { name: 'Expand Command navigation' }));
+    const expanded = screen.getByRole('dialog', { name: 'Expanded Command navigation' });
+    expect(within(expanded).getByRole('link', { name: 'Task review' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await user.click(screen.getByRole('button', { name: 'Collapse Command navigation' }));
+
+    await user.click(screen.getByRole('button', { name: 'Open Command navigation' }));
+    const mobile = screen.getByRole('dialog', { name: 'Command navigation' });
+    expect(within(mobile).getByRole('link', { name: 'Task review' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await user.click(screen.getByRole('button', { name: 'Close Command navigation' }));
+
+    await user.click(screen.getByRole('button', { name: 'Search Command' }));
+    await user.type(screen.getByRole('combobox', { name: 'Search Command' }), 'Sydney');
+    expect(screen.getByRole('option', { name: 'Task review' })).toBeInTheDocument();
+  });
+
   it('opens global search with Control+K and navigates the filtered result by keyboard', async () => {
     const user = userEvent.setup();
     render(

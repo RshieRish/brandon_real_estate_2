@@ -43,7 +43,12 @@ on:
       - "docs/deployment/hermes-railway.md"
       - "frontend/package.json"
       - "frontend/package-lock.json"
+      - "frontend/src/instrumentation-client.ts"
+      - "frontend/src/proxy.ts"
+      - "frontend/src/app/admin/layout.tsx"
       - "frontend/src/app/admin/command/task-suggestions/page.tsx"
+      - "frontend/src/app/admin/login/page.tsx"
+      - "frontend/src/lib/command/task-suggestion-handoff.ts"
       - "frontend/src/lib/command/task-suggestions.ts"
       - "frontend/src/lib/command/task-suggestions.test.ts"
       - "frontend/src/components/command/TaskSuggestionsWorkspace.tsx"
@@ -96,7 +101,12 @@ on:
       - "docs/deployment/hermes-railway.md"
       - "frontend/package.json"
       - "frontend/package-lock.json"
+      - "frontend/src/instrumentation-client.ts"
+      - "frontend/src/proxy.ts"
+      - "frontend/src/app/admin/layout.tsx"
       - "frontend/src/app/admin/command/task-suggestions/page.tsx"
+      - "frontend/src/app/admin/login/page.tsx"
+      - "frontend/src/lib/command/task-suggestion-handoff.ts"
       - "frontend/src/lib/command/task-suggestions.ts"
       - "frontend/src/lib/command/task-suggestions.test.ts"
       - "frontend/src/components/command/TaskSuggestionsWorkspace.tsx"
@@ -300,3 +310,53 @@ jobs:
           docker rm --force gmail-sydney-postgres 2>/dev/null || true
           rm -f -- "$SSL_CERT_FILE" "${SSL_CERT_FILE%.crt}.key"
           rmdir -- "$(dirname "$SSL_CERT_FILE")" 2>/dev/null || true
+
+  task7-command-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run the exact Task 7 Command review tests
+        working-directory: frontend
+        run: |
+          npm test -- \
+            src/lib/command/task-suggestions.test.ts \
+            src/components/command/TaskSuggestionsWorkspace.test.tsx \
+            src/components/command/shell/commandNavigation.test.ts \
+            src/components/command/shell/CommandShell.test.tsx
+
+      - name: Type-check the frontend
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Lint only the Task 7 frontend scope
+        working-directory: frontend
+        run: |
+          npm exec eslint -- \
+            src/instrumentation-client.ts \
+            src/proxy.ts \
+            src/app/admin/layout.tsx \
+            src/app/admin/command/task-suggestions/page.tsx \
+            src/app/admin/login/page.tsx \
+            src/lib/command/task-suggestion-handoff.ts \
+            src/lib/command/task-suggestions.ts \
+            src/lib/command/task-suggestions.test.ts \
+            src/components/command/TaskSuggestionsWorkspace.tsx \
+            src/components/command/TaskSuggestionsWorkspace.test.tsx \
+            src/components/command/shell/commandNavigation.ts \
+            src/components/command/shell/commandNavigation.test.ts \
+            src/components/command/shell/CommandShell.test.tsx

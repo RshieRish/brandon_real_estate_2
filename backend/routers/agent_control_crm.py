@@ -58,6 +58,18 @@ router = APIRouter(dependencies=[Depends(require_agent_control)])
 
 
 def _suggestion(row: CRMTaskSuggestion) -> TaskSuggestionSummary:
+    blockers = set(row.blocker_codes)
+    resolution_requirements = []
+    if "unsupported_owner" in blockers or row.owner_clarification_pending:
+        resolution_requirements.append("resolve_owner_as_brandon")
+    if "unsupported_link" in blockers:
+        resolution_requirements.append("create_without_unsupported_link")
+    if row.task_details_clarification_pending:
+        resolution_requirements.append("accept_current_task_details")
+    if "multiple_actions" in blockers:
+        resolution_requirements.append("treat_as_single_action")
+    if row.state == "possible_duplicate":
+        resolution_requirements.append("confirm_not_duplicate")
     return TaskSuggestionSummary(
         id=row.id,
         source_type=row.source_type,
@@ -70,6 +82,10 @@ def _suggestion(row: CRMTaskSuggestion) -> TaskSuggestionSummary:
         state=row.state,
         clarification_state=row.clarification_state,
         blocker_codes=list(row.blocker_codes),
+        resolution_requirements=resolution_requirements,
+        confidence=float(row.confidence),
+        rationale=row.rationale,
+        model_schema_version=row.model_schema_version,
         payload_hash=row.payload_hash,
         version=row.version,
         applied_task_id=row.applied_task_id,

@@ -138,33 +138,20 @@ class CRMTaskSuggestionService:
         )
 
     @staticmethod
-    async def _has_current_duplicate_resolution(
+    def current_duplicate_resolution_evidence_is_valid(
         *,
-        session: AsyncSession,
         suggestion: CRMTaskSuggestion,
+        event: CRMTaskSuggestionEvent,
+        audit: AgentActionAudit | None,
     ) -> bool:
-        events = list(
-            (
-                await session.scalars(
-                    select(CRMTaskSuggestionEvent)
-                    .where(
-                        CRMTaskSuggestionEvent.suggestion_id == suggestion.id,
-                        CRMTaskSuggestionEvent.suggestion_version == suggestion.version,
-                        CRMTaskSuggestionEvent.event_type == "edit",
-                        CRMTaskSuggestionEvent.actor_type == "command_admin",
-                        CRMTaskSuggestionEvent.action_audit_id.is_not(None),
-                    )
-                    .order_by(CRMTaskSuggestionEvent.id)
-                    .limit(2)
-                )
-            ).all()
-        )
-        if len(events) != 1 or events[0].action_audit_id is None:
-            return False
-        event = events[0]
-        audit = await session.get(AgentActionAudit, event.action_audit_id)
         if (
-            audit is None
+            event.suggestion_id != suggestion.id
+            or event.suggestion_version != suggestion.version
+            or event.event_type != "edit"
+            or event.actor_type != "command_admin"
+            or event.action_audit_id is None
+            or audit is None
+            or audit.id != event.action_audit_id
             or not audit.allowed
             or not audit.actor.startswith("command_admin:")
             or audit.action_id != "command.task_suggestions.edit"
@@ -193,6 +180,38 @@ class CRMTaskSuggestionService:
             and type(request_resolutions) is list
             and all(type(value) is str for value in request_resolutions)
             and "confirm_not_duplicate" in request_resolutions
+        )
+
+    @staticmethod
+    async def _has_current_duplicate_resolution(
+        *,
+        session: AsyncSession,
+        suggestion: CRMTaskSuggestion,
+    ) -> bool:
+        events = list(
+            (
+                await session.scalars(
+                    select(CRMTaskSuggestionEvent)
+                    .where(
+                        CRMTaskSuggestionEvent.suggestion_id == suggestion.id,
+                        CRMTaskSuggestionEvent.suggestion_version == suggestion.version,
+                        CRMTaskSuggestionEvent.event_type == "edit",
+                        CRMTaskSuggestionEvent.actor_type == "command_admin",
+                        CRMTaskSuggestionEvent.action_audit_id.is_not(None),
+                    )
+                    .order_by(CRMTaskSuggestionEvent.id)
+                    .limit(2)
+                )
+            ).all()
+        )
+        if len(events) != 1 or events[0].action_audit_id is None:
+            return False
+        event = events[0]
+        audit = await session.get(AgentActionAudit, event.action_audit_id)
+        return CRMTaskSuggestionService.current_duplicate_resolution_evidence_is_valid(
+            suggestion=suggestion,
+            event=event,
+            audit=audit,
         )
 
     @staticmethod

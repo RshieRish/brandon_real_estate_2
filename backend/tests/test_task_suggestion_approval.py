@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,66 @@ from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 REVISION = "84d7a5f9b2c3"
 NOW = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+
+
+def test_command_summary_exposes_bounded_review_provenance() -> None:
+    from routers.command_task_suggestions import _summary
+
+    suggestion_id = uuid4()
+    row = SimpleNamespace(
+        id=suggestion_id,
+        source_type="gmail_message",
+        title="Send Jane the disclosure package",
+        description="Jane requested the signed disclosure package.",
+        priority="high",
+        due_at=NOW,
+        contact_id=41,
+        task_status="open",
+        state="pending_review",
+        clarification_state="not_required",
+        blocker_codes=["missing_required_field"],
+        owner_clarification_pending=True,
+        task_details_clarification_pending=False,
+        confidence=0.94,
+        rationale="The message explicitly requests a disclosure follow-up.",
+        model_schema_version="gmail-task-v1",
+        payload_hash="a" * 64,
+        version=7,
+        applied_task_id=None,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    source = SimpleNamespace(
+        direction="received",
+        source_label=f"gmail:received:{'1' * 32}",
+        created_at=NOW,
+    )
+    event = SimpleNamespace(
+        suggestion_version=7,
+        event_type="edit",
+        actor_type="command_admin",
+        action_audit_id=91,
+        created_at=NOW,
+    )
+
+    result = _summary(row, sources=(source,), audit_trail=(event,))
+
+    assert result.confidence == 0.94
+    assert result.rationale.startswith("The message explicitly")
+    assert result.model_schema_version == "gmail-task-v1"
+    assert result.resolution_requirements == ["resolve_owner_as_brandon"]
+    assert result.sources[0].model_dump() == {
+        "direction": "received",
+        "source_label": f"gmail:received:{'1' * 32}",
+        "created_at": NOW,
+    }
+    assert result.audit_trail[0].model_dump() == {
+        "suggestion_version": 7,
+        "event_type": "edit",
+        "actor_type": "command_admin",
+        "action_audited": True,
+        "created_at": NOW,
+    }
 
 
 def _request(path: str, *, method: str = "POST") -> Request:
@@ -458,7 +519,10 @@ async def test_explicit_duplicate_resolution_allows_both_legitimate_gmail_tasks(
 ):
     from models.admin_user import AdminUser
     from models.gmail_task_intake import CRMTaskSuggestion, GmailSyncAccount
-    from routers.command_task_suggestions import edit_task_suggestion
+    from routers.command_task_suggestions import (
+        edit_task_suggestion,
+        get_task_suggestion,
+    )
     from schemas.agent_control_crm import TaskSuggestionEditRequest
     from services.crm_task_suggestion_service import canonical_task_payload_hash
     from services.task_suggestion_approval_service import TaskSuggestionApprovalService
@@ -514,7 +578,10 @@ async def test_explicit_duplicate_resolution_allows_both_legitimate_gmail_tasks(
 
     service = TaskSuggestionApprovalService()
     task_ids = []
-    for suggestion in suggestions:
+    for index, suggestion in enumerate(suggestions):
+        async with sessions() as session:
+            summary = await get_task_suggestion(suggestion.id, session)
+        assert "confirm_not_duplicate" in summary.resolution_requirements
         async with sessions() as session:
             edited = await edit_task_suggestion(
                 suggestion.id,
@@ -531,6 +598,17 @@ async def test_explicit_duplicate_resolution_allows_both_legitimate_gmail_tasks(
                 session,
             )
         assert edited.state == "pending_review"
+        assert "confirm_not_duplicate" not in edited.resolution_requirements
+        async with sessions() as session:
+            refreshed = await get_task_suggestion(suggestion.id, session)
+        assert "confirm_not_duplicate" not in refreshed.resolution_requirements
+        if index == 0:
+            async with sessions() as session:
+                unresolved_sibling = await get_task_suggestion(
+                    suggestions[1].id,
+                    session,
+                )
+            assert "confirm_not_duplicate" in unresolved_sibling.resolution_requirements
         async with sessions() as session, session.begin():
             _, issued = await service.prepare(
                 session,
@@ -803,6 +881,51 @@ async def test_command_edit_preserves_blockers_until_explicit_choices_and_supers
     assert second.blocker_codes == []
     assert second.state == "pending_review"
     assert second.clarification_state == "not_required"
+
+
+@pytest.mark.asyncio
+async def test_command_owner_ambiguity_exposes_only_the_applicable_resolution(
+    approval_runtime,
+):
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from routers.command_task_suggestions import (
+        edit_task_suggestion,
+        get_task_suggestion,
+    )
+    from schemas.agent_control_crm import TaskSuggestionEditRequest
+
+    _, sessions = approval_runtime
+    admin, suggestion = await _seed(sessions, blocked=True)
+    async with sessions() as session:
+        row = await session.get(CRMTaskSuggestion, suggestion.id)
+        assert row is not None
+        row.blocker_codes = ["missing_required_field"]
+        row.owner_clarification_pending = True
+        row.task_details_clarification_pending = False
+        await session.commit()
+
+    async with sessions() as session:
+        summary = await get_task_suggestion(suggestion.id, session)
+    assert summary.resolution_requirements == ["resolve_owner_as_brandon"]
+
+    async with sessions() as session:
+        resolved = await edit_task_suggestion(
+            suggestion.id,
+            TaskSuggestionEditRequest(
+                expected_version=summary.version,
+                expected_payload_hash=summary.payload_hash,
+                resolve_owner_as_brandon=True,
+            ),
+            _request(
+                f"/api/v1/command/task-suggestions/{suggestion.id}",
+                method="PATCH",
+            ),
+            str(admin.id),
+            session,
+        )
+    assert resolved.blocker_codes == []
+    assert resolved.resolution_requirements == []
+    assert resolved.state == "pending_review"
 
 
 @pytest.mark.asyncio

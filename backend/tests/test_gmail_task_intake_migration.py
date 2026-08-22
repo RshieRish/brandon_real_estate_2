@@ -5636,3 +5636,39 @@ def test_task2_is_included_once_before_task5_in_the_dedicated_workflow() -> None
     assert command.index("tests/test_crm_task_suggestions.py") < command.index(
         "tests/test_sydney_task_review_migration.py"
     )
+
+
+def test_task7_frontend_contract_is_pinned_in_the_dedicated_workflow() -> None:
+    workflow = (
+        _backend_root().parent
+        / ".github"
+        / "workflows"
+        / "gmail-sydney-task-intake.yml"
+    ).read_text(encoding="utf-8")
+    assert workflow.count("task7-command-review:") == 1
+    job = workflow.split("task7-command-review:", 1)[1]
+    assert 'node-version: "22"' in job
+    assert "working-directory: frontend" in job
+    assert "npm ci" in job
+    assert "npm run typecheck" in job
+    assert job.count("src/lib/command/task-suggestions.test.ts") == 2
+    assert job.count("src/components/command/TaskSuggestionsWorkspace.test.tsx") == 2
+    assert job.count("src/components/command/shell/commandNavigation.test.ts") == 2
+    assert job.count("src/components/command/shell/CommandShell.test.tsx") == 2
+    lint_step = job.split("name: Lint only the Task 7 frontend scope", 1)[1]
+    for path in (
+        "src/instrumentation-client.ts",
+        "src/proxy.ts",
+        "src/app/admin/layout.tsx",
+        "src/app/admin/command/task-suggestions/page.tsx",
+        "src/app/admin/login/page.tsx",
+        "src/lib/command/task-suggestion-handoff.ts",
+        "src/lib/command/task-suggestions.ts",
+        "src/lib/command/task-suggestions.test.ts",
+        "src/components/command/TaskSuggestionsWorkspace.tsx",
+        "src/components/command/TaskSuggestionsWorkspace.test.tsx",
+        "src/components/command/shell/commandNavigation.ts",
+        "src/components/command/shell/commandNavigation.test.ts",
+        "src/components/command/shell/CommandShell.test.tsx",
+    ):
+        assert lint_step.count(path) == 1
