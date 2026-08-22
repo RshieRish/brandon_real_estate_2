@@ -756,6 +756,12 @@ class GmailExtractedObligation(Base):
             "id",
         ),
         Index(
+            "ix_gmail_extracted_obligations_suggestion_owner_ambiguous",
+            "reconciled_suggestion_id",
+            "owner_ambiguous",
+            "id",
+        ),
+        Index(
             "ix_gmail_extracted_obligations_attempt_replay",
             "extraction_attempt_id",
             "created_at",
@@ -803,6 +809,9 @@ class GmailExtractedObligation(Base):
     )
     contact_hint: Mapped[str | None] = mapped_column(
         String(255), nullable=True
+    )
+    owner_ambiguous: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
     )
     taxonomy_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False)
     obligation_fingerprint: Mapped[str] = mapped_column(
@@ -949,6 +958,25 @@ class CRMTaskSuggestion(Base):
             name="ck_crm_task_suggestions_blocker_codes_unique",
         ).ddl_if(dialect="postgresql"),
         CheckConstraint(
+            "('missing_required_field' = ANY(blocker_codes)) = "
+            "(owner_clarification_pending OR "
+            "task_details_clarification_pending)",
+            name="ck_crm_task_suggestions_clarification_pending_cause",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "(contact_resolution_state IN ('not_provided', 'explicit_none') "
+            "AND contact_id IS NULL AND contact_resolution_hash IS NULL AND "
+            "NOT ('ambiguous_contact' = ANY(blocker_codes))) OR "
+            "(contact_resolution_state = 'unresolved' AND contact_id IS NULL "
+            "AND contact_resolution_hash IS NULL AND "
+            "'ambiguous_contact' = ANY(blocker_codes)) OR "
+            "(contact_resolution_state IN ('inferred_unique', "
+            "'clarified_unique') AND contact_id IS NOT NULL AND "
+            "contact_resolution_hash ~ '^[0-9a-f]{64}$' AND NOT "
+            "('ambiguous_contact' = ANY(blocker_codes)))",
+            name="ck_crm_task_suggestions_contact_resolution",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
             "confidence >= 0 AND confidence <= 1",
             name="ck_crm_task_suggestions_confidence",
         ),
@@ -1068,6 +1096,20 @@ class CRMTaskSuggestion(Base):
         default=list,
         server_default="{}",
         nullable=False,
+    )
+    owner_clarification_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    task_details_clarification_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    contact_resolution_state: Mapped[str] = mapped_column(
+        String(32),
+        default="not_provided",
+        nullable=False,
+    )
+    contact_resolution_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     application_idempotency_key: Mapped[UUID | None] = mapped_column(

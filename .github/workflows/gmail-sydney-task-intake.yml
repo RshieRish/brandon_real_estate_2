@@ -261,7 +261,7 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the Task 1 through Task 4 persistence and compatibility contracts
+      - name: Run the Task 1 through Task 5 persistence and compatibility contracts
         working-directory: backend
         run: |
           python -m pytest -q \
@@ -283,7 +283,10 @@ jobs:
             tests/test_agent_control_router.py \
             tests/test_workspace_actions.py \
             tests/test_gmail_task_extractor.py \
-            tests/test_crm_task_suggestions.py
+            tests/test_crm_task_suggestions.py \
+            tests/test_sydney_task_review_migration.py \
+            tests/test_sydney_clarifications.py \
+            tests/test_sydney_telegram_dispatcher.py
 
       - name: Remove the exact disposable fixtures
         if: always()

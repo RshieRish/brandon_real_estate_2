@@ -39,7 +39,14 @@ from services.gmail_task_extractor import (
     gmail_participant_evidence_hash,
     gmail_subject_evidence_hash,
 )
-from services.integration_advisory_locks import transaction_advisory_lock
+from services.integration_advisory_locks import (
+    contact_identity_transaction_lock,
+    transaction_advisory_lock,
+)
+from services.sydney_clarification_service import (
+    contact_resolution_hash,
+    supersede_locked_clarification,
+)
 
 
 _SCHEMA_VERSION = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -631,6 +638,12 @@ class GmailObligationReconciliationService:
     ) -> GmailObligationReconciliationResult:
         for obligation in extraction.obligations:
             _require_instance_digest(obligation)
+        candidates, fallback_suggestion_ids = (
+            await self._load_thread_candidates(
+                session=session,
+                receipt=receipt,
+            )
+        )
         prepared: list[
             tuple[
                 ExtractedGmailObligation,
@@ -733,12 +746,6 @@ class GmailObligationReconciliationService:
                     contact,
                 )
             )
-        candidates, fallback_suggestion_ids = (
-            await self._load_thread_candidates(
-                session=session,
-                receipt=receipt,
-            )
-        )
         scope_key = gmail_source_scope_key(
             receipt.account_id,
             receipt.gmail_thread_id,
@@ -771,6 +778,7 @@ class GmailObligationReconciliationService:
                 requested_link_id=obligation.requested_link_id,
                 contact_hint=contact.durable_hint,
                 taxonomy_fallback=obligation.taxonomy_fallback,
+                owner_ambiguous=obligation.owner_ambiguous,
                 obligation_fingerprint=obligation.obligation_fingerprint,
                 identity_instance_digest=obligation.identity_instance_digest,
                 reconciliation_material_hash=_reconciliation_material_hash(
@@ -996,6 +1004,7 @@ class GmailObligationReconciliationService:
         normalized = canonical_email(contact_hint)
         if normalized is None:
             return _ResolvedContact(None, None, True, True)
+        await contact_identity_transaction_lock(await session.connection())
         rows = list(
             (
                 await session.execute(
@@ -1007,6 +1016,7 @@ class GmailObligationReconciliationService:
                     .where(CRMContact.normalized_email == normalized)
                     .order_by(CRMContact.id)
                     .limit(2)
+                    .with_for_update()
                 )
             ).all()
         )
@@ -1203,9 +1213,16 @@ class GmailObligationReconciliationService:
                     candidate.state != "possible_duplicate"
                     or candidate.clarification_state != clarification_state
                 ):
+                    previous_version = candidate.version
                     candidate.state = "possible_duplicate"
                     candidate.clarification_state = clarification_state
                     candidate.version += 1
+                    await supersede_locked_clarification(
+                        session=session,
+                        suggestion=candidate,
+                        previous_version=previous_version,
+                        now=datetime.now(timezone.utc),
+                    )
         if exact is not None:
             primary_instance = (
                 exact.primary_instance_digest
@@ -1231,6 +1248,51 @@ class GmailObligationReconciliationService:
                 )
             elif "ambiguous_contact" in existing_blockers:
                 resolved_contact_id = None
+            resolved_contact_email = (
+                contact.durable_hint
+                if resolved_contact_id == contact.contact_id
+                else None
+            )
+            if resolved_contact_id is not None and resolved_contact_email is None:
+                await contact_identity_transaction_lock(
+                    await session.connection()
+                )
+                selected = await session.get(
+                    CRMContact,
+                    resolved_contact_id,
+                    with_for_update=True,
+                )
+                selected_email = (
+                    canonical_email(selected.email) if selected is not None else None
+                )
+                if (
+                    selected is None
+                    or selected_email is None
+                    or selected.normalized_email != selected_email
+                ):
+                    resolved_contact_id = None
+                else:
+                    matches = list(
+                        (
+                            await session.scalars(
+                                select(CRMContact.id)
+                                .where(
+                                    CRMContact.normalized_email == selected_email
+                                )
+                                .order_by(CRMContact.id)
+                                .limit(2)
+                                .with_for_update()
+                            )
+                        ).all()
+                    )
+                    if matches != [selected.id]:
+                        resolved_contact_id = None
+                    else:
+                        resolved_contact_email = selected_email
+                if resolved_contact_id is None:
+                    incoming_blockers = _ordered_blockers(
+                        set(incoming_blockers) | {"ambiguous_contact"}
+                    )
             merged_blockers = _ordered_blockers(
                 existing_blockers | set(incoming_blockers)
             )
@@ -1309,8 +1371,15 @@ class GmailObligationReconciliationService:
                     )
                     for candidate in base_candidates:
                         if candidate.state not in _TERMINAL_SUGGESTION_STATES:
+                            previous_version = candidate.version
                             candidate.state = "possible_duplicate"
                             candidate.version += 1
+                            await supersede_locked_clarification(
+                                session=session,
+                                suggestion=candidate,
+                                previous_version=previous_version,
+                                now=datetime.now(timezone.utc),
+                            )
                     duplicate_of = root.id
                     force_reviewable_successor = False
                 suggestion = self._new_suggestion(
@@ -1318,7 +1387,16 @@ class GmailObligationReconciliationService:
                     extraction=extraction,
                     obligation=obligation,
                     contact_id=resolved_contact_id,
+                    contact_email=resolved_contact_email,
                     blockers=merged_blockers,
+                    owner_clarification_pending=(
+                        exact.owner_clarification_pending
+                        or obligation.owner_ambiguous
+                    ),
+                    task_details_clarification_pending=(
+                        exact.task_details_clarification_pending
+                        or obligation.taxonomy_fallback
+                    ),
                     scope_key=scope_key,
                     duplicate_of=duplicate_of,
                     force_reviewable_successor=force_reviewable_successor,
@@ -1343,7 +1421,16 @@ class GmailObligationReconciliationService:
                     extraction=extraction,
                     obligation=obligation,
                     contact_id=resolved_contact_id,
+                    contact_email=resolved_contact_email,
                     blockers=merged_blockers,
+                    owner_clarification_pending=(
+                        exact.owner_clarification_pending
+                        or obligation.owner_ambiguous
+                    ),
+                    task_details_clarification_pending=(
+                        exact.task_details_clarification_pending
+                        or obligation.taxonomy_fallback
+                    ),
                     scope_key=scope_key,
                     duplicate_of=exact.id,
                 )
@@ -1389,8 +1476,49 @@ class GmailObligationReconciliationService:
                     suggestion.state = state
                     suggestion.clarification_state = clarification_state
                     suggestion.blocker_codes = merged_blockers
+                    suggestion.owner_clarification_pending = (
+                        suggestion.owner_clarification_pending
+                        or obligation.owner_ambiguous
+                    )
+                    suggestion.task_details_clarification_pending = (
+                        suggestion.task_details_clarification_pending
+                        or obligation.taxonomy_fallback
+                    )
+                    if resolved_contact_id is not None:
+                        suggestion.contact_resolution_state = (
+                            "clarified_unique"
+                            if suggestion.contact_resolution_state
+                            == "clarified_unique"
+                            and suggestion.contact_id == resolved_contact_id
+                            else "inferred_unique"
+                        )
+                        suggestion.contact_resolution_hash = (
+                            contact_resolution_hash(
+                                contact_id=resolved_contact_id,
+                                email=resolved_contact_email,
+                            )
+                        )
+                    elif "ambiguous_contact" in merged_blockers:
+                        suggestion.contact_resolution_state = "unresolved"
+                        suggestion.contact_resolution_hash = None
+                    elif (
+                        not contact.supplied
+                        and suggestion.contact_resolution_state
+                        == "explicit_none"
+                    ):
+                        suggestion.contact_resolution_hash = None
+                    else:
+                        suggestion.contact_resolution_state = "not_provided"
+                        suggestion.contact_resolution_hash = None
                     suggestion.model_schema_version = extraction.schema_version
+                    previous_version = suggestion.version
                     suggestion.version += 1
+                    await supersede_locked_clarification(
+                        session=session,
+                        suggestion=suggestion,
+                        previous_version=previous_version,
+                        now=datetime.now(timezone.utc),
+                    )
                     await session.flush()
         else:
             if base_candidates:
@@ -1404,8 +1532,15 @@ class GmailObligationReconciliationService:
                 )
                 for candidate in base_candidates:
                     if candidate.state not in _TERMINAL_SUGGESTION_STATES:
+                        previous_version = candidate.version
                         candidate.state = "possible_duplicate"
                         candidate.version += 1
+                        await supersede_locked_clarification(
+                            session=session,
+                            suggestion=candidate,
+                            previous_version=previous_version,
+                            now=datetime.now(timezone.utc),
+                        )
                 duplicate_of = root.id
             else:
                 duplicate_of = next(
@@ -1431,7 +1566,14 @@ class GmailObligationReconciliationService:
                 extraction=extraction,
                 obligation=obligation,
                 contact_id=resolved_contact_id,
+                contact_email=(
+                    contact.durable_hint
+                    if resolved_contact_id == contact.contact_id
+                    else None
+                ),
                 blockers=incoming_blockers,
+                owner_clarification_pending=obligation.owner_ambiguous,
+                task_details_clarification_pending=obligation.taxonomy_fallback,
                 scope_key=scope_key,
                 duplicate_of=duplicate_of,
             )
@@ -1461,7 +1603,10 @@ class GmailObligationReconciliationService:
         extraction: GmailExtractionResult,
         obligation: ExtractedGmailObligation,
         contact_id: int | None,
+        contact_email: str | None,
         blockers: list[str],
+        owner_clarification_pending: bool,
+        task_details_clarification_pending: bool,
         scope_key: str,
         duplicate_of: UUID | None,
         force_reviewable_successor: bool = False,
@@ -1503,6 +1648,27 @@ class GmailObligationReconciliationService:
             state=state,
             clarification_state=clarification_state,
             blocker_codes=blockers,
+            owner_clarification_pending=owner_clarification_pending,
+            task_details_clarification_pending=(
+                task_details_clarification_pending
+            ),
+            contact_resolution_state=(
+                "inferred_unique"
+                if contact_id is not None
+                else (
+                    "unresolved"
+                    if "ambiguous_contact" in blockers
+                    else "not_provided"
+                )
+            ),
+            contact_resolution_hash=(
+                contact_resolution_hash(
+                    contact_id=contact_id,
+                    email=contact_email,
+                )
+                if contact_id is not None and contact_email is not None
+                else None
+            ),
             payload_hash=_payload_hash(obligation, contact_id=contact_id),
             application_idempotency_key=None,
             applied_task_id=None,

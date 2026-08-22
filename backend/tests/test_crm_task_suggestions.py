@@ -5,7 +5,7 @@ import hashlib
 import json
 import unicodedata
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,7 +17,7 @@ from sqlalchemy.pool import NullPool
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
-REVISION = "83c6f4e8a1b2"
+REVISION = "84d7a5f9b2c3"
 UTC = timezone.utc
 
 
@@ -1562,7 +1562,10 @@ async def test_taxonomy_fallback_is_durable_and_requires_clarification(
     assert suggestion.state == "needs_clarification"
     assert suggestion.clarification_state == "pending"
     assert suggestion.blocker_codes == ["missing_required_field"]
+    assert suggestion.owner_clarification_pending is False
+    assert suggestion.task_details_clarification_pending is True
     assert obligation.taxonomy_fallback is True
+    assert obligation.owner_ambiguous is False
     assert json.loads(obligation.evaluator_result_json) == {
         "contact_hint_supplied": False,
         "due_at_ambiguous": False,
@@ -3172,6 +3175,235 @@ async def test_material_change_increments_version_and_changes_payload_hash(
         )
 
 
+async def test_material_source_change_supersedes_active_clarification(
+    suggestion_runtime,
+) -> None:
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from services.gmail_obligation_reconciliation import (
+        GmailObligationReconciliationService,
+    )
+    from services.sydney_clarification_service import SydneyClarificationService
+
+    _engine, sessions = suggestion_runtime
+    account = await _seed_account(sessions)
+    first_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id="thread-material-supersedes-question",
+        message_id="material-question-v1",
+    )
+    reconciliation = GmailObligationReconciliationService(sessionmaker=sessions)
+    first = await _claim_and_reconcile(
+        reconciliation,
+        first_receipt,
+        _extraction(first_receipt, _obligation(due_at_ambiguous=True)),
+    )
+    clarification_service = SydneyClarificationService(
+        sessionmaker=sessions,
+        brandon_chat_id="-1001234567890",
+        clarification_code_keys={7: b"k" * 32},
+        active_code_key_version=7,
+    )
+    queued = await clarification_service.enqueue_next(
+        suggestion_id=first.suggestion_ids[0],
+        party_label="Alice",
+        subject_preview="Material source change",
+        now=datetime(2026, 8, 21, 15, 0, tzinfo=UTC),
+    )
+    assert queued.created is True
+
+    second_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id=first_receipt.gmail_thread_id,
+        message_id="material-question-v2",
+    )
+    second = await _claim_and_reconcile(
+        reconciliation,
+        second_receipt,
+        _extraction(
+            second_receipt,
+            _obligation(due_at_ambiguous=True, priority="high"),
+        ),
+    )
+    assert second.suggestion_ids == first.suggestion_ids
+    async with sessions() as session:
+        suggestion = await session.get(
+            CRMTaskSuggestion, first.suggestion_ids[0]
+        )
+        clarification = await session.get(
+            CRMTaskClarification, queued.clarification_id
+        )
+        outbox = await session.get(SydneyQuestionOutbox, queued.outbox_id)
+    assert suggestion.version == 2
+    assert clarification.state == "superseded"
+    assert outbox.state == "failed"
+    assert outbox.failure_category == "pre_send_superseded"
+
+
+async def test_contact_answer_vs_source_update_serializes_without_deadlock(
+    suggestion_runtime,
+) -> None:
+    from models.command import CRMContact
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from services.gmail_obligation_reconciliation import (
+        GmailObligationReconciliationService,
+    )
+    from services.sydney_clarification_service import (
+        SydneyClarificationError,
+        SydneyClarificationService,
+        derive_clarification_code,
+    )
+
+    _engine, sessions = suggestion_runtime
+    account = await _seed_account(sessions)
+    async with sessions() as session:
+        session.add(
+            CRMContact(
+                first_name="Alice",
+                last_name="Client",
+                email="alice-source-race@example.test",
+                phone=None,
+                stage="lead",
+            )
+        )
+        await session.commit()
+    first_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id="thread-contact-answer-source-race",
+        message_id="contact-answer-source-v1",
+    )
+    base_reconciliation = GmailObligationReconciliationService(
+        sessionmaker=sessions
+    )
+    first = await _claim_and_reconcile(
+        base_reconciliation,
+        first_receipt,
+        _extraction(
+            first_receipt,
+            _obligation(contact_hint="unknown-source-race@example.test"),
+        ),
+    )
+    clarification_service = SydneyClarificationService(
+        sessionmaker=sessions,
+        brandon_chat_id="-1001234567890",
+        clarification_code_keys={7: b"k" * 32},
+        active_code_key_version=7,
+    )
+    now = datetime(2026, 8, 21, 15, 30, tzinfo=UTC)
+    queued = await clarification_service.enqueue_next(
+        suggestion_id=first.suggestion_ids[0],
+        party_label="Alice",
+        subject_preview="Contact race",
+        now=now,
+    )
+    async with sessions() as session:
+        clarification = await session.get(
+            CRMTaskClarification,
+            queued.clarification_id,
+        )
+        outbox = await session.get(SydneyQuestionOutbox, queued.outbox_id)
+        assert clarification is not None and outbox is not None
+        outbox.state = "sending"
+        outbox.attempted_at = now + timedelta(seconds=1)
+        outbox.telegram_chat_id = "-1001234567890"
+        clarification.first_attempt_at = outbox.attempted_at
+        clarification.deadline_anchor_kind = "first_attempt"
+        clarification.deadline_anchored_at = outbox.attempted_at
+        clarification.slot_deadline_at = outbox.attempted_at + timedelta(
+            hours=48
+        )
+        await session.flush()
+        outbox.state = "sent"
+        outbox.sent_at = now + timedelta(seconds=2)
+        outbox.telegram_message_id = "9100"
+        clarification.deadline_anchor_kind = "initial_sent"
+        clarification.deadline_anchored_at = outbox.sent_at
+        clarification.slot_deadline_at = outbox.sent_at + timedelta(hours=48)
+        await session.commit()
+        code = derive_clarification_code(
+            key=b"k" * 32,
+            key_version=clarification.code_key_version,
+            clarification_id=clarification.id,
+            suggestion_id=clarification.suggestion_id,
+            suggestion_version=clarification.suggestion_version,
+            field_name=clarification.field_name,
+            round_number=clarification.round_number,
+        )
+
+    second_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id=first_receipt.gmail_thread_id,
+        message_id="contact-answer-source-v2",
+    )
+    contact_locked = asyncio.Event()
+    release_reconciliation = asyncio.Event()
+
+    class PausingReconciliation(GmailObligationReconciliationService):
+        @staticmethod
+        async def _resolve_contact(*, session, contact_hint):
+            result = await GmailObligationReconciliationService._resolve_contact(
+                session=session,
+                contact_hint=contact_hint,
+            )
+            contact_locked.set()
+            await release_reconciliation.wait()
+            return result
+
+    reconciliation = PausingReconciliation(sessionmaker=sessions)
+    extraction = _extraction(
+        second_receipt,
+        _obligation(
+            contact_hint="alice-source-race@example.test",
+            priority="high",
+        ),
+    )
+    claim = await reconciliation.claim_attempt(
+        receipt_id=second_receipt.id,
+        schema_version=extraction.schema_version,
+    )
+
+    reconcile_task = asyncio.create_task(
+        reconciliation.reconcile_attempt(claim=claim, extraction=extraction)
+    )
+    await asyncio.wait_for(contact_locked.wait(), timeout=2)
+
+    async def answer_late():
+        try:
+            return await clarification_service.answer(
+                code=code,
+                expected_suggestion_version=1,
+                answer={
+                    "kind": "contact",
+                    "decision": "exact_email",
+                    "email": "alice-source-race@example.test",
+                },
+                now=now + timedelta(minutes=1),
+            )
+        except SydneyClarificationError:
+            return None
+
+    answer_task = asyncio.create_task(answer_late())
+    await asyncio.sleep(0.05)
+    assert not answer_task.done()
+    release_reconciliation.set()
+    reconciled, answer = await asyncio.wait_for(
+        asyncio.gather(reconcile_task, answer_task),
+        timeout=5,
+    )
+    assert reconciled.suggestion_ids == first.suggestion_ids
+    assert answer is None
+    async with sessions() as session:
+        clarification = await session.get(
+            CRMTaskClarification,
+            queued.clarification_id,
+        )
+    assert clarification.state == "superseded"
+
+
 @pytest.mark.parametrize(
     ("change", "expected_field", "expected_value", "expected_blockers"),
     [
@@ -4086,6 +4318,12 @@ async def test_owner_due_and_link_authority_shape_blocks_approval(
         assert suggestion.blocker_codes == expected_blockers
         assert suggestion.task_status == "open"
         assert suggestion.contact_id is None
+        assert suggestion.owner_clarification_pending is bool(
+            obligation_overrides.get("owner_ambiguous", False)
+        )
+        assert suggestion.task_details_clarification_pending is False
+        assert suggestion.contact_resolution_state == "not_provided"
+        assert suggestion.contact_resolution_hash is None
         assert not hasattr(suggestion, "owner_id")
         assert CRMTaskSuggestionService.approval_eligible(suggestion) is False
         with pytest.raises(CRMTaskSuggestionAuthorityError, match="suggestion_blocked"):
@@ -4840,6 +5078,9 @@ async def test_approval_eligibility_requires_one_clean_review_lifecycle_shape(
         suggestion = await session.get(CRMTaskSuggestion, result.suggestion_ids[0])
         suggestion.clarification_state = clarification_state
         suggestion.blocker_codes = blockers
+        suggestion.task_details_clarification_pending = (
+            "missing_required_field" in blockers
+        )
         if state == "applied":
             task = CRMTask(
                 title=suggestion.title,
@@ -4931,6 +5172,7 @@ async def test_contact_hint_binds_only_one_unique_backend_resolved_contact(
     from services.gmail_obligation_reconciliation import (
         GmailObligationReconciliationService,
     )
+    from services.sydney_clarification_service import contact_resolution_hash
 
     _engine, sessions = suggestion_runtime
     account = await _seed_account(sessions)
@@ -4960,6 +5202,11 @@ async def test_contact_hint_binds_only_one_unique_backend_resolved_contact(
     async with sessions() as session:
         suggestion = await session.get(CRMTaskSuggestion, result.suggestion_ids[0])
     assert suggestion.contact_id == alice.id
+    assert suggestion.contact_resolution_state == "inferred_unique"
+    assert suggestion.contact_resolution_hash == contact_resolution_hash(
+        contact_id=alice.id,
+        email="alice@example.test",
+    )
     assert "ambiguous_contact" not in suggestion.blocker_codes
 
 
@@ -5402,6 +5649,8 @@ async def test_duplicate_contact_hint_never_selects_the_first_match(
     assert suggestion.contact_id is None
     assert suggestion.state == "needs_clarification"
     assert suggestion.blocker_codes == ["ambiguous_contact"]
+    assert suggestion.contact_resolution_state == "unresolved"
+    assert suggestion.contact_resolution_hash is None
     assert len(contact_queries) == 1
     statement, parameters = contact_queries[0]
     assert " limit " in " ".join(statement.split())
@@ -5682,6 +5931,84 @@ async def test_task_payload_revalidates_unique_contact_at_application_time(
                 expected_version=expected_version,
                 expected_payload_hash=expected_hash,
             )
+
+
+async def test_task_payload_accepts_hash_bound_clarified_unique_contact(
+    suggestion_runtime,
+) -> None:
+    from models.command import CRMContact
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from services.crm_task_suggestion_service import (
+        CRMTaskSuggestionService,
+        canonical_task_payload_hash,
+    )
+    from services.gmail_obligation_reconciliation import (
+        GmailObligationReconciliationService,
+    )
+
+    _engine, sessions = suggestion_runtime
+    account = await _seed_account(sessions)
+    receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id="thread-clarified-contact-authority",
+    )
+    reconciliation = GmailObligationReconciliationService(sessionmaker=sessions)
+    result = await _claim_and_reconcile(
+        reconciliation,
+        receipt,
+        _extraction(
+            receipt,
+            _obligation(contact_hint="alice@example.test"),
+        ),
+    )
+    async with sessions() as session:
+        contact = CRMContact(
+            first_name="Alice",
+            last_name="Client",
+            email="alice@example.test",
+            phone=None,
+            stage="lead",
+        )
+        session.add(contact)
+        await session.flush()
+        suggestion = await session.get(
+            CRMTaskSuggestion, result.suggestion_ids[0]
+        )
+        suggestion.contact_id = contact.id
+        suggestion.contact_resolution_state = "clarified_unique"
+        suggestion.contact_resolution_hash = hashlib.sha256(
+            b"sws:crm-contact-resolution:v1\0"
+            + str(contact.id).encode("ascii")
+            + b"\0alice@example.test"
+        ).hexdigest()
+        suggestion.blocker_codes = []
+        suggestion.state = "approved"
+        suggestion.clarification_state = "not_required"
+        suggestion.version += 1
+        suggestion.payload_hash = canonical_task_payload_hash(
+            title=suggestion.title,
+            description=suggestion.description,
+            priority=suggestion.priority,
+            due_at=suggestion.due_at,
+            contact_id=suggestion.contact_id,
+            status=suggestion.task_status,
+        )
+        await session.commit()
+        expected_version = suggestion.version
+        expected_hash = suggestion.payload_hash
+
+    async with sessions() as session:
+        suggestion = await session.get(
+            CRMTaskSuggestion, result.suggestion_ids[0]
+        )
+        payload = await CRMTaskSuggestionService.task_payload(
+            session=session,
+            suggestion=suggestion,
+            expected_version=expected_version,
+            expected_payload_hash=expected_hash,
+        )
+    assert payload.contact_id == contact.id
 
 
 async def test_conflicting_unique_contacts_across_sources_never_last_write_wins(
@@ -6408,19 +6735,34 @@ async def test_succeeded_replay_with_changed_payload_never_rewrites_evidence(
 async def test_thread_lock_precedes_all_protected_reconciliation_work(
     suggestion_runtime,
 ) -> None:
+    from models.command import CRMContact
     from services.gmail_obligation_reconciliation import (
         GmailObligationReconciliationService,
     )
 
     engine, sessions = suggestion_runtime
     account = await _seed_account(sessions)
+    async with sessions() as session:
+        session.add(
+            CRMContact(
+                first_name="Alice",
+                last_name="Client",
+                email="alice-lock-order@example.test",
+                phone=None,
+                stage="lead",
+            )
+        )
+        await session.commit()
     receipt = await _seed_receipt(
         sessions,
         account_id=account.id,
         thread_id="thread-sql-order",
     )
     service = GmailObligationReconciliationService(sessionmaker=sessions)
-    extraction = _extraction(receipt, _obligation())
+    extraction = _extraction(
+        receipt,
+        _obligation(contact_hint="alice-lock-order@example.test"),
+    )
     claim = await service.claim_attempt(
         receipt_id=receipt.id,
         schema_version=extraction.schema_version,
@@ -6466,6 +6808,7 @@ async def test_thread_lock_precedes_all_protected_reconciliation_work(
         )
     ]
     assert lock_positions
+    assert len(lock_positions) >= 2
     assert protected_positions
     lock_position = min(lock_positions)
     assert lock_position < min(protected_positions)
@@ -6478,6 +6821,96 @@ async def test_thread_lock_precedes_all_protected_reconciliation_work(
         lock_position < boundary < max(protected_positions)
         for boundary in transaction_boundaries
     )
+    suggestion_lock_positions = [
+        index
+        for index, statement in enumerate(statements)
+        if "from crm_task_suggestions" in statement
+        and "for update" in statement
+    ]
+    contact_lock_positions = [
+        index
+        for index, statement in enumerate(statements)
+        if "from crm_contacts" in statement and "for update" in statement
+    ]
+    assert suggestion_lock_positions
+    assert contact_lock_positions
+    assert min(suggestion_lock_positions) < min(contact_lock_positions)
+    assert max(lock_positions) < min(contact_lock_positions)
+
+
+async def test_preserved_contact_authority_joins_identity_lock_protocol(
+    suggestion_runtime,
+) -> None:
+    from models.command import CRMContact
+    from services.gmail_obligation_reconciliation import (
+        GmailObligationReconciliationService,
+    )
+
+    engine, sessions = suggestion_runtime
+    account = await _seed_account(sessions)
+    async with sessions() as session:
+        session.add(
+            CRMContact(
+                first_name="Alice",
+                last_name="Client",
+                email="alice-preserved-lock@example.test",
+                phone=None,
+                stage="lead",
+            )
+        )
+        await session.commit()
+    service = GmailObligationReconciliationService(sessionmaker=sessions)
+    first_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id="thread-preserved-contact-lock",
+        message_id="preserved-contact-lock-v1",
+    )
+    await _claim_and_reconcile(
+        service,
+        first_receipt,
+        _extraction(
+            first_receipt,
+            _obligation(contact_hint="alice-preserved-lock@example.test"),
+        ),
+    )
+    second_receipt = await _seed_receipt(
+        sessions,
+        account_id=account.id,
+        thread_id=first_receipt.gmail_thread_id,
+        message_id="preserved-contact-lock-v2",
+    )
+    extraction = _extraction(
+        second_receipt,
+        _obligation(contact_hint=None, priority="high"),
+    )
+    claim = await service.claim_attempt(
+        receipt_id=second_receipt.id,
+        schema_version=extraction.schema_version,
+    )
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(" ".join(statement.casefold().split()))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        await service.reconcile_attempt(claim=claim, extraction=extraction)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    identity_lock_positions = [
+        index
+        for index, statement in enumerate(statements)
+        if "pg_advisory_xact_lock" in statement
+    ]
+    contact_lookup_positions = [
+        index
+        for index, statement in enumerate(statements)
+        if "from crm_contacts" in statement and "for update" in statement
+    ]
+    assert len(identity_lock_positions) >= 2
+    assert contact_lookup_positions
+    assert max(identity_lock_positions) < min(contact_lookup_positions)
 
 
 async def test_two_connections_same_thread_create_one_suggestion_and_two_sources(

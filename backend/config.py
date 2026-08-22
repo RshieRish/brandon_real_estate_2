@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # Required only while Gmail task intake is enabled. There is deliberately
     # no fallback because changing the key changes every participant digest.
     GMAIL_PARTICIPANT_HASH_KEY: str = ""
+    # Required only while Sydney task questions are enabled. The keyring is a
+    # JSON object of positive integer versions to base64-encoded 32-byte keys;
+    # old versions remain configured until every pending row using them closes.
+    SYDNEY_TELEGRAM_BOT_TOKEN: str = ""
+    SYDNEY_TELEGRAM_BRANDON_CHAT_ID: str = ""
+    SYDNEY_TELEGRAM_BRANDON_USER_ID: str = ""
+    SYDNEY_CLARIFICATION_CODE_KEYS_JSON: str = ""
+    SYDNEY_CLARIFICATION_ACTIVE_KEY_VERSION: int = 0
     INTEGRATION_WORKER_HEARTBEAT_SECONDS: int = 30
     INTEGRATION_WORKER_HEARTBEAT_MAX_AGE_SECONDS: int = 120
     INTEGRATION_PROVIDER_MAX_WORKERS: int = 4

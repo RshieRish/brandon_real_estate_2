@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 _ACCOUNT_DOMAIN = b"sws:gmail-task-intake:advisory:v1:account\x00"
 _THREAD_DOMAIN = b"sws:gmail-task-intake:advisory:v1:thread\x00"
+_CONTACT_IDENTITY_DOMAIN = b"sws:crm-contact-identity:advisory:v1"
 
 
 def _signed_postgresql_bigint(material: bytes) -> int:
@@ -34,6 +35,11 @@ def thread_advisory_key(account_id: UUID, gmail_thread_id: str) -> int:
         + thread_bytes
     )
     return _signed_postgresql_bigint(material)
+
+
+def contact_identity_advisory_key() -> int:
+    """Serialize contact identity mutations with uniqueness decisions."""
+    return _signed_postgresql_bigint(_CONTACT_IDENTITY_DOMAIN)
 
 
 async def try_session_advisory_lock(
@@ -71,8 +77,19 @@ async def transaction_advisory_lock(
     )
 
 
+async def contact_identity_transaction_lock(
+    connection: AsyncConnection,
+) -> None:
+    await connection.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": contact_identity_advisory_key()},
+    )
+
+
 __all__ = [
     "account_advisory_key",
+    "contact_identity_advisory_key",
+    "contact_identity_transaction_lock",
     "release_session_advisory_lock",
     "thread_advisory_key",
     "transaction_advisory_lock",

@@ -150,6 +150,7 @@ def _manual_signed_key(material: bytes) -> int:
 def test_advisory_v1_vectors_domain_and_framing_are_exact() -> None:
     from services.integration_advisory_locks import (
         account_advisory_key,
+        contact_identity_advisory_key,
         thread_advisory_key,
     )
 
@@ -179,6 +180,11 @@ def test_advisory_v1_vectors_domain_and_framing_are_exact() -> None:
         account_id,
         "",
     )
+    assert contact_identity_advisory_key() == 3892649629032444829
+    assert contact_identity_advisory_key() not in {
+        account_advisory_key(account_id),
+        thread_advisory_key(account_id, "thread-123"),
+    }
     assert thread_advisory_key(account_id, "a") != thread_advisory_key(
         account_id,
         "\x00a",

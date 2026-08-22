@@ -19,7 +19,10 @@ from models.gmail_task_intake import (
 from schemas.gmail_task_intake import GmailTaskPayload
 from services.command_contact_identity import canonical_email
 from services.gmail_history_adapter import parse_gmail_provider_id
-from services.integration_advisory_locks import transaction_advisory_lock
+from services.integration_advisory_locks import (
+    contact_identity_transaction_lock,
+    transaction_advisory_lock,
+)
 
 
 class CRMTaskSuggestionAuthorityError(RuntimeError):
@@ -86,6 +89,15 @@ def gmail_source_scope_key(account_id: UUID, gmail_thread_id: str) -> str:
     if len(scope) > 512:
         raise ValueError("Gmail source scope is too long")
     return scope
+
+
+def _contact_resolution_hash(*, contact_id: int, email: str) -> str:
+    return hashlib.sha256(
+        b"sws:crm-contact-resolution:v1\0"
+        + str(contact_id).encode("ascii")
+        + b"\0"
+        + email.encode("utf-8")
+    ).hexdigest()
 
 
 class CRMTaskSuggestionService:
@@ -244,39 +256,60 @@ class CRMTaskSuggestionService:
             or suggestion.contact_id is None
         ):
             raise _fixed_authority_error("contact_authority_changed")
-        hint_query = select(GmailExtractedObligation.contact_hint).where(
-            GmailExtractedObligation.reconciled_suggestion_id == suggestion.id,
-            GmailExtractedObligation.contact_hint.is_not(None),
+        await contact_identity_transaction_lock(await session.connection())
+        selected = await session.scalar(
+            select(CRMContact)
+            .where(CRMContact.id == suggestion.contact_id)
+            .with_for_update()
         )
-        first_hint = await session.scalar(
-            hint_query.order_by(
-                GmailExtractedObligation.contact_hint.asc(),
-                GmailExtractedObligation.id.asc(),
-            ).limit(1)
+        selected_email = (
+            canonical_email(selected.email) if selected is not None else None
         )
-        last_hint = await session.scalar(
-            hint_query.order_by(
-                GmailExtractedObligation.contact_hint.desc(),
-                GmailExtractedObligation.id.desc(),
-            ).limit(1)
-        )
-        if (
-            first_hint is None
-            or last_hint is None
-            or first_hint != last_hint
-        ):
-            raise _fixed_authority_error("contact_authority_changed")
-        authorized_email = canonical_email(first_hint)
-        if authorized_email is None:
-            raise _fixed_authority_error("contact_authority_changed")
-
-        selected = await session.get(CRMContact, suggestion.contact_id)
         if (
             selected is None
-            or canonical_email(selected.email) != authorized_email
-            or selected.normalized_email != authorized_email
+            or selected_email is None
+            or selected.normalized_email != selected_email
+            or suggestion.contact_resolution_state
+            not in {"inferred_unique", "clarified_unique"}
+            or suggestion.contact_resolution_hash is None
+            or not hmac.compare_digest(
+                suggestion.contact_resolution_hash,
+                _contact_resolution_hash(
+                    contact_id=selected.id,
+                    email=selected_email,
+                ),
+            )
         ):
             raise _fixed_authority_error("contact_authority_changed")
+        if suggestion.contact_resolution_state == "clarified_unique":
+            authorized_email = selected_email
+        else:
+            hint_query = select(GmailExtractedObligation.contact_hint).where(
+                GmailExtractedObligation.reconciled_suggestion_id
+                == suggestion.id,
+                GmailExtractedObligation.contact_hint.is_not(None),
+            )
+            first_hint = await session.scalar(
+                hint_query.order_by(
+                    GmailExtractedObligation.contact_hint.asc(),
+                    GmailExtractedObligation.id.asc(),
+                ).limit(1)
+            )
+            last_hint = await session.scalar(
+                hint_query.order_by(
+                    GmailExtractedObligation.contact_hint.desc(),
+                    GmailExtractedObligation.id.desc(),
+                ).limit(1)
+            )
+            if (
+                first_hint is None
+                or last_hint is None
+                or first_hint != last_hint
+            ):
+                raise _fixed_authority_error("contact_authority_changed")
+            authorized_email = canonical_email(first_hint)
+            if authorized_email is None or authorized_email != selected_email:
+                raise _fixed_authority_error("contact_authority_changed")
         candidates = list(
             (
                 await session.execute(
@@ -288,6 +321,7 @@ class CRMTaskSuggestionService:
                     .where(CRMContact.normalized_email == authorized_email)
                     .order_by(CRMContact.id)
                     .limit(2)
+                    .with_for_update()
                 )
             ).all()
         )

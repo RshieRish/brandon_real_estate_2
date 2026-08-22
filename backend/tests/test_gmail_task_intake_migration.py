@@ -51,6 +51,27 @@ TABLES = (
     "gmail_backfill_requests",
 )
 
+TASK5_OVERLAY_COLUMNS = {
+    "gmail_extracted_obligations": {"owner_ambiguous"},
+    "crm_task_suggestions": {
+        "owner_clarification_pending",
+        "task_details_clarification_pending",
+        "contact_resolution_state",
+        "contact_resolution_hash",
+    },
+}
+TASK5_OVERLAY_INDEXES = {
+    "gmail_extracted_obligations": {
+        "ix_gmail_extracted_obligations_suggestion_owner_ambiguous"
+    },
+}
+TASK5_OVERLAY_CHECKS = {
+    "crm_task_suggestions": {
+        "ck_crm_task_suggestions_clarification_pending_cause",
+        "ck_crm_task_suggestions_contact_resolution",
+    },
+}
+
 NULLABLE_COLUMNS = {
     "gmail_sync_accounts": {
         "committed_history_id",
@@ -136,6 +157,7 @@ NULLABLE_COLUMNS = {
         "application_idempotency_key",
         "applied_task_id",
         "primary_instance_digest",
+        "contact_resolution_hash",
     },
     "crm_task_suggestion_sources": set(),
     "crm_task_suggestion_suppressions": {
@@ -524,7 +546,7 @@ TYPE_GROUPS = {
             "reconciled_suppression_id",
         ),
         "text": ("description", "evaluator_result_json"),
-        "boolean": ("taxonomy_fallback",),
+        "boolean": ("owner_ambiguous", "taxonomy_fallback"),
         "numeric_5_4": ("confidence",),
         "datetime": ("due_at", "created_at"),
         "strings": {
@@ -554,16 +576,27 @@ TYPE_GROUPS = {
         "text": ("description",),
         "numeric_5_4": ("confidence",),
         "array_string_64": ("blocker_codes",),
+        "boolean": (
+            "owner_clarification_pending",
+            "task_details_clarification_pending",
+        ),
         "datetime": ("due_at", "created_at", "updated_at"),
         "strings": {
             255: ("gmail_thread_id", "title"),
-            32: ("priority", "task_status", "state", "clarification_state"),
+            32: (
+                "priority",
+                "task_status",
+                "state",
+                "clarification_state",
+                "contact_resolution_state",
+            ),
             64: (
                 "source_type",
                 "payload_hash",
                 "model_schema_version",
                 "obligation_fingerprint",
                 "primary_instance_digest",
+                "contact_resolution_hash",
             ),
             512: ("source_scope_key",),
             128: ("source_action_key",),
@@ -1010,26 +1043,53 @@ def _inspector_check_contract(
 def _assert_real_schema_matches_models(
     connection: sa.Connection,
     tables: dict[str, sa.Table],
+    *,
+    omit_task5_overlays: bool = False,
 ) -> None:
     inspector = sa.inspect(connection)
     assert set(TABLES).issubset(inspector.get_table_names())
     for table_name, model_table in tables.items():
+        omitted_columns = (
+            TASK5_OVERLAY_COLUMNS.get(table_name, set())
+            if omit_task5_overlays
+            else set()
+        )
+        omitted_indexes = (
+            TASK5_OVERLAY_INDEXES.get(table_name, set())
+            if omit_task5_overlays
+            else set()
+        )
+        omitted_checks = (
+            TASK5_OVERLAY_CHECKS.get(table_name, set())
+            if omit_task5_overlays
+            else set()
+        )
         inspected_columns = inspector.get_columns(table_name)
         assert tuple(column["name"] for column in inspected_columns) == tuple(
-            model_table.columns.keys()
+            name
+            for name in model_table.columns.keys()
+            if name not in omitted_columns
         )
         assert {
             column["name"] for column in inspected_columns if column["nullable"]
-        } == NULLABLE_COLUMNS[table_name]
+        } == NULLABLE_COLUMNS[table_name] - omitted_columns
         assert {
             column["name"]: _type_signature(column["type"])
             for column in inspected_columns
-        } == _expected_type_signatures(table_name)
+        } == {
+            name: signature
+            for name, signature in _expected_type_signatures(table_name).items()
+            if name not in omitted_columns
+        }
         assert {
             column["name"]: _canonical_default(column["default"])
             for column in inspected_columns
             if column["default"] is not None
-        } == EXPECTED_SERVER_DEFAULTS[table_name]
+        } == {
+            name: default
+            for name, default in EXPECTED_SERVER_DEFAULTS[table_name].items()
+            if name not in omitted_columns
+        }
         primary_key = inspector.get_pk_constraint(table_name)
         assert primary_key["constrained_columns"] == ["id"]
         assert primary_key["name"] == f"{table_name}_pkey"
@@ -1042,10 +1102,13 @@ def _assert_real_schema_matches_models(
         assert _inspector_check_contract(inspector, table_name) == {
             name: _normalized_check_sql(sqltext)
             for name, sqltext in _named_checks(model_table).items()
+            if name not in omitted_checks
         }
-        assert _inspector_index_contract(
-            inspector, table_name
-        ) == _model_index_contract(model_table)
+        assert _inspector_index_contract(inspector, table_name) == {
+            name: contract
+            for name, contract in _model_index_contract(model_table).items()
+            if name not in omitted_indexes
+        }
 
 
 def _seed_existing_crm(connection: sa.Connection) -> None:
@@ -1296,14 +1359,20 @@ def _retain_only_intake_table(
             connection.exec_driver_sql(f'DELETE FROM "{table_name}"')
 
 
-def test_revision_83_is_the_sole_serial_head_after_revision_82() -> None:
+def test_revision_83_directly_follows_82_and_remains_in_serial_history() -> None:
     revision = _load_revision()
     assert revision.revision == REVISION
     assert revision.down_revision == DOWN_REVISION
     assert revision.branch_labels is None
     assert revision.depends_on is None
     scripts = _script_directory()
-    assert scripts.get_heads() == [REVISION]
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    ancestor_revisions = {
+        candidate.revision
+        for candidate in scripts.walk_revisions(base="base", head=heads[0])
+    }
+    assert REVISION in ancestor_revisions
     assert scripts.get_revision(REVISION).down_revision == DOWN_REVISION
 
 
@@ -1447,6 +1516,7 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "requested_link_type",
             "requested_link_id",
             "contact_hint",
+            "owner_ambiguous",
             "taxonomy_fallback",
             "obligation_fingerprint",
             "identity_instance_digest",
@@ -1476,6 +1546,10 @@ def test_all_twelve_models_have_exact_columns_defaults_and_no_raw_secrets() -> N
             "state",
             "clarification_state",
             "blocker_codes",
+            "owner_clarification_pending",
+            "task_details_clarification_pending",
+            "contact_resolution_state",
+            "contact_resolution_hash",
             "payload_hash",
             "application_idempotency_key",
             "applied_task_id",
@@ -1829,6 +1903,16 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
     )
     assert _compiled_index(
         obligation_indexes[
+            "ix_gmail_extracted_obligations_suggestion_owner_ambiguous"
+        ]
+    ) == (
+        "CREATE INDEX "
+        "ix_gmail_extracted_obligations_suggestion_owner_ambiguous ON "
+        "gmail_extracted_obligations (reconciled_suggestion_id, "
+        "owner_ambiguous, id)"
+    )
+    assert _compiled_index(
+        obligation_indexes[
             "ix_gmail_extracted_obligations_suggestion_contact_hint"
         ]
     ) == (
@@ -1946,6 +2030,15 @@ def test_models_pin_exact_uniqueness_indexes_and_postgresql_predicates() -> None
                 (
                     "reconciled_suggestion_id",
                     "taxonomy_fallback",
+                    "id",
+                ),
+                False,
+                None,
+            ),
+            "ix_gmail_extracted_obligations_suggestion_owner_ambiguous": (
+                (
+                    "reconciled_suggestion_id",
+                    "owner_ambiguous",
                     "id",
                 ),
                 False,
@@ -2165,6 +2258,24 @@ def test_models_pin_exact_states_and_cross_field_constraints() -> None:
             "'unsupported_owner')) <= 1 AND "
             "cardinality(array_positions(blocker_codes, "
             "'unsupported_link')) <= 1"
+        ),
+        "ck_crm_task_suggestions_clarification_pending_cause": (
+            "('missing_required_field' = ANY(blocker_codes)) = "
+            "(owner_clarification_pending OR "
+            "task_details_clarification_pending)"
+        ),
+        "ck_crm_task_suggestions_contact_resolution": (
+            "(contact_resolution_state IN ('not_provided', "
+            "'explicit_none') AND contact_id IS NULL AND "
+            "contact_resolution_hash IS NULL AND NOT "
+            "('ambiguous_contact' = ANY(blocker_codes))) OR "
+            "(contact_resolution_state = 'unresolved' AND contact_id IS NULL "
+            "AND contact_resolution_hash IS NULL AND "
+            "'ambiguous_contact' = ANY(blocker_codes)) OR "
+            "(contact_resolution_state IN ('inferred_unique', "
+            "'clarified_unique') AND contact_id IS NOT NULL AND "
+            "contact_resolution_hash ~ '^[0-9a-f]{64}$' AND NOT "
+            "('ambiguous_contact' = ANY(blocker_codes)))"
         ),
         "ck_crm_task_suggestions_confidence": (
             "confidence >= 0 AND confidence <= 1"
@@ -2476,7 +2587,11 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                 assert connection.scalar(
                     sa.text("SELECT version_num FROM alembic_version")
                 ) == REVISION
-                _assert_real_schema_matches_models(connection, _model_tables())
+                _assert_real_schema_matches_models(
+                    connection,
+                    _model_tables(),
+                    omit_task5_overlays=True,
+                )
                 assert connection.execute(
                     sa.text(
                         "SELECT c.first_name, t.title, t.version "
@@ -2664,7 +2779,9 @@ def test_revision_83_upgrades_real_postgresql_and_enforces_contracts() -> None:
                     )
 
             heads = run_alembic(url, "heads")
-            assert heads.count(f"{REVISION} (head)") == 1
+            repository_head = _script_directory().get_current_head()
+            assert repository_head is not None
+            assert heads.count(f"{repository_head} (head)") == 1
 
             with engine.begin() as connection:
                 verify_exact_ownership(
@@ -5560,7 +5677,7 @@ def test_missing_message_ack_shape_fails_closed_on_real_postgresql() -> None:
         engine.dispose()
 
 
-def test_task2_is_included_once_before_task4_in_the_dedicated_workflow() -> None:
+def test_task2_is_included_once_before_task5_in_the_dedicated_workflow() -> None:
     workflow = (
         _backend_root().parent
         / ".github"
@@ -5569,7 +5686,7 @@ def test_task2_is_included_once_before_task4_in_the_dedicated_workflow() -> None
     ).read_text(encoding="utf-8")
     assert workflow.count("tests/test_gmail_task_intake_migration.py") == 1
     step_name = (
-        "name: Run the Task 1 through Task 4 persistence and compatibility "
+        "name: Run the Task 1 through Task 5 persistence and compatibility "
         "contracts"
     )
     assert step_name in workflow
@@ -5584,4 +5701,7 @@ def test_task2_is_included_once_before_task4_in_the_dedicated_workflow() -> None
     )
     assert command.index("tests/test_gmail_task_extractor.py") < command.index(
         "tests/test_crm_task_suggestions.py"
+    )
+    assert command.index("tests/test_crm_task_suggestions.py") < command.index(
+        "tests/test_sydney_task_review_migration.py"
     )

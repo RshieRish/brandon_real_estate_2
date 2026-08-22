@@ -1,7 +1,15 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-21
+Last Updated: 2026-08-22
+
+### 2026-08-22 - Sydney Task Clarification Persistence and One-Question Flow
+- Completed Gmail/Sydney plan Task 5 locally. Alembic revision `84d7a5f9b2c3` is the sole head after revision `83` and adds hash-only clarification, Telegram outbox, approval-nonce, and immutable suggestion-event persistence. Downgrade remains evidence-guarded; revision-83 rolling writers use omitted-column sentinels, while explicit invalid authority shapes and duplicate/stale contact changes fail closed.
+- Sydney now asks one highest-value consequential question at a time, applies only strict structured answers to the same locked suggestion/version, supersedes old questions after independent source edits, releases the chat slot on terminal states, and enters manual review after five rounds without creating a sixth row. Clarification codes and 32-byte handoff secrets are restart-stable/hash-only in storage; handoff URLs keep the secret in the fragment and create no confirmed CRM task.
+- Telegram delivery persists `sending` before the bounded provider call, records immutable sent/failed/uncertain attempts, permits one 24-hour reminder, uses a fixed 48-hour deadline, and allows an explicit retry only after audited `not_delivered` reconciliation. Unknown delivery is never automatically retried, and reminder/retry attempts cannot extend the clarification deadline.
+- Contact authority now uses one database-enforced transaction advisory protocol shared by every contact identity insert/update/delete and every inference, clarification, preserved-contact, compatibility, and approval-time reader. Suggestion rows lock before contacts; a real two-session contact-answer/source-update race completes without deadlock; duplicate-email phantoms and rolling-writer contact changes fail with full rollback.
+- Verification: the exact Task 1-through-Task 5 PostgreSQL 16/TLS workflow passed `1155 passed, 19 warnings` in `134.67s`; the warnings are unchanged `python-jose` `datetime.utcnow` deprecations. Focused touched suites passed `445/445`; final Ruff, compileall, sole Alembic head `84d7a5f9b2c3`, and diff checks passed. Independent final review found no remaining Critical or Important findings.
+- Rollout boundary: no production migration, Railway deployment, live Telegram/Gmail call, confirmed CRM task write, or feature enablement occurred. `GMAIL_TASK_INTAKE_ENABLED=false`, `SYDNEY_TASK_QUESTIONS_ENABLED=false`, and `INSTAGRAM_INTEGRATION_ENABLED=false` remain unchanged. Next: Task 6 authenticated approval and Agent Control CRM tools.
 
 ### 2026-08-21 - Gmail Obligation Extraction and Review Suggestions
 - Completed Gmail/Sydney plan Task 4 locally. Added a strict bounded `gmail-task-v1` Gemini envelope, separately framed untrusted subject/body evidence, trusted message-time anchoring, finite real-estate semantic taxonomy with explicit review fallback, backend-derived identity/material hashes, and fixed body-free provider/parser errors. Model output never supplies action keys, CRM IDs, contact authority, owner authority, or apply authority.

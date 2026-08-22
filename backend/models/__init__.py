@@ -47,6 +47,12 @@ from models.gmail_task_intake import (
     GmailSyncPageCheckpoint,
     GmailSyncRun,
 )
+from models.sydney_tasks import (
+    CRMTaskClarification,
+    CRMTaskSuggestionEvent,
+    SydneyQuestionOutbox,
+    TaskSuggestionApprovalNonce,
+)
 
 __all__ = [
     "AgentActionAudit",
@@ -71,9 +77,11 @@ __all__ = [
     "CRMSourceRecord",
     "CRMSourceRecordArtifact",
     "CRMTask",
+    "CRMTaskClarification",
     "CRMTaskCreationRequest",
     "CRMTaskSource",
     "CRMTaskSuggestion",
+    "CRMTaskSuggestionEvent",
     "CRMTaskSuggestionSource",
     "CRMTaskSuggestionSuppression",
     "CaptureQuality",
@@ -89,4 +97,6 @@ __all__ = [
     "GmailSyncAccount",
     "GmailSyncPageCheckpoint",
     "GmailSyncRun",
+    "SydneyQuestionOutbox",
+    "TaskSuggestionApprovalNonce",
 ]
