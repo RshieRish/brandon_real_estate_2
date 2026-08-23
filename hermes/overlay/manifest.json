@@ -1,0 +1,32 @@
+{
+  "upstream": {
+    "repository": "https://github.com/praveen-ks-2001/hermes-agent-template.git",
+    "commit": "7224d7c1a4dcffe9304f49bc843f55716f5561b4"
+  },
+  "tools": {
+    "include": [
+      "status_read",
+      "actions_list",
+      "leads_recent",
+      "bookings_recent",
+      "workspace_status",
+      "drive_search",
+      "drive_file_read",
+      "gmail_search",
+      "gmail_thread_read",
+      "gmail_draft_create",
+      "gmail_send",
+      "docs_create",
+      "sheets_append",
+      "calendar_events_read",
+      "calendar_event_create",
+      "contacts_search",
+      "crm_tasks_read",
+      "crm_task_suggestions_read",
+      "crm_task_clarifications_answer",
+      "crm_task_drafts_create",
+      "crm_task_suggestions_approval_link",
+      "crm_task_suggestions_dismiss_proposal"
+    ]
+  }
+}
