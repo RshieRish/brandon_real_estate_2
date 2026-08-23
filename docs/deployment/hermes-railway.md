@@ -107,7 +107,7 @@ The custom Hermes image copies the bridge to:
 /app/atlas_backend_mcp.py
 ```
 
-The patched Hermes template writes this config entry at boot when both backend bridge vars exist:
+The currently deployed Hermes image writes this config entry at boot when both backend bridge vars exist:
 
 ```yaml
 mcp_servers:
@@ -145,6 +145,28 @@ mcp_servers:
 ```
 
 Local stdio verification against production succeeded for `initialize` and `workspace_status`, returning `configured=True` and `connected=True`. The live Hermes service cannot show a full MCP tool invocation yet because no messaging platform is enabled and Railway SSH is not available for direct `hermes mcp list/test` inside the container.
+
+### Local Task 8 overlay preparation — not deployed
+
+`hermes/overlay/manifest.json` pins the Hermes template source to commit
+`7224d7c1a4dcffe9304f49bc843f55716f5561b4`. The local overlay preserves the
+16 current tool names above in their current order and prepares exactly these
+six additional CRM review tools:
+
+- `crm_tasks_read`
+- `crm_task_suggestions_read`
+- `crm_task_clarifications_answer`
+- `crm_task_drafts_create`
+- `crm_task_suggestions_approval_link`
+- `crm_task_suggestions_dismiss_proposal`
+
+This is deliberately a local-only contract. Do not deploy it or change the
+production `tools.include` list until the authenticated Task 7 review route,
+two-stage handoff exchange, blocker UI, and production deployment are all
+verified. The answer and draft tools treat Hermes input as untrusted draft
+evidence. The dismissal tool only records a non-authoritative review proposal;
+it cannot dismiss, suppress, or release anything. Actual dismiss, approve,
+create-confirmed, archive, and restore tools remain absent.
 
 ## Verification
 

@@ -8,8 +8,12 @@ the Hermes container without changing FastAPI/backend dependencies.
 from __future__ import annotations
 
 import json
+import math
 import os
+import socket
+import signal
 import sys
+import threading
 from typing import Any
 from urllib import error, parse, request
 
@@ -17,6 +21,7 @@ from urllib import error, parse, request
 SERVER_NAME = "atlas-backend"
 SERVER_VERSION = "1.0.0"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+MAX_TIMEOUT_SECONDS = 30.0
 
 
 class BackendRequestError(Exception):
@@ -31,6 +36,68 @@ class BackendRequestError(Exception):
         self.status_code = status_code
         self.message = message
         self.payload = payload or {}
+
+
+class _RequestDeadlineExceeded(Exception):
+    pass
+
+
+class _RequestDeadlineUnavailable(Exception):
+    pass
+
+
+class _HardRequestDeadline:
+    """Interrupt one synchronous request at its end-to-end deadline on Linux."""
+
+    def __init__(self, timeout_seconds: float | None) -> None:
+        self.timeout_seconds = timeout_seconds
+        self._previous_handler: Any = None
+        self._handler_installed = False
+        self._timer_armed = False
+
+    def __enter__(self) -> None:
+        try:
+            valid_timeout = (
+                self.timeout_seconds is not None
+                and math.isfinite(float(self.timeout_seconds))
+                and float(self.timeout_seconds) > 0
+            )
+        except (TypeError, ValueError):
+            valid_timeout = False
+        if not valid_timeout:
+            raise _RequestDeadlineUnavailable("invalid request deadline")
+        if threading.current_thread() is not threading.main_thread():
+            raise _RequestDeadlineUnavailable("request is not on the main thread")
+        self._previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_delay, previous_interval = signal.getitimer(signal.ITIMER_REAL)
+        if previous_delay or previous_interval:
+            raise _RequestDeadlineUnavailable("ITIMER_REAL is already active")
+        try:
+            signal.signal(signal.SIGALRM, self._raise_deadline)
+            self._handler_installed = True
+            signal.setitimer(signal.ITIMER_REAL, self.timeout_seconds)
+            self._timer_armed = True
+        except Exception:
+            self._restore()
+            raise
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        self._restore()
+        return False
+
+    def _restore(self) -> None:
+        try:
+            if self._timer_armed:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            self._timer_armed = False
+            if self._handler_installed:
+                signal.signal(signal.SIGALRM, self._previous_handler)
+                self._handler_installed = False
+
+    @staticmethod
+    def _raise_deadline(signum: int, frame: Any) -> None:
+        raise _RequestDeadlineExceeded()
 
 
 def _object_schema(
@@ -188,6 +255,22 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         "path": "/api/v1/agent-control/workspace/gmail/send",
         "inputSchema": _object_schema(
             {
+                "request_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": (
+                        "Caller-supplied idempotency UUID; the bridge never "
+                        "creates or replaces it."
+                    ),
+                },
+                "retry_of_request_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": (
+                        "Optional caller-supplied UUID of a prior intent "
+                        "authenticated as not-delivered."
+                    ),
+                },
                 "to": _array_of_strings("Recipient email addresses.", min_items=1),
                 "subject": {"type": "string", "minLength": 1, "maxLength": 300},
                 "body_text": {"type": "string", "minLength": 1, "maxLength": 20000},
@@ -196,7 +279,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "confirmed_by_brandon": {"type": "boolean"},
                 "confirmation_note": {"type": "string", "maxLength": 500},
             },
-            ["to", "subject", "body_text", "confirmed_by_brandon"],
+            ["request_id", "to", "subject", "body_text", "confirmed_by_brandon"],
         ),
     },
     "docs_create": {
@@ -271,7 +354,9 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "summary": {"type": "string", "minLength": 1, "maxLength": 300},
                 "start": {"type": "string", "format": "date-time"},
                 "end": {"type": "string", "format": "date-time"},
-                "attendees": _array_of_strings("Attendee email addresses.", min_items=1),
+                "attendees": _array_of_strings(
+                    "Attendee email addresses.", min_items=1
+                ),
                 "location": {"type": "string", "maxLength": 1000},
                 "description": {"type": "string", "maxLength": 10000},
                 "calendar_id": {"type": "string", "minLength": 1, "maxLength": 300},
@@ -294,6 +379,104 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             ["query"],
         ),
     },
+    "crm_tasks_read": {
+        "name": "crm_tasks_read",
+        "description": "Read active CRM task summaries for review.",
+        "method": "GET",
+        "path": "/api/v1/agent-control/crm/tasks",
+        "query_params": ("limit",),
+        "inputSchema": _object_schema(
+            {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ),
+    },
+    "crm_task_suggestions_read": {
+        "name": "crm_task_suggestions_read",
+        "description": "Read CRM task suggestions awaiting Brandon review.",
+        "method": "GET",
+        "path": "/api/v1/agent-control/crm/task-suggestions",
+        "query_params": ("limit",),
+        "inputSchema": _object_schema(
+            {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ),
+    },
+    "crm_task_clarifications_answer": {
+        "name": "crm_task_clarifications_answer",
+        "description": (
+            "Answer an opaque Sydney clarification with the required suggestion version "
+            "using untrusted Hermes draft evidence; this cannot approve or create a task."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/task-clarifications/answer",
+        "inputSchema": _object_schema(
+            {
+                "code": {},
+                "expected_version": {"type": "integer", "minimum": 1},
+                "answer": {"type": "object", "maxProperties": 12},
+            },
+            ["code", "expected_version", "answer"],
+        ),
+    },
+    "crm_task_drafts_create": {
+        "name": "crm_task_drafts_create",
+        "description": (
+            "Create a non-authoritative Brandon-owned review draft from untrusted "
+            "Hermes draft evidence; it cannot create a confirmed task."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/task-drafts",
+        "inputSchema": _object_schema(
+            {
+                "request_id": {"type": "string", "format": "uuid"},
+                "title": {"type": "string", "minLength": 1, "maxLength": 255},
+                "description": {"type": "string", "maxLength": 5000},
+                "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                "due_at": {"type": "string", "format": "date-time"},
+                "contact_id": {"type": "integer", "minimum": 1},
+            },
+            ["request_id", "title"],
+        ),
+    },
+    "crm_task_suggestions_approval_link": {
+        "name": "crm_task_suggestions_approval_link",
+        "description": (
+            "Create a fragment-only handoff link with the required suggestion version "
+            "and payload hash for Brandon's authenticated review; actual approval remains "
+            "authenticated Command-only."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/task-suggestions/{suggestion_id}/approval-link",
+        "path_params": ("suggestion_id",),
+        "inputSchema": _object_schema(
+            {
+                "suggestion_id": {"type": "string", "format": "uuid"},
+                "expected_version": {"type": "integer", "minimum": 1},
+                "expected_payload_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                },
+            },
+            ["suggestion_id", "expected_version", "expected_payload_hash"],
+        ),
+    },
+    "crm_task_suggestions_dismiss_proposal": {
+        "name": "crm_task_suggestions_dismiss_proposal",
+        "description": (
+            "Record a non-authoritative review proposal with the required suggestion "
+            "version only; it cannot dismiss, suppress, or release anything."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/task-suggestions/{suggestion_id}/dismiss-proposal",
+        "path_params": ("suggestion_id",),
+        "inputSchema": _object_schema(
+            {
+                "suggestion_id": {"type": "string", "format": "uuid"},
+                "request_id": {"type": "string", "format": "uuid"},
+                "expected_version": {"type": "integer", "minimum": 1},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+            },
+            ["suggestion_id", "request_id", "expected_version", "reason"],
+        ),
+    },
 }
 
 
@@ -306,10 +489,26 @@ class BackendClient:
         timeout_seconds: float | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("BRANDON_BACKEND_URL") or "").rstrip("/")
-        self.token = token or os.getenv("BRANDON_AGENT_CONTROL_TOKEN") or os.getenv("AGENT_CONTROL_TOKEN")
-        self.timeout_seconds = timeout_seconds or float(
-            os.getenv("BRANDON_MCP_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+        self.token = (
+            token
+            or os.getenv("BRANDON_AGENT_CONTROL_TOKEN")
+            or os.getenv("AGENT_CONTROL_TOKEN")
         )
+        configured_timeout: object = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else os.getenv("BRANDON_MCP_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+        )
+        try:
+            requested_timeout = float(configured_timeout)
+        except (TypeError, ValueError):
+            self.timeout_seconds = None
+        else:
+            self.timeout_seconds = (
+                min(max(requested_timeout, 1.0), MAX_TIMEOUT_SECONDS)
+                if math.isfinite(requested_timeout) and requested_timeout > 0
+                else None
+            )
 
     def request(
         self,
@@ -329,42 +528,69 @@ class BackendClient:
                 status_code=500,
                 message="BRANDON_AGENT_CONTROL_TOKEN is not configured.",
             )
+        if self.timeout_seconds is None:
+            raise BackendRequestError(
+                status_code=500,
+                message="Backend request timeout configuration is invalid.",
+            )
 
-        url = f"{self.base_url}{path}"
-        clean_params = _drop_none(params or {})
-        if clean_params:
-            url = f"{url}?{parse.urlencode(clean_params, doseq=True)}"
-
-        encoded_body = None
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-        }
-        if body is not None:
-            encoded_body = json.dumps(_drop_none(body)).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-
-        backend_request = request.Request(
-            url,
-            data=encoded_body,
-            headers=headers,
-            method=method.upper(),
-        )
         try:
-            with request.urlopen(backend_request, timeout=self.timeout_seconds) as response:
-                response_text = response.read().decode("utf-8")
-                return _parse_json_response(response_text)
-        except error.HTTPError as exc:
-            payload = _parse_json_response(exc.read().decode("utf-8"))
+            with _HardRequestDeadline(self.timeout_seconds):
+                url = f"{self.base_url}{path}"
+                clean_params = _drop_none(params or {})
+                if clean_params:
+                    url = f"{url}?{parse.urlencode(clean_params, doseq=True)}"
+
+                encoded_body = None
+                headers = {
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/json",
+                }
+                if body is not None:
+                    encoded_body = json.dumps(_drop_none(body)).encode("utf-8")
+                    headers["Content-Type"] = "application/json"
+
+                backend_request = request.Request(
+                    url,
+                    data=encoded_body,
+                    headers=headers,
+                    method=method.upper(),
+                )
+                try:
+                    with request.urlopen(
+                        backend_request, timeout=self.timeout_seconds
+                    ) as response:
+                        response_text = response.read().decode("utf-8")
+                        return _parse_json_response(response_text)
+                except error.HTTPError as exc:
+                    payload = _parse_json_response(exc.read().decode("utf-8"))
+                    raise BackendRequestError(
+                        status_code=exc.code,
+                        message=_error_message_from_payload(payload)
+                        or exc.reason
+                        or "Backend request failed.",
+                        payload=payload
+                        if isinstance(payload, dict)
+                        else {"response": payload},
+                    ) from exc
+        except _RequestDeadlineExceeded as exc:
             raise BackendRequestError(
-                status_code=exc.code,
-                message=_error_message_from_payload(payload) or exc.reason or "Backend request failed.",
-                payload=payload if isinstance(payload, dict) else {"response": payload},
+                status_code=504,
+                message="Backend request timed out.",
             ) from exc
-        except error.URLError as exc:
+        except _RequestDeadlineUnavailable as exc:
             raise BackendRequestError(
-                status_code=502,
-                message=f"Could not reach Brandon backend: {exc.reason}",
+                status_code=503,
+                message="Backend request deadline is unavailable.",
+            ) from exc
+        except (error.URLError, socket.timeout, TimeoutError) as exc:
+            raise BackendRequestError(
+                status_code=504 if _is_timeout_error(exc) else 502,
+                message=(
+                    "Backend request timed out."
+                    if _is_timeout_error(exc)
+                    else "Could not reach Brandon backend."
+                ),
             ) from exc
 
 
@@ -413,16 +639,31 @@ def call_tool(
                 for key in spec.get("query_params", ())
                 if arguments.get(key) is not None
             }
-            payload = backend_client.request(spec["method"], spec["path"], params=params)
+            payload = backend_client.request(
+                spec["method"], spec["path"], params=params
+            )
         else:
-            payload = backend_client.request(spec["method"], spec["path"], body=arguments)
+            path = spec["path"]
+            path_params = spec.get("path_params", ())
+            body = dict(arguments)
+            for key in path_params:
+                value = body.pop(key, None)
+                if value is None:
+                    return _tool_error(
+                        {
+                            "status_code": 400,
+                            "message": "Tool path parameter is required.",
+                            "tool": name,
+                        }
+                    )
+                path = path.replace("{" + key + "}", str(value))
+            payload = backend_client.request(spec["method"], path, body=body)
         return _tool_success(payload)
     except BackendRequestError as exc:
         return _tool_error(
             {
                 "status_code": exc.status_code,
-                "message": exc.message,
-                "payload": exc.payload,
+                "message": "Backend request failed.",
                 "tool": name,
             }
         )
@@ -473,7 +714,9 @@ def serve_stdio() -> None:
         try:
             message = json.loads(line)
             if not isinstance(message, dict):
-                response = _rpc_error(None, -32600, "JSON-RPC message must be an object.")
+                response = _rpc_error(
+                    None, -32600, "JSON-RPC message must be an object."
+                )
             else:
                 response = handle_request(message, client=client)
         except json.JSONDecodeError:
@@ -488,10 +731,21 @@ def serve_stdio() -> None:
 
 def _drop_none(value: Any) -> Any:
     if isinstance(value, dict):
-        return {key: _drop_none(item) for key, item in value.items() if item is not None}
+        return {
+            key: _drop_none(item) for key, item in value.items() if item is not None
+        }
     if isinstance(value, list):
         return [_drop_none(item) for item in value]
     return value
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    reason = exc.reason if isinstance(exc, error.URLError) else exc
+    if isinstance(reason, TimeoutError):
+        return True
+    return isinstance(reason, str) and (
+        "timeout" in reason.lower() or "timed out" in reason.lower()
+    )
 
 
 def _parse_json_response(response_text: str) -> Any:

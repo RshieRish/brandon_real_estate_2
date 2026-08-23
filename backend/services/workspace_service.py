@@ -1,17 +1,34 @@
 """Google Workspace OAuth and service clients for Brandon's agent access."""
 
+import asyncio
 import base64
+import itertools
 import logging
+import math
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from email.message import EmailMessage
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token as google_id_token
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-from config import settings
+from config import (
+    WorkspaceOAuthClientSettings,
+    resolve_workspace_oauth_client_settings,
+    settings,
+)
+from services.integration_health_service import (
+    BoundedProviderExecutor,
+    ProviderCallTimedOut,
+    ProviderExecutorSaturated,
+    ProviderJobStillRunning,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,51 +61,110 @@ WORKSPACE_FULL_ACCESS_SCOPES = [
     "https://www.googleapis.com/auth/admin.directory.user",
 ]
 
+_GOOGLE_IDENTITY_ISSUERS = frozenset(
+    {"accounts.google.com", "https://accounts.google.com"}
+)
+_workspace_oauth_executor: BoundedProviderExecutor | None = None
+_workspace_oauth_call_ids = itertools.count(1)
+_bound_workspace_refresh_token: ContextVar[str | None] = ContextVar(
+    "bound_workspace_refresh_token",
+    default=None,
+)
+
 
 class WorkspaceIntegrationError(RuntimeError):
     """Raised when Google Workspace cannot be authorized or queried."""
 
 
-def _workspace_client_id() -> str:
-    return (
-        settings.GOOGLE_WORKSPACE_CLIENT_ID
-        or settings.GOOGLE_CLIENT_ID
-        or settings.GOOGLE_CALENDAR_CLIENT_ID
-    )
+@dataclass(frozen=True)
+class WorkspaceOAuthCredentials:
+    """Side-effect-free raw OAuth exchange result."""
+
+    refresh_token: str = field(repr=False)
+    id_token: str = field(repr=False)
 
 
-def _workspace_client_secret() -> str:
-    return (
-        settings.GOOGLE_WORKSPACE_CLIENT_SECRET
-        or settings.GOOGLE_CLIENT_SECRET
-        or settings.GOOGLE_CALENDAR_CLIENT_SECRET
-    )
+@dataclass(frozen=True)
+class WorkspaceOAuthIdentity:
+    """Verified Google identity bound to one durable Workspace token."""
+
+    refresh_token: str = field(repr=False)
+    email: str
+    email_verified: bool
+    issuer: str
+    audience: str
+    subject: str = ""
 
 
-def _workspace_redirect_uri() -> str:
-    return settings.GOOGLE_WORKSPACE_REDIRECT_URI or settings.GOOGLE_CALENDAR_REDIRECT_URI
+def workspace_oauth_client_settings() -> WorkspaceOAuthClientSettings:
+    """Return the one OAuth tuple shared by connect, status, and transports."""
 
-
-def workspace_integration_configured() -> bool:
-    return bool(_workspace_client_id() and _workspace_client_secret() and _workspace_redirect_uri())
-
-
-def workspace_integration_ready() -> bool:
-    return bool(workspace_integration_configured() and settings.GOOGLE_WORKSPACE_REFRESH_TOKEN)
-
-
-def _workspace_client_config() -> dict:
-    client_id = _workspace_client_id()
-    client_secret = _workspace_client_secret()
-    if not client_id or not client_secret:
+    resolved = resolve_workspace_oauth_client_settings(settings)
+    if resolved is None:
         raise WorkspaceIntegrationError(
             "Google Workspace OAuth client credentials are not configured."
         )
+    return resolved
+
+
+def _workspace_client_id() -> str:
+    resolved = resolve_workspace_oauth_client_settings(settings)
+    return resolved.client_id if resolved is not None else ""
+
+
+def workspace_oauth_client_id() -> str:
+    """Return the exact configured audience used for Workspace ID tokens."""
+
+    return _workspace_client_id()
+
+
+def _workspace_client_secret() -> str:
+    resolved = resolve_workspace_oauth_client_settings(settings)
+    return resolved.client_secret if resolved is not None else ""
+
+
+def _workspace_redirect_uri() -> str:
+    resolved = resolve_workspace_oauth_client_settings(settings)
+    return resolved.redirect_uri if resolved is not None else ""
+
+
+def workspace_integration_configured() -> bool:
+    return resolve_workspace_oauth_client_settings(settings) is not None
+
+
+def workspace_integration_ready() -> bool:
+    return bool(
+        workspace_integration_configured()
+        and _active_workspace_refresh_token()
+    )
+
+
+def bind_workspace_refresh_token_for_request(
+    refresh_token: str | None,
+) -> None:
+    """Bind database credentials to the current request without global writes."""
+
+    if refresh_token is not None and not isinstance(refresh_token, str):
+        raise WorkspaceIntegrationError(
+            "Workspace refresh token binding is invalid."
+        )
+    _bound_workspace_refresh_token.set(refresh_token)
+
+
+def _active_workspace_refresh_token() -> str:
+    bound_token = _bound_workspace_refresh_token.get()
+    if bound_token is not None:
+        return bound_token
+    return settings.GOOGLE_WORKSPACE_REFRESH_TOKEN
+
+
+def _workspace_client_config() -> dict:
+    oauth_client = workspace_oauth_client_settings()
 
     return {
         "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "client_id": oauth_client.client_id,
+            "client_secret": oauth_client.client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -96,12 +172,13 @@ def _workspace_client_config() -> dict:
 
 
 def _build_oauth_flow(state: str | None = None) -> Flow:
+    oauth_client = workspace_oauth_client_settings()
     flow = Flow.from_client_config(
         _workspace_client_config(),
         scopes=WORKSPACE_FULL_ACCESS_SCOPES,
         state=state,
     )
-    flow.redirect_uri = _workspace_redirect_uri()
+    flow.redirect_uri = oauth_client.redirect_uri
     return flow
 
 
@@ -137,44 +214,301 @@ def persist_refresh_token(refresh_token: str, env_path: Path | None = None) -> N
     target_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
 
 
-def exchange_code(code: str, state: str) -> str:
-    """Exchange a Google OAuth code for a refresh token and persist it."""
+def exchange_code(
+    code: str,
+    state: str,
+    *,
+    socket_timeout_seconds: float | None = None,
+) -> WorkspaceOAuthCredentials:
+    """Exchange a code without writing files, settings, or process state."""
+
     flow = _build_oauth_flow(state=state)
-    flow.fetch_token(code=code)
+    if socket_timeout_seconds is None:
+        flow.fetch_token(code=code)
+    else:
+        flow.fetch_token(code=code, timeout=socket_timeout_seconds)
     refresh_token = flow.credentials.refresh_token
-    if not refresh_token:
+    raw_id_token = flow.credentials.id_token
+    if not refresh_token or not raw_id_token:
         raise WorkspaceIntegrationError(
-            "Google did not return a Workspace refresh token. Disconnect the app in Google and try again."
+            "Google did not return the required Workspace credentials."
         )
 
-    persist_refresh_token(refresh_token)
-    settings.GOOGLE_WORKSPACE_REFRESH_TOKEN = refresh_token
-    return refresh_token
+    return WorkspaceOAuthCredentials(
+        refresh_token=refresh_token,
+        id_token=raw_id_token,
+    )
 
 
-def _workspace_credentials() -> Credentials:
-    if not _workspace_client_id() or not _workspace_client_secret():
-        raise WorkspaceIntegrationError(
-            "Google Workspace OAuth client credentials are not configured."
+def _get_workspace_oauth_executor() -> BoundedProviderExecutor:
+    global _workspace_oauth_executor
+    if _workspace_oauth_executor is None:
+        configured_workers = settings.INTEGRATION_PROVIDER_MAX_WORKERS
+        max_workers = configured_workers if configured_workers > 0 else 1
+        _workspace_oauth_executor = BoundedProviderExecutor(
+            max_workers=max_workers,
+        )
+    return _workspace_oauth_executor
+
+
+def _google_request_with_timeout(socket_timeout_seconds: float):
+    transport = GoogleAuthRequest()
+
+    def bounded_request(*args, **kwargs):
+        kwargs.setdefault("timeout", socket_timeout_seconds)
+        return transport(*args, **kwargs)
+
+    return bounded_request
+
+
+def _canonical_workspace_email(value: object) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError("workspace_identity_invalid")
+    canonical = value.strip().lower()
+    if (
+        len(canonical) > 320
+        or canonical.count("@") != 1
+        or any(character.isspace() or ord(character) < 33 for character in canonical)
+    ):
+        raise RuntimeError("workspace_identity_invalid")
+    local_part, domain = canonical.split("@", 1)
+    if not local_part or not domain:
+        raise RuntimeError("workspace_identity_invalid")
+    return canonical
+
+
+def validate_workspace_oauth_identity(identity: object) -> str:
+    """Return the canonical email for a verified, configured identity."""
+
+    if not isinstance(identity, WorkspaceOAuthIdentity):
+        raise RuntimeError("workspace_identity_invalid")
+    if (
+        not isinstance(identity.refresh_token, str)
+        or not identity.refresh_token.strip()
+        or identity.email_verified is not True
+        or identity.issuer not in _GOOGLE_IDENTITY_ISSUERS
+        or not workspace_oauth_client_id()
+        or identity.audience != workspace_oauth_client_id()
+    ):
+        raise RuntimeError("workspace_identity_invalid")
+    return _canonical_workspace_email(identity.email)
+
+
+def _verified_identity_from_claims(
+    credentials: WorkspaceOAuthCredentials,
+    claims: object,
+    client_id: str,
+) -> WorkspaceOAuthIdentity:
+    if not isinstance(claims, dict):
+        raise RuntimeError("workspace_identity_invalid")
+    subject = claims.get("sub")
+    audience = claims.get("aud")
+    issuer = claims.get("iss")
+    email = claims.get("email")
+    email_verified = claims.get("email_verified")
+    if (
+        not isinstance(subject, str)
+        or not subject.strip()
+        or audience != client_id
+        or issuer not in _GOOGLE_IDENTITY_ISSUERS
+        or email_verified is not True
+    ):
+        raise RuntimeError("workspace_identity_invalid")
+    canonical_email = _canonical_workspace_email(email)
+    identity = WorkspaceOAuthIdentity(
+        refresh_token=credentials.refresh_token,
+        email=canonical_email,
+        email_verified=True,
+        issuer=issuer,
+        audience=audience,
+        subject=subject.strip(),
+    )
+    return identity
+
+
+async def _run_bounded_oauth_call(
+    *,
+    executor: BoundedProviderExecutor,
+    phase: str,
+    function,
+    deadline_seconds: float,
+    failure_category: str,
+):
+    if deadline_seconds <= 0:
+        raise RuntimeError("workspace_oauth_provider_timeout")
+    key = f"workspace-oauth:{phase}:{next(_workspace_oauth_call_ids)}"
+    try:
+        return await executor.run(
+            key=key,
+            function=function,
+            deadline_seconds=deadline_seconds,
+        )
+    except ProviderCallTimedOut:
+        raise RuntimeError("workspace_oauth_provider_timeout") from None
+    except (ProviderExecutorSaturated, ProviderJobStillRunning):
+        raise RuntimeError("workspace_oauth_provider_unavailable") from None
+    except Exception:
+        raise RuntimeError(failure_category) from None
+
+
+async def run_workspace_oauth_exchange(
+    *,
+    code: str,
+    state: str,
+    client_id: str | None = None,
+    deadline_seconds: float,
+    socket_timeout_seconds: float,
+    executor: BoundedProviderExecutor | None = None,
+    exchange=None,
+    verifier=None,
+    oauth_request_factory=None,
+) -> WorkspaceOAuthIdentity:
+    """Exchange and cryptographically verify Google identity off-loop."""
+
+    if (
+        not isinstance(code, str)
+        or not code
+        or not isinstance(state, str)
+        or not state
+        or not math.isfinite(deadline_seconds)
+        or deadline_seconds <= 0
+        or not math.isfinite(socket_timeout_seconds)
+        or socket_timeout_seconds <= 0
+        or socket_timeout_seconds > deadline_seconds
+    ):
+        raise RuntimeError("workspace_oauth_configuration_invalid")
+
+    expected_audience = client_id or workspace_oauth_client_id()
+    if not expected_audience:
+        raise RuntimeError("workspace_identity_invalid")
+    bounded_executor = executor or _get_workspace_oauth_executor()
+    exchange_function = exchange or exchange_code
+    verifier_function = verifier or google_id_token.verify_oauth2_token
+    request_factory = oauth_request_factory or _google_request_with_timeout
+    loop = asyncio.get_running_loop()
+    expires_at = loop.time() + deadline_seconds
+
+    def exchange_call():
+        if exchange is None:
+            return exchange_function(
+                code,
+                state,
+                socket_timeout_seconds=socket_timeout_seconds,
+            )
+        return exchange_function(code, state)
+
+    credentials = await _run_bounded_oauth_call(
+        executor=bounded_executor,
+        phase="exchange",
+        function=exchange_call,
+        deadline_seconds=expires_at - loop.time(),
+        failure_category="workspace_oauth_provider_failed",
+    )
+    if (
+        not isinstance(credentials, WorkspaceOAuthCredentials)
+        or not isinstance(credentials.refresh_token, str)
+        or not credentials.refresh_token.strip()
+        or not isinstance(credentials.id_token, str)
+        or not credentials.id_token
+    ):
+        raise RuntimeError("workspace_identity_invalid") from None
+
+    request_object = request_factory(socket_timeout_seconds)
+
+    def verify_call():
+        return verifier_function(
+            credentials.id_token,
+            request_object,
+            expected_audience,
         )
 
-    if not settings.GOOGLE_WORKSPACE_REFRESH_TOKEN:
+    claims = await _run_bounded_oauth_call(
+        executor=bounded_executor,
+        phase="verify",
+        function=verify_call,
+        deadline_seconds=expires_at - loop.time(),
+        failure_category="workspace_identity_invalid",
+    )
+    try:
+        return _verified_identity_from_claims(
+            credentials,
+            claims,
+            expected_audience,
+        )
+    except RuntimeError:
+        raise RuntimeError("workspace_identity_invalid") from None
+
+
+def _workspace_credentials(
+    *,
+    refresh_token: str | None = None,
+    oauth_client: WorkspaceOAuthClientSettings | None = None,
+) -> Credentials:
+    oauth_client = oauth_client or workspace_oauth_client_settings()
+
+    active_refresh_token = (
+        refresh_token
+        if refresh_token is not None
+        else _active_workspace_refresh_token()
+    )
+    if not active_refresh_token:
         raise WorkspaceIntegrationError(
             "Google Workspace needs one-time authorization before Hermes can access Brandon's Workspace."
         )
 
     return Credentials(
         token=None,
-        refresh_token=settings.GOOGLE_WORKSPACE_REFRESH_TOKEN,
+        refresh_token=active_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=_workspace_client_id(),
-        client_secret=_workspace_client_secret(),
+        client_id=oauth_client.client_id,
+        client_secret=oauth_client.client_secret,
     )
 
 
-def build_workspace_service(api_name: str, version: str):
+def build_workspace_service(
+    api_name: str,
+    version: str,
+    *,
+    refresh_token: str | None = None,
+    oauth_client: WorkspaceOAuthClientSettings | None = None,
+    socket_timeout_seconds: float | None = None,
+):
     """Build a Google API client using Brandon's Workspace OAuth token."""
-    return build(api_name, version, credentials=_workspace_credentials(), cache_discovery=False)
+
+    credentials = _workspace_credentials(
+        refresh_token=refresh_token,
+        oauth_client=oauth_client,
+    )
+    if socket_timeout_seconds is None:
+        return build(
+            api_name,
+            version,
+            credentials=credentials,
+            cache_discovery=False,
+        )
+    if (
+        not math.isfinite(socket_timeout_seconds)
+        or socket_timeout_seconds <= 0
+    ):
+        raise WorkspaceIntegrationError(
+            "Google Workspace provider timeout is invalid."
+        )
+    import google_auth_httplib2
+
+    from services.gmail_history_adapter import _SingleAttemptHttp
+
+    authorized_http = google_auth_httplib2.AuthorizedHttp(
+        credentials,
+        http=_SingleAttemptHttp(timeout=socket_timeout_seconds),
+        max_refresh_attempts=0,
+    )
+    return build(
+        api_name,
+        version,
+        http=authorized_http,
+        cache_discovery=False,
+        num_retries=0,
+    )
 
 
 def _coerce_recipients(value: list[str] | None) -> list[str]:
@@ -334,11 +668,17 @@ def send_gmail_message(
     body_text: str,
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    gmail_client: Any | None = None,
 ) -> dict[str, str]:
     """Send a Gmail message from Brandon's mailbox."""
-    gmail = build_workspace_service("gmail", "v1")
+    gmail = gmail_client or build_workspace_service("gmail", "v1")
     raw = _build_raw_email(to=to, subject=subject, body_text=body_text, cc=cc, bcc=bcc)
-    result = gmail.users().messages().send(userId="me", body={"raw": raw}).execute()
+    result = (
+        gmail.users()
+        .messages()
+        .send(userId="me", body={"raw": raw})
+        .execute(num_retries=0)
+    )
     return {
         "id": result.get("id", ""),
         "thread_id": result.get("threadId", ""),
@@ -638,9 +978,29 @@ def append_sheet_values(
     }
 
 
-def get_workspace_connection_status() -> dict[str, str | bool]:
+def _workspace_status_unavailable() -> dict[str, str | bool]:
+    return {
+        "configured": True,
+        "connected": False,
+        "can_connect": True,
+        "detail": (
+            "Workspace credentials are present, but the connection check "
+            "did not complete. Try again shortly."
+        ),
+    }
+
+
+def get_workspace_connection_status(
+    *,
+    refresh_token: str | None = None,
+    oauth_client: WorkspaceOAuthClientSettings | None = None,
+    socket_timeout_seconds: float | None = None,
+) -> dict[str, str | bool]:
     """Return current Workspace integration state for the admin UI."""
-    if not workspace_integration_configured():
+    resolved_oauth_client = oauth_client or resolve_workspace_oauth_client_settings(
+        settings
+    )
+    if resolved_oauth_client is None:
         return {
             "configured": False,
             "connected": False,
@@ -648,7 +1008,12 @@ def get_workspace_connection_status() -> dict[str, str | bool]:
             "detail": "Google Workspace OAuth client credentials are missing.",
         }
 
-    if not settings.GOOGLE_WORKSPACE_REFRESH_TOKEN:
+    active_refresh_token = (
+        refresh_token
+        if refresh_token is not None
+        else _active_workspace_refresh_token()
+    )
+    if not active_refresh_token:
         return {
             "configured": True,
             "connected": False,
@@ -657,12 +1022,24 @@ def get_workspace_connection_status() -> dict[str, str | bool]:
         }
 
     try:
-        gmail = build_workspace_service("gmail", "v1")
-        profile = gmail.users().getProfile(userId="me").execute()
-        drive = build_workspace_service("drive", "v3")
-        drive.about().get(fields="user").execute()
+        gmail = build_workspace_service(
+            "gmail",
+            "v1",
+            refresh_token=active_refresh_token,
+            oauth_client=resolved_oauth_client,
+            socket_timeout_seconds=socket_timeout_seconds,
+        )
+        profile = gmail.users().getProfile(userId="me").execute(num_retries=0)
+        drive = build_workspace_service(
+            "drive",
+            "v3",
+            refresh_token=active_refresh_token,
+            oauth_client=resolved_oauth_client,
+            socket_timeout_seconds=socket_timeout_seconds,
+        )
+        drive.about().get(fields="user").execute(num_retries=0)
     except Exception:
-        logger.exception("Google Workspace connection check failed")
+        logger.error("Google Workspace connection check failed")
         return {
             "configured": True,
             "connected": False,
@@ -677,3 +1054,82 @@ def get_workspace_connection_status() -> dict[str, str | bool]:
         "can_connect": True,
         "detail": f"Google Workspace is connected as {email}. Full-access OAuth is available for approved agent workflows.",
     }
+
+
+async def get_workspace_connection_status_bounded(
+    *,
+    deadline_seconds: float | None = None,
+    socket_timeout_seconds: float | None = None,
+    executor: BoundedProviderExecutor | None = None,
+    status_check=None,
+) -> dict[str, str | bool]:
+    """Check Workspace off-loop with one stable overlap key and fixed errors."""
+
+    oauth_client = resolve_workspace_oauth_client_settings(settings)
+    if oauth_client is None:
+        return {
+            "configured": False,
+            "connected": False,
+            "can_connect": False,
+            "detail": "Google Workspace OAuth client credentials are missing.",
+        }
+    refresh_token = _active_workspace_refresh_token()
+    if not refresh_token:
+        return {
+            "configured": True,
+            "connected": False,
+            "can_connect": True,
+            "detail": "Google Workspace needs full-access authorization as Brandon.",
+        }
+    deadline = (
+        settings.INTEGRATION_PROVIDER_DEADLINE_SECONDS
+        if deadline_seconds is None
+        else deadline_seconds
+    )
+    socket_timeout = (
+        settings.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS
+        if socket_timeout_seconds is None
+        else socket_timeout_seconds
+    )
+    if (
+        not math.isfinite(deadline)
+        or deadline <= 0
+        or not math.isfinite(socket_timeout)
+        or socket_timeout <= 0
+        or socket_timeout > deadline
+    ):
+        return _workspace_status_unavailable()
+    bounded_executor = executor or _get_workspace_oauth_executor()
+
+    def check():
+        if status_check is not None:
+            return status_check(
+                refresh_token=refresh_token,
+                oauth_client=oauth_client,
+                socket_timeout_seconds=socket_timeout,
+            )
+        return get_workspace_connection_status(
+            refresh_token=refresh_token,
+            oauth_client=oauth_client,
+            socket_timeout_seconds=socket_timeout,
+        )
+
+    try:
+        result = await bounded_executor.run(
+            key="workspace-status",
+            function=check,
+            deadline_seconds=deadline,
+        )
+    except (
+        ProviderCallTimedOut,
+        ProviderExecutorSaturated,
+        ProviderJobStillRunning,
+    ):
+        logger.error("Google Workspace connection check unavailable")
+        return _workspace_status_unavailable()
+    except BaseException:
+        logger.error("Google Workspace connection check failed")
+        return _workspace_status_unavailable()
+    if not isinstance(result, dict):
+        return _workspace_status_unavailable()
+    return result

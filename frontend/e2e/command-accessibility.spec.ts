@@ -83,6 +83,29 @@ test('quick task dialog passes axe and contains focus in both directions', async
   await expect(trigger).toBeFocused();
 });
 
+test('Tasks uses one main landmark and its archive dialog passes axe with contained focus', async ({ commandPage }) => {
+  await commandPage.goto('/admin/command/tasks');
+  await expect(commandPage.getByRole('heading', { name: 'Tasks', level: 1 })).toBeVisible();
+  await expect(commandPage.getByRole('main')).toHaveCount(1);
+  await expect(commandPage.getByRole('region', { name: 'Tasks' })).toBeVisible();
+
+  const trigger = commandPage.getByRole('button', { name: 'Task actions for Call Avery' });
+  await trigger.click();
+  await commandPage.getByRole('menuitem', { name: 'Archive task' }).click();
+  const dialog = commandPage.getByRole('dialog', { name: 'Archive Call Avery' });
+  await expect(dialog).toBeVisible();
+
+  await expectNoAxeViolations(commandPage);
+  await expectBidirectionalFocusLoop(
+    commandPage,
+    dialog,
+    dialog.getByRole('textbox', { name: 'Archive reason (optional)' }),
+    dialog.getByRole('button', { name: 'Archive', exact: true }),
+  );
+  await commandPage.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+});
+
 test('keyboard-only journey reaches shell actions, live regions, and sortable records', async ({
   commandPage,
   mockCommandEndpoint,
@@ -141,7 +164,9 @@ test('keyboard-only journey reaches shell actions, live regions, and sortable re
   }
   await expect(saveTask).toBeFocused();
   await commandPage.keyboard.press('Enter');
-  const error = commandPage.getByRole('alert').filter({ hasText: 'Synthetic task rejection' });
+  const error = commandPage.getByRole('alert').filter({
+    hasText: 'The server may have applied the task change; refresh before retrying.',
+  });
   await expect(error).toHaveAttribute('aria-live', 'assertive');
   await commandPage.keyboard.press('Escape');
   await expect(commandPage).toHaveURL('/admin/command');
@@ -154,6 +179,9 @@ test('keyboard-only journey reaches shell actions, live regions, and sortable re
     priority: 'normal',
     due_at: null,
     status: 'open',
+    archived_at: null,
+    archive_reason: null,
+    version: 1,
   }, 201, 'POST');
   await commandPage.keyboard.press('Enter');
   await expect(commandPage).toHaveURL('/admin/command?create=task');

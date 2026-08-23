@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { CircleNotch } from '@phosphor-icons/react';
 import AdminSidebar from '@/components/layout/AdminSidebar';
+import { hadTaskSuggestionHandoff } from '@/lib/command/task-suggestion-handoff';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -24,10 +25,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       return;
     }
 
+    const loginDestination =
+      pathname === '/admin/command/task-suggestions' && hadTaskSuggestionHandoff(window)
+        ? '/admin/login?approval_notice=reopen_task_handoff'
+        : '/admin/login';
+
     const checkAuth = async () => {
       const token = localStorage.getItem('admin_token');
       if (!token) {
-        router.push('/admin/login');
+        router.push(loginDestination);
         setIsChecking(false);
         return;
       }
@@ -41,18 +47,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           setIsAuthed(true);
         } else {
           localStorage.removeItem('admin_token');
-          router.push('/admin/login');
+          router.push(loginDestination);
         }
       } catch {
         localStorage.removeItem('admin_token');
-        router.push('/admin/login');
+        router.push(loginDestination);
       } finally {
         setIsChecking(false);
       }
     };
 
     checkAuth();
-  }, [isLoginPage]);
+  }, [isLoginPage, pathname, router]);
 
   // Login page: render without shell
   if (isLoginPage) {

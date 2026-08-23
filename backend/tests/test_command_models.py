@@ -35,7 +35,7 @@ from schemas.command import (
 )
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
-from services.command_tasks import task_activity_summary
+from services.command_tasks import archive_task_source_key, task_activity_summary
 
 
 def test_all_focused_contact_boundary_models_share_strict_extra_policy():
@@ -81,8 +81,18 @@ def test_focused_contact_compatibility_field_contracts_are_exact():
         "opportunities", "saved_searches", "bookings", "tags",
     )
     assert tuple(ContactWorkspaceSummaryOut.model_fields) == (
-        "open_tasks", "completed_tasks", "archived_tasks", "active_smart_plans",
-        "opportunities", "notes", "saved_searches", "bookings",
+        "open_tasks",
+        "active_tasks",
+        "completed_tasks",
+        "cancelled_tasks",
+        "archived_tasks",
+        "archived_mutable_tasks",
+        "archived_recovered_evidence",
+        "active_smart_plans",
+        "opportunities",
+        "notes",
+        "saved_searches",
+        "bookings",
     )
     assert tuple(ContactTagAssignmentOut.model_fields) == ("contact_id", "tag_id")
     assert tuple(ContactTagRemovalOut.model_fields) == (
@@ -102,6 +112,35 @@ def test_focused_contact_compatibility_field_contracts_are_exact():
     assert tuple(SavedSearchOut.model_fields) == (
         "id", "name", "criteria", "contact_id", "contact_name", "updated_at",
     )
+
+
+def test_contact_workspace_summary_requires_consistent_task_subtotals():
+    from schemas.command_contacts import ContactWorkspaceSummaryOut
+
+    valid = {
+        "open_tasks": 3,
+        "active_tasks": 3,
+        "completed_tasks": 2,
+        "cancelled_tasks": 1,
+        "archived_tasks": 5,
+        "archived_mutable_tasks": 2,
+        "archived_recovered_evidence": 3,
+        "active_smart_plans": 4,
+        "opportunities": 5,
+        "notes": 6,
+        "saved_searches": 7,
+        "bookings": 8,
+    }
+    assert ContactWorkspaceSummaryOut.model_validate(valid).model_dump() == valid
+
+    for invalid in (
+        {**valid, "open_tasks": 4},
+        {**valid, "archived_tasks": 4},
+        {**valid, "cancelled_tasks": True},
+        {**valid, "archived_mutable_tasks": -1},
+    ):
+        with pytest.raises(ValidationError):
+            ContactWorkspaceSummaryOut.model_validate(invalid)
 
 
 def test_archive_contact_parser_extracts_identity_and_profile_fields():
@@ -299,14 +338,22 @@ def test_contact_profile_updates_keep_explicit_optional_field_clears():
 
 
 def test_task_updates_only_allow_internal_task_lifecycle_and_priorities():
-    update = TaskUpdate(status="in_progress", priority="high", description="Call before noon", contact_id=12, due_at=None)
+    update = TaskUpdate(
+        expected_version=1,
+        status="in_progress",
+        priority="high",
+        description="Call before noon",
+        contact_id=12,
+        due_at=None,
+    )
+    assert update.expected_version == 1
     assert update.priority == "high"
     assert update.contact_id == 12
     assert {"contact_id", "due_at"}.issubset(update.model_fields_set)
     with pytest.raises(ValidationError):
-        TaskUpdate(status="deleted")
+        TaskUpdate(expected_version=1, status="deleted")
     with pytest.raises(ValidationError):
-        TaskUpdate(priority="urgentish")
+        TaskUpdate(expected_version=1, priority="urgentish")
 
 
 def test_task_audit_summary_describes_the_persisted_changed_fields():
@@ -348,8 +395,19 @@ def test_contact_import_supports_private_celebration_dates():
 
 
 def test_archive_bundle_accepts_every_internal_record_collection():
-    bundle = ArchiveBundleImportRequest(contacts=[{"first_name": "Avery", "email": "avery@example.com"}], tasks=[{"title": "Call Avery", "contact_email": "avery@example.com"}], notes=[{"contact_email": "avery@example.com", "body": "Imported context"}], opportunities=[{"name": "Main Street", "contact_emails": ["avery@example.com"]}], referrals=[{"name": "Avery referral"}], listings=[{"address": "10 Main Street"}], templates=[{"name": "Buyer agreement"}], agreements=[{"title": "Buyer agreement", "contact_email": "avery@example.com", "template_name": "Buyer agreement"}])
+    bundle = ArchiveBundleImportRequest(source_id="complete-bundle-fixture", contacts=[{"first_name": "Avery", "email": "avery@example.com"}], tasks=[{"source_row_id": "call-avery", "title": "Call Avery", "contact_email": "avery@example.com"}], notes=[{"contact_email": "avery@example.com", "body": "Imported context"}], opportunities=[{"name": "Main Street", "contact_emails": ["avery@example.com"]}], referrals=[{"name": "Avery referral"}], listings=[{"address": "10 Main Street"}], templates=[{"name": "Buyer agreement"}], agreements=[{"title": "Buyer agreement", "contact_email": "avery@example.com", "template_name": "Buyer agreement"}])
     assert (len(bundle.contacts), len(bundle.tasks), len(bundle.agreements)) == (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("source_id", "source_row_id"),
+    [("   ", "row-1"), ("source-1", "\n\t")],
+)
+def test_archive_task_source_key_rejects_whitespace_only_identities(
+    source_id: str, source_row_id: str
+):
+    with pytest.raises(ValueError):
+        archive_task_source_key(source_id, source_row_id)
 
 
 def test_smart_plan_enrollment_has_one_canonical_row_per_contact_and_plan():

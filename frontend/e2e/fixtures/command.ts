@@ -1,8 +1,9 @@
-import { expect, test as base, type Page, type Route } from '@playwright/test';
+import { expect, test as base, type Page, type Request, type Route } from '@playwright/test';
 import home from './command-home.json';
 import {
   createCommandContactsFixtureState,
   handleCommandContactsRequest,
+  type CommandFixtureTask,
   type CommandContactsFixtureState,
 } from './command-contacts';
 
@@ -24,7 +25,7 @@ type BuiltInCommandMock = Readonly<{
   method: string;
   path: string | RegExp;
   query?: string;
-  respond: (url: URL) => MockResponse;
+  respond: (url: URL, request: Request, state: RouteState) => MockResponse;
 }>;
 
 type RouteState = {
@@ -32,6 +33,8 @@ type RouteState = {
   failures: Map<string, Map<string, FailureResponse>>;
   expectedHttpFailures: ExpectedHttpFailures;
   contacts: CommandContactsFixtureState;
+  tasks: CommandFixtureTask[];
+  useCentralLegacyWorkspace: boolean;
 };
 
 class ExpectedHttpFailures {
@@ -95,22 +98,25 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
       body: Number(url.searchParams.get('offset') ?? '0') === 0 ? home.contacts : [],
     }),
   },
-  { method: 'GET', path: '/tasks', query: '', respond: () => ({ status: 200, body: home.tasks }) },
   {
-    method: 'POST',
+    method: 'GET',
     path: '/tasks',
-    query: '',
-    respond: () => ({
-      status: 201,
-      body: {
-        id: 99,
-        title: 'Synthetic task',
-        contact_id: null,
-        description: '',
-        priority: 'normal',
-        due_at: null,
-        status: 'open',
-      },
+    query: '?visibility=active',
+    respond: (_url, _request, state) => ({
+      status: 200,
+      body: [...state.tasks, ...state.contacts.createdTasks].filter((task) => (
+        task.archived_at === null
+        && (task.status === 'open' || task.status === 'in_progress')
+      )),
+    }),
+  },
+  {
+    method: 'GET',
+    path: '/tasks',
+    query: '?visibility=all',
+    respond: (_url, _request, state) => ({
+      status: 200,
+      body: [...state.tasks, ...state.contacts.createdTasks],
     }),
   },
   { method: 'GET', path: '/opportunities', query: '', respond: () => ({ status: 200, body: home.opportunities }) },
@@ -128,7 +134,17 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
       body: {
         contact: home.contacts[0],
         timeline: [],
-        tasks: home.tasks.filter((task) => task.contact_id === 1),
+        tasks: home.tasks
+          .filter((task) => task.contact_id === 1)
+          .map((task) => ({
+            id: task.id,
+            title: task.title,
+            contact_id: task.contact_id,
+            description: task.description,
+            priority: task.priority,
+            due_at: task.due_at,
+            status: task.status,
+          })),
         notes: [],
         smart_plans: [],
         opportunities: home.opportunities.slice(0, 1),
@@ -140,14 +156,14 @@ const BUILT_IN_COMMAND_MOCKS: readonly BuiltInCommandMock[] = [
   },
 ];
 
-function defaultCommandResponse(url: URL, method: string): MockResponse {
+function defaultCommandResponse(url: URL, method: string, request: Request, state: RouteState): MockResponse {
   const path = url.pathname.slice(COMMAND_PREFIX.length) || '/';
   const builtIn = BUILT_IN_COMMAND_MOCKS.find((candidate) => (
     candidate.method === method
     && (typeof candidate.path === 'string' ? candidate.path === path : candidate.path.test(path))
     && (candidate.query === undefined || candidate.query === url.search)
   ));
-  if (builtIn) return builtIn.respond(url);
+  if (builtIn) return builtIn.respond(url, request, state);
 
   const requestIdentity = safeRequestIdentity(method, url, path);
   return {
@@ -158,7 +174,7 @@ function defaultCommandResponse(url: URL, method: string): MockResponse {
   };
 }
 
-function responseFor(state: RouteState, url: URL, method: string): MockResponse {
+function responseFor(state: RouteState, url: URL, method: string, request: Request): MockResponse {
   const normalized = `${url.pathname.slice(COMMAND_PREFIX.length) || '/'}${url.search}`;
   const failure = state.failures.get(normalized)?.get(method);
   if (failure?.remaining) {
@@ -167,7 +183,7 @@ function responseFor(state: RouteState, url: URL, method: string): MockResponse 
   }
   return state.responses.get(normalized)
     ?.get(method)
-    ?? defaultCommandResponse(url, method);
+    ?? defaultCommandResponse(url, method, request, state);
 }
 
 async function fulfillApiRoute(route: Route, state: RouteState): Promise<void> {
@@ -204,9 +220,12 @@ async function fulfillApiRoute(route: Route, state: RouteState): Promise<void> {
   const normalized = `${url.pathname.slice(COMMAND_PREFIX.length) || '/'}${url.search}`;
   const hasOverride = (state.failures.get(normalized)?.get(request.method())?.remaining ?? 0) > 0
     || state.responses.get(normalized)?.has(request.method());
-  const response = hasOverride
-    ? responseFor(state, url, request.method())
-    : handleCommandContactsRequest(state.contacts, request, url) ?? responseFor(state, url, request.method());
+  const useCentralLegacyWorkspace = state.useCentralLegacyWorkspace
+    && normalized === '/contacts/1/workspace'
+    && request.method() === 'GET';
+  const response = hasOverride || useCentralLegacyWorkspace
+    ? responseFor(state, url, request.method(), request)
+    : handleCommandContactsRequest(state.contacts, request, url) ?? responseFor(state, url, request.method(), request);
   if (response.status >= 400) state.expectedHttpFailures.registerResponse(normalized, request.method());
   if (response.binaryBody !== undefined) {
     await route.fulfill({ status: response.status, body: response.binaryBody, headers: response.headers });
@@ -222,6 +241,8 @@ export const test = base.extend<CommandFixtures>({
       failures: new Map(),
       expectedHttpFailures: new ExpectedHttpFailures(),
       contacts: createCommandContactsFixtureState(),
+      tasks: structuredClone(home.tasks) as CommandFixtureTask[],
+      useCentralLegacyWorkspace: false,
     });
   },
 

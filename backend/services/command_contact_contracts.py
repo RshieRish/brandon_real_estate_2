@@ -874,8 +874,12 @@ class ContactNeighbors:
 @dataclass(frozen=True, slots=True)
 class ContactWorkspaceSummary:
     open_tasks: int
+    active_tasks: int
     completed_tasks: int
+    cancelled_tasks: int
     archived_tasks: int
+    archived_mutable_tasks: int
+    archived_recovered_evidence: int
     active_smart_plans: int
     opportunities: int
     notes: int

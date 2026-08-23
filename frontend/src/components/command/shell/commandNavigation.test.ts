@@ -11,6 +11,7 @@ describe('Command navigation registry', () => {
       '/admin/command',
       '/admin/command/contacts',
       '/admin/command/tasks',
+      '/admin/command/task-suggestions',
       '/admin/command/smart-plans',
       '/admin/command/opportunities',
       '/admin/command/referrals',
@@ -33,5 +34,6 @@ describe('Command navigation registry', () => {
       isCommandDestinationActive('/admin/command/contacts/42', '/admin/command/contacts'),
     ).toBe(true);
     expect(findCommandDestination('/admin/command/tasks/9')?.label).toBe('Tasks');
+    expect(findCommandDestination('/admin/command/task-suggestions')?.label).toBe('Task review');
   });
 });

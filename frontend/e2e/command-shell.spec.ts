@@ -15,6 +15,42 @@ async function fetchCommand(
   }, { requestPath: path, requestMethod: method });
 }
 
+async function createFixtureTask(
+  commandPage: Page,
+  idempotencyKey: string,
+  payload: Readonly<{
+    title: string;
+    contact_id: number | null;
+    description: string;
+    priority: 'low' | 'normal' | 'high';
+    due_at: string | null;
+  }>,
+  clientTimezone = 'America/New_York',
+) {
+  return commandPage.evaluate(async ({ key, taskPayload, timezone }) => {
+    const response = await fetch('/api/v1/command/tasks', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-admin-token',
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': key,
+        'X-Client-Timezone': timezone,
+      },
+      body: JSON.stringify(taskPayload),
+    });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }, { key: idempotencyKey, taskPayload: payload, timezone: clientTimezone });
+}
+
+async function readFixtureTasks(commandPage: Page) {
+  return commandPage.evaluate(async () => {
+    const response = await fetch('/api/v1/command/tasks?visibility=all', {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    });
+    return { status: response.status, body: await response.json() as Record<string, unknown>[] };
+  });
+}
+
 test('shell persists across module navigation @critical', async ({ commandPage }) => {
   await commandPage.goto('/admin/command');
   const navigation = commandPage.getByRole('navigation', { name: 'Command modules' });
@@ -121,4 +157,71 @@ test('a wrong method cannot consume a one-shot failure registered for another me
 
   const recovered = await fetchCommand(commandPage, '/overview', 'GET');
   expect(recovered).toEqual({ status: 200, body: expect.any(Object) });
+});
+
+test('central task fixture replays one readable 200 create and rejects changed payload or timezone', async ({ commandPage, routeState }) => {
+  await commandPage.goto('/admin/login');
+  const key = '550e8400-e29b-41d4-a716-446655440000';
+  const payload = {
+    title: 'Replay-safe task',
+    contact_id: null,
+    description: 'Canonical task payload',
+    priority: 'high' as const,
+    due_at: '2026-08-20T14:30:00Z',
+  };
+  const first = await createFixtureTask(commandPage, key, payload);
+  const replay = await createFixtureTask(commandPage, key, payload);
+  expect.soft(first.status).toBe(200);
+  expect(replay).toEqual(first);
+  const listed = await readFixtureTasks(commandPage);
+  expect(listed.status).toBe(200);
+  expect.soft(listed.body.filter((task) => task.id === first.body.id)).toEqual([first.body]);
+
+  const mismatches = [
+    { label: 'title', payload: { ...payload, title: 'Changed payload' }, timezone: 'America/New_York' },
+    { label: 'description', payload: { ...payload, description: 'Changed description' }, timezone: 'America/New_York' },
+    { label: 'priority', payload: { ...payload, priority: 'low' as const }, timezone: 'America/New_York' },
+    { label: 'due_at', payload: { ...payload, due_at: null }, timezone: 'America/New_York' },
+    { label: 'contact_id', payload: { ...payload, contact_id: 1 }, timezone: 'America/New_York' },
+    { label: 'client_timezone', payload, timezone: 'America/Chicago' },
+  ];
+  routeState.expectedHttpFailures.add('/tasks', 'POST', mismatches.length);
+  for (const mismatch of mismatches) {
+    expect.soft(
+      await createFixtureTask(commandPage, key, mismatch.payload, mismatch.timezone),
+      `${mismatch.label} participates in the idempotency fingerprint`,
+    ).toEqual({
+      status: 409,
+      body: {
+        detail: {
+          code: 'task_idempotency_mismatch',
+          message: 'Idempotency key was already used with a different task request',
+        },
+      },
+    });
+  }
+
+  const listedAfterMismatches = await readFixtureTasks(commandPage);
+  expect.soft(listedAfterMismatches.body.filter((task) => task.id === first.body.id)).toEqual([first.body]);
+
+  const other = await createFixtureTask(
+    commandPage,
+    '123e4567-e89b-42d3-a456-426614174000',
+    payload,
+  );
+  expect.soft(other.status).toBe(200);
+  expect(other.body.id).not.toBe(first.body.id);
+});
+
+test('central legacy contact workspace preserves raw workflow status for archived rows', async ({ commandPage, routeState }) => {
+  routeState.useCentralLegacyWorkspace = true;
+  await commandPage.goto('/admin/login');
+  const workspace = await commandPage.evaluate(async () => {
+    const response = await fetch('/api/v1/command/contacts/1/workspace', {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    });
+    return response.json() as Promise<{ tasks: { title: string; status: string }[] }>;
+  });
+
+  expect(workspace.tasks.find((task) => task.title === 'Archived reminder')?.status).toBe('open');
 });

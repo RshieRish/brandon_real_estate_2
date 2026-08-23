@@ -33,17 +33,26 @@ export default defineConfig({
         '**/command-shell.spec.ts',
         '**/command-home.spec.ts',
         '**/command-contacts.spec.ts',
+        '**/command-tasks.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1800, height: 982 } },
     },
     {
       name: 'command-mobile',
-      testMatch: ['**/command-mobile.spec.ts', '**/command-contacts-mobile.spec.ts'],
+      testMatch: [
+        '**/command-mobile.spec.ts',
+        '**/command-contacts-mobile.spec.ts',
+        '**/command-tasks.spec.ts',
+      ],
       use: { ...devices['iPhone 14'], browserName: 'chromium', viewport: { width: 390, height: 844 } },
     },
     {
       name: 'command-a11y',
-      testMatch: ['**/command-accessibility.spec.ts', '**/command-contacts-accessibility.spec.ts'],
+      testMatch: [
+        '**/command-accessibility.spec.ts',
+        '**/command-contacts-accessibility.spec.ts',
+        '**/command-tasks.spec.ts',
+      ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
     {

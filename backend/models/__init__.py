@@ -1,4 +1,5 @@
 from models.agent_action_audit import AgentActionAudit
+from models.admin_user import AdminUser
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
     CRMContactAddress,
@@ -23,9 +24,39 @@ from models.command_provenance import (
     CRMSourceRecordArtifact,
     EvidenceLevel,
 )
+from models.crm_task_lifecycle import (
+    CRMRecordLifecycleEvent,
+    CRMTaskCreationRequest,
+    CRMTaskSource,
+)
+from models.integration_health import (
+    IntegrationHealthState,
+    IntegrationWorkerHeartbeat,
+)
+from models.gmail_task_intake import (
+    CRMTaskSuggestion,
+    CRMTaskSuggestionSource,
+    CRMTaskSuggestionSuppression,
+    GmailBackfillRequest,
+    GmailExtractedObligation,
+    GmailExtractionAttempt,
+    GmailMessageOrigin,
+    GmailMessageReceipt,
+    GmailMissingMessageIncident,
+    GmailSyncAccount,
+    GmailSyncPageCheckpoint,
+    GmailSyncRun,
+)
+from models.sydney_tasks import (
+    CRMTaskClarification,
+    CRMTaskSuggestionEvent,
+    SydneyQuestionOutbox,
+    TaskSuggestionApprovalNonce,
+)
 
 __all__ = [
     "AgentActionAudit",
+    "AdminUser",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",
@@ -42,9 +73,30 @@ __all__ = [
     "CRMEntitySource",
     "CRMReconciliationResult",
     "CRMReconciliationRun",
+    "CRMRecordLifecycleEvent",
     "CRMSourceRecord",
     "CRMSourceRecordArtifact",
     "CRMTask",
+    "CRMTaskClarification",
+    "CRMTaskCreationRequest",
+    "CRMTaskSource",
+    "CRMTaskSuggestion",
+    "CRMTaskSuggestionEvent",
+    "CRMTaskSuggestionSource",
+    "CRMTaskSuggestionSuppression",
     "CaptureQuality",
     "EvidenceLevel",
+    "IntegrationHealthState",
+    "IntegrationWorkerHeartbeat",
+    "GmailBackfillRequest",
+    "GmailExtractedObligation",
+    "GmailExtractionAttempt",
+    "GmailMessageOrigin",
+    "GmailMessageReceipt",
+    "GmailMissingMessageIncident",
+    "GmailSyncAccount",
+    "GmailSyncPageCheckpoint",
+    "GmailSyncRun",
+    "SydneyQuestionOutbox",
+    "TaskSuggestionApprovalNonce",
 ]

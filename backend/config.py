@@ -1,3 +1,5 @@
+from dataclasses import dataclass, field
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +47,83 @@ class Settings(BaseSettings):
     AGENT_CONTROL_TOKEN: str = ""
     AGENT_CONTROL_ENABLED: bool = False
     AGENT_CONTROL_RECENT_LIMIT: int = 10
+    CRM_TASK_ARCHIVE_ENABLED: bool = False
+    # Dedicated integration-worker rollout gates. They remain disabled until
+    # each provider-specific migration and live verification gate is complete.
+    GMAIL_TASK_INTAKE_ENABLED: bool = False
+    SYDNEY_TASK_QUESTIONS_ENABLED: bool = False
+    INSTAGRAM_INTEGRATION_ENABLED: bool = False
+    # Gmail History needs a direct, session-affine PostgreSQL connection so
+    # session advisory locks remain held across page-level commits.
+    GMAIL_HISTORY_DATABASE_URL: str = ""
+    # Required only while Gmail task intake is enabled. There is deliberately
+    # no fallback because changing the key changes every participant digest.
+    GMAIL_PARTICIPANT_HASH_KEY: str = ""
+    # Required only while Sydney task questions are enabled. The keyring is a
+    # JSON object of positive integer versions to base64-encoded 32-byte keys;
+    # old versions remain configured until every pending row using them closes.
+    SYDNEY_TELEGRAM_BOT_TOKEN: str = ""
+    SYDNEY_TELEGRAM_BRANDON_CHAT_ID: str = ""
+    SYDNEY_TELEGRAM_BRANDON_USER_ID: str = ""
+    SYDNEY_CLARIFICATION_CODE_KEYS_JSON: str = ""
+    SYDNEY_CLARIFICATION_ACTIVE_KEY_VERSION: int = 0
+    INTEGRATION_WORKER_HEARTBEAT_SECONDS: int = 30
+    INTEGRATION_WORKER_HEARTBEAT_MAX_AGE_SECONDS: int = 120
+    INTEGRATION_PROVIDER_MAX_WORKERS: int = 4
+    INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: float = 10.0
+    INTEGRATION_PROVIDER_DEADLINE_SECONDS: float = 30.0
+    GMAIL_HISTORY_MAX_PAGES_PER_RUN: int = 100
+    GMAIL_HISTORY_JOB_DEADLINE_SECONDS: float = 300.0
+    GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS: float = 30.0
+    GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS: float = 120.0
+
+
+@dataclass(frozen=True)
+class WorkspaceOAuthClientSettings:
+    """One internally consistent OAuth client tuple with a redacted secret."""
+
+    client_id: str
+    client_secret: str = field(repr=False)
+    redirect_uri: str
+
+
+def _nonblank_setting(config: object, name: str) -> str:
+    value = getattr(config, name, "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def resolve_workspace_oauth_client_settings(
+    config: object,
+) -> WorkspaceOAuthClientSettings | None:
+    """Resolve one complete client tuple without mixing configuration sources."""
+
+    for client_id_name, client_secret_name, redirect_uri_name in (
+        (
+            "GOOGLE_WORKSPACE_CLIENT_ID",
+            "GOOGLE_WORKSPACE_CLIENT_SECRET",
+            "GOOGLE_WORKSPACE_REDIRECT_URI",
+        ),
+        (
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+            "GOOGLE_CALENDAR_REDIRECT_URI",
+        ),
+        (
+            "GOOGLE_CALENDAR_CLIENT_ID",
+            "GOOGLE_CALENDAR_CLIENT_SECRET",
+            "GOOGLE_CALENDAR_REDIRECT_URI",
+        ),
+    ):
+        client_id = _nonblank_setting(config, client_id_name)
+        client_secret = _nonblank_setting(config, client_secret_name)
+        redirect_uri = _nonblank_setting(config, redirect_uri_name)
+        if client_id and client_secret and redirect_uri:
+            return WorkspaceOAuthClientSettings(
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=redirect_uri,
+            )
+    return None
 
 
 settings = Settings()

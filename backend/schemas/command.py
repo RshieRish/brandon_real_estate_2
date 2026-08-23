@@ -1,5 +1,20 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+import re
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+_RFC3339_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
+)
+POSTGRES_INTEGER_MAX = 2_147_483_647
+DatabaseInteger = Annotated[
+    int,
+    Field(ge=1, le=POSTGRES_INTEGER_MAX, strict=True),
+]
 
 
 class ContactCreate(BaseModel):
@@ -41,23 +56,90 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(open|in_progress|completed|cancelled)$")
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: DatabaseInteger
+    status: Literal["open", "in_progress", "completed", "cancelled"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = None
-    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
+    description: str | None = Field(default=None, max_length=65_536)
+    priority: Literal["low", "normal", "high"] | None = None
     due_at: datetime | None = None
-    contact_id: int | None = Field(default=None, ge=1)
+    contact_id: DatabaseInteger | None = None
+
+    @field_validator("title")
+    @classmethod
+    def require_nonblank_title(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("title cannot be blank")
+        return value
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def reject_non_datetime_due_input(cls, value: object) -> object:
+        if value is None or isinstance(value, datetime):
+            return value
+        if type(value) is str and _RFC3339_DATETIME_PATTERN.fullmatch(value):
+            return value
+        raise ValueError("due_at must be an RFC 3339 datetime")
+
+    @field_validator("due_at")
+    @classmethod
+    def require_due_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("due_at must include a UTC offset")
+        return value
+
+    @model_validator(mode="after")
+    def require_mutable_nonnull_change(self):
+        mutable_fields = {
+            "status",
+            "title",
+            "description",
+            "priority",
+            "due_at",
+            "contact_id",
+        }
+        provided = self.model_fields_set & mutable_fields
+        if not provided:
+            raise ValueError("at least one mutable task field is required")
+        nonnullable = {"status", "title", "description", "priority"}
+        if any(getattr(self, field) is None for field in provided & nonnullable):
+            raise ValueError("non-nullable task fields cannot be null")
+        return self
+
+
+class TaskLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    expected_version: DatabaseInteger
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class TaskLinkCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     entity_type: str = Field(min_length=1, max_length=50)
-    entity_id: int = Field(gt=0)
+    entity_id: DatabaseInteger
+    expected_version: DatabaseInteger
 
 
 class TaskOut(TaskCreate):
     id: int
     status: str
+    archived_at: datetime | None
+    archive_reason: str | None
+    version: int
     class Config: from_attributes = True
+
+
+class TaskLinkOut(BaseModel):
+    id: int
+    task_id: int
+    entity_type: str
+    entity_id: int
+    display_name: str
+    task_version: int
 
 
 class OverviewOut(BaseModel):
@@ -204,12 +286,20 @@ class ContactImportResult(BaseModel):
 
 
 class ArchiveTaskImportRow(BaseModel):
+    source_row_id: str = Field(min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=255)
     contact_email: str | None = None
     description: str = ""
     status: str = Field(default="open", pattern="^(open|in_progress|completed|cancelled)$")
     priority: str = Field(default="normal", pattern="^(low|normal|high)$")
     due_at: datetime | None = None
+
+    @field_validator("source_row_id")
+    @classmethod
+    def reject_blank_source_row_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("source_row_id must not be blank")
+        return value
 
 
 class ArchiveNoteImportRow(BaseModel):
@@ -251,6 +341,7 @@ class ArchiveAgreementImportRow(BaseModel):
 
 
 class ArchiveBundleImportRequest(BaseModel):
+    source_id: str | None = Field(default=None, min_length=1, max_length=255)
     contacts: list[ContactImportRow] = Field(default_factory=list, max_length=10000)
     tasks: list[ArchiveTaskImportRow] = Field(default_factory=list, max_length=10000)
     notes: list[ArchiveNoteImportRow] = Field(default_factory=list, max_length=10000)
@@ -259,6 +350,19 @@ class ArchiveBundleImportRequest(BaseModel):
     listings: list[ArchiveListingImportRow] = Field(default_factory=list, max_length=10000)
     templates: list[ArchiveTemplateImportRow] = Field(default_factory=list, max_length=10000)
     agreements: list[ArchiveAgreementImportRow] = Field(default_factory=list, max_length=10000)
+
+    @field_validator("source_id")
+    @classmethod
+    def reject_blank_source_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("source_id must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def require_task_source_identity(self):
+        if self.tasks and self.source_id is None:
+            raise ValueError("source_id is required when importing tasks")
+        return self
 
 
 class ArchiveBundleImportResult(BaseModel):

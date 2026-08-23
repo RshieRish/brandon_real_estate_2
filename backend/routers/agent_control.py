@@ -1,5 +1,6 @@
 import json
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import desc, select
@@ -9,6 +10,11 @@ from config import settings
 from database import get_db
 from middleware.agent_control import require_agent_control
 from models.booking import Booking
+from models.gmail_task_intake import (
+    GmailBackfillRequest,
+    GmailMissingMessageIncident,
+    GmailSyncRun,
+)
 from models.lead import Lead
 from schemas.agent_control import (
     AgentAction,
@@ -46,20 +52,34 @@ from schemas.agent_control import (
     WorkspaceSheetsAppendRequest,
     WorkspaceSheetsAppendResponse,
 )
+from schemas.gmail_task_intake import (
+    GmailMissingMessageAcknowledgeRequest,
+    GmailMissingMessageAcknowledgeResponse,
+    GmailMissingMessageIncidentDetail,
+)
+from middleware.auth import AdminSubject
 from services.agent_control_audit import write_agent_audit
+from services.gmail_origin_service import (
+    GmailSendConflict,
+    send_agent_gmail_with_origin,
+)
+from services.gmail_history_service import (
+    GmailMissingMessageAcknowledgementError,
+    acknowledge_missing_message_incident,
+)
 from services.workspace_service import (
     append_sheet_values,
     create_gmail_draft,
     create_google_doc,
     create_workspace_calendar_event,
     get_gmail_thread,
-    get_workspace_connection_status,
+    get_workspace_connection_status_bounded,
     list_calendar_events,
     read_drive_file,
     search_contacts,
     search_drive_files,
     search_gmail_messages,
-    send_gmail_message,
+    send_gmail_message,  # noqa: F401 - legacy patch seam proves route bypass
 )
 from routers.workspace import load_workspace_refresh_token_from_db
 
@@ -186,6 +206,54 @@ AGENT_ACTIONS = [
         side_effects=True,
         description="Create a Google Calendar event only after explicit Brandon confirmation.",
     ),
+    AgentAction(
+        id="crm.tasks.read",
+        method="GET",
+        path="/api/v1/agent-control/crm/tasks",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read active CRM task summaries.",
+    ),
+    AgentAction(
+        id="crm.task_suggestions.read",
+        method="GET",
+        path="/api/v1/agent-control/crm/task-suggestions",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read Sydney task suggestions awaiting review.",
+    ),
+    AgentAction(
+        id="crm.task_clarifications.answer",
+        method="POST",
+        path="/api/v1/agent-control/crm/task-clarifications/answer",
+        risk_tier="operator_review",
+        side_effects=True,
+        description="Answer one opaque Sydney clarification without approving a task.",
+    ),
+    AgentAction(
+        id="crm.task_drafts.create",
+        method="POST",
+        path="/api/v1/agent-control/crm/task-drafts",
+        risk_tier="operator_review",
+        side_effects=True,
+        description="Create a Brandon-owned task suggestion for later Command review.",
+    ),
+    AgentAction(
+        id="crm.task_suggestions.approval_link",
+        method="POST",
+        path="/api/v1/agent-control/crm/task-suggestions/{suggestion_id}/approval-link",
+        risk_tier="human_confirm",
+        side_effects=True,
+        description="Create a fragment-only handoff link for Brandon's authenticated review.",
+    ),
+    AgentAction(
+        id="crm.task_suggestions.dismiss_proposal",
+        method="POST",
+        path="/api/v1/agent-control/crm/task-suggestions/{suggestion_id}/dismiss-proposal",
+        risk_tier="operator_review",
+        side_effects=True,
+        description="Record a non-authoritative dismissal proposal for Brandon review.",
+    ),
 ]
 
 
@@ -236,7 +304,9 @@ def _sanitize_metadata_value(value: Any) -> Any:
     if isinstance(value, str):
         return _truncate_text(value, max_length=500)
     if isinstance(value, dict):
-        return {str(key): _sanitize_metadata_value(inner) for key, inner in value.items()}
+        return {
+            str(key): _sanitize_metadata_value(inner) for key, inner in value.items()
+        }
     if isinstance(value, list):
         return [_sanitize_metadata_value(item) for item in value[:20]]
     if value is None or isinstance(value, (bool, int, float)):
@@ -295,7 +365,10 @@ async def workspace_status(
     agent: dict = Depends(require_agent_control),
 ):
     await load_workspace_refresh_token_from_db(db)
-    response = get_workspace_connection_status()
+    response = await get_workspace_connection_status_bounded(
+        deadline_seconds=settings.INTEGRATION_PROVIDER_DEADLINE_SECONDS,
+        socket_timeout_seconds=(settings.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS),
+    )
     await _audit(
         db,
         request=request,
@@ -348,7 +421,9 @@ async def workspace_gmail_thread(
     result = get_gmail_thread(payload.thread_id, max_body_chars=payload.max_body_chars)
     response = WorkspaceGmailThreadResponse(
         thread_id=result.get("thread_id", payload.thread_id),
-        messages=[WorkspaceGmailThreadMessage(**item) for item in result.get("messages", [])],
+        messages=[
+            WorkspaceGmailThreadMessage(**item) for item in result.get("messages", [])
+        ],
     )
     await _audit(
         db,
@@ -364,7 +439,9 @@ async def workspace_gmail_thread(
             "count": len(response.messages),
             "message_ids": [item.id for item in response.messages],
             "body_lengths": [len(item.body_text) for item in response.messages],
-            "truncated_count": sum(1 for item in response.messages if item.body_truncated),
+            "truncated_count": sum(
+                1 for item in response.messages if item.body_truncated
+            ),
         },
     )
     return response
@@ -403,7 +480,10 @@ async def workspace_gmail_draft(
             "subject_length": len(payload.subject),
             "body_length": len(payload.body_text),
         },
-        response_meta={"draft_id": response.draft_id, "message_id": response.message_id},
+        response_meta={
+            "draft_id": response.draft_id,
+            "message_id": response.message_id,
+        },
     )
     return response
 
@@ -421,37 +501,139 @@ async def workspace_gmail_send(
             detail="Direct Gmail send requires confirmed_by_brandon=true.",
         )
 
-    await load_workspace_refresh_token_from_db(db)
-    result = send_gmail_message(
-        to=payload.to,
-        subject=payload.subject,
-        body_text=payload.body_text,
-        cc=payload.cc,
-        bcc=payload.bcc,
-    )
+    try:
+        result = await send_agent_gmail_with_origin(
+            db=db,
+            payload=payload,
+            request=request,
+            actor=agent["actor"],
+        )
+    except GmailSendConflict as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.category,
+        ) from None
+    except RuntimeError as error:
+        if str(error) == "gmail_send_delivery_uncertain":
+            raise HTTPException(
+                status_code=503,
+                detail="gmail_send_delivery_uncertain",
+            ) from None
+        raise
     response = WorkspaceGmailSendResponse(
-        message_id=result.get("id", ""),
-        thread_id=result.get("thread_id", ""),
+        request_id=result.request_id,
+        message_id=result.message_id or "",
+        thread_id=result.thread_id or "",
+        delivery_state=result.delivery_state,
+        replayed=result.replayed,
         to_count=len(payload.to),
         subject=payload.subject,
     )
-    await _audit(
-        db,
-        request=request,
-        actor=agent["actor"],
-        action_id="workspace.gmail.send",
-        request_meta={
-            "to_count": len(payload.to),
-            "cc_count": len(payload.cc),
-            "bcc_count": len(payload.bcc),
-            "subject_length": len(payload.subject),
-            "body_length": len(payload.body_text),
-            "confirmed_by_brandon": payload.confirmed_by_brandon,
-            "confirmation_note_length": len(payload.confirmation_note),
-        },
-        response_meta={"message_id": response.message_id, "thread_id": response.thread_id},
-    )
     return response
+
+
+@router.post(
+    "/gmail/missing-message/acknowledge",
+    response_model=GmailMissingMessageAcknowledgeResponse,
+)
+async def acknowledge_gmail_missing_message(
+    payload: GmailMissingMessageAcknowledgeRequest,
+    request: Request,
+    administrator_subject: AdminSubject,
+    db: AsyncSession = Depends(get_db),
+) -> GmailMissingMessageAcknowledgeResponse:
+    try:
+        incident = await acknowledge_missing_message_incident(
+            db,
+            request=request,
+            administrator_id=int(administrator_subject),
+            incident_id=payload.incident_id,
+            account_id=payload.account_id,
+            run_id=payload.run_id,
+            gmail_message_id=payload.gmail_message_id,
+            gmail_thread_id=payload.gmail_thread_id,
+            expected_start_history_id=payload.expected_start_history_id,
+            expected_page_number=payload.expected_page_number,
+            expected_request_page_token=payload.expected_request_page_token,
+            expected_version=payload.expected_version,
+            reason=payload.reason,
+            backfill_request_id=payload.backfill_request_id,
+            expected_reseed_history_id=payload.expected_reseed_history_id,
+        )
+    except GmailMissingMessageAcknowledgementError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.category,
+        ) from None
+    return GmailMissingMessageAcknowledgeResponse(
+        incident_id=incident.id,
+        state="acknowledged",
+        version=incident.version,
+        run_id=incident.run_id,
+    )
+
+
+@router.get(
+    "/gmail/missing-message/incidents/{incident_id}",
+    response_model=GmailMissingMessageIncidentDetail,
+)
+async def get_gmail_missing_message_incident(
+    incident_id: UUID,
+    _administrator_subject: AdminSubject,
+    db: AsyncSession = Depends(get_db),
+) -> GmailMissingMessageIncidentDetail:
+    incident = await db.scalar(
+        select(GmailMissingMessageIncident).where(
+            GmailMissingMessageIncident.id == incident_id,
+            GmailMissingMessageIncident.state == "pending",
+        )
+    )
+    if incident is None:
+        raise HTTPException(
+            status_code=404,
+            detail="gmail_missing_message_incident_not_found",
+        )
+    run = await db.scalar(
+        select(GmailSyncRun).where(
+            GmailSyncRun.id == incident.run_id,
+            GmailSyncRun.account_id == incident.account_id,
+        )
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail="gmail_missing_message_incident_not_found",
+        )
+    backfill_request = None
+    if run.run_kind == "backfill":
+        backfill_request = await db.scalar(
+            select(GmailBackfillRequest).where(
+                GmailBackfillRequest.run_id == run.id,
+                GmailBackfillRequest.account_id == incident.account_id,
+            )
+        )
+        if backfill_request is None:
+            raise HTTPException(
+                status_code=404,
+                detail="gmail_missing_message_incident_not_found",
+            )
+    return GmailMissingMessageIncidentDetail(
+        incident_id=incident.id,
+        account_id=incident.account_id,
+        run_id=incident.run_id,
+        gmail_message_id=incident.gmail_message_id,
+        gmail_thread_id=incident.gmail_thread_id,
+        expected_start_history_id=incident.start_history_id,
+        expected_page_number=incident.page_number,
+        expected_request_page_token=incident.request_page_token,
+        expected_version=incident.version,
+        backfill_request_id=(
+            backfill_request.id if backfill_request is not None else None
+        ),
+        expected_reseed_history_id=(
+            backfill_request.reseed_history_id if backfill_request is not None else None
+        ),
+    )
 
 
 @router.post("/workspace/drive/search", response_model=WorkspaceDriveSearchResponse)
@@ -473,7 +655,10 @@ async def workspace_drive_search(
         actor=agent["actor"],
         action_id="workspace.drive.search",
         request_meta={"query_length": len(payload.query), "page_size": safe_page_size},
-        response_meta={"count": len(response.files), "ids": [item.id for item in response.files]},
+        response_meta={
+            "count": len(response.files),
+            "ids": [item.id for item in response.files],
+        },
     )
     return response
 
@@ -519,13 +704,18 @@ async def workspace_docs_create(
         request=request,
         actor=agent["actor"],
         action_id="workspace.docs.create",
-        request_meta={"title_length": len(payload.title), "body_length": len(payload.body_text)},
+        request_meta={
+            "title_length": len(payload.title),
+            "body_length": len(payload.body_text),
+        },
         response_meta={"document_id": response.document_id},
     )
     return response
 
 
-@router.post("/workspace/calendar/events", response_model=WorkspaceCalendarEventsResponse)
+@router.post(
+    "/workspace/calendar/events", response_model=WorkspaceCalendarEventsResponse
+)
 async def workspace_calendar_events(
     payload: WorkspaceCalendarEventsRequest,
     request: Request,
@@ -554,7 +744,10 @@ async def workspace_calendar_events(
             "page_size": safe_page_size,
             "calendar_id": payload.calendar_id,
         },
-        response_meta={"count": len(response.events), "ids": [item.id for item in response.events]},
+        response_meta={
+            "count": len(response.events),
+            "ids": [item.id for item in response.events],
+        },
     )
     return response
 
@@ -612,7 +805,9 @@ async def workspace_calendar_event_create(
     return response
 
 
-@router.post("/workspace/contacts/search", response_model=WorkspaceContactsSearchResponse)
+@router.post(
+    "/workspace/contacts/search", response_model=WorkspaceContactsSearchResponse
+)
 async def workspace_contacts_search(
     payload: WorkspaceContactsSearchRequest,
     request: Request,
@@ -685,7 +880,10 @@ async def list_agent_actions(
         request=request,
         actor=agent["actor"],
         action_id="actions.read",
-        response_meta={"count": len(response.actions), "ids": [action.id for action in response.actions]},
+        response_meta={
+            "count": len(response.actions),
+            "ids": [action.id for action in response.actions],
+        },
     )
     return response
 
@@ -731,8 +929,15 @@ async def recent_leads(
         request=request,
         actor=agent["actor"],
         action_id="leads.recent.read",
-        request_meta={"limit": safe_limit, "lead_type": lead_type, "routing_status": routing_status},
-        response_meta={"count": len(response.leads), "ids": [lead.id for lead in response.leads]},
+        request_meta={
+            "limit": safe_limit,
+            "lead_type": lead_type,
+            "routing_status": routing_status,
+        },
+        response_meta={
+            "count": len(response.leads),
+            "ids": [lead.id for lead in response.leads],
+        },
     )
     return response
 
@@ -779,7 +984,14 @@ async def recent_bookings(
         request=request,
         actor=agent["actor"],
         action_id="bookings.recent.read",
-        request_meta={"limit": safe_limit, "meeting_type": meeting_type, "context": context},
-        response_meta={"count": len(response.bookings), "ids": [booking.id for booking in response.bookings]},
+        request_meta={
+            "limit": safe_limit,
+            "meeting_type": meeting_type,
+            "context": context,
+        },
+        response_meta={
+            "count": len(response.bookings),
+            "ids": [booking.id for booking in response.bookings],
+        },
     )
     return response

@@ -1,4 +1,11 @@
 import { commandBlob, commandJson, CommandDecodeError, type Decoder } from './http';
+import {
+  createTask as createLifecycleTask,
+  restoreTask as restoreLifecycleTask,
+  type Task,
+  type TaskLifecycleRequest,
+  type TaskRequestOptions,
+} from './tasks';
 
 export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
@@ -112,7 +119,7 @@ export type ContactNeighbors = Readonly<{
   next_contact_id: number | null;
 }>;
 
-export type ContactWorkspaceSummary = Readonly<{
+type ContactWorkspaceSummaryBase = Readonly<{
   open_tasks: number;
   completed_tasks: number;
   archived_tasks: number;
@@ -122,6 +129,26 @@ export type ContactWorkspaceSummary = Readonly<{
   saved_searches: number;
   bookings: number;
 }>;
+
+type LegacyContactWorkspaceTaskSummary = Readonly<{
+  active_tasks?: never;
+  cancelled_tasks?: never;
+  archived_mutable_tasks?: never;
+  archived_recovered_evidence?: never;
+}>;
+
+type ExpandedContactWorkspaceTaskSummary = Readonly<{
+  active_tasks: number;
+  cancelled_tasks: number;
+  archived_mutable_tasks: number;
+  archived_recovered_evidence: number;
+}>;
+
+/** The legacy variant exists only for a rolling frontend-before-backend deploy. */
+export type ContactWorkspaceSummary = ContactWorkspaceSummaryBase & (
+  | LegacyContactWorkspaceTaskSummary
+  | ExpandedContactWorkspaceTaskSummary
+);
 
 export type ContactOccurrence =
   | Readonly<{ kind: 'opportunity'; title: string; stage: string | null; value_cents: number | null }>
@@ -267,15 +294,30 @@ export type ContactInternalTimelineEntry = Readonly<{
   created_at: string;
 }>;
 
-export type ContactInternalTask = Readonly<{
+type ContactInternalTaskBase = Readonly<{
   id: number;
   title: string;
   contact_id: number;
   description: string;
   priority: string;
   due_at: string | null;
-  status: 'open' | 'completed' | 'archived';
 }>;
+
+export type ContactLegacyInternalTask = ContactInternalTaskBase & Readonly<{
+  status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'archived';
+  archived_at?: never;
+  archive_reason?: never;
+  version?: never;
+}>;
+
+export type ContactLifecycleInternalTask = ContactInternalTaskBase & Readonly<{
+  status: 'open' | 'in_progress' | 'completed' | 'cancelled';
+  archived_at: string | null;
+  archive_reason: string | null;
+  version: number;
+}>;
+
+export type ContactInternalTask = ContactLegacyInternalTask | ContactLifecycleInternalTask;
 
 export type ContactInternalNote = Readonly<{
   id: number;
@@ -756,12 +798,21 @@ export const decodeContactNeighbors: Decoder<ContactNeighbors> = (input, path = 
 };
 
 export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (input, path = 'response') => {
-  const keys = [
+  const legacyKeys = [
     'open_tasks', 'completed_tasks', 'archived_tasks', 'active_smart_plans',
     'opportunities', 'notes', 'saved_searches', 'bookings',
-  ];
+  ] as const;
+  const additiveKeys = [
+    'active_tasks', 'cancelled_tasks',
+    'archived_mutable_tasks', 'archived_recovered_evidence',
+  ] as const;
+  const hasAdditiveKey = typeof input === 'object'
+    && input !== null
+    && !Array.isArray(input)
+    && additiveKeys.some((key) => Object.hasOwn(input, key));
+  const keys = hasAdditiveKey ? [...legacyKeys, ...additiveKeys] : legacyKeys;
   const read = objectReader(input, keys, path);
-  return {
+  const legacy = {
     open_tasks: nonnegativeInteger(read('open_tasks'), `${path}.open_tasks`),
     completed_tasks: nonnegativeInteger(read('completed_tasks'), `${path}.completed_tasks`),
     archived_tasks: nonnegativeInteger(read('archived_tasks'), `${path}.archived_tasks`),
@@ -771,6 +822,24 @@ export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (
     saved_searches: nonnegativeInteger(read('saved_searches'), `${path}.saved_searches`),
     bookings: nonnegativeInteger(read('bookings'), `${path}.bookings`),
   };
+  if (!hasAdditiveKey) return legacy;
+  const additive = {
+    active_tasks: nonnegativeInteger(read('active_tasks'), `${path}.active_tasks`),
+    cancelled_tasks: nonnegativeInteger(read('cancelled_tasks'), `${path}.cancelled_tasks`),
+    archived_mutable_tasks: nonnegativeInteger(
+      read('archived_mutable_tasks'), `${path}.archived_mutable_tasks`,
+    ),
+    archived_recovered_evidence: nonnegativeInteger(
+      read('archived_recovered_evidence'), `${path}.archived_recovered_evidence`,
+    ),
+  };
+  if (
+    legacy.open_tasks !== additive.active_tasks
+    || legacy.archived_tasks !== (
+      additive.archived_mutable_tasks + additive.archived_recovered_evidence
+    )
+  ) return invalid(path, 'consistent task summary totals');
+  return { ...legacy, ...additive };
 };
 
 function occurrenceValue(input: unknown, path: string): ContactOccurrence {
@@ -1140,19 +1209,54 @@ function internalTimelineValue(input: unknown, path: string): ContactInternalTim
 }
 
 function internalTaskValue(input: unknown, path: string): ContactInternalTask {
+  const lifecycleKeys = ['archived_at', 'archive_reason', 'version'] as const;
+  const lifecycle = typeof input === 'object'
+    && input !== null
+    && !Array.isArray(input)
+    && lifecycleKeys.some((key) => Object.hasOwn(input, key));
   const read = objectReader(
     input,
-    ['id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status'],
+    lifecycle
+      ? [
+          'id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status',
+          ...lifecycleKeys,
+        ]
+      : ['id', 'title', 'contact_id', 'description', 'priority', 'due_at', 'status'],
     path,
   );
-  return {
-    id: positiveInteger(read('id'), `${path}.id`),
+  const common = {
+    id: integer(read('id'), `${path}.id`, 1, 2_147_483_647),
     title: stringValue(read('title'), `${path}.title`, 1, 255),
-    contact_id: positiveInteger(read('contact_id'), `${path}.contact_id`),
+    contact_id: integer(read('contact_id'), `${path}.contact_id`, 1, 2_147_483_647),
     description: stringValue(read('description'), `${path}.description`),
     priority: stringValue(read('priority'), `${path}.priority`),
     due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
-    status: enumValue(read('status'), ['open', 'completed', 'archived'], `${path}.status`),
+  };
+  if (!lifecycle) {
+    return {
+      ...common,
+      status: enumValue(
+        read('status'),
+        ['open', 'in_progress', 'completed', 'cancelled', 'archived'],
+        `${path}.status`,
+      ),
+    };
+  }
+  const archivedAt = nullableRfc3339(read('archived_at'), `${path}.archived_at`);
+  const rawReason = read('archive_reason');
+  const archiveReason = rawReason === null
+    ? null
+    : stringValue(rawReason, `${path}.archive_reason`, 0, 500);
+  return {
+    ...common,
+    status: enumValue(
+      read('status'),
+      ['open', 'in_progress', 'completed', 'cancelled'],
+      `${path}.status`,
+    ),
+    archived_at: archivedAt,
+    archive_reason: archiveReason,
+    version: integer(read('version'), `${path}.version`, 1, 2_147_483_647),
   };
 }
 
@@ -1461,11 +1565,6 @@ const decodeContactTagRemoval: Decoder<ContactTagRemoval> = (input, path = 'resp
   };
 };
 
-const decodeContactInternalTask: Decoder<ContactInternalTask> = (
-  input,
-  path = 'response',
-) => internalTaskValue(input, path);
-
 function inputReader(input: unknown, allowed: readonly string[], path: string): Reader {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return invalid(path, 'object');
   const actual = Object.keys(input);
@@ -1707,7 +1806,16 @@ export type ContactsApi = Readonly<{
   createTag: (input: ContactTagCreateInput, options?: CommandRequestOptions) => Promise<ContactTag>;
   assignTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagAssignment>;
   removeTag: (id: number, tagId: number, options?: CommandRequestOptions) => Promise<ContactTagRemoval>;
-  createTask: (input: ContactTaskCreateInput, options?: CommandRequestOptions) => Promise<ContactInternalTask>;
+  createTask: (
+    input: ContactTaskCreateInput,
+    idempotencyKey: string,
+    options?: TaskRequestOptions,
+  ) => Promise<Task>;
+  restoreTask: (
+    taskId: number,
+    input: TaskLifecycleRequest,
+    options?: TaskRequestOptions,
+  ) => Promise<Task>;
   artifactBlob: (artifactId: number, options?: CommandRequestOptions) => Promise<Blob>;
 }>;
 
@@ -1993,23 +2101,11 @@ export const contactsApi: ContactsApi = {
       signal: options?.signal,
     });
   },
-  createTask: async (input, options) => {
+  createTask: async (input, idempotencyKey, options) => {
     const body = decodeContactTaskCreateInput(input);
-    return commandJson({
-      path: '/tasks',
-      method: 'POST',
-      body,
-      decode: (raw: unknown, path?: string) => {
-        const responsePath = path ?? 'response';
-        const decoded = decodeContactInternalTask(raw, responsePath);
-        if (decoded.contact_id !== body.contact_id || decoded.status !== 'open') {
-          return invalid(responsePath, 'created contact task identity and state');
-        }
-        return decoded;
-      },
-      signal: options?.signal,
-    });
+    return createLifecycleTask(body, idempotencyKey, options);
   },
+  restoreTask: (taskId, input, options) => restoreLifecycleTask(taskId, input, options),
   artifactBlob: async (artifactId, options) => commandBlob({
     path: `/archive/artifacts/${validId(artifactId, 'request.artifact_id')}/content`,
     signal: options?.signal,

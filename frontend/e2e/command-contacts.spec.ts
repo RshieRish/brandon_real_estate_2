@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures/command';
 
 const defaultDirectory = '/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=50';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function api(page: Page, path: string, method = 'GET', body?: unknown) {
   return page.evaluate(async ({ requestPath, requestMethod, requestBody }) => {
@@ -24,6 +25,33 @@ async function rawApi(page: Page, path: string, method: string, body: string) {
     });
     return { status: response.status, body: await response.json() };
   }, { requestPath: path, requestMethod: method, requestBody: body });
+}
+
+async function taskApi(
+  page: Page,
+  key: string,
+  payload: Readonly<{
+    title: string;
+    contact_id: number | null;
+    description: string;
+    priority: 'low' | 'normal' | 'high';
+    due_at: string | null;
+  }>,
+  clientTimezone = 'America/New_York',
+) {
+  return page.evaluate(async ({ idempotencyKey, taskPayload, timezone }) => {
+    const response = await fetch('/api/v1/command/tasks', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-admin-token',
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': idempotencyKey,
+        'X-Client-Timezone': timezone,
+      },
+      body: JSON.stringify(taskPayload),
+    });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }, { idempotencyKey: key, taskPayload: payload, timezone: clientTimezone });
 }
 
 test('Contacts loads the deterministic 366-row directory and accessible table @critical', async ({ commandPage }) => {
@@ -187,6 +215,59 @@ test('fixture is auth-bound, fail-closed, stateful, and returns exact binary byt
     }
   });
   expect(externalFailure).toBe('TypeError');
+});
+
+test('contact task fixture replays one readable 200 create and rejects changed payload or timezone', async ({ commandPage, routeState }) => {
+  await commandPage.goto('/admin/login');
+  const key = '550e8400-e29b-41d4-a716-446655440000';
+  const payload = {
+    title: 'Contact replay task',
+    contact_id: 1,
+    description: 'Canonical contact task payload',
+    priority: 'high' as const,
+    due_at: '2026-08-20T14:30:00Z',
+  };
+  const beforeTasks = routeState.contacts.workspaces.get(1)!.tasks.length;
+  const first = await taskApi(commandPage, key, payload);
+  const replay = await taskApi(commandPage, key, payload);
+
+  expect.soft(first.status).toBe(200);
+  expect(replay).toEqual(first);
+  expect(routeState.contacts.workspaces.get(1)!.tasks).toHaveLength(beforeTasks + 1);
+  const workspace = await api(commandPage, '/contacts/1/workspace');
+  expect(workspace.status).toBe(200);
+  expect((workspace.body as { tasks: Record<string, unknown>[] }).tasks).toContainEqual(
+    expect.objectContaining({ id: first.body.id, title: 'Contact replay task' }),
+  );
+  const allTasks = await api(commandPage, '/tasks?visibility=all');
+  expect(allTasks.status).toBe(200);
+  expect((allTasks.body as Record<string, unknown>[]).filter((task) => task.id === first.body.id)).toEqual([first.body]);
+
+  routeState.expectedHttpFailures.add('/tasks', 'POST');
+  const mismatch = await taskApi(commandPage, key, { ...payload, title: 'Changed contact replay task' });
+  expect(mismatch).toEqual({
+    status: 409,
+    body: {
+      detail: {
+        code: 'task_idempotency_mismatch',
+        message: 'Idempotency key was already used with a different task request',
+      },
+    },
+  });
+  expect(routeState.contacts.workspaces.get(1)!.tasks).toHaveLength(beforeTasks + 1);
+
+  routeState.expectedHttpFailures.add('/tasks', 'POST');
+  const timezoneMismatch = await taskApi(commandPage, key, payload, 'America/Chicago');
+  expect.soft(timezoneMismatch).toEqual({
+    status: 409,
+    body: {
+      detail: {
+        code: 'task_idempotency_mismatch',
+        message: 'Idempotency key was already used with a different task request',
+      },
+    },
+  });
+  expect(routeState.contacts.workspaces.get(1)!.tasks).toHaveLength(beforeTasks + 1);
 });
 
 test('detail renders celebrations, all eight top-level panels, three task panels, and source ownership', async ({ commandPage }) => {
@@ -458,7 +539,9 @@ test('internal profile, note, search, tag, task, delete, and remove mutations se
   await commandPage.getByLabel('Task title').fill('Browser task');
   const task = commandPage.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/tasks'));
   await commandPage.getByRole('button', { name: 'Save task' }).click();
-  expect((await task).postDataJSON()).toEqual({ title: 'Browser task', contact_id: 1, description: '', priority: 'normal', due_at: null });
+  const taskRequest = await task;
+  expect(taskRequest.postDataJSON()).toEqual({ title: 'Browser task', contact_id: 1, description: '', priority: 'normal', due_at: null });
+  expect(taskRequest.headers()['x-idempotency-key']).toMatch(UUID_PATTERN);
   await expect(commandPage.getByRole('button', { name: 'Add task' })).toBeFocused();
 
   await commandPage.getByRole('tab', { name: 'Notes' }).click();

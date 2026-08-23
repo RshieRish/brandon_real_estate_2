@@ -121,11 +121,10 @@ from services.command_contact_contracts import (
 from services.command_contact_identity import canonical_email
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
-)
-from services.command_contact_timeline import (
     ContactTimelineIntegrityError,
     count_contact_bookings,
 )
+from services.crm_task_projection import TaskProjectionError, task_group
 
 
 class ContactDirectoryError(Exception):
@@ -1939,10 +1938,10 @@ async def get_contact_workspace_summary(
         if await db.get(CRMContact, contact_id) is None:
             _safe_not_found()
         tasks = {
-            row.id: row.status
+            row.id: (row.status, row.archived_at)
             for row in (
                 await db.execute(
-                    select(CRMTask.id, CRMTask.status).where(
+                    select(CRMTask.id, CRMTask.status, CRMTask.archived_at).where(
                         CRMTask.contact_id == contact_id
                     )
                 )
@@ -2031,11 +2030,20 @@ async def get_contact_workspace_summary(
                     continue
             counts[section.section_name] += 1
 
-        task_counts = {"open": 0, "completed": 0, "archived": 0}
-        for status in tasks.values():
-            if status not in task_counts:
-                raise ContactDataIntegrityError("contact task status is invalid")
-            task_counts[status] += 1
+        task_counts = {
+            "active": 0,
+            "completed": 0,
+            "cancelled": 0,
+            "archived": 0,
+        }
+        for status, archived_at in tasks.values():
+            try:
+                group = task_group(status=status, archived_at=archived_at)
+            except TaskProjectionError as error:
+                raise ContactDataIntegrityError(
+                    "contact task status is invalid"
+                ) from error
+            task_counts[group] += 1
         active_enrollments = sum(
             1
             for status in enrollments.values()
@@ -2050,10 +2058,17 @@ async def get_contact_workspace_summary(
                 "contact booking ownership is invalid"
             ) from error
 
+    active_tasks = task_counts["active"] + counts["tasks_to_do"]
+    archived_mutable_tasks = task_counts["archived"]
+    archived_recovered_evidence = counts["tasks_archived"]
     return ContactWorkspaceSummary(
-        open_tasks=task_counts["open"] + counts["tasks_to_do"],
+        open_tasks=active_tasks,
+        active_tasks=active_tasks,
         completed_tasks=(task_counts["completed"] + counts["tasks_completed"]),
-        archived_tasks=(task_counts["archived"] + counts["tasks_archived"]),
+        cancelled_tasks=task_counts["cancelled"],
+        archived_tasks=(archived_mutable_tasks + archived_recovered_evidence),
+        archived_mutable_tasks=archived_mutable_tasks,
+        archived_recovered_evidence=archived_recovered_evidence,
         active_smart_plans=active_enrollments + counts["smart_plans"],
         opportunities=len(opportunities) + counts["opportunities"],
         notes=len(notes) + counts["notes"],

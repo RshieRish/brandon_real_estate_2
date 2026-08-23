@@ -25,7 +25,7 @@ from main import app as main_app
 from middleware import auth as auth_middleware
 from middleware.auth import require_admin_subject
 from models.booking import Booking
-from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact
+from models.command import CRMContact, CRMOpportunity, CRMOpportunityContact, CRMTask
 from models.command_contacts import CRMContactMethod
 from models.lead import Lead
 from routers import command as command_router
@@ -58,6 +58,7 @@ from schemas.command_contacts import (
     ContactTimelinePageOut,
     ContactUpdateIn,
     LegacyContactWorkspaceOut,
+    LegacyTaskOut,
     canonical_saved_search_criteria,
 )
 from services.command_contact_contracts import (
@@ -1048,6 +1049,91 @@ def test_legacy_workspace_boundary_has_only_the_existing_typed_wire_keys():
         )
 
 
+@pytest.mark.parametrize(
+    ("status", "archived_at"),
+    [
+        ("open", None),
+        ("open", NOW),
+        ("completed", NOW),
+    ],
+)
+def test_legacy_workspace_task_boundary_exposes_exact_lifecycle_state(
+    status,
+    archived_at,
+):
+    output = LegacyTaskOut.model_validate(
+        {
+            "id": 4,
+            "title": "Follow up",
+            "contact_id": 1,
+            "description": "",
+            "priority": "normal",
+            "due_at": None,
+            "status": status,
+            "archived_at": archived_at,
+            "archive_reason": (
+                "No longer needed" if archived_at is not None else None
+            ),
+            "version": 3,
+        }
+    )
+
+    assert output.status == status
+    assert output.archived_at == archived_at
+    assert output.archive_reason == (
+        "No longer needed" if archived_at is not None else None
+    )
+    assert output.version == 3
+    assert set(output.model_dump()) == {
+        "id",
+        "title",
+        "contact_id",
+        "description",
+        "priority",
+        "due_at",
+        "status",
+        "archived_at",
+        "archive_reason",
+        "version",
+    }
+
+
+def test_legacy_workspace_task_boundary_requires_complete_safe_lifecycle_wire():
+    valid = {
+        "id": 4,
+        "title": "Follow up",
+        "contact_id": 1,
+        "description": "",
+        "priority": "normal",
+        "due_at": None,
+        "status": "open",
+        "archived_at": NOW,
+        "archive_reason": "No longer needed",
+        "version": 3,
+    }
+
+    for missing in ("archived_at", "archive_reason", "version"):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate(
+                {key: value for key, value in valid.items() if key != missing}
+            )
+    for field, value in (
+        ("status", "archived"),
+        ("status", "snoozed"),
+        ("version", True),
+        ("version", 0),
+        ("version", 2_147_483_648),
+        ("archive_reason", "x" * 501),
+    ):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate({**valid, field: value})
+    for private_field in ("archived_by_id", "private_payload"):
+        with pytest.raises(ValidationError):
+            LegacyTaskOut.model_validate(
+                {**valid, private_field: "PLANTED_PRIVATE_TASK_VALUE"}
+            )
+
+
 def test_legacy_workspace_validates_every_populated_nested_wire_row():
     payload = {
         "contact": {
@@ -1071,6 +1157,9 @@ def test_legacy_workspace_validates_every_populated_nested_wire_row():
                 "priority": "normal",
                 "due_at": None,
                 "status": "open",
+                "archived_at": None,
+                "archive_reason": None,
+                "version": 1,
             }
         ],
         "notes": [
@@ -1213,7 +1302,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     routes = _main_command_routes()
     inventory = _mounted_inventory(routes)
 
-    assert len(inventory) == 86
+    assert len(inventory) == 88
     assert inventory[:24] == FULL_ROUTE_INVENTORY
     assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
     assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (
@@ -1259,7 +1348,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method in sorted(route.methods or ())
         if method != "HEAD"
     )
-    assert len(inventory) == 86
+    assert len(inventory) == 88
     assert len(set(inventory)) == len(inventory)
     schema = fresh.openapi()
     operation_ids = [
@@ -1268,7 +1357,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method, operation in path.items()
         if method.lower() in {"get", "post", "patch", "delete", "put"}
     ]
-    assert len(operation_ids) == 86
+    assert len(operation_ids) == 88
     assert len(set(operation_ids)) == len(operation_ids)
     expected_response_schemas = {
         ("/api/v1/command/contacts/directory", "get"): "ContactDirectoryPageOut",
@@ -1581,7 +1670,20 @@ def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch)
 
     async def fake_summary(_db, contact_id):
         calls.append(("summary", contact_id))
-        return ContactWorkspaceSummary(1, 2, 3, 4, 5, 6, 7, 8)
+        return ContactWorkspaceSummary(
+            open_tasks=1,
+            active_tasks=1,
+            completed_tasks=2,
+            cancelled_tasks=3,
+            archived_tasks=7,
+            archived_mutable_tasks=4,
+            archived_recovered_evidence=3,
+            active_smart_plans=5,
+            opportunities=6,
+            notes=7,
+            saved_searches=8,
+            bookings=9,
+        )
 
     async def fake_evidence(_db, contact_id):
         calls.append(("evidence", contact_id))
@@ -1614,13 +1716,17 @@ def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch)
     }
     assert client.get("/contacts/7/workspace/summary").json() == {
         "open_tasks": 1,
+        "active_tasks": 1,
         "completed_tasks": 2,
-        "archived_tasks": 3,
-        "active_smart_plans": 4,
-        "opportunities": 5,
-        "notes": 6,
-        "saved_searches": 7,
-        "bookings": 8,
+        "cancelled_tasks": 3,
+        "archived_tasks": 7,
+        "archived_mutable_tasks": 4,
+        "archived_recovered_evidence": 3,
+        "active_smart_plans": 5,
+        "opportunities": 6,
+        "notes": 7,
+        "saved_searches": 8,
+        "bookings": 9,
     }
     assert client.get("/contacts/7/evidence").json()["capture_quality"] == (
         "limitation"
@@ -2090,6 +2196,73 @@ async def test_legacy_workspace_uses_exact_booking_ownership_and_two_opportuniti
     assert len(opportunity_ids) == 2
     assert sorted(opportunity_ids) == [10, 11]
     assert ambiguous_workspace["bookings"] == []
+
+
+async def test_legacy_workspace_returns_authoritative_task_lifecycle_fields(
+    contact_router_db,
+):
+    contact = CRMContact(
+        id=1,
+        first_name="Lifecycle",
+        last_name="Owner",
+        stage="lead",
+    )
+    contact_router_db.add(contact)
+    await contact_router_db.flush()
+    contact_router_db.add_all(
+        [
+            CRMTask(
+                id=101,
+                contact_id=contact.id,
+                title="Active task",
+                status="open",
+                version=1,
+            ),
+            CRMTask(
+                id=102,
+                contact_id=contact.id,
+                title="Archived open task",
+                status="open",
+                archived_at=NOW,
+                archived_by_type="admin",
+                archived_by_id="PLANTED_PRIVATE_TASK_ACTOR",
+                archive_reason="No longer needed",
+                version=3,
+            ),
+            CRMTask(
+                id=103,
+                contact_id=contact.id,
+                title="Archived completed task",
+                status="completed",
+                archived_at=NOW,
+                archive_reason=None,
+                version=5,
+            ),
+        ]
+    )
+    await contact_router_db.flush()
+
+    raw = await contact_router._legacy_contact_workspace(
+        contact_router_db,
+        contact_id=contact.id,
+    )
+    output = LegacyContactWorkspaceOut.model_validate(raw)
+    tasks = {task.title: task for task in output.tasks}
+
+    assert tasks["Active task"].archived_at is None
+    assert tasks["Active task"].archive_reason is None
+    assert tasks["Active task"].version == 1
+    assert tasks["Archived open task"].status == "open"
+    # SQLite drops timezone metadata; PostgreSQL preserves it in production.
+    assert tasks["Archived open task"].archived_at == NOW.replace(tzinfo=None)
+    assert tasks["Archived open task"].archive_reason == "No longer needed"
+    assert tasks["Archived open task"].version == 3
+    assert tasks["Archived completed task"].status == "completed"
+    assert tasks["Archived completed task"].archived_at == NOW.replace(tzinfo=None)
+    assert tasks["Archived completed task"].version == 5
+    encoded = output.model_dump_json()
+    assert "PLANTED_PRIVATE_TASK_ACTOR" not in encoded
+    assert "archived_by" not in encoded
 
 
 async def test_legacy_workspace_missing_lead_and_booking_drift_fail_safe(

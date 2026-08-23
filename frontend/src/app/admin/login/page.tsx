@@ -1,18 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowClockwise, LockKey, User } from '@phosphor-icons/react';
+import { ArrowClockwise, Info, LockKey, User } from '@phosphor-icons/react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
-export default function AdminLoginPage() {
+function AdminLoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const shouldReopenTaskHandoff =
+    searchParams.get('approval_notice') === 'reopen_task_handoff';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +63,16 @@ export default function AdminLoginPage() {
           <p className="text-gold font-black text-lg tracking-tight leading-none">Sold With Sweeney &amp; Co.</p>
           <p className="text-white/40 text-xs mt-1 uppercase tracking-widest">Admin</p>
         </div>
+
+        {shouldReopenTaskHandoff ? (
+          <div
+            role="status"
+            className="mb-6 flex items-start gap-3 rounded-lg border border-gold/30 bg-gold/10 px-4 py-3 text-sm leading-5 text-white/75"
+          >
+            <Info aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-gold" />
+            <p>Sign in, then reopen the unused Sydney task link. The link was not exchanged.</p>
+          </div>
+        ) : null}
 
         {/* Error banner */}
         {error && (
@@ -121,5 +134,19 @@ export default function AdminLoginPage() {
         </form>
       </motion.div>
     </div>
+  );
+}
+
+export default function AdminLoginPage() {
+  return (
+    <Suspense
+      fallback={(
+        <div className="flex min-h-[100dvh] items-center justify-center bg-dark-surface text-sm text-white/50" role="status">
+          Opening secure sign in.
+        </div>
+      )}
+    >
+      <AdminLoginForm />
+    </Suspense>
   );
 }

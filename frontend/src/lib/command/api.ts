@@ -11,30 +11,75 @@ import {
   CommandDecodeError,
   type Decoder,
 } from './http';
+import {
+  addTaskLink as addTypedTaskLink,
+  archiveTask as archiveTypedTask,
+  CommandConflictError,
+  CommandCreateConflictError,
+  CommandOutcomeUncertainError,
+  createTask as createTypedTask,
+  currentTaskClientTimezone,
+  decodeTask,
+  decodeTaskConflict,
+  decodeTaskLink,
+  loadTaskLinks,
+  loadTasks,
+  restoreTask as restoreTypedTask,
+  updateTask as updateTypedTask,
+  type Task,
+  type TaskConflict,
+  type TaskCreateConflict,
+  type TaskCreateInput,
+  type TaskFilters,
+  type TaskLifecycleRequest,
+  type TaskLink,
+  type TaskLinkRequest,
+  type TaskPriority,
+  type TaskStatus,
+  type TaskUpdateRequest,
+  type TaskVisibility,
+} from './tasks';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export { contactsApi };
+export {
+  CommandConflictError,
+  CommandCreateConflictError,
+  CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
+  decodeTask,
+  decodeTaskConflict,
+  decodeTaskLink,
+};
+export type {
+  Task,
+  TaskConflict,
+  TaskCreateConflict,
+  TaskCreateInput,
+  TaskFilters,
+  TaskLifecycleRequest,
+  TaskLink,
+  TaskLinkRequest,
+  TaskPriority,
+  TaskStatus,
+  TaskUpdateRequest,
+  TaskVisibility,
+};
 
 export type CommandRequestOptions = Readonly<{ signal?: AbortSignal }>;
-export type TaskFilters = Readonly<{
-  status?: string;
-  due_before?: string;
-  due_after?: string;
-}>;
 
 export type Overview = { contacts: number; open_tasks: number; opportunities: number; active_smart_plans: number };
 export type Contact = { id: number; first_name: string; last_name: string; email: string | null; phone: string | null; stage: string; birthday?: string | null; anniversary?: string | null; last_contacted_at?: string | null; recently_active_at?: string | null; health_score?: number | null };
 export type ReportDetails = { metric: string; rows: { id: number; title: string; detail: string; occurred_at: string | null }[] };
 export type Goal = { id: number; name: string; target_value: number; current_value: number; period: 'weekly' | 'monthly' | 'quarterly' | 'annual' };
 export type AiBriefing = { summary: string; source: string; requires_review: boolean };
-export type Task = { id: number; title: string; contact_id: number | null; description: string; priority: string; due_at: string | null; status: string };
 export type NamedRecord = { id:number; name:string; description:string; status:string };
 export type SmartPlanEnrollment = { id: number; contact_id: number; contact_name: string; status: 'active' | 'paused' | 'completed' };
-export type TaskLink = { id: number; task_id: number; entity_type: string; entity_id: number; display_name: string };
 export type ContactImportRow = Pick<Contact, 'first_name' | 'last_name' | 'email' | 'phone' | 'birthday' | 'anniversary'> & { stage?: string };
 export type ContactImportResult = { created: number; skipped_duplicates: number };
-export type ArchiveBundle = { contacts?: ContactImportRow[]; tasks?: { title: string; contact_email?: string | null; description?: string; status?: string; priority?: string; due_at?: string | null }[]; notes?: { contact_email: string; body: string }[]; opportunities?: { name: string; stage?: string; value_cents?: number | null; contact_emails?: string[] }[]; referrals?: { name: string; source?: string; status?: string; contact_email?: string | null }[]; listings?: { address: string; latitude?: string | null; longitude?: string | null; status?: string }[]; templates?: { name: string; body?: string }[]; agreements?: { title: string; contact_email?: string | null; template_name?: string | null; status?: string }[] };
+export type ArchiveTaskImportRow = { source_row_id: string; title: string; contact_email?: string | null; description?: string; status?: string; priority?: string; due_at?: string | null };
+export type ArchiveBundle = { source_id?: string; contacts?: ContactImportRow[]; tasks?: ArchiveTaskImportRow[]; notes?: { contact_email: string; body: string }[]; opportunities?: { name: string; stage?: string; value_cents?: number | null; contact_emails?: string[] }[]; referrals?: { name: string; source?: string; status?: string; contact_email?: string | null }[]; listings?: { address: string; latitude?: string | null; longitude?: string | null; status?: string }[]; templates?: { name: string; body?: string }[]; agreements?: { title: string; contact_email?: string | null; template_name?: string | null; status?: string }[] };
 export type ArchiveBundleImportResult = { created: Record<string, number>; skipped_duplicates: Record<string, number>; unresolved_contact_references: number };
 export type SavedSearch = { id: number; name: string; criteria: string; contact_id: number | null; contact_name: string | null; updated_at: string };
 export type Opportunity = { id:number; name:string; stage:string; value_cents:number|null; updated_at?:string|null };
@@ -50,7 +95,19 @@ export type Relationship = { id:number; contact_id?:number; name?:string; email?
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('admin_token');
   const response = await fetch(`${API_URL}/api/v1/command${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init?.headers } });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? 'Unable to load Command workspace');
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const detail = body && typeof body === 'object' && 'detail' in body
+      ? (body as { detail?: unknown }).detail
+      : null;
+    const message = typeof detail === 'string'
+      ? detail
+      : detail && typeof detail === 'object' && 'message' in detail
+        && typeof (detail as { message?: unknown }).message === 'string'
+        ? (detail as { message: string }).message
+        : 'Unable to load Command workspace';
+    throw new Error(message);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -112,7 +169,7 @@ export const commandApi = {
     directoryRequest: ContactDirectoryRequest,
     options?: CommandRequestOptions,
   ): Promise<ContactDirectoryPage> => contactsApi.directory(directoryRequest, options),
-  tasks: (filters: TaskFilters = {}, options?: CommandRequestOptions) => { const params = new URLSearchParams(); if (filters.status) params.set('status', filters.status); if (filters.due_before) params.set('due_before', filters.due_before); if (filters.due_after) params.set('due_after', filters.due_after); return request<Task[]>(`/tasks${params.size ? `?${params.toString()}` : ''}`, { signal: options?.signal }); },
+  tasks: loadTasks,
   celebrations: (month: number, options?: CommandRequestOptions) => contactsApi.celebrations(month, options),
   createContactNote: (id: number, body: string) => request<{ id: number; body: string }>(`/contacts/${id}/notes`, { method: 'POST', body: JSON.stringify({ body }) }),
   createContactSavedSearch: (id: number, name: string, criteria: Record<string, unknown>) => request<{ id: number; name: string; criteria: string }>(`/contacts/${id}/saved-searches`, { method: 'POST', body: JSON.stringify({ name, criteria }) }),
@@ -164,8 +221,10 @@ export const commandApi = {
   archiveArtifacts: (domain?: string, offset = 0) => { const params = new URLSearchParams({ limit: '100', offset: String(offset) }); if (domain) params.set('domain', domain); return request<{ total: number; rows: ArchiveArtifact[] }>(`/archive/artifacts?${params}`); },
   archiveArtifactBlob: (id: number, options?: CommandRequestOptions) => commandBlob({ path: `/archive/artifacts/${id}/content`, signal: options?.signal }),
   reportDetails: (metric: string) => request<ReportDetails>(`/reports/details/${encodeURIComponent(metric)}`),
-  createTask: (task: Pick<Task, 'title' | 'description' | 'priority' | 'contact_id' | 'due_at'>) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify(task) }),
-  addTaskLink: (taskId: number, entityType: string, entityId: number) => request<TaskLink>(`/tasks/${taskId}/links`, { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId }) }),
-  taskLinks: (taskId: number) => request<TaskLink[]>(`/tasks/${taskId}/links`),
-  updateTask: (id: number, payload: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'status' | 'due_at' | 'contact_id'>>) => request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createTask: createTypedTask,
+  addTaskLink: addTypedTaskLink,
+  taskLinks: loadTaskLinks,
+  updateTask: updateTypedTask,
+  archiveTask: archiveTypedTask,
+  restoreTask: restoreTypedTask,
 };

@@ -26,6 +26,7 @@ import {
 
 const COMMAND_BASE_URL = 'http://localhost:8000/api/v1/command';
 const SHA = 'a'.repeat(64);
+const TASK_IDEMPOTENCY_KEY = '550e8400-e29b-41d4-a716-446655440000';
 
 const actor = {
   role: 'owner',
@@ -232,9 +233,13 @@ const legacyContact = {
 };
 
 const workspaceSummary = {
-  open_tasks: 1,
+  open_tasks: 3,
+  active_tasks: 3,
   completed_tasks: 2,
-  archived_tasks: 3,
+  cancelled_tasks: 1,
+  archived_tasks: 5,
+  archived_mutable_tasks: 2,
+  archived_recovered_evidence: 3,
   active_smart_plans: 4,
   opportunities: 5,
   notes: 6,
@@ -273,6 +278,14 @@ const internalWorkspace = {
     notes: '',
   }],
   tags: [{ id: 28, name: 'VIP' }],
+};
+
+const lifecycleInternalTask = {
+  ...internalWorkspace.tasks[0],
+  status: 'completed',
+  archived_at: '2026-08-19T15:30:00Z',
+  archive_reason: 'Superseded by the signed plan',
+  version: 4,
 };
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -334,11 +347,41 @@ describe('Command contacts wire decoders', () => {
         tasks: [{ ...internalWorkspace.tasks[0], contact_id: contactId }],
       }, 7));
     }
-    for (const status of ['in_progress', 'cancelled', 'unknown']) {
-      privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+    for (const status of ['in_progress', 'cancelled'] as const) {
+      expect(decodeContactInternalWorkspaceForContact({
         ...internalWorkspace,
         tasks: [{ ...internalWorkspace.tasks[0], status }],
-      }, 7));
+      }, 7).tasks[0]?.status).toBe(status);
+    }
+    privateDecodeFailure(() => decodeContactInternalWorkspaceForContact({
+      ...internalWorkspace,
+      tasks: [{ ...internalWorkspace.tasks[0], status: 'unknown' }],
+    }, 7));
+
+    expect(decodeContactInternalWorkspaceForContact({
+      ...internalWorkspace,
+      tasks: [lifecycleInternalTask],
+    }, 7).tasks[0]).toEqual(lifecycleInternalTask);
+    for (const key of ['archived_at', 'archive_reason', 'version']) {
+      privateDecodeFailure(() => decodeContactInternalWorkspace({
+        ...internalWorkspace,
+        tasks: [withoutKey(lifecycleInternalTask, key)],
+      }));
+    }
+    for (const task of [
+      { ...lifecycleInternalTask, status: 'archived' },
+      { ...lifecycleInternalTask, archived_at: '2026-08-19 15:30:00' },
+      { ...lifecycleInternalTask, archive_reason: 'x'.repeat(501) },
+      { ...lifecycleInternalTask, id: 2_147_483_648 },
+      { ...lifecycleInternalTask, contact_id: 2_147_483_648 },
+      { ...lifecycleInternalTask, version: 0 },
+      { ...lifecycleInternalTask, version: 2_147_483_648 },
+      { ...lifecycleInternalTask, private_payload: 'secret' },
+    ]) {
+      privateDecodeFailure(() => decodeContactInternalWorkspace({
+        ...internalWorkspace,
+        tasks: [task],
+      }));
     }
 
     const sorted = decodeContactInternalWorkspace({
@@ -767,6 +810,42 @@ describe('Command contacts wire decoders', () => {
     });
   });
 
+  it('strictly decodes additive task summary fields and preserves the legacy rolling shape', () => {
+    expect(decodeContactWorkspaceSummary(workspaceSummary)).toEqual(workspaceSummary);
+
+    const legacy = {
+      open_tasks: 3,
+      completed_tasks: 2,
+      archived_tasks: 5,
+      active_smart_plans: 4,
+      opportunities: 5,
+      notes: 6,
+      saved_searches: 7,
+      bookings: 8,
+    };
+    expect(decodeContactWorkspaceSummary(legacy)).toEqual(legacy);
+
+    for (const key of [
+      'active_tasks',
+      'cancelled_tasks',
+      'archived_mutable_tasks',
+      'archived_recovered_evidence',
+    ]) {
+      privateDecodeFailure(() => decodeContactWorkspaceSummary(withoutKey(workspaceSummary, key)));
+    }
+    for (const invalid of [
+      { ...workspaceSummary, open_tasks: 4 },
+      { ...workspaceSummary, archived_tasks: 4 },
+      { ...workspaceSummary, cancelled_tasks: true },
+      { ...workspaceSummary, archived_mutable_tasks: -1 },
+      { ...workspaceSummary, archived_recovered_evidence: 1.5 },
+      { ...workspaceSummary, active_tasks: Number.MAX_SAFE_INTEGER + 1 },
+      { ...workspaceSummary, private_payload: 'private' },
+    ]) {
+      privateDecodeFailure(() => decodeContactWorkspaceSummary(invalid));
+    }
+  });
+
   it('matches Task 6 celebration wire bounds without applying Home semantics', () => {
     expect(decodeContactDirectoryPage({
       ...directoryPage,
@@ -1006,6 +1085,7 @@ describe('dedicated Contacts API transport map', () => {
       'assignTag',
       'removeTag',
       'createTask',
+      'restoreTask',
       'artifactBlob',
     ]);
   });
@@ -1095,6 +1175,9 @@ describe('dedicated Contacts API transport map', () => {
         priority: 'normal',
         due_at: null,
         status: 'open',
+        archived_at: null,
+        archive_reason: null,
+        version: 1,
       },
     ];
     const fetchMock = vi.fn().mockImplementation(() => {
@@ -1117,7 +1200,7 @@ describe('dedicated Contacts API transport map', () => {
     await contactsApi.removeTag(7, 33, { signal: controller.signal });
     await contactsApi.createTask({
       title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
-    }, { signal: controller.signal });
+    }, TASK_IDEMPOTENCY_KEY, { signal: controller.signal });
     await expect(contactsApi.artifactBlob(9, { signal: controller.signal })).resolves.toMatchObject({
       size: 8,
       type: 'text/html',
@@ -1147,6 +1230,69 @@ describe('dedicated Contacts API transport map', () => {
       if (body === undefined) expect(call?.[1]).not.toHaveProperty('body');
       else expect(call?.[1]?.body).toBe(body);
     });
+    expect(fetchMock.mock.calls[7]?.[1]?.headers).toEqual(expect.objectContaining({
+      Authorization: 'Bearer admin-token',
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': TASK_IDEMPOTENCY_KEY,
+    }));
+  });
+
+  it('rejects an invalid contact-task idempotency key before fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    }, 'not-a-uuid')).rejects.toBeInstanceOf(CommandDecodeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts the current mutable task row returned by an idempotent contact-task replay', async () => {
+    const replayedTask = {
+      id: 34,
+      title: 'Call',
+      contact_id: 8,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 4,
+    } as const;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(replayedTask)));
+
+    await expect(contactsApi.createTask({
+      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
+    }, TASK_IDEMPOTENCY_KEY)).resolves.toEqual(replayedTask);
+  });
+
+  it('exposes the shared typed Restore transport through the injectable Contacts API', async () => {
+    const restoredTask = {
+      id: 34,
+      title: 'Call',
+      contact_id: 7,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'completed',
+      archived_at: null,
+      archive_reason: null,
+      version: 5,
+    } as const;
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(restoredTask));
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(contactsApi.restoreTask(34, {
+      request_id: TASK_IDEMPOTENCY_KEY,
+      expected_version: 4,
+    }, { signal: controller.signal })).resolves.toEqual(restoredTask);
+    expect(fetchMock).toHaveBeenCalledWith(`${COMMAND_BASE_URL}/tasks/34/restore`, expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ request_id: TASK_IDEMPOTENCY_KEY, expected_version: 4 }),
+      signal: controller.signal,
+    }));
   });
 
   it('rejects wrong-contact internal and mutation responses at the boundary', async () => {
@@ -1157,15 +1303,6 @@ describe('dedicated Contacts API transport map', () => {
       .mockResolvedValueOnce(jsonResponse({
         ...internalWorkspace,
         tasks: [{ ...internalWorkspace.tasks[0], contact_id: 8 }],
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        id: 34,
-        title: 'Call',
-        contact_id: 8,
-        description: '',
-        priority: 'normal',
-        due_at: null,
-        status: 'open',
       }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1173,9 +1310,6 @@ describe('dedicated Contacts API transport map', () => {
     await expect(contactsApi.evidence(7)).rejects.toBeInstanceOf(CommandDecodeError);
     await expect(contactsApi.update(7, { first_name: 'Avery' })).rejects.toBeInstanceOf(CommandDecodeError);
     await expect(contactsApi.internalWorkspace(7)).rejects.toBeInstanceOf(CommandDecodeError);
-    await expect(contactsApi.createTask({
-      title: 'Call', contact_id: 7, description: '', priority: 'normal', due_at: null,
-    })).rejects.toBeInstanceOf(CommandDecodeError);
   });
 
   it('rejects a created tag whose response name does not bind to the request', async () => {

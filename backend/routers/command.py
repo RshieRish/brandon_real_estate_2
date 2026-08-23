@@ -1,10 +1,12 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 import httpx
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Path,
     Response,
@@ -48,6 +50,7 @@ from models.content_block import ContentBlock
 from models.funnel import Funnel
 from models.lead import Lead
 from schemas.command import (
+    POSTGRES_INTEGER_MAX,
     AgreementCreate,
     AgreementOut,
     AgreementStatusUpdate,
@@ -79,6 +82,8 @@ from schemas.command import (
     TagCreate,
     TaskCreate,
     TaskLinkCreate,
+    TaskLinkOut,
+    TaskLifecycleRequest,
     TaskOut,
     TaskUpdate,
     TemplateCreate,
@@ -109,7 +114,27 @@ from services.command_geocoding import geocode_listing_address
 from services.command_lifecycle import ensure_agreement_transition
 from services.command_relationships import is_same_opportunity_contact
 from services.command_task_links import task_link_display_name, task_link_model
-from services.command_tasks import task_activity_summary
+from services.command_tasks import archive_task_source_key
+from services.crm_task_service import (
+    CreateTaskCommand,
+    TaskActor,
+    TaskCommandValidationError,
+    TaskContactNotFound,
+    TaskCreationStateError,
+    TaskIdempotencyConflict,
+    TaskLinkedRecordNotFound,
+    TaskNotFound,
+    TaskSource,
+    TaskSourceConflict,
+    TaskStateConflict,
+    crm_task_service,
+)
+from services.crm_task_projection import (
+    TaskWorkflowStatus,
+    active_task_clause,
+    archived_task_clause,
+    workflow_status_task_clause,
+)
 from services.gemini import generate_text_flash_lite
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -137,6 +162,11 @@ SavedSearchId = Annotated[
     Path(gt=0),
     BeforeValidator(_canonical_http_integer),
 ]
+TaskId = Annotated[
+    int,
+    Path(ge=1, le=POSTGRES_INTEGER_MAX),
+    BeforeValidator(_canonical_http_integer),
+]
 
 
 async def _count(db: AsyncSession, model, *where) -> int:
@@ -148,7 +178,7 @@ async def _count(db: AsyncSession, model, *where) -> int:
 @router.get("/overview", response_model=OverviewOut)
 async def overview(db: AsyncSession = Depends(get_db)):
     return OverviewOut(
-        contacts=await _count(db, CRMContact), open_tasks=await _count(db, CRMTask, CRMTask.status != "completed"),
+        contacts=await _count(db, CRMContact), open_tasks=await _count(db, CRMTask, active_task_clause()),
         opportunities=await _count(db, CRMOpportunity), active_smart_plans=await _count(db, CRMSmartPlan, CRMSmartPlan.status == "active"),
     )
 
@@ -169,7 +199,7 @@ async def update_goal_progress(goal_id: int, payload: GoalUpdate, db: AsyncSessi
 @router.get("/ai/briefing")
 async def ai_briefing(db: AsyncSession = Depends(get_db)):
     """Deterministic, auditable pre-AI briefing; no contact data leaves the API."""
-    open_tasks = await _count(db, CRMTask, CRMTask.status != "completed")
+    open_tasks = await _count(db, CRMTask, active_task_clause())
     contacts = await _count(db, CRMContact)
     opportunities = await _count(db, CRMOpportunity)
     return {"summary": f"{open_tasks} open tasks across {contacts} contacts and {opportunities} opportunities.", "source": "internal-crm", "requires_review": True}
@@ -191,7 +221,7 @@ async def generate_ai_briefing(db:AsyncSession=Depends(get_db)):
 
 @router.get("/reports/summary")
 async def reports_summary(db:AsyncSession=Depends(get_db)):
-    return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,CRMTask.status!="completed"),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
+    return {"contacts":await _count(db,CRMContact),"leads":await _count(db,Lead),"open_tasks":await _count(db,CRMTask,active_task_clause()),"opportunities":await _count(db,CRMOpportunity),"agreements":await _count(db,CRMAgreement),"events":await _count(db,AnalyticsEvent)}
 
 
 @router.get("/archive/artifacts")
@@ -235,7 +265,7 @@ async def report_details(metric: str, db: AsyncSession = Depends(get_db)):
         rows = (await db.execute(select(Lead).order_by(Lead.updated_at.desc()).limit(25))).scalars().all()
         data = [{"id": row.id, "title": row.name or "Unnamed lead", "detail": f"{row.routing_status} · {row.source or 'internal'}", "occurred_at": row.updated_at} for row in rows]
     elif metric == "open_tasks":
-        rows = (await db.execute(select(CRMTask).where(CRMTask.status != "completed").order_by(CRMTask.due_at.asc().nulls_last()).limit(25))).scalars().all()
+        rows = (await db.execute(select(CRMTask).where(active_task_clause()).order_by(CRMTask.due_at.asc().nulls_last()).limit(25))).scalars().all()
         data = [{"id": row.id, "title": row.title, "detail": f"{row.status} · {row.priority}", "occurred_at": row.due_at or row.updated_at} for row in rows]
     elif metric == "opportunities":
         rows = (await db.execute(select(CRMOpportunity).order_by(CRMOpportunity.updated_at.desc()).limit(25))).scalars().all()
@@ -323,14 +353,45 @@ async def _import_archive_bundle(
         item = CRMAgreementTemplate(name=row.name, body=row.body); db.add(item); await db.flush()
         templates_by_name[key] = item; created["templates"] += 1
 
-    for row in payload.tasks:
+    if payload.tasks and payload.source_id is None:
+        raise TaskCommandValidationError("archive task source is invalid")
+    task_rows_with_source_keys = sorted(
+        (
+            (
+                archive_task_source_key(payload.source_id, row.source_row_id),
+                row,
+            )
+            for row in payload.tasks
+        ),
+        key=lambda item: item[0],
+    )
+    for source_key, row in task_rows_with_source_keys:
         contact_id = resolve(row.contact_email)
         if row.contact_email and contact_id is None: unresolved += 1
-        existing = (await db.execute(select(CRMTask).where(CRMTask.title == row.title, CRMTask.contact_id == contact_id))).scalar_one_or_none()
-        if existing: skipped["tasks"] += 1; continue
-        item = CRMTask(title=row.title, description=row.description, status=row.status, priority=row.priority, due_at=row.due_at, contact_id=contact_id)
-        db.add(item); await db.flush(); created["tasks"] += 1
-        if contact_id is not None: db.add(CRMActivity(contact_id=contact_id, kind="archive_task_imported", summary=f"Imported task: {item.title}"))
+        result = await crm_task_service.create(
+            db,
+            CreateTaskCommand(
+                title=row.title,
+                description=row.description,
+                priority=row.priority,
+                due_at=row.due_at,
+                contact_id=contact_id,
+                actor=TaskActor(type="admin", id=actor_subject),
+                source=TaskSource(
+                    type="archive_import",
+                    id=payload.source_id,
+                    key=source_key,
+                ),
+                idempotency_scope="archive_import",
+                idempotency_key=source_key,
+                client_timezone="UTC",
+                status=row.status,
+            ),
+        )
+        if result.replayed:
+            skipped["tasks"] += 1
+        else:
+            created["tasks"] += 1
 
     for row in payload.notes:
         contact_id = resolve(row.contact_email)
@@ -441,6 +502,35 @@ async def import_archive_bundle(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Contact section is unsupported",
         ) from None
+    except TaskCommandValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Archive task input is invalid",
+        ) from None
+    except TaskIdempotencyConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_idempotency_mismatch",
+                "message": "Archive task identity was already used with different task data or authority",
+            },
+        ) from None
+    except TaskSourceConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_source_conflict",
+                "message": "Archive task source identity is already linked",
+            },
+        ) from None
+    except TaskCreationStateError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "task_creation_state_invalid",
+                "message": "Archive task creation request is not replayable",
+            },
+        ) from None
     except Exception:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -546,62 +636,274 @@ async def delete_saved_search(
         ) from None
 
 
+TaskVisibility = Literal["active", "archived", "all"]
+
+
+def _require_aware_task_filter(
+    value: datetime | None,
+    *,
+    name: str,
+) -> datetime | None:
+    if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+        raise HTTPException(422, f"{name} must include a UTC offset")
+    return value
+
+
+def _task_state_conflict(exc: TaskStateConflict) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": exc.code,
+            "current_version": exc.current_version,
+            "current_task": exc.current_task,
+        },
+    )
+
+
+def _task_link_response(result) -> TaskLinkOut:
+    return TaskLinkOut(
+        id=result.link.id,
+        task_id=result.link.task_id,
+        entity_type=result.link.entity_type,
+        entity_id=result.link.entity_id,
+        display_name=result.display_name,
+        task_version=result.task_version,
+    )
+
+
 @router.get("/tasks", response_model=list[TaskOut])
-async def tasks(status: str | None = None, due_before: datetime | None = None, due_after: datetime | None = None, db: AsyncSession = Depends(get_db)):
-    query = select(CRMTask).order_by(CRMTask.due_at.asc().nulls_last())
-    if status: query = query.where(CRMTask.status == status)
-    if due_before: query = query.where(CRMTask.due_at <= due_before)
-    if due_after: query = query.where(CRMTask.due_at >= due_after)
+async def tasks(
+    visibility: TaskVisibility = "active",
+    status: TaskWorkflowStatus | None = None,
+    due_before: datetime | None = None,
+    due_after: datetime | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    due_before = _require_aware_task_filter(due_before, name="due_before")
+    due_after = _require_aware_task_filter(due_after, name="due_after")
+    query = select(CRMTask)
+    if visibility == "active":
+        query = query.where(
+            workflow_status_task_clause(status)
+            if status is not None
+            else active_task_clause()
+        )
+    elif visibility == "archived":
+        query = query.where(archived_task_clause())
+        if status is not None:
+            query = query.where(CRMTask.status == status)
+    else:
+        if status is not None:
+            query = query.where(CRMTask.status == status)
+    if due_before is not None:
+        query = query.where(CRMTask.due_at <= due_before)
+    if due_after is not None:
+        query = query.where(CRMTask.due_at >= due_after)
+    query = query.order_by(CRMTask.due_at.asc().nulls_last())
     return (await db.execute(query)).scalars().all()
 
 
 @router.post("/tasks", response_model=TaskOut)
-async def create_task(payload: TaskCreate, db: AsyncSession = Depends(get_db)):
-    if payload.contact_id is not None and not await db.get(CRMContact, payload.contact_id):
-        raise HTTPException(404, "Task contact not found")
-    item = CRMTask(**payload.model_dump()); db.add(item); await db.flush()
-    db.add(CRMActivity(contact_id=item.contact_id, kind="task_created", summary=item.title)); await db.flush()
-    return item
+async def create_task(
+    payload: TaskCreate,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+    idempotency_key: Annotated[UUID, Header(alias="X-Idempotency-Key")],
+    client_timezone: Annotated[str, Header(alias="X-Client-Timezone")] = "UTC",
+):
+    try:
+        result = await crm_task_service.create(
+            db,
+            CreateTaskCommand(
+                **payload.model_dump(),
+                actor=TaskActor(type="admin", id=actor_subject),
+                source=TaskSource(
+                    type="command_ui",
+                    id=str(idempotency_key),
+                    key="primary",
+                ),
+                idempotency_scope="command_ui",
+                idempotency_key=str(idempotency_key),
+                client_timezone=client_timezone,
+            ),
+        )
+        return result.task
+    except TaskContactNotFound:
+        raise HTTPException(404, "Task contact not found") from None
+    except TaskCommandValidationError:
+        raise HTTPException(422, "Task request is invalid") from None
+    except TaskIdempotencyConflict:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_idempotency_mismatch",
+                "message": "Idempotency key was already used with a different task request",
+            },
+        ) from None
+    except TaskCreationStateError:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_creation_state_invalid",
+                "message": "Task creation request is not in a replayable state",
+            },
+        ) from None
+    except TaskSourceConflict:
+        raise HTTPException(
+            409,
+            {
+                "code": "task_source_conflict",
+                "message": "Task source identity is already linked",
+            },
+        ) from None
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
-async def update_task(task_id: int, payload: TaskUpdate, db: AsyncSession = Depends(get_db)):
-    item = await db.get(CRMTask, task_id)
-    if not item: raise HTTPException(404, "Task not found")
-    changes = payload.model_dump(exclude_unset=True)
-    for nullable_field in ("status", "title", "description", "priority"):
-        if changes.get(nullable_field) is None:
-            changes.pop(nullable_field, None)
-    if "contact_id" in changes and changes["contact_id"] is not None and not await db.get(CRMContact, changes["contact_id"]):
-        raise HTTPException(404, "Task contact not found")
-    for field, value in changes.items(): setattr(item, field, value)
-    if changes:
-        db.add(CRMActivity(contact_id=item.contact_id, kind="task_updated", summary=task_activity_summary(changes)))
-    await db.flush(); return item
+async def update_task(
+    task_id: TaskId,
+    payload: TaskUpdate,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+):
+    try:
+        result = await crm_task_service.update(
+            db,
+            task_id=task_id,
+            expected_version=payload.expected_version,
+            changes=payload.model_dump(
+                exclude_unset=True,
+                exclude={"expected_version"},
+            ),
+            actor=TaskActor(type="admin", id=actor_subject),
+        )
+        return result.task
+    except TaskNotFound:
+        raise HTTPException(404, "Task not found") from None
+    except TaskContactNotFound:
+        raise HTTPException(404, "Task contact not found") from None
+    except TaskCommandValidationError:
+        raise HTTPException(422, "Task request is invalid") from None
+    except TaskStateConflict as exc:
+        raise _task_state_conflict(exc) from None
 
-@router.post("/tasks/{task_id}/links")
-async def add_task_link(task_id: int, payload: TaskLinkCreate, db: AsyncSession = Depends(get_db)):
-    if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
-    entity_model = task_link_model(payload.entity_type)
-    if entity_model is None: raise HTTPException(422, "Unsupported task-link entity type")
-    record = await db.get(entity_model, payload.entity_id)
-    if not record: raise HTTPException(404, "Linked internal record not found")
-    existing = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id, CRMTaskLink.entity_type == payload.entity_type, CRMTaskLink.entity_id == payload.entity_id))).scalar_one_or_none()
-    if existing:
-        return {"id": existing.id, "task_id": existing.task_id, "entity_type": existing.entity_type, "entity_id": existing.entity_id, "display_name": task_link_display_name(payload.entity_type, record)}
-    link = CRMTaskLink(task_id=task_id, **payload.model_dump()); db.add(link); await db.flush()
-    return {"id": link.id, "task_id": link.task_id, "entity_type": link.entity_type, "entity_id": link.entity_id, "display_name": task_link_display_name(payload.entity_type, record)}
 
-@router.get("/tasks/{task_id}/links")
-async def task_links(task_id: int, db: AsyncSession = Depends(get_db)):
-    if not await db.get(CRMTask, task_id): raise HTTPException(404, "Task not found")
+@router.post("/tasks/{task_id}/links", response_model=TaskLinkOut)
+async def add_task_link(
+    task_id: TaskId,
+    payload: TaskLinkCreate,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+):
+    try:
+        result = await crm_task_service.add_link(
+            db,
+            task_id=task_id,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            expected_version=payload.expected_version,
+            actor=TaskActor(type="admin", id=actor_subject),
+        )
+        return _task_link_response(result)
+    except TaskNotFound:
+        raise HTTPException(404, "Task not found") from None
+    except TaskLinkedRecordNotFound:
+        raise HTTPException(404, "Linked internal record not found") from None
+    except TaskCommandValidationError:
+        raise HTTPException(422, "Unsupported task-link entity type") from None
+    except TaskStateConflict as exc:
+        raise _task_state_conflict(exc) from None
+
+
+@router.get("/tasks/{task_id}/links", response_model=list[TaskLinkOut])
+async def task_links(task_id: TaskId, db: AsyncSession = Depends(get_db)):
+    task = await db.get(CRMTask, task_id, with_for_update=True)
+    if not task:
+        raise HTTPException(404, "Task not found")
     rows = (await db.execute(select(CRMTaskLink).where(CRMTaskLink.task_id == task_id).order_by(CRMTaskLink.id.desc()))).scalars().all()
     links = []
     for row in rows:
         entity_model = task_link_model(row.entity_type)
         record = await db.get(entity_model, row.entity_id) if entity_model else None
-        links.append({"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id, "display_name": task_link_display_name(row.entity_type, record) if record else "Removed internal record"})
+        links.append({"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id, "display_name": task_link_display_name(row.entity_type, record) if record else "Removed internal record", "task_version": task.version})
     return links
+
+
+async def _change_task_archive_state(
+    *,
+    action: Literal["archive", "restore"],
+    task_id: int,
+    payload: TaskLifecycleRequest,
+    db: AsyncSession,
+    actor_subject: str,
+):
+    if not settings.CRM_TASK_ARCHIVE_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Task archive and restore are disabled",
+        )
+    method = (
+        crm_task_service.archive
+        if action == "archive"
+        else crm_task_service.restore
+    )
+    try:
+        result = await method(
+            db,
+            task_id=task_id,
+            request_id=payload.request_id,
+            expected_version=payload.expected_version,
+            reason=payload.reason,
+            actor=TaskActor(type="admin", id=actor_subject),
+            source=TaskSource(
+                type="command_ui",
+                id=str(payload.request_id),
+                key=action,
+            ),
+        )
+        return result.task
+    except TaskNotFound:
+        raise HTTPException(404, "Task not found") from None
+    except TaskCommandValidationError:
+        raise HTTPException(422, "Task lifecycle request is invalid") from None
+    except TaskStateConflict as exc:
+        raise _task_state_conflict(exc) from None
+
+
+@router.post("/tasks/{task_id}/archive", response_model=TaskOut)
+async def archive_task(
+    task_id: TaskId,
+    payload: TaskLifecycleRequest,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+):
+    return await _change_task_archive_state(
+        action="archive",
+        task_id=task_id,
+        payload=payload,
+        db=db,
+        actor_subject=actor_subject,
+    )
+
+
+@router.post("/tasks/{task_id}/restore", response_model=TaskOut)
+async def restore_task(
+    task_id: TaskId,
+    payload: TaskLifecycleRequest,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+):
+    return await _change_task_archive_state(
+        action="restore",
+        task_id=task_id,
+        payload=payload,
+        db=db,
+        actor_subject=actor_subject,
+    )
 
 
 @router.patch("/agreements/{agreement_id}/status")

@@ -1,7 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, CaretDown, MagnifyingGlass, Plus, X } from '@phosphor-icons/react';
+import {
+  ArrowCounterClockwise,
+  ArrowLeft,
+  ArrowRight,
+  CaretDown,
+  MagnifyingGlass,
+  Plus,
+  X,
+} from '@phosphor-icons/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   useCallback,
@@ -15,6 +23,8 @@ import type {
   ContactDetail,
   ContactDirectoryRequest,
   ContactEvidence,
+  ContactInternalTask,
+  ContactLifecycleInternalTask,
   ContactInternalWorkspace,
   ContactMaterialization,
   ContactNeighbors,
@@ -26,6 +36,12 @@ import type {
 } from '@/lib/command/contacts';
 import { contactsApi, serializeDirectoryRequest } from '@/lib/command/contacts';
 import { CommandHttpError } from '@/lib/command/http';
+import {
+  CommandConflictError,
+  CommandOutcomeUncertainError,
+  currentTaskClientTimezone,
+  type Task,
+} from '@/lib/command/tasks';
 import { ContactActions } from '../ContactActions';
 import { CommandModuleHeader } from '../ui/CommandModuleHeader';
 import { CommandStatePanel } from '../ui/CommandStatePanel';
@@ -52,6 +68,9 @@ const DETAIL_VIEWS: readonly ContactDetailView[] = [
   'saved_searches', 'evidence', 'bookings',
 ];
 const TASK_VIEWS: readonly ContactTaskView[] = ['to_do', 'completed', 'archived'];
+const SUMMARY_NON_TASK_KEYS = [
+  'active_smart_plans', 'opportunities', 'notes', 'saved_searches', 'bookings',
+] as const satisfies readonly (keyof ContactWorkspaceSummary)[];
 const SECTION_FOR_VIEW: Readonly<Partial<Record<ContactDetailView, Exclude<ContactSectionName, 'timeline'>>>> = {
   opportunities: 'opportunities',
   smart_plans: 'smart_plans',
@@ -92,6 +111,42 @@ type PendingMutationVerification = Readonly<{
   label: string;
   controller: AbortController;
   contactId: number;
+  taskOutcome?: 'uncertain' | 'confirmed';
+}>;
+
+type TaskCreateAttempt = Readonly<{
+  key: string;
+  fingerprint: string;
+  payload: Parameters<ContactsApi['createTask']>[0];
+  clientTimezone: string;
+}>;
+
+type TaskRestoreAttempt = Readonly<{
+  intent: Readonly<{
+    task_id: number;
+    request_id: string;
+    expected_version: number;
+  }>;
+  originalTask: ContactLifecycleInternalTask;
+}>;
+
+type TaskRestoreRefreshPhase = 'acknowledged' | 'uncertain' | 'retry-acknowledged' | 'conflict';
+
+type TaskRestoreRefreshContext = Readonly<{
+  attempt: TaskRestoreAttempt;
+  phase: TaskRestoreRefreshPhase;
+  acknowledgedTask: ContactLifecycleInternalTask | null;
+}>;
+
+type TaskRestoreFocusTarget =
+  | Readonly<{ kind: 'archived' }>
+  | Readonly<{ kind: 'retry' }>
+  | Readonly<{ kind: 'refresh' }>
+  | Readonly<{ kind: 'progress' }>
+  | Readonly<{ kind: 'restore'; taskId: number }>;
+
+type TaskRestoreAuthority = Readonly<{
+  task: ContactLifecycleInternalTask | undefined;
 }>;
 
 function abortError(error: unknown): boolean {
@@ -118,8 +173,72 @@ function internalRows(
   if (section === 'smart_plans') return workspace.smart_plans;
   if (section === 'notes') return workspace.notes;
   if (section === 'saved_searches') return workspace.saved_searches;
-  const state = section === 'tasks_to_do' ? 'open' : section === 'tasks_completed' ? 'completed' : 'archived';
-  return workspace.tasks.filter((task) => task.status === state);
+  return taskRowsForSection(workspace.tasks, section);
+}
+
+function lifecycleInternalTask(task: ContactInternalTask): task is ContactLifecycleInternalTask {
+  return Object.hasOwn(task, 'archived_at')
+    && Object.hasOwn(task, 'archive_reason')
+    && Object.hasOwn(task, 'version');
+}
+
+function contactLifecycleTask(task: Task, contactId: number): ContactLifecycleInternalTask | null {
+  if (task.contact_id !== contactId) return null;
+  return {
+    id: task.id,
+    title: task.title,
+    contact_id: contactId,
+    description: task.description,
+    priority: task.priority,
+    due_at: task.due_at,
+    status: task.status,
+    archived_at: task.archived_at,
+    archive_reason: task.archive_reason,
+    version: task.version,
+  };
+}
+
+function sameLifecycleTask(
+  left: ContactLifecycleInternalTask | undefined,
+  right: ContactLifecycleInternalTask,
+): boolean {
+  return left !== undefined
+    && left.id === right.id
+    && left.title === right.title
+    && left.contact_id === right.contact_id
+    && left.description === right.description
+    && left.priority === right.priority
+    && left.due_at === right.due_at
+    && left.status === right.status
+    && left.archived_at === right.archived_at
+    && left.archive_reason === right.archive_reason
+    && left.version === right.version;
+}
+
+function restoreReachedDesiredState(
+  task: ContactLifecycleInternalTask | undefined,
+  expectedVersion: number,
+): boolean {
+  return task !== undefined
+    && task.archived_at === null
+    && task.version > expectedVersion;
+}
+
+function taskRowsForSection(
+  tasks: readonly ContactInternalTask[],
+  section: 'tasks_to_do' | 'tasks_completed' | 'tasks_archived',
+): readonly ContactInternalTask[] {
+  return tasks.filter((task) => {
+    if (!lifecycleInternalTask(task)) {
+      if (section === 'tasks_archived') return task.status === 'archived';
+      if (section === 'tasks_completed') return task.status === 'completed';
+      return task.status === 'open' || task.status === 'in_progress';
+    }
+    if (section === 'tasks_archived') return task.archived_at !== null;
+    if (task.archived_at !== null) return false;
+    if (section === 'tasks_completed') return task.status === 'completed';
+    return task.status === 'open' || task.status === 'in_progress';
+  });
 }
 
 function sectionLabel(section: Exclude<ContactSectionName, 'timeline'>): string {
@@ -129,11 +248,17 @@ function sectionLabel(section: Exclude<ContactSectionName, 'timeline'>): string 
         : section;
 }
 
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function InternalCards({
   section,
   workspace,
   onAddTask,
   onDeleteNote,
+  onRestoreTask,
+  registerRestoreButton,
   mutationPending,
   addTaskRef,
 }: Readonly<{
@@ -141,6 +266,8 @@ function InternalCards({
   workspace: ContactInternalWorkspace;
   onAddTask: () => void;
   onDeleteNote: (noteId: number) => void;
+  onRestoreTask: (task: ContactLifecycleInternalTask) => void;
+  registerRestoreButton?: (taskId: number, node: HTMLButtonElement | null) => void;
   mutationPending: boolean;
   addTaskRef?: Ref<HTMLButtonElement>;
 }>) {
@@ -179,14 +306,31 @@ function InternalCards({
       </article>
     ))}</div>;
   }
-  const state = section === 'tasks_to_do' ? 'open' : section === 'tasks_completed' ? 'completed' : 'archived';
-  const rows = workspace.tasks.filter((task) => task.status === state);
+  const rows = taskRowsForSection(workspace.tasks, section);
   return (
     <div className="command-contact-cards">
       {section === 'tasks_to_do' ? <button ref={addTaskRef} type="button" className="command-primary-button command-print-hidden" disabled={mutationPending} onClick={onAddTask}><Plus aria-hidden="true" size={15} />Add task</button> : null}
       {rows.map((row) => (
         <article key={row.id} className="command-contact-record-card" aria-label={`SWS internal task ${row.id}`}>
-          <h4>{row.title}</h4>{row.description ? <p>{row.description}</p> : null}<p>{row.status}</p>
+          <h4>{row.title}</h4>
+          {row.description ? <p>{row.description}</p> : null}
+          <p>{row.status}</p>
+          {section === 'tasks_archived' && lifecycleInternalTask(row) ? (
+            <>
+              <time dateTime={row.archived_at ?? undefined}>Archived {new Date(row.archived_at!).toLocaleString()}</time>
+              <p>{row.archive_reason ?? 'No archive reason provided'}</p>
+              <button
+                ref={(node) => registerRestoreButton?.(row.id, node)}
+                type="button"
+                className="command-secondary-button command-touch-target command-print-hidden"
+                aria-label={`Restore ${row.title}`}
+                disabled={mutationPending}
+                onClick={() => onRestoreTask(row)}
+              ><ArrowCounterClockwise aria-hidden="true" size={17} />Restore</button>
+            </>
+          ) : section === 'tasks_archived' ? (
+            <p>Restore is unavailable until task lifecycle data is refreshed.</p>
+          ) : null}
         </article>
       ))}
     </div>
@@ -249,6 +393,13 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const [mutationPending, setMutationPending] = useState(false);
   const [mutationVerification, setMutationVerification] = useState<PendingMutationVerification | null>(null);
   const [mutationVerificationRetrying, setMutationVerificationRetrying] = useState(false);
+  const [taskRestoreRetry, setTaskRestoreRetry] = useState<TaskRestoreAttempt | null>(null);
+  const [taskRestoreRefresh, setTaskRestoreRefresh] = useState<TaskRestoreRefreshContext | null>(null);
+  const [taskRestoreRefreshing, setTaskRestoreRefreshing] = useState(false);
+  const [taskRestoreError, setTaskRestoreError] = useState('');
+  const [taskRestoreNotice, setTaskRestoreNotice] = useState('');
+  const [taskRestoreProgress, setTaskRestoreProgress] = useState('');
+  const [taskRestoreFocusTarget, setTaskRestoreFocusTarget] = useState<TaskRestoreFocusTarget | null>(null);
   const [outsideUniverse, setOutsideUniverse] = useState(false);
   const profileDisclosureRef = useRef<HTMLButtonElement>(null);
 
@@ -272,7 +423,13 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const mutationControllerRef = useRef<AbortController | null>(null);
   const mutationOwnerRef = useRef<string | null>(null);
   const mutationVerificationRefreshRef = useRef<(() => Promise<boolean>) | null>(null);
+  const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
   const taskOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const taskRestoreButtonsRef = useRef(new Map<number, HTMLButtonElement>());
+  const taskRestoreRetryRef = useRef<HTMLButtonElement | null>(null);
+  const taskRestoreRefreshRef = useRef<HTMLButtonElement | null>(null);
+  const taskRestoreProgressRef = useRef<HTMLParagraphElement | null>(null);
+  const taskRestoreRefreshPendingRef = useRef(false);
   const baseRecordRef = useRef<LoadRecord | null>(null);
   const internalRecordRef = useRef<LoadRecord | null>(null);
   const timelineRecordRef = useRef<LoadRecord | null>(null);
@@ -648,10 +805,20 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setMutationVerification(null);
     setMutationVerificationRetrying(false);
     mutationVerificationRefreshRef.current = null;
+    setTaskRestoreRetry(null);
+    setTaskRestoreRefresh(null);
+    setTaskRestoreRefreshing(false);
+    setTaskRestoreError('');
+    setTaskRestoreNotice('');
+    setTaskRestoreProgress('');
+    setTaskRestoreFocusTarget(null);
+    taskRestoreRefreshPendingRef.current = false;
+    taskRestoreButtonsRef.current.clear();
     setTaskFormOpen(false);
     setTaskRestoreFocus(false);
     setTaskTitle('');
     setTaskError('');
+    taskCreateAttemptRef.current = null;
     setProfileOpen(false);
     setJump('');
     setJumpResult(null);
@@ -790,6 +957,217 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setTaskView(next);
     writeView('tasks', next);
   };
+
+  const registerTaskRestoreButton = useCallback((taskId: number, node: HTMLButtonElement | null) => {
+    if (node) taskRestoreButtonsRef.current.set(taskId, node);
+    else taskRestoreButtonsRef.current.delete(taskId);
+  }, []);
+
+  function finishTaskRestoreMutation(controller: AbortController, ownedContactId: number) {
+    if (!mutationIsCurrent(controller, ownedContactId)) return;
+    mutationControllerRef.current = null;
+    releaseMutation('task-restore');
+  }
+
+  function resolveTaskRestoreAuthority(
+    context: TaskRestoreRefreshContext,
+    authority: TaskRestoreAuthority,
+    controller: AbortController,
+    ownedContactId: number,
+  ) {
+    if (!mutationIsCurrent(controller, ownedContactId)) return;
+    const { attempt, phase, acknowledgedTask } = context;
+    const { task } = authority;
+    setTaskRestoreRefresh(null);
+    setTaskRestoreRefreshing(false);
+    taskRestoreRefreshPendingRef.current = false;
+    setTaskRestoreProgress('');
+    setTaskRestoreRetry(null);
+
+    if (phase === 'uncertain') {
+      if (restoreReachedDesiredState(task, attempt.intent.expected_version)) {
+        setTaskRestoreError('');
+        setTaskRestoreNotice('Restore confirmed after refreshing.');
+        setTaskRestoreFocusTarget({ kind: 'archived' });
+      } else if (sameLifecycleTask(task, attempt.originalTask)) {
+        setTaskRestoreNotice('');
+        setTaskRestoreError('Restore outcome is uncertain. The task is unchanged, so the exact request can be retried.');
+        setTaskRestoreRetry(attempt);
+        setTaskRestoreFocusTarget({ kind: 'retry' });
+      } else {
+        setTaskRestoreNotice('');
+        setTaskRestoreError('The task changed elsewhere after the Restore attempt. Review current data and start a fresh action.');
+        setTaskRestoreFocusTarget({ kind: 'archived' });
+      }
+      finishTaskRestoreMutation(controller, ownedContactId);
+      return;
+    }
+
+    if (phase === 'conflict') {
+      setTaskRestoreNotice('');
+      setTaskRestoreError('The task changed elsewhere. Review current data and start a fresh action.');
+      setTaskRestoreFocusTarget({ kind: 'archived' });
+      finishTaskRestoreMutation(controller, ownedContactId);
+      return;
+    }
+
+    const acknowledgedAuthoritatively = acknowledgedTask !== null
+      && sameLifecycleTask(task, acknowledgedTask)
+      && restoreReachedDesiredState(task, attempt.intent.expected_version);
+    if (acknowledgedAuthoritatively) {
+      setTaskRestoreError('');
+      setTaskRestoreNotice('Restore confirmed after refreshing.');
+      setTaskRestoreFocusTarget({ kind: 'archived' });
+    } else {
+      setTaskRestoreNotice('');
+      setTaskRestoreError(phase === 'retry-acknowledged'
+        ? 'The task changed again after the Restore retry. Review current data and start a fresh action.'
+        : 'The task changed after Restore was acknowledged. Review current data and start a fresh action.');
+      setTaskRestoreFocusTarget({ kind: 'archived' });
+    }
+    finishTaskRestoreMutation(controller, ownedContactId);
+  }
+
+  async function refreshTaskRestoreAuthority(
+    context: TaskRestoreRefreshContext,
+    controller: AbortController,
+    ownedContactId: number,
+  ) {
+    let authority: TaskRestoreAuthority | null = null;
+    try {
+      const [nextInternal, nextSummary] = await Promise.all([
+        api.internalWorkspace(ownedContactId, { signal: controller.signal }),
+        api.workspace(ownedContactId, { signal: controller.signal }),
+      ]);
+      if (!mutationIsCurrent(controller, ownedContactId)) return;
+      if (nextInternal.contact.id !== ownedContactId) throw new Error('Authoritative contact did not match.');
+      setInternal(nextInternal);
+      setInternalFailed(false);
+      setInternalLoading(false);
+      setSummary(nextSummary);
+      const candidate = nextInternal.tasks.find((task) => task.id === context.attempt.intent.task_id);
+      authority = candidate && lifecycleInternalTask(candidate) ? { task: candidate } : { task: undefined };
+    } catch {
+      authority = null;
+    }
+    if (!mutationIsCurrent(controller, ownedContactId)) return;
+    if (authority === null) {
+      setTaskRestoreRefresh(context);
+      setTaskRestoreRefreshing(false);
+      taskRestoreRefreshPendingRef.current = false;
+      setTaskRestoreProgress('');
+      setTaskRestoreError('Restore state could not be verified because current contact data could not be refreshed.');
+      setTaskRestoreFocusTarget({ kind: 'refresh' });
+      return;
+    }
+    resolveTaskRestoreAuthority(context, authority, controller, ownedContactId);
+  }
+
+  async function runTaskRestore(attempt: TaskRestoreAttempt, retrying: boolean) {
+    if (mutationControllerRef.current || !acquireMutation('task-restore')) return;
+    const controller = new AbortController();
+    const ownedContactId = contactId;
+    mutationControllerRef.current = controller;
+    setTaskRestoreRetry(null);
+    setTaskRestoreRefresh(null);
+    setTaskRestoreRefreshing(false);
+    taskRestoreRefreshPendingRef.current = false;
+    setTaskRestoreError('');
+    setTaskRestoreNotice('');
+    if (retrying) {
+      setTaskRestoreProgress(`Retrying Restore for ${attempt.originalTask.title}…`);
+      setTaskRestoreFocusTarget({ kind: 'progress' });
+    } else {
+      setTaskRestoreProgress('');
+    }
+    try {
+      const acknowledged = await api.restoreTask(attempt.intent.task_id, {
+        request_id: attempt.intent.request_id,
+        expected_version: attempt.intent.expected_version,
+      }, { signal: controller.signal });
+      if (!mutationIsCurrent(controller, ownedContactId)) return;
+      const acknowledgedTask = contactLifecycleTask(acknowledged, ownedContactId);
+      await refreshTaskRestoreAuthority({
+        attempt,
+        phase: acknowledgedTask === null
+          ? 'uncertain'
+          : retrying ? 'retry-acknowledged' : 'acknowledged',
+        acknowledgedTask,
+      }, controller, ownedContactId);
+    } catch (caught) {
+      if (!mutationIsCurrent(controller, ownedContactId)) return;
+      if (caught instanceof CommandConflictError || caught instanceof CommandOutcomeUncertainError) {
+        await refreshTaskRestoreAuthority({
+          attempt,
+          phase: caught instanceof CommandConflictError ? 'conflict' : 'uncertain',
+          acknowledgedTask: null,
+        }, controller, ownedContactId);
+        return;
+      }
+      setTaskRestoreRetry(null);
+      setTaskRestoreRefresh(null);
+      setTaskRestoreRefreshing(false);
+      taskRestoreRefreshPendingRef.current = false;
+      setTaskRestoreProgress('');
+      setTaskRestoreNotice('');
+      if (!abortError(caught)) {
+        setTaskRestoreError(caught instanceof Error ? caught.message : 'Unable to restore task.');
+        setTaskRestoreFocusTarget({ kind: 'restore', taskId: attempt.intent.task_id });
+      }
+      finishTaskRestoreMutation(controller, ownedContactId);
+    }
+  }
+
+  function restoreTaskFromContact(task: ContactLifecycleInternalTask) {
+    if (task.archived_at === null || mutationPending || mutationControllerRef.current) return;
+    void runTaskRestore({
+      intent: {
+        task_id: task.id,
+        request_id: crypto.randomUUID(),
+        expected_version: task.version,
+      },
+      originalTask: task,
+    }, false);
+  }
+
+  function retryTaskRestore() {
+    if (!taskRestoreRetry || mutationPending || mutationControllerRef.current) return;
+    void runTaskRestore(taskRestoreRetry, true);
+  }
+
+  async function retryTaskRestoreRefresh() {
+    const context = taskRestoreRefresh;
+    const controller = mutationControllerRef.current;
+    if (
+      !context
+      || !controller
+      || taskRestoreRefreshPendingRef.current
+      || !mutationIsCurrent(controller, contactId)
+    ) return;
+    taskRestoreRefreshPendingRef.current = true;
+    setTaskRestoreRefreshing(true);
+    await refreshTaskRestoreAuthority(context, controller, contactId);
+  }
+
+  useEffect(() => {
+    if (!taskRestoreFocusTarget) return;
+    let target: HTMLElement | null;
+    if (taskRestoreFocusTarget.kind === 'archived') {
+      target = document.getElementById('contact-task-state-tab-archived');
+    } else if (taskRestoreFocusTarget.kind === 'retry') {
+      target = taskRestoreRetryRef.current;
+    } else if (taskRestoreFocusTarget.kind === 'refresh') {
+      target = taskRestoreRefreshRef.current;
+    } else if (taskRestoreFocusTarget.kind === 'progress') {
+      target = taskRestoreProgressRef.current;
+    } else {
+      target = taskRestoreButtonsRef.current.get(taskRestoreFocusTarget.taskId) ?? null;
+    }
+    if (!(target instanceof HTMLElement)) return;
+    target.focus();
+    setTaskRestoreFocusTarget(null);
+  }, [internal, mutationPending, taskRestoreFocusTarget, taskRestoreProgress, taskRestoreRefresh, taskRestoreRetry]);
+
   const openTaskForm = () => {
     if (mutationPending) return;
     const active = document.activeElement;
@@ -803,6 +1181,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setTaskFormOpen(false);
     setTaskTitle('');
     setTaskError('');
+    taskCreateAttemptRef.current = null;
   };
 
   useEffect(() => {
@@ -837,27 +1216,81 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     const ownedContactId = contactId;
     mutationControllerRef.current = controller;
     let authoritative = false;
+    const payload: Parameters<ContactsApi['createTask']>[0] = {
+      title,
+      contact_id: contactId,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+    };
+    const fingerprint = JSON.stringify(payload);
+    const attempt = taskCreateAttemptRef.current?.fingerprint === fingerprint
+      ? taskCreateAttemptRef.current
+      : {
+          key: crypto.randomUUID(),
+          fingerprint,
+          payload,
+          clientTimezone: currentTaskClientTimezone(),
+        };
+    taskCreateAttemptRef.current = attempt;
     try {
-      await api.createTask({ title, contact_id: contactId, description: '', priority: 'normal', due_at: null }, { signal: controller.signal });
+      await api.createTask(
+        attempt.payload,
+        attempt.key,
+        { signal: controller.signal, clientTimezone: attempt.clientTimezone },
+      );
+      taskCreateAttemptRef.current = null;
       if (!mutationIsCurrent(controller, ownedContactId)) return;
       const refreshed = await refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
       if (!mutationIsCurrent(controller, ownedContactId)) return;
-      if (!refreshed) throw new Error('Authoritative contact refresh failed');
+      if (!refreshed) {
+        mutationVerificationRefreshRef.current = () => refreshMutation([
+          loadInternal(), loadSummary(), loadTimeline(false, null),
+        ]);
+        setMutationVerification({
+          owner: 'task-create',
+          label: 'Task mutation',
+          controller,
+          contactId: ownedContactId,
+          taskOutcome: 'confirmed',
+        });
+        pushToast({
+          tone: 'error',
+          message: 'Task was saved, but current contact data could not be verified.',
+        });
+        return;
+      }
       authoritative = true;
       setTaskTitle('');
       setTaskError('');
       setTaskRestoreFocus(true);
       setTaskFormOpen(false);
       pushToast({ tone: 'success', message: 'Task added' });
-    } catch {
+    } catch (caught) {
       if (mutationIsCurrent(controller, ownedContactId)) {
+        const uncertain = caught instanceof CommandOutcomeUncertainError
+          || caught instanceof CommandConflictError;
+        if (!uncertain) {
+          authoritative = true;
+          if (!abortError(caught)) {
+            setTaskError(caught instanceof Error ? caught.message : 'Unable to create task.');
+          }
+          return;
+        }
         const refreshed = await refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
         if (!mutationIsCurrent(controller, ownedContactId)) return;
         authoritative = refreshed;
         if (!refreshed) {
           mutationVerificationRefreshRef.current = () => refreshMutation([loadInternal(), loadSummary(), loadTimeline(false, null)]);
-          setMutationVerification({ owner: 'task-create', label: 'Task mutation', controller, contactId: ownedContactId });
+          setMutationVerification({
+            owner: 'task-create',
+            label: 'Task mutation',
+            controller,
+            contactId: ownedContactId,
+            taskOutcome: 'uncertain',
+          });
         }
+        setTaskError(refreshed && caught instanceof Error ? caught.message : '');
         pushToast({ tone: 'error', message: refreshed
           ? 'Task mutation status is unknown. Current contact data was refreshed.'
           : 'Task mutation status is unknown. Current contact data could not be verified.' });
@@ -972,7 +1405,12 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     if (!mutationIsCurrent(pending.controller, pending.contactId)) return;
     if (!refreshed) {
       setMutationVerificationRetrying(false);
-      pushToast({ tone: 'error', message: `${pending.label} status is unknown. Current contact data could not be verified.` });
+      pushToast({
+        tone: 'error',
+        message: pending.taskOutcome === 'confirmed'
+          ? 'Task was saved, but current contact data could not be verified.'
+          : `${pending.label} status is unknown. Current contact data could not be verified.`,
+      });
       return;
     }
     mutationVerificationRefreshRef.current = null;
@@ -980,6 +1418,14 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setMutationVerificationRetrying(false);
     mutationControllerRef.current = null;
     releaseMutation(pending.owner);
+    if (pending.owner === 'task-create' && pending.taskOutcome === 'confirmed') {
+      setTaskTitle('');
+      setTaskError('');
+      setTaskRestoreFocus(true);
+      setTaskFormOpen(false);
+      pushToast({ tone: 'success', message: 'Task added' });
+      return;
+    }
     pushToast({ tone: 'success', message: `${pending.label} data was refreshed.` });
   }
 
@@ -1114,7 +1560,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
                               <CapturedSection section={nestedSection} page={nestedPage} evidence={currentEvidence} internal={currentInternal} loading={sectionLoading.has(nestedSection)} error={sectionFailed.has(nestedSection)} onRetry={() => void loadSection(nestedSection)} onViewEvidence={() => writeView('evidence')} />
                               {nestedState && nestedState.page < nestedState.page_count ? <><button type="button" className="command-secondary-button command-print-hidden" disabled={mutationPending || sectionLoading.has(nestedSection) || sectionLoadingMore.has(nestedSection)} onClick={() => void loadSection(nestedSection, nestedState.page + 1, true)}>{sectionLoading.has(nestedSection) || sectionLoadingMore.has(nestedSection) ? 'Loading…' : sectionLoadMoreFailed.has(nestedSection) ? 'Retry more captured tasks' : 'Load more captured tasks'}</button>{sectionLoadMoreFailed.has(nestedSection) ? <p role="alert">More captured tasks could not be loaded.</p> : null}</> : null}
                               <InternalState label={`${state === 'to_do' ? 'to-do' : state} tasks`} loading={internalLoading} available={!internalFailed && currentInternal !== null} empty={internalTaskRows.length === 0} onRetry={() => void loadInternal()}>
-                                {currentInternal ? <InternalCards section={nestedSection} workspace={currentInternal} onAddTask={openTaskForm} onDeleteNote={() => undefined} mutationPending={mutationPending} addTaskRef={taskOpenerRef} /> : null}
+                                {currentInternal ? <InternalCards section={nestedSection} workspace={currentInternal} onAddTask={openTaskForm} onDeleteNote={() => undefined} onRestoreTask={restoreTaskFromContact} registerRestoreButton={registerTaskRestoreButton} mutationPending={mutationPending} addTaskRef={taskOpenerRef} /> : null}
                               </InternalState>
                               {state === 'to_do' && currentInternal && internalTaskRows.length === 0 ? <button ref={taskOpenerRef} type="button" className="command-primary-button command-print-hidden" disabled={mutationPending} onClick={openTaskForm}><Plus aria-hidden="true" size={15} />Add task</button> : null}
                               {state === 'to_do' && taskFormOpen ? <section className="command-contact-action-form command-print-hidden" aria-label="Add task" onKeyDown={(event) => { if (event.key === 'Escape' && !mutationPending) { event.preventDefault(); closeTaskForm(); } }}><div><h3>Add task</h3><button type="button" className="command-touch-target" aria-label="Close task editor" disabled={mutationPending} onClick={closeTaskForm}><X aria-hidden="true" size={16} /></button></div><input aria-label="Task title" autoFocus disabled={mutationPending} value={taskTitle} onChange={(event) => { setTaskTitle(event.target.value); setTaskError(''); }} />{taskError ? <p role="alert" className="command-contacts-form-error">{taskError}</p> : null}<button type="button" className="command-primary-button command-touch-target" disabled={mutationPending || !taskTitle.trim()} onClick={() => void createTask()}>{mutationPending ? 'Saving…' : 'Save task'}</button></section> : null}
@@ -1134,7 +1580,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
                       <CapturedSection section={section} page={page} evidence={currentEvidence} internal={currentInternal} loading={sectionLoading.has(section)} error={sectionFailed.has(section)} onRetry={() => void loadSection(section)} onViewEvidence={() => writeView('evidence')} />
                       {sectionState && sectionState.page < sectionState.page_count ? <><button type="button" className="command-secondary-button command-print-hidden" disabled={mutationPending || sectionLoading.has(section) || sectionLoadingMore.has(section)} onClick={() => void loadSection(section, sectionState.page + 1, true)}>{sectionLoading.has(section) || sectionLoadingMore.has(section) ? 'Loading…' : sectionLoadMoreFailed.has(section) ? `Retry more captured ${sectionLabel(section)}` : `Load more captured ${sectionLabel(section)}`}</button>{sectionLoadMoreFailed.has(section) ? <p role="alert">More captured {sectionLabel(section)} could not be loaded.</p> : null}</> : null}
                       <InternalState label={sectionLabel(section)} loading={internalLoading} available={!internalFailed && currentInternal !== null} empty={rows.length === 0} onRetry={() => void loadInternal()}>
-                        {currentInternal ? <InternalCards section={section} workspace={currentInternal} onAddTask={() => undefined} onDeleteNote={(id) => void deleteNote(id)} mutationPending={mutationPending} /> : null}
+                        {currentInternal ? <InternalCards section={section} workspace={currentInternal} onAddTask={() => undefined} onDeleteNote={(id) => void deleteNote(id)} onRestoreTask={restoreTaskFromContact} registerRestoreButton={registerTaskRestoreButton} mutationPending={mutationPending} /> : null}
                       </InternalState>
                     </>
                   );
@@ -1153,9 +1599,35 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
       {currentOutsideUniverse ? <p className="command-contact-universe-state" role="status">This contact is outside the current directory view</p> : null}
       {currentNeighborsFailed ? <p className="command-contact-universe-state" role="status">Directory navigation is unavailable for the current view. <button type="button" className="command-inline-button" onClick={() => void loadBase()}>Retry</button></p> : null}
       {failure && currentDetail !== null ? <p className="command-contact-universe-state" role="alert">Current contact data could not be refreshed. <button type="button" className="command-inline-button" onClick={() => void loadBase()}>Retry contact data</button></p> : null}
-      {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.label} status is unknown. Current contact data could not be verified. <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
+      {taskRestoreError ? (
+        <p className="command-contact-universe-state" role="alert">
+          {taskRestoreError}{' '}
+          {taskRestoreRetry ? <button ref={taskRestoreRetryRef} type="button" className="command-secondary-button command-touch-target command-print-hidden" onClick={retryTaskRestore}>Retry Restore</button> : null}
+          {taskRestoreRefresh ? <button ref={taskRestoreRefreshRef} type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={taskRestoreRefreshing} onClick={() => void retryTaskRestoreRefresh()}>{taskRestoreRefreshing ? 'Refreshing…' : 'Retry contact refresh'}</button> : null}
+        </p>
+      ) : null}
+      {taskRestoreProgress ? <p ref={taskRestoreProgressRef} className="command-contact-universe-state" role="status" aria-live="polite" aria-atomic="true" tabIndex={-1}>{taskRestoreProgress}</p> : null}
+      {taskRestoreNotice ? <p className="command-contact-universe-state" role="status" aria-live="polite" aria-atomic="true">{taskRestoreNotice}</p> : null}
+      {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.taskOutcome === 'confirmed' ? 'Task was saved, but current contact data could not be verified.' : `${mutationVerification.label} status is unknown. Current contact data could not be verified.`} <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
       <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
-        {summary && currentDetail ? Object.entries(summary).map(([key, value]) => <span key={key}><strong>{value}</strong>{key.replaceAll('_', ' ')}</span>) : null}
+        {summary && currentDetail ? (
+          <>
+            <span><strong>{typeof summary.active_tasks === 'number' ? summary.active_tasks : summary.open_tasks}</strong>{typeof summary.active_tasks === 'number' ? 'active tasks' : 'open tasks'}</span>
+            <span><strong>{summary.completed_tasks}</strong>completed tasks</span>
+            {typeof summary.cancelled_tasks === 'number' ? <span><strong>{summary.cancelled_tasks}</strong>cancelled tasks</span> : null}
+            <span>
+              <strong>{summary.archived_tasks}</strong>archived tasks
+              {typeof summary.archived_mutable_tasks === 'number'
+                && typeof summary.archived_recovered_evidence === 'number' ? (
+                  <>
+                    <span className="command-visually-hidden">{countLabel(summary.archived_mutable_tasks, 'restorable SWS task')}</span>
+                    <span className="command-visually-hidden">{countLabel(summary.archived_recovered_evidence, 'recovered evidence task')}</span>
+                  </>
+                ) : <span className="command-visually-hidden">Archived task breakdown unavailable during update</span>}
+            </span>
+            {SUMMARY_NON_TASK_KEYS.map((key) => <span key={key}><strong>{summary[key]}</strong>{key.replaceAll('_', ' ')}</span>)}
+          </>
+        ) : null}
       </aside>
     </section>
   );

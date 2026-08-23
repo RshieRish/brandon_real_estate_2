@@ -19,6 +19,7 @@ const FIXED_AT = '2026-08-12T12:00:00.000Z';
 const ACTIVITY_AT = '2026-08-12T13:00:00.000Z';
 const CONTACT_COUNT = 366;
 const RECOVERED_COUNT = 317;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECTION_NAMES: readonly ContactSectionName[] = [
   'timeline', 'opportunities', 'smart_plans', 'notes', 'saved_searches',
   'tasks_to_do', 'tasks_completed', 'tasks_archived',
@@ -31,6 +32,19 @@ export type ContactsFixtureResponse = Readonly<{
   headers?: Readonly<Record<string, string>>;
 }>;
 
+export type CommandFixtureTask = {
+  id: number;
+  title: string;
+  contact_id: number | null;
+  description: string;
+  priority: string;
+  due_at: string | null;
+  status: string;
+  archived_at: string | null;
+  archive_reason: string | null;
+  version: number;
+};
+
 type MutableContactState = {
   rows: ContactDirectoryRow[];
   details: Map<number, ContactDetail>;
@@ -42,6 +56,8 @@ type MutableContactState = {
   nextTagId: number;
   nextTaskId: number;
   nextActivityId: number;
+  taskCreates: Map<string, Readonly<{ fingerprint: string; task: CommandFixtureTask }>>;
+  createdTasks: CommandFixtureTask[];
   createdAt: Map<number, string>;
   updatedAt: Map<number, string>;
 };
@@ -170,6 +186,8 @@ export function createCommandContactsFixtureState(): CommandContactsFixtureState
     nextTagId: 2,
     nextTaskId: 700,
     nextActivityId: 800,
+    taskCreates: new Map(),
+    createdTasks: [],
     createdAt: new Map(rows.map((row) => [row.id, new Date(Date.parse(FIXED_AT) - row.id * 60_000).toISOString()])),
     updatedAt: new Map(rows.map((row) => [row.id, new Date(Date.parse(FIXED_AT) - row.id * 30_000).toISOString()])),
   };
@@ -737,15 +755,58 @@ export function handleCommandContactsRequest(
     const body = jsonBody(request);
     const keys = ['title', 'contact_id', 'description', 'priority', 'due_at'];
     if (isFixtureResponse(body)) return body;
+    const idempotencyKey = request.headers()['x-idempotency-key'];
+    const clientTimezone = request.headers()['x-client-timezone'];
     const validContact = body.contact_id === null || (Number.isInteger(body.contact_id) && state.rows.some((row) => row.id === body.contact_id));
-    if (!exactKeys(body, keys) || !validContact || typeof body.title !== 'string' || body.title.trim().length === 0 || Array.from(body.title).length > 255 || typeof body.description !== 'string' || !['low', 'normal', 'high'].includes(String(body.priority)) || !rfc3339Value(body.due_at)) return fail('invalid contact task body');
-    const task = { id: state.nextTaskId++, title: String(body.title), contact_id: body.contact_id === null ? null : Number(body.contact_id), description: String(body.description), priority: String(body.priority), due_at: body.due_at === null ? null : String(body.due_at), status: 'open' as const };
-    if (task.contact_id !== null) {
-      const taskWorkspace = state.workspaces.get(task.contact_id)!;
-      state.workspaces.set(task.contact_id, { ...taskWorkspace, tasks: [{ ...task, contact_id: task.contact_id }, ...taskWorkspace.tasks] });
-      recordActivity(state, task.contact_id, 'task_created', task.title);
+    if (!UUID_PATTERN.test(idempotencyKey ?? '') || typeof clientTimezone !== 'string' || clientTimezone.trim().length === 0 || clientTimezone.length > 100 || !exactKeys(body, keys) || !validContact || typeof body.title !== 'string' || body.title.trim().length === 0 || Array.from(body.title).length > 255 || typeof body.description !== 'string' || !['low', 'normal', 'high'].includes(String(body.priority)) || !rfc3339Value(body.due_at)) return fail('invalid contact task body');
+    const canonicalPayload = {
+      title: String(body.title),
+      contact_id: body.contact_id === null ? null : Number(body.contact_id),
+      description: String(body.description),
+      priority: String(body.priority),
+      due_at: body.due_at === null ? null : String(body.due_at),
+    };
+    const fingerprint = JSON.stringify({ ...canonicalPayload, client_timezone: clientTimezone });
+    const existing = state.taskCreates.get(idempotencyKey!);
+    if (existing !== undefined) {
+      if (existing.fingerprint !== fingerprint) {
+        return {
+          status: 409,
+          body: {
+            detail: {
+              code: 'task_idempotency_mismatch',
+              message: 'Idempotency key was already used with a different task request',
+            },
+          },
+        };
+      }
+      return { status: 200, body: structuredClone(existing.task) };
     }
-    return { status: 201, body: task };
+    const createdTask = {
+      id: state.nextTaskId++,
+      ...canonicalPayload,
+      status: 'open' as const,
+      archived_at: null,
+      archive_reason: null,
+      version: 1,
+    };
+    state.taskCreates.set(idempotencyKey!, { fingerprint, task: createdTask });
+    state.createdTasks.push(createdTask);
+    if (createdTask.contact_id !== null) {
+      const taskWorkspace = state.workspaces.get(createdTask.contact_id)!;
+      const legacyTask = {
+        id: createdTask.id,
+        title: createdTask.title,
+        contact_id: createdTask.contact_id,
+        description: createdTask.description,
+        priority: createdTask.priority,
+        due_at: createdTask.due_at,
+        status: createdTask.status,
+      };
+      state.workspaces.set(createdTask.contact_id, { ...taskWorkspace, tasks: [legacyTask, ...taskWorkspace.tasks] });
+      recordActivity(state, createdTask.contact_id, 'task_created', createdTask.title);
+    }
+    return { status: 200, body: createdTask };
   }
   const artifact = /^\/archive\/artifacts\/(\d+)\/content$/.exec(path);
   if (artifact) {

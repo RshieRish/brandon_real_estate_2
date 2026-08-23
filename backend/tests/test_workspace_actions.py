@@ -51,8 +51,39 @@ class WorkspaceActionServiceTests(unittest.TestCase):
         send_kwargs = gmail.users.return_value.messages.return_value.send.call_args.kwargs
         self.assertEqual(send_kwargs["userId"], "me")
         self.assertIn("raw", send_kwargs["body"])
+        gmail.users.return_value.messages.return_value.send.return_value.execute.assert_called_once_with(
+            num_retries=0
+        )
         self.assertEqual(result["id"], "sent-123")
         self.assertEqual(result["thread_id"], "thread-123")
+
+    @patch("services.workspace_service.build_workspace_service")
+    def test_send_gmail_message_uses_caller_supplied_bound_client_without_global_token(
+        self,
+        mock_build,
+    ):
+        bound_gmail = Mock()
+        bound_gmail.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+            "id": "bound-sent-123",
+            "threadId": "bound-thread-123",
+        }
+
+        result = workspace_service.send_gmail_message(
+            to=["client@example.com"],
+            subject="Bound account",
+            body_text="Use the database-bound credential.",
+            gmail_client=bound_gmail,
+        )
+
+        mock_build.assert_not_called()
+        bound_gmail.users.return_value.messages.return_value.send.assert_called_once()
+        bound_gmail.users.return_value.messages.return_value.send.return_value.execute.assert_called_once_with(
+            num_retries=0
+        )
+        self.assertEqual(
+            result,
+            {"id": "bound-sent-123", "thread_id": "bound-thread-123"},
+        )
 
     @patch("services.workspace_service.build_workspace_service")
     def test_search_drive_files_returns_file_summaries(self, mock_build):
