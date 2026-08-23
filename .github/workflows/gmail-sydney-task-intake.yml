@@ -142,7 +142,7 @@ jobs:
       GOOGLE_WORKSPACE_CLIENT_ID: gmail-sydney-ci-client-id
       GOOGLE_WORKSPACE_CLIENT_SECRET: gmail-sydney-ci-client-secret-only
       GOOGLE_WORKSPACE_REDIRECT_URI: http://localhost:3000/api/v1/workspace/oauth/callback
-      SSL_CERT_FILE: ${{ runner.temp }}/gmail-sydney-postgres-tls/server.crt
+      SSL_CERT_FILE: /tmp/gmail-sydney-postgres-tls/server.crt
       JWT_SECRET: gmail-sydney-ci-fixture-only
       CI: "true"
 

@@ -58,7 +58,7 @@ jobs:
       CRM_TASK_TEST_DATABASE_NAME: brandon_crm_task_lifecycle_ci_test
       CRM_TASK_TEST_DATABASE_URL: postgresql+asyncpg://crm_task_ci_fixture:crm_task_ci_fixture_only@localhost:55432/brandon_crm_task_lifecycle_ci_test
       DATABASE_URL: postgresql+asyncpg://crm_task_ci_fixture:crm_task_ci_fixture_only@localhost:55432/brandon_crm_task_lifecycle_ci_test
-      SSL_CERT_FILE: ${{ runner.temp }}/crm-task-lifecycle-postgres-tls/server.crt
+      SSL_CERT_FILE: /tmp/crm-task-lifecycle-postgres-tls/server.crt
       JWT_SECRET: crm-task-lifecycle-ci-fixture-only
       CI: "true"
 
