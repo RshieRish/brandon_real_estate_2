@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
+from fastapi import HTTPException, Response
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from starlette.requests import Request
@@ -288,67 +289,225 @@ async def _approve_once(
     admin,
     path: str,
     request_id: UUID,
+    handoff_token: str | None = None,
+    approval_start: datetime = NOW,
 ):
+    from routers.command_task_suggestions import (
+        approve_task_suggestion,
+        exchange_task_suggestion_handoff,
+        prepare_task_suggestion_approval,
+    )
+    from schemas.agent_control_crm import (
+        ApprovalRequest,
+        HandoffExchangeRequest,
+        SuggestionVersion,
+    )
+    from services.crm_task_suggestion_service import (
+        CRMTaskSuggestionService,
+        canonical_task_payload_hash,
+    )
     from services.task_suggestion_approval_service import (
         TaskSuggestionApprovalService,
     )
 
+    async def durable_counts() -> dict[str, int]:
+        tables = (
+            "crm_tasks",
+            "crm_task_creation_requests",
+            "crm_task_sources",
+            "crm_record_lifecycle_events",
+            "crm_activities",
+            "crm_task_suggestion_events",
+            "agent_action_audits",
+            "crm_task_suggestion_approval_nonces",
+        )
+        async with sessions() as session:
+            return {
+                table: int(
+                    await session.scalar(sa.text(f"SELECT count(*) FROM {table}")) or 0
+                )
+                for table in tables
+            }
+
+    def assert_preview(prepared) -> None:
+        expected_task = CRMTaskSuggestionService.preview_payload(suggestion)
+        assert prepared.suggestion_id == suggestion.id
+        assert prepared.suggestion_version == suggestion.version
+        assert prepared.payload_hash == suggestion.payload_hash
+        assert prepared.task == expected_task
+        assert prepared.payload_hash == canonical_task_payload_hash(
+            title=prepared.task.title,
+            description=prepared.task.description,
+            priority=prepared.task.priority,
+            due_at=prepared.task.due_at,
+            contact_id=prepared.task.contact_id,
+            status=prepared.task.status,
+        )
+
+    async def command_call_at(when: datetime, call):
+        import services.task_suggestion_approval_service as approval_module
+
+        class _FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return when.replace(tzinfo=None)
+                return when.astimezone(tz)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(approval_module, "datetime", _FixedDateTime)
+            return await call()
+
     service = TaskSuggestionApprovalService()
+    before_issuance = await durable_counts()
+    extra_approval = None
     if path == "command_prepare":
-        async with sessions() as session, session.begin():
-            _, issued = await service.prepare(
-                session,
-                suggestion_id=suggestion.id,
-                administrator_id=admin.id,
-                expected_version=suggestion.version,
-                expected_payload_hash=suggestion.payload_hash,
-                now=NOW,
+        prepared_responses = []
+        for offset in range(2):
+
+            async def prepare():
+                async with sessions() as session:
+                    return await prepare_task_suggestion_approval(
+                        suggestion.id,
+                        SuggestionVersion(
+                            expected_version=suggestion.version,
+                            expected_payload_hash=suggestion.payload_hash,
+                        ),
+                        _request(
+                            f"/api/v1/command/task-suggestions/{suggestion.id}"
+                            "/approval/prepare"
+                        ),
+                        Response(),
+                        str(admin.id),
+                        session,
+                    )
+
+            prepared = await command_call_at(
+                approval_start + timedelta(seconds=offset),
+                prepare,
             )
+            assert_preview(prepared)
+            prepared_responses.append(prepared)
+        assert prepared_responses[0].approval != prepared_responses[1].approval
+        extra_approval = prepared_responses[0].approval
+        issued_approval = prepared_responses[1].approval
+        expected_nonce_delta = 2
     else:
-        async with sessions() as session, session.begin():
-            _, handoff = await service.issue_handoff(
-                session,
-                suggestion_id=suggestion.id,
-                expected_version=suggestion.version,
-                expected_payload_hash=suggestion.payload_hash,
-                now=NOW,
-            )
-        async with sessions() as session, session.begin():
-            _, issued = await service.exchange_handoff(
-                session,
-                suggestion_id=suggestion.id,
-                administrator_id=admin.id,
-                handoff=handoff.token,
-                expected_version=suggestion.version,
-                expected_payload_hash=suggestion.payload_hash,
-                now=NOW + timedelta(seconds=1),
-            )
-    async with sessions() as session, session.begin():
-        first = await service.approve(
-            session,
-            suggestion_id=suggestion.id,
-            administrator_id=admin.id,
-            approval=issued.token,
-            expected_version=suggestion.version,
-            expected_payload_hash=suggestion.payload_hash,
-            request_id=request_id,
-            client_timezone="America/New_York",
-            now=NOW + timedelta(seconds=2),
+        if handoff_token is None:
+            async with sessions() as session, session.begin():
+                _, handoff = await service.issue_handoff(
+                    session,
+                    suggestion_id=suggestion.id,
+                    expected_version=suggestion.version,
+                    expected_payload_hash=suggestion.payload_hash,
+                    now=approval_start,
+                )
+            handoff_token = handoff.token
+            expected_nonce_delta = 2
+        else:
+            expected_nonce_delta = 1
+
+        async def exchange():
+            async with sessions() as session:
+                return await exchange_task_suggestion_handoff(
+                    suggestion.id,
+                    HandoffExchangeRequest(
+                        handoff=handoff_token,
+                        expected_version=suggestion.version,
+                        expected_payload_hash=suggestion.payload_hash,
+                    ),
+                    _request(
+                        f"/api/v1/command/task-suggestions/{suggestion.id}"
+                        "/handoff/exchange"
+                    ),
+                    Response(),
+                    str(admin.id),
+                    session,
+                )
+
+        prepared = await command_call_at(
+            approval_start + timedelta(seconds=1),
+            exchange,
         )
-    async with sessions() as session, session.begin():
-        replay = await service.approve(
-            session,
-            suggestion_id=suggestion.id,
-            administrator_id=admin.id,
-            approval=issued.token,
-            expected_version=suggestion.version,
-            expected_payload_hash=suggestion.payload_hash,
-            request_id=request_id,
-            client_timezone="America/New_York",
-            now=NOW + timedelta(minutes=3),
-        )
+        assert_preview(prepared)
+        issued_approval = prepared.approval
+        with pytest.raises(HTTPException) as replayed_exchange:
+            await command_call_at(
+                approval_start + timedelta(seconds=2),
+                exchange,
+            )
+        assert replayed_exchange.value.status_code == 409
+        assert replayed_exchange.value.detail == "handoff_invalid"
+
+    after_issuance = await durable_counts()
+    for table in (
+        "crm_tasks",
+        "crm_task_creation_requests",
+        "crm_task_sources",
+        "crm_record_lifecycle_events",
+        "crm_activities",
+        "crm_task_suggestion_events",
+        "agent_action_audits",
+    ):
+        assert after_issuance[table] == before_issuance[table]
+    assert (
+        after_issuance["crm_task_suggestion_approval_nonces"]
+        == before_issuance["crm_task_suggestion_approval_nonces"] + expected_nonce_delta
+    )
+
+    async def approve(approval: str, *, replay_request_id: UUID):
+        async with sessions() as session:
+            return await approve_task_suggestion(
+                suggestion.id,
+                ApprovalRequest(
+                    approval=approval,
+                    expected_version=suggestion.version,
+                    expected_payload_hash=suggestion.payload_hash,
+                    request_id=replay_request_id,
+                    client_timezone="America/New_York",
+                ),
+                _request(f"/api/v1/command/task-suggestions/{suggestion.id}/approve"),
+                Response(),
+                str(admin.id),
+                session,
+            )
+
+    first = await command_call_at(
+        approval_start + timedelta(seconds=3),
+        lambda: approve(issued_approval, replay_request_id=request_id),
+    )
+    assert first.replayed is False
+    replay = await command_call_at(
+        approval_start + timedelta(minutes=3),
+        lambda: approve(issued_approval, replay_request_id=request_id),
+    )
     assert replay.replayed is True
-    assert replay.task.id == first.task.id
+    assert replay.task_id == first.task_id
+    after_approval_replay = await durable_counts()
+    expected_deltas = {
+        "crm_tasks": 1,
+        "crm_task_creation_requests": 1,
+        "crm_task_sources": 1,
+        "crm_record_lifecycle_events": 1,
+        "crm_activities": 0,
+        "crm_task_suggestion_events": 2,
+        "agent_action_audits": 1,
+    }
+    for table, delta in expected_deltas.items():
+        assert after_approval_replay[table] == after_issuance[table] + delta
+    assert (
+        after_approval_replay["crm_task_suggestion_approval_nonces"]
+        == after_issuance["crm_task_suggestion_approval_nonces"]
+    )
+    if extra_approval is not None:
+        with pytest.raises(HTTPException) as stale_approval:
+            await command_call_at(
+                approval_start + timedelta(minutes=4),
+                lambda: approve(extra_approval, replay_request_id=uuid4()),
+            )
+        assert stale_approval.value.status_code == 409
+        assert stale_approval.value.detail == "suggestion_stale"
+        assert await durable_counts() == after_approval_replay
     return first
 
 
@@ -865,46 +1024,18 @@ async def test_direct_sydney_draft_uses_evaluator_question_answer_and_handoff_on
         assert current is not None
         current_version = current.version
         current_hash = current.payload_hash
-    from services.task_suggestion_approval_service import TaskSuggestionApprovalService
-
-    approvals = TaskSuggestionApprovalService()
-    async with sessions() as session, session.begin():
-        _, issued = await approvals.exchange_handoff(
-            session,
-            suggestion_id=first.id,
-            administrator_id=admin.id,
-            handoff=handoff_token,
-            expected_version=current_version,
-            expected_payload_hash=current_hash,
-            now=NOW + timedelta(minutes=2),
-        )
     task_request_id = UUID("00000000-0000-0000-0000-000000000907")
-    async with sessions() as session, session.begin():
-        created = await approvals.approve(
-            session,
-            suggestion_id=first.id,
-            administrator_id=admin.id,
-            approval=issued.token,
-            expected_version=current_version,
-            expected_payload_hash=current_hash,
-            request_id=task_request_id,
-            client_timezone="America/New_York",
-            now=NOW + timedelta(minutes=3),
-        )
-    async with sessions() as session, session.begin():
-        replayed = await approvals.approve(
-            session,
-            suggestion_id=first.id,
-            administrator_id=admin.id,
-            approval=issued.token,
-            expected_version=current_version,
-            expected_payload_hash=current_hash,
-            request_id=task_request_id,
-            client_timezone="America/New_York",
-            now=NOW + timedelta(minutes=4),
-        )
-    assert replayed.replayed is True
-    assert replayed.task.id == created.task.id
+    assert current_version == current.version
+    assert current_hash == current.payload_hash
+    await _approve_once(
+        sessions,
+        suggestion=current,
+        admin=admin,
+        path="handoff_exchange",
+        request_id=task_request_id,
+        handoff_token=handoff_token,
+        approval_start=NOW + timedelta(minutes=2),
+    )
     async with sessions() as session:
         assert await session.scalar(sa.text("SELECT count(*) FROM crm_tasks")) == 1
         assert (

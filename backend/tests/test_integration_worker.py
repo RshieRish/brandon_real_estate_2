@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -59,6 +61,35 @@ def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop
     assert "GMAIL_TASK_INTAKE_ENABLED" not in main_source
     assert "SYDNEY_TASK_QUESTIONS_ENABLED" not in main_source
     assert "INSTAGRAM_INTEGRATION_ENABLED" not in main_source
+
+
+def test_gmail_runtime_requires_inner_socket_timeout_below_outer_deadline() -> None:
+    from services.gmail_message_sanitizer import validate_gmail_runtime_settings
+
+    config = SimpleNamespace(
+        GMAIL_TASK_INTAKE_ENABLED=True,
+        GMAIL_PARTICIPANT_HASH_KEY="x" * 32,
+        INTEGRATION_PROVIDER_MAX_WORKERS=1,
+        INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS=30,
+        INTEGRATION_PROVIDER_DEADLINE_SECONDS=30,
+        GMAIL_HISTORY_MAX_PAGES_PER_RUN=1,
+        GMAIL_HISTORY_JOB_DEADLINE_SECONDS=60,
+        GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS=30,
+        GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS=120,
+        GOOGLE_WORKSPACE_CLIENT_ID="worker-client-id",
+        GOOGLE_WORKSPACE_CLIENT_SECRET="worker-client-secret",
+        GOOGLE_WORKSPACE_REDIRECT_URI="https://example.test/oauth/callback",
+        DATABASE_URL="postgresql+asyncpg://worker@localhost/task_intake",
+        GMAIL_HISTORY_DATABASE_URL=(
+            "postgresql+asyncpg://worker@localhost/task_intake?ssl=require"
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="^provider_socket_timeout_exceeds_deadline$",
+    ):
+        validate_gmail_runtime_settings(config)
 
 
 def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
@@ -571,9 +602,10 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
         GMAIL_PARTICIPANT_HASH_KEY="p" * 32,
         GOOGLE_WORKSPACE_CLIENT_ID="default-worker-client-id",
         GOOGLE_WORKSPACE_CLIENT_SECRET="default-worker-client-secret",
+        GOOGLE_WORKSPACE_REDIRECT_URI="https://example.test/workspace/callback",
         INTEGRATION_PROVIDER_MAX_WORKERS=1,
-        INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS=4.5,
-        INTEGRATION_PROVIDER_DEADLINE_SECONDS=11,
+        INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS=0.1,
+        INTEGRATION_PROVIDER_DEADLINE_SECONDS=0.25,
         GMAIL_HISTORY_MAX_PAGES_PER_RUN=19,
         GMAIL_HISTORY_JOB_DEADLINE_SECONDS=45,
         GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS=8,
@@ -587,6 +619,23 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
     observed: dict[str, object] = {}
     retry_values: list[int] = []
     provider_calls: list[str] = []
+    model_entered = threading.Event()
+    model_release = threading.Event()
+
+    class _ModelClient:
+        def __init__(self, **kwargs):
+            observed["model_client_kwargs"] = kwargs
+            self.models = self
+
+        def generate_content(self, **kwargs):
+            observed["model_generate_kwargs"] = kwargs
+            model_entered.set()
+            model_release.wait(timeout=2)
+            return SimpleNamespace(
+                text='{"schema_version":"gmail-task-v1","actions":[]}'
+            )
+
+    monkeypatch.setattr("google.genai.Client", _ModelClient)
 
     class _ProviderError(RuntimeError):
         def __init__(self, status: int):
@@ -732,6 +781,55 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             "notification_delivery",
             "sydney_questions",
         )
+        receipt_job = next(
+            job.runner.__self__
+            for job in runtime.registry.jobs
+            if job.name == "gmail_receipts"
+        )
+        from services.gmail_message_sanitizer import SanitizedGmailMessage
+        from services.gmail_task_extractor import GmailTaskExtractionError
+
+        model_message = SanitizedGmailMessage(
+            message_id="production-model-timeout-message",
+            thread_id="production-model-timeout-thread",
+            direction="received",
+            message_at=datetime(2026, 8, 21, 12, 0, tzinfo=UTC),
+            sender_hmac="a" * 64,
+            recipient_hmacs=("b" * 64,),
+            subject_preview="Bounded model request",
+            body_hash=hashlib.sha256(b"bounded model request").hexdigest(),
+            labels=("INBOX",),
+            processing_state="processing",
+            classification="eligible",
+            transient_body_text="Please prepare the bounded model request.",
+            body_truncated=False,
+        )
+        started = time.monotonic()
+        with pytest.raises(GmailTaskExtractionError) as timed_out:
+            await receipt_job._extractor.extract(
+                account_id=account_id,
+                message=model_message,
+            )
+        assert str(timed_out.value) == "gmail_extraction_timeout"
+        assert time.monotonic() - started < 1
+        assert model_entered.is_set()
+        model_client_kwargs = observed["model_client_kwargs"]
+        assert model_client_kwargs["api_key"] == config.GEMINI_API_KEY
+        assert model_client_kwargs["http_options"].timeout == 100
+        assert model_client_kwargs["http_options"].timeout < int(
+            config.INTEGRATION_PROVIDER_DEADLINE_SECONDS * 1000
+        )
+        assert len(shared_executor._tracked) == 1
+        assert not next(iter(shared_executor._tracked.values())).done()
+        with pytest.raises(GmailTaskExtractionError) as still_running:
+            await receipt_job._extractor.extract(
+                account_id=account_id,
+                message=model_message,
+            )
+        assert str(still_running.value) == "gmail_extraction_already_running"
+        model_release.set()
+        await shared_executor.wait_for_tracked_calls()
+        assert shared_executor._tracked == {}
         cycle_at = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
         await run_scheduler_cycle(
             sessionmaker=sessionmaker,
@@ -850,6 +948,7 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             "refresh_token",
         }.intersection(incident_alert.payload_dict)
     finally:
+        model_release.set()
         if runtime is not None:
             await runtime.close()
         else:
@@ -861,12 +960,12 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
         "refresh_token": "default-worker-database-token",
         "client_id": "default-worker-client-id",
         "client_secret": "default-worker-client-secret",
-        "socket_timeout_seconds": 4.5,
+        "socket_timeout_seconds": 0.1,
     }
     adapter_kwargs = observed["adapter_kwargs"]
     assert adapter_kwargs["executor"] is shared_executor
-    assert adapter_kwargs["deadline_seconds"] == 11
-    assert adapter_kwargs["socket_timeout_seconds"] == 4.5
+    assert adapter_kwargs["deadline_seconds"] == 0.25
+    assert adapter_kwargs["socket_timeout_seconds"] == 0.1
     service_kwargs = observed["service_kwargs"]
     assert service_kwargs["engine"] is direct_history_engine
     assert service_kwargs["adapter"].__class__ is adapter_module.GmailHistoryAdapter

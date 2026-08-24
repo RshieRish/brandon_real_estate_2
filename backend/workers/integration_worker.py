@@ -331,7 +331,10 @@ async def initialize_worker_runtime(
 
                 extractor = GmailTaskExtractor(
                     executor=provider_executor,
-                    model_call=build_gmail_model_call(api_key=config.GEMINI_API_KEY),
+                    model_call=build_gmail_model_call(
+                        api_key=config.GEMINI_API_KEY,
+                        socket_timeout_seconds=gmail.socket_timeout_seconds,
+                    ),
                     deadline_seconds=gmail.provider_deadline_seconds,
                 )
                 receipt_runner = GmailReceiptJob(

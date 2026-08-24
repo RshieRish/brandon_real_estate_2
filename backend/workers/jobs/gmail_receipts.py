@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -33,14 +34,35 @@ _FAILURE_CATEGORY_BY_EXTRACTOR_ERROR = {
 }
 
 
-def build_gmail_model_call(*, api_key: str) -> Callable[[Any], object]:
+def build_gmail_model_call(
+    *,
+    api_key: str,
+    socket_timeout_seconds: float,
+) -> Callable[[Any], object]:
     """Build one synchronous structured-output Gemini boundary."""
+
+    if (
+        isinstance(socket_timeout_seconds, bool)
+        or not isinstance(socket_timeout_seconds, (int, float))
+        or not math.isfinite(float(socket_timeout_seconds))
+        or socket_timeout_seconds <= 0
+    ):
+        raise ValueError("gmail_model_socket_timeout_invalid")
+    # google-genai HttpOptions.timeout is an integer number of milliseconds.
+    # Floor to the provider's supported precision so this inner timeout never
+    # exceeds the already-validated outer worker deadline.
+    socket_timeout_milliseconds = int(float(socket_timeout_seconds) * 1000)
+    if socket_timeout_milliseconds < 1:
+        raise ValueError("gmail_model_socket_timeout_invalid")
 
     def call(request: Any) -> object:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=socket_timeout_milliseconds),
+        )
         response = client.models.generate_content(
             model="gemini-3.1-flash-lite-preview",
             contents=request.prompt,
