@@ -1,7 +1,15 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-22
+Last Updated: 2026-08-23
+
+### 2026-08-23 - Task 8 Hermes Review-Tool Production Rollout
+- Completed Gmail/Sydney plan Task 8. Task 8 source commit `a53ff04421c395be54012398cc1dccecddf08f97` shipped through PR #5 at merge commit `f3ed543359cac39c3caa66dd3d25592319f1b921`; the exact main workflow run was green. Railway backend deployment `e29cfc64-5b2d-4265-ad9d-0e0d7d00a226` and Atlas deployment `51f50a75-32ed-4ed7-bd88-5dc5bfde0988` both reached `SUCCESS`, and their public health endpoints returned HTTP 200.
+- Cleared the rollout dependency first with authenticated production Task 7 evidence. The fragment-only handoff was removed before exchange network activity, exchange returned 200, the separate Approve button remained required and was not clicked, query-carried secrets were rejected and stripped, and both controlled suggestions were dismissed through the real UI. The production CRM task total remained 453, pending review count returned to zero, both fixture rows have `applied_task_id=null`, and the smoke produced zero HTTP 5xx, runtime exceptions, console errors, or related production log errors.
+- Built the Atlas image from pinned upstream Hermes commit `7224d7c1a4dcffe9304f49bc843f55716f5561b4` with the repo overlay applied reproducibly. Overlay hashes were stable across a second application, `git diff --check` passed, and the focused local MCP/overlay/live-verifier suite passed `26/26`. The merged GitHub Task 8 workflow also passed its exact PostgreSQL/TLS job; the separate local full PostgreSQL attempt remained environment-blocked because the Homebrew server rejected mandatory TLS and was not reported as green.
+- Fresh Member-level Railway SSH connected to the deployed `atlas-agent`. `hermes mcp test atlas_backend` discovered 22 tools. The checked-in `hermes/verify_atlas_tools.py` raw JSON-RPC probe returned exactly 22 ordered unique names, preserved all original 16 names unchanged, appended the exact six CRM review tools once, required UUID `gmail_send.request_id`, and exposed none of `crm_task_suggestions_dismiss`, `crm_task_suggestions_approve`, `crm_tasks_create_confirmed`, `crm_tasks_archive`, or `crm_tasks_restore`.
+- Operational correction: use the directly authenticated Railway CLI with `RAILWAY_API_TOKEN` and `RAILWAY_TOKEN` unset. The token saved in `.env.railway-sweeney.local` is stale or unauthorized for current project operations and must not be used as production evidence. The backend service ID is `37afead7-c55b-4ef2-8071-ca4da1c88992`.
+- Safety boundary: `GMAIL_TASK_INTAKE_ENABLED=false`, `SYDNEY_TASK_QUESTIONS_ENABLED=false`, and `CRM_TASK_ARCHIVE_ENABLED=false` remain unchanged. No real suggestion was approved, no confirmed task was created, and actual approve/dismiss/create-confirmed/archive/restore tools remain absent. Next: Task 9, the only remaining numbered task in this plan.
 
 ### 2026-08-22 - Command Task-Suggestion Review Workspace
 - Completed Gmail/Sydney plan Task 7 locally. Command now has one authenticated `/admin/command/task-suggestions` destination and a dark SWS review workspace with loading, empty, error, clarification, timed-out/manual, blocker, stale-write, dismissal, terminal, keyboard/focus, preview, handoff, and approval states. It uses the existing shared navigation registry and exposes no native `prompt()` or `confirm()` flow.
@@ -313,14 +321,14 @@ Last Updated: 2026-08-22
 - Status: Spec written; awaiting written-spec review before implementation plan
 
 ### 2026-05-31 - Railway Sweeney Token Verified
-- What was changed: Replaced the rejected local Railway project token in the gitignored `.env.railway-sweeney.local` with a freshly generated project token for the Sold With Sweeney Railway project.
+- What was changed: Replaced the rejected local Railway account/workspace token in the gitignored `.env.railway-sweeney.local` with a freshly generated account/workspace token for the Sold With Sweeney Railway workspace.
 - Files modified:
   - `.env.railway-sweeney.local` - local-only token refreshed; added the verified Railway service metadata for `extraordinary-prosperity`.
   - `tdtn.md`
   - `memory.md`
 - Key decisions:
   - Continued to use the wrapper instead of `railway login`, preserving the global CLI authentication for `rishabnandibusiness@gmail.com`.
-  - Kept the project token local-only and out of git.
+  - Kept the account/workspace token local-only and out of git.
   - Because the current repo is not globally service-linked, service-scoped commands should pass `--service extraordinary-prosperity` when needed.
 - Verification:
   - `scripts/railway-sweeney status` returned `Project: enchanting-perception`, `Environment: production`, `Service: None`.
@@ -334,7 +342,7 @@ Last Updated: 2026-08-22
 - What was changed: Added a local token-scoped Railway helper so commands for the Sold With Sweeney deployment project can run without replacing the global Railway CLI login for `rishabnandibusiness@gmail.com`.
 - Files created:
   - `scripts/railway-sweeney` - sources a repo-local env file, exports the Railway token only for that process, then runs `railway ...` or opens a token-scoped subshell.
-  - `.env.railway-sweeney.local` - gitignored local env file holding the `soldwithsweeneyfordeployment@gmail.com` Railway project token and the `enchanting-perception` project metadata.
+  - `.env.railway-sweeney.local` - gitignored local env file holding the `soldwithsweeneyfordeployment@gmail.com` Railway account/workspace token and the `enchanting-perception` project metadata.
 - Key decisions:
   - Used `RAILWAY_TOKEN` because the provided token is tied to the single Railway project `enchanting-perception` (`aa6c9f9c-46d4-4f5d-b529-86b073de4972`).
   - Did not run `railway login`, so `~/.railway/config.json` and the existing global CLI login remain untouched.
@@ -1161,7 +1169,7 @@ Completed Checklist Video Integration
   - `.gitignore`
 - Key decisions:
   - Kept the backend under the same Railway project and service family so Hermes can control the Brandon backend without splitting operational context.
-  - Used a dedicated Railway project token via `scripts/railway-sweeney`, leaving the existing global Railway login untouched.
+  - Used a dedicated Railway account/workspace token via `scripts/railway-sweeney`, leaving the existing global Railway login untouched.
   - Shipped only read-only bridge actions for the first pass: status, action catalog, recent leads, and recent bookings.
   - Protected all bridge routes with `AGENT_CONTROL_ENABLED=true` plus a bearer token, and masked lead/booking email and phone values in responses.
   - Added `agent_action_audits` so every allowed agent-control request is persisted with metadata, IP, user agent, and action id.
@@ -1180,7 +1188,7 @@ Completed Checklist Video Integration
 - Notes:
   - `tests/test_leads_notifications.py` still has a pre-existing expectation mismatch around background notification retry scheduling and was not caused by this bridge.
   - Railway logs still show a pre-existing Gemini blog auto-generation model error for `gemini-3-pro-preview`; this should be handled as a separate follow-up.
-  - `atlas-agent` is now live as a separate Railway service in the same project. The direct GitHub-backed service creation path was rejected by the current project-scoped token, so the successful fallback was: create empty service, attach `/data`, set admin variables, upload the Hermes template checkout with `railway up --path-as-root`, then redeploy after adding backend bridge vars.
+  - `atlas-agent` is now live as a separate Railway service in the same project. The direct GitHub-backed service creation path was rejected by the then-current account/workspace token, so the successful fallback was: create empty service, attach `/data`, set admin variables, upload the Hermes template checkout with `railway up --path-as-root`, then redeploy after adding backend bridge vars.
 - Hermes service:
   - Service ID: `6dc65984-89c1-400c-9d17-d5412befd031`
   - URL: `https://atlas-agent-production-99dc.up.railway.app`

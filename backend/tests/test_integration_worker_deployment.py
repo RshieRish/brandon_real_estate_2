@@ -316,6 +316,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> Non
         "backend/schemas/agent_control_crm.py",
         "backend/tests/test_atlas_backend_mcp.py",
         "backend/tests/test_hermes_overlay.py",
+        "backend/tests/test_verify_atlas_tools.py",
         "backend/tests/gmail_task_postgres.py",
         ".github/workflows/gmail-sydney-task-intake.yml",
         "if: always()",
@@ -340,6 +341,19 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> Non
     )
     for future_test in ("tests/test_gmail_task_intake_e2e.py",):
         assert future_test not in workflow
+
+    task8_step = re.search(
+        r"name: Run the Task 8 MCP and overlay contract tests\n"
+        r"\s+working-directory: backend\n"
+        r"\s+run: (?P<body>[^\n]+)",
+        workflow,
+    )
+    assert task8_step is not None
+    assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", task8_step.group("body"))) == (
+        "tests/test_atlas_backend_mcp.py",
+        "tests/test_hermes_overlay.py",
+        "tests/test_verify_atlas_tools.py",
+    )
 
     assert 'if [[ "$GMAIL_TASK_TEST_DATABASE_NAME" != *_test ]]' in workflow
     assert 'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]' in workflow

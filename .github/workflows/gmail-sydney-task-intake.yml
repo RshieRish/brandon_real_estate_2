@@ -32,6 +32,7 @@ on:
       - "backend/tests/test_gmail_task_extractor.py"
       - "backend/tests/test_crm_task_suggestions.py"
       - "backend/tests/test_hermes_overlay.py"
+      - "backend/tests/test_verify_atlas_tools.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
       - "backend/tests/test_workspace_actions.py"
@@ -90,6 +91,7 @@ on:
       - "backend/tests/test_gmail_task_extractor.py"
       - "backend/tests/test_crm_task_suggestions.py"
       - "backend/tests/test_hermes_overlay.py"
+      - "backend/tests/test_verify_atlas_tools.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
       - "backend/tests/test_workspace_actions.py"
@@ -333,7 +335,7 @@ jobs:
 
       - name: Run the Task 8 MCP and overlay contract tests
         working-directory: backend
-        run: python -m pytest -q tests/test_atlas_backend_mcp.py tests/test_hermes_overlay.py
+        run: python -m pytest -q tests/test_atlas_backend_mcp.py tests/test_hermes_overlay.py tests/test_verify_atlas_tools.py
 
   task7-command-review:
     runs-on: ubuntu-latest
