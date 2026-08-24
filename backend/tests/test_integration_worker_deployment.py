@@ -49,6 +49,7 @@ TASK6_TESTS = TASK5_TESTS + (
     "tests/test_agent_control_transactional_audit.py",
     "tests/test_gmail_task_router_registration.py",
 )
+TASK9_TESTS = TASK6_TESTS + ("tests/test_gmail_task_intake_e2e.py",)
 TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
@@ -264,7 +265,7 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
-def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> None:
+def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> None:
     workflow_path = (
         REPOSITORY_ROOT / ".github" / "workflows" / "gmail-sydney-task-intake.yml"
     )
@@ -329,7 +330,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> Non
     ):
         assert required in workflow
     pytest_step = re.search(
-        r"name: Run the Task 1 through Task 6 persistence and compatibility contracts"
+        r"name: Run the Task 1 through Task 9 persistence, concurrency, and E2E contracts"
         r"(?P<body>.*?)"
         r"\n\s+- name:",
         workflow,
@@ -337,10 +338,9 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task6() -> Non
     )
     assert pytest_step is not None
     assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK6_TESTS
+        TASK9_TESTS
     )
-    for future_test in ("tests/test_gmail_task_intake_e2e.py",):
-        assert future_test not in workflow
+    assert workflow.count('"backend/tests/test_gmail_task_intake_e2e.py"') == 2
 
     task8_step = re.search(
         r"name: Run the Task 8 MCP and overlay contract tests\n"

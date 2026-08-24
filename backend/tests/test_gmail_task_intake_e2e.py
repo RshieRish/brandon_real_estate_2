@@ -1,0 +1,1240 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
+
+import pytest
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from starlette.requests import Request
+
+from tests.gmail_task_postgres import async_test_url, migrated_test_database
+
+
+REVISION = "84d7a5f9b2c3"
+UTC = timezone.utc
+NOW = datetime(2026, 8, 23, 14, 0, tzinfo=UTC)
+CHAT_ID = "8675309"
+CODE_KEY = bytes(range(32))
+CODE_KEY_VERSION = 7
+PARTICIPANT_KEY = b"task-nine-participant-key-32bytes"
+
+
+@pytest.fixture(scope="module")
+def e2e_database():
+    with migrated_test_database(REVISION) as database:
+        yield database
+
+
+@pytest.fixture
+async def e2e_runtime(e2e_database):
+    from models.lead import Lead
+
+    assert Lead.__table__.name == "leads"
+    url, sync_engine = e2e_database
+    with sync_engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "TRUNCATE TABLE gmail_sync_accounts, settings, admin_users, "
+                "crm_contacts, crm_tasks, integration_health_states, "
+                "notification_jobs CASCADE"
+            )
+        )
+    engine = create_async_engine(
+        async_test_url(url),
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield engine, sessions
+    finally:
+        await engine.dispose()
+
+
+def _request(path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "scheme": "https",
+            "server": ("testserver", 443),
+        }
+    )
+
+
+async def _seed_account(sessions, *, cursor: str = "100"):
+    from models.gmail_task_intake import GmailSyncAccount
+    from models.setting import Setting
+
+    account = GmailSyncAccount(
+        workspace_email="brandon@example.test",
+        committed_history_id=cursor,
+        mode="shadow",
+    )
+    async with sessions() as session:
+        session.add(account)
+        await session.flush()
+        session.add_all(
+            (
+                Setting(
+                    key="google_workspace_gmail_account_id",
+                    value=str(account.id),
+                ),
+                Setting(
+                    key="google_workspace_refresh_token",
+                    value="disposable-test-refresh-token",
+                ),
+            )
+        )
+        await session.commit()
+        await session.refresh(account)
+    return account
+
+
+async def _seed_admin(sessions):
+    from models.admin_user import AdminUser
+
+    admin = AdminUser(email=f"admin-{uuid4()}@example.test", hashed_password="test")
+    async with sessions() as session:
+        session.add(admin)
+        await session.commit()
+        await session.refresh(admin)
+    return admin
+
+
+async def _replay_from_cursor(sessions, *, account_id: UUID, cursor: str) -> None:
+    from models.gmail_task_intake import GmailSyncAccount
+
+    async with sessions() as session:
+        account = await session.get(GmailSyncAccount, account_id)
+        assert account is not None
+        account.committed_history_id = cursor
+        await session.commit()
+
+
+def _message(
+    *,
+    message_id: str,
+    thread_id: str,
+    direction: str,
+    body: str,
+    subject: str = "Follow-up",
+):
+    from services.gmail_history_adapter import GmailMessageContent
+
+    if direction == "received":
+        labels = ("INBOX",)
+        sender = "client@example.test"
+        recipient = "brandon@example.test"
+    else:
+        labels = ("SENT",)
+        sender = "brandon@example.test"
+        recipient = "client@example.test"
+    return GmailMessageContent(
+        message_id=message_id,
+        thread_id=thread_id,
+        label_ids=labels,
+        message_at=NOW,
+        headers={
+            "subject": subject,
+            "from": sender,
+            "to": recipient,
+        },
+        body_text=body,
+    )
+
+
+class _ControlledGmailAdapter:
+    def __init__(self, messages):
+        self.messages = {message.message_id: message for message in messages}
+        self.history_calls: list[tuple[str, str | None]] = []
+        self.content_calls: list[str] = []
+
+    async def list_history(
+        self,
+        *,
+        account_key: str,
+        start_history_id: str,
+        page_token: str | None,
+    ):
+        from services.gmail_history_adapter import (
+            GmailHistoryMessageRef,
+            GmailHistoryPage,
+        )
+
+        del account_key
+        self.history_calls.append((start_history_id, page_token))
+        terminal = str(max(int(start_history_id), 101))
+        return GmailHistoryPage(
+            history_id=terminal,
+            next_page_token=None,
+            messages=tuple(
+                GmailHistoryMessageRef(
+                    message_id=message.message_id,
+                    thread_id=message.thread_id,
+                )
+                for message in self.messages.values()
+            ),
+            discovered_history_id_min=terminal,
+            discovered_history_id_max=terminal,
+        )
+
+    async def get_message_metadata(self, *, account_key: str, message_id: str):
+        from services.gmail_history_adapter import GmailMessageMetadata
+
+        del account_key
+        message = self.messages[message_id]
+        return GmailMessageMetadata(
+            message_id=message.message_id,
+            thread_id=message.thread_id,
+            label_ids=message.label_ids,
+            message_at=message.message_at,
+            headers=message.headers,
+        )
+
+    async def get_message_content(self, *, account_key: str, message_id: str):
+        del account_key
+        self.content_calls.append(message_id)
+        return self.messages[message_id]
+
+
+def _model_action(*, kind: str, ambiguous_due: bool = False):
+    return {
+        "kind": kind,
+        "semantic_action": "send",
+        "semantic_object": "seller_disclosure",
+        "title": "Send the disclosure package",
+        "description": "Send the seller disclosure package to the client.",
+        "priority": "high",
+        "due_at": None if ambiguous_due else "2026-08-24T14:00:00-04:00",
+        "timezone_basis": None if ambiguous_due else "America/New_York",
+        "due_at_ambiguous": ambiguous_due,
+        "requested_owner": None,
+        "owner_ambiguous": False,
+        "requested_link_type": None,
+        "requested_link_id": None,
+        "contact_hint": None,
+        "confidence": 0.97,
+        "rationale": "The message contains an explicit disclosure follow-up.",
+    }
+
+
+@dataclass
+class _ReceiptHarness:
+    history: object
+    receipts: object
+    executor: object
+
+    async def close(self) -> None:
+        await self.executor.wait_for_tracked_calls()
+        self.executor.shutdown()
+
+
+def _receipt_harness(
+    *,
+    engine,
+    sessions,
+    adapter,
+    model_call,
+    origin_observer=None,
+):
+    from services.gmail_history_service import GmailHistoryService
+    from services.gmail_obligation_reconciliation import (
+        GmailObligationReconciliationService,
+    )
+    from services.gmail_task_extractor import GmailTaskExtractor
+    from services.integration_health_service import BoundedProviderExecutor
+    from workers.jobs.gmail_receipts import GmailReceiptJob
+
+    executor = BoundedProviderExecutor(max_workers=2)
+    history = GmailHistoryService(
+        engine=engine,
+        adapter=adapter,
+        participant_hash_key=PARTICIPANT_KEY,
+        origin_observer=origin_observer,
+        receipt_processing_deadline_seconds=2,
+        receipt_processing_stale_after_seconds=10,
+        clock=lambda: NOW,
+    )
+    extractor = GmailTaskExtractor(
+        executor=executor,
+        model_call=model_call,
+        deadline_seconds=1,
+    )
+    receipts = GmailReceiptJob(
+        enabled=True,
+        sessionmaker=sessions,
+        history_service=history,
+        extractor=extractor,
+        reconciliation_service=GmailObligationReconciliationService(
+            sessionmaker=sessions,
+        ),
+        batch_size=20,
+        clock=lambda: NOW,
+    )
+    return _ReceiptHarness(history=history, receipts=receipts, executor=executor)
+
+
+async def _approve_once(
+    sessions,
+    *,
+    suggestion,
+    admin,
+    path: str,
+    request_id: UUID,
+):
+    from services.task_suggestion_approval_service import (
+        TaskSuggestionApprovalService,
+    )
+
+    service = TaskSuggestionApprovalService()
+    if path == "command_prepare":
+        async with sessions() as session, session.begin():
+            _, issued = await service.prepare(
+                session,
+                suggestion_id=suggestion.id,
+                administrator_id=admin.id,
+                expected_version=suggestion.version,
+                expected_payload_hash=suggestion.payload_hash,
+                now=NOW,
+            )
+    else:
+        async with sessions() as session, session.begin():
+            _, handoff = await service.issue_handoff(
+                session,
+                suggestion_id=suggestion.id,
+                expected_version=suggestion.version,
+                expected_payload_hash=suggestion.payload_hash,
+                now=NOW,
+            )
+        async with sessions() as session, session.begin():
+            _, issued = await service.exchange_handoff(
+                session,
+                suggestion_id=suggestion.id,
+                administrator_id=admin.id,
+                handoff=handoff.token,
+                expected_version=suggestion.version,
+                expected_payload_hash=suggestion.payload_hash,
+                now=NOW + timedelta(seconds=1),
+            )
+    async with sessions() as session, session.begin():
+        first = await service.approve(
+            session,
+            suggestion_id=suggestion.id,
+            administrator_id=admin.id,
+            approval=issued.token,
+            expected_version=suggestion.version,
+            expected_payload_hash=suggestion.payload_hash,
+            request_id=request_id,
+            client_timezone="America/New_York",
+            now=NOW + timedelta(seconds=2),
+        )
+    async with sessions() as session, session.begin():
+        replay = await service.approve(
+            session,
+            suggestion_id=suggestion.id,
+            administrator_id=admin.id,
+            approval=issued.token,
+            expected_version=suggestion.version,
+            expected_payload_hash=suggestion.payload_hash,
+            request_id=request_id,
+            client_timezone="America/New_York",
+            now=NOW + timedelta(minutes=3),
+        )
+    assert replay.replayed is True
+    assert replay.task.id == first.task.id
+    return first
+
+
+@pytest.mark.asyncio
+async def test_controlled_received_history_replay_approves_exactly_one_task(
+    e2e_runtime,
+):
+    from models.gmail_task_intake import (
+        CRMTaskSuggestion,
+        GmailMessageReceipt,
+    )
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    admin = await _seed_admin(sessions)
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="received-e2e-1",
+                thread_id="received-thread-1",
+                direction="received",
+                body="Please send me the seller disclosures tomorrow.",
+            )
+        ]
+    )
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=lambda _request: {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind="incoming_request")],
+        },
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        await _replay_from_cursor(sessions, account_id=account.id, cursor="100")
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+        await harness.receipts.run()
+    finally:
+        await harness.close()
+
+    async with sessions() as session:
+        receipts = list((await session.scalars(sa.select(GmailMessageReceipt))).all())
+        suggestions = list((await session.scalars(sa.select(CRMTaskSuggestion))).all())
+    assert len(receipts) == 1
+    assert receipts[0].processing_state == "processed"
+    assert len(suggestions) == 1
+    assert suggestions[0].state == "pending_review"
+
+    await _approve_once(
+        sessions,
+        suggestion=suggestions[0],
+        admin=admin,
+        path="command_prepare",
+        request_id=UUID("00000000-0000-0000-0000-000000000901"),
+    )
+    async with sessions() as session:
+        assert await session.scalar(sa.text("SELECT count(*) FROM crm_tasks")) == 1
+        assert (
+            await session.scalar(
+                sa.text("SELECT count(*) FROM crm_task_creation_requests")
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_controlled_agent_send_uuid_origin_and_receipt_replay_create_one_task(
+    e2e_runtime,
+):
+    from models.gmail_task_intake import (
+        CRMTaskSuggestion,
+        GmailMessageOrigin,
+        GmailMessageReceipt,
+    )
+    from schemas.agent_control import WorkspaceGmailSendRequest
+    from services.gmail_origin_service import GmailOriginService
+    from services.integration_health_service import BoundedProviderExecutor
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    admin = await _seed_admin(sessions)
+    request_id = UUID("00000000-0000-0000-0000-000000000902")
+    payload = WorkspaceGmailSendRequest(
+        request_id=request_id,
+        to=["client@example.test"],
+        cc=[],
+        bcc=[],
+        subject="Disclosure follow-up",
+        body_text="I will send the seller disclosures tomorrow.",
+        confirmed_by_brandon=True,
+        confirmation_note="Controlled local fixture.",
+    )
+    provider_executor = BoundedProviderExecutor(max_workers=1)
+    origin_service = GmailOriginService(
+        engine=engine,
+        provider_executor=provider_executor,
+        transport=lambda **_kwargs: {
+            "id": "sent-e2e-1",
+            "thread_id": "sent-thread-1",
+        },
+        deadline_seconds=1,
+        participant_hash_key=PARTICIPANT_KEY,
+        clock=lambda: NOW,
+    )
+    try:
+        first_send = await origin_service.send(
+            payload=payload,
+            request=_request("/api/v1/agent-control/workspace/gmail/send"),
+            actor="hermes",
+        )
+        replay_send = await origin_service.send(
+            payload=payload,
+            request=_request("/api/v1/agent-control/workspace/gmail/send"),
+            actor="hermes",
+        )
+    finally:
+        await provider_executor.wait_for_tracked_calls()
+        provider_executor.shutdown()
+    assert replay_send.replayed is True
+    assert replay_send.origin_id == first_send.origin_id
+
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="sent-e2e-1",
+                thread_id="sent-thread-1",
+                direction="sent",
+                body=payload.body_text,
+                subject=payload.subject,
+            )
+        ]
+    )
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        origin_observer=origin_service,
+        model_call=lambda _request: {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind="outgoing_commitment")],
+        },
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        await _replay_from_cursor(sessions, account_id=account.id, cursor="100")
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+        await harness.receipts.run()
+    finally:
+        await harness.close()
+
+    async with sessions() as session:
+        assert (
+            await session.scalar(sa.select(sa.func.count(GmailMessageOrigin.id))) == 1
+        )
+        assert (
+            await session.scalar(sa.select(sa.func.count(GmailMessageReceipt.id))) == 1
+        )
+        suggestions = list((await session.scalars(sa.select(CRMTaskSuggestion))).all())
+    assert len(suggestions) == 1
+    await _approve_once(
+        sessions,
+        suggestion=suggestions[0],
+        admin=admin,
+        path="command_prepare",
+        request_id=UUID("00000000-0000-0000-0000-000000000903"),
+    )
+    async with sessions() as session:
+        assert await session.scalar(sa.text("SELECT count(*) FROM crm_tasks")) == 1
+
+
+@pytest.mark.asyncio
+async def test_received_request_and_sydney_commitment_in_one_thread_have_two_sources(
+    e2e_runtime,
+):
+    from models.gmail_task_intake import (
+        CRMTaskSuggestion,
+        CRMTaskSuggestionSource,
+    )
+    from schemas.agent_control import WorkspaceGmailSendRequest
+    from services.gmail_origin_service import GmailOriginService
+    from services.integration_health_service import BoundedProviderExecutor
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    admin = await _seed_admin(sessions)
+    send_request_id = UUID("00000000-0000-0000-0000-000000000904")
+    payload = WorkspaceGmailSendRequest(
+        request_id=send_request_id,
+        to=["client@example.test"],
+        cc=[],
+        bcc=[],
+        subject="Re: Disclosure request",
+        body_text="I will send the seller disclosure package tomorrow.",
+        confirmed_by_brandon=True,
+        confirmation_note="Controlled local fixture.",
+    )
+    send_executor = BoundedProviderExecutor(max_workers=1)
+    origin_service = GmailOriginService(
+        engine=engine,
+        provider_executor=send_executor,
+        transport=lambda **_kwargs: {
+            "id": "merged-sent-1",
+            "thread_id": "merged-thread-1",
+        },
+        deadline_seconds=1,
+        participant_hash_key=PARTICIPANT_KEY,
+        clock=lambda: NOW,
+    )
+    try:
+        await origin_service.send(
+            payload=payload,
+            request=_request("/api/v1/agent-control/workspace/gmail/send"),
+            actor="hermes",
+        )
+    finally:
+        await send_executor.wait_for_tracked_calls()
+        send_executor.shutdown()
+
+    messages = (
+        _message(
+            message_id="merged-received-1",
+            thread_id="merged-thread-1",
+            direction="received",
+            body="Please send the seller disclosure package tomorrow.",
+            subject="Disclosure request",
+        ),
+        _message(
+            message_id="merged-sent-1",
+            thread_id="merged-thread-1",
+            direction="sent",
+            body=payload.body_text,
+            subject=payload.subject,
+        ),
+    )
+    adapter = _ControlledGmailAdapter(messages)
+
+    def model_call(request):
+        kind = (
+            "incoming_request"
+            if request.direction == "received"
+            else "outgoing_commitment"
+        )
+        return {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind=kind)],
+        }
+
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=model_call,
+        origin_observer=origin_service,
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+        await _replay_from_cursor(sessions, account_id=account.id, cursor="100")
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+    finally:
+        await harness.close()
+
+    async with sessions() as session:
+        suggestions = list((await session.scalars(sa.select(CRMTaskSuggestion))).all())
+        source_count = await session.scalar(
+            sa.select(sa.func.count(CRMTaskSuggestionSource.id))
+        )
+    assert len(suggestions) == 1
+    assert source_count == 2
+    await _approve_once(
+        sessions,
+        suggestion=suggestions[0],
+        admin=admin,
+        path="handoff_exchange",
+        request_id=UUID("00000000-0000-0000-0000-000000000905"),
+    )
+    async with sessions() as session:
+        assert await session.scalar(sa.text("SELECT count(*) FROM crm_tasks")) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_model_output_is_lease_bound_atomic_and_has_no_n_plus_one_call(
+    e2e_runtime,
+):
+    from models.gmail_task_intake import (
+        CRMTaskSuggestion,
+        CRMTaskSuggestionSource,
+        GmailExtractedObligation,
+        GmailExtractionAttempt,
+        GmailMessageReceipt,
+    )
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="invalid-output-e2e-1",
+                thread_id="invalid-output-thread-1",
+                direction="received",
+                body="Please send the disclosure package tomorrow.",
+            )
+        ]
+    )
+    model_calls = 0
+
+    def invalid_model_call(_request):
+        nonlocal model_calls
+        model_calls += 1
+        return {"schema_version": "gmail-task-v1", "actions": "not-a-list"}
+
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=invalid_model_call,
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        for _attempt in range(5):
+            await harness.receipts.run()
+    finally:
+        await harness.close()
+
+    async with sessions() as session:
+        receipt = await session.scalar(sa.select(GmailMessageReceipt))
+        attempts = list(
+            (
+                await session.scalars(
+                    sa.select(GmailExtractionAttempt).order_by(
+                        GmailExtractionAttempt.attempt_number
+                    )
+                )
+            ).all()
+        )
+        counts = (
+            await session.scalar(sa.select(sa.func.count(GmailExtractedObligation.id))),
+            await session.scalar(sa.select(sa.func.count(CRMTaskSuggestion.id))),
+            await session.scalar(sa.select(sa.func.count(CRMTaskSuggestionSource.id))),
+        )
+    assert receipt is not None
+    assert receipt.processing_state == "processed"
+    assert receipt.body_hash is not None
+    assert receipt.classification == "eligible"
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2, 3]
+    assert [attempt.state for attempt in attempts] == ["failed"] * 3
+    assert [attempt.error_category for attempt in attempts] == [
+        "invalid_model_output"
+    ] * 3
+    assert model_calls == 3
+    assert counts == (0, 0, 0)
+
+
+class _MutableClock:
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+class _InlineExecutor:
+    async def run(self, *, function, **_kwargs):
+        return function()
+
+
+def _telegram_response(*, message_id: int):
+    from services.sydney_telegram_dispatcher import TelegramHTTPResponse
+
+    return TelegramHTTPResponse(
+        status_code=200,
+        payload={
+            "ok": True,
+            "result": {"message_id": message_id, "chat": {"id": int(CHAT_ID)}},
+        },
+    )
+
+
+def _clarification_service(sessions):
+    from services.sydney_clarification_service import SydneyClarificationService
+
+    return SydneyClarificationService(
+        sessionmaker=sessions,
+        brandon_chat_id=CHAT_ID,
+        clarification_code_keys={CODE_KEY_VERSION: CODE_KEY},
+        active_code_key_version=CODE_KEY_VERSION,
+    )
+
+
+def _clarification_code(row) -> str:
+    from services.sydney_clarification_service import derive_clarification_code
+
+    return derive_clarification_code(
+        key=CODE_KEY,
+        key_version=row.code_key_version,
+        clarification_id=row.id,
+        suggestion_id=row.suggestion_id,
+        suggestion_version=row.suggestion_version,
+        field_name=row.field_name,
+        round_number=row.round_number,
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_sydney_draft_uses_evaluator_question_answer_and_handoff_once(
+    e2e_runtime,
+):
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from routers.agent_control_crm import create_task_draft
+    from schemas.agent_control_crm import AgentTaskDraftRequest
+    from services.sydney_clarification_service import SydneyClarificationError
+    from services.sydney_telegram_dispatcher import (
+        SydneyTelegramDispatcher,
+        SydneyTelegramDispatcherConfig,
+    )
+    from workers.jobs.sydney_questions import SydneyQuestionsJob
+
+    _engine, sessions = e2e_runtime
+    admin = await _seed_admin(sessions)
+    draft_request_id = UUID("00000000-0000-0000-0000-000000000906")
+    payload = AgentTaskDraftRequest(
+        request_id=draft_request_id,
+        title="Prepare the inspection follow-up",
+        description="",
+    )
+    async with sessions() as session:
+        first = await create_task_draft(
+            payload,
+            _request("/api/v1/agent-control/crm/task-drafts"),
+            session,
+            {"actor": "hermes"},
+        )
+    async with sessions() as session:
+        replay = await create_task_draft(
+            payload,
+            _request("/api/v1/agent-control/crm/task-drafts"),
+            session,
+            {"actor": "hermes"},
+        )
+    assert replay.id == first.id
+    assert replay.state == "needs_clarification"
+
+    clock = _MutableClock(NOW)
+    sent_messages: list[dict[str, object]] = []
+
+    def send_message(**kwargs):
+        sent_messages.append(kwargs["payload"])
+        return _telegram_response(message_id=700 + len(sent_messages))
+
+    clarification_service = _clarification_service(sessions)
+    dispatcher = SydneyTelegramDispatcher(
+        sessionmaker=sessions,
+        executor=_InlineExecutor(),
+        send_message=send_message,
+        config=SydneyTelegramDispatcherConfig(
+            enabled=True,
+            bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+            brandon_chat_id=CHAT_ID,
+            clarification_code_keys={CODE_KEY_VERSION: CODE_KEY},
+            active_code_key_version=CODE_KEY_VERSION,
+            provider_deadline_seconds=2,
+            provider_socket_timeout_seconds=1,
+        ),
+        clock=clock,
+    )
+    questions = SydneyQuestionsJob(
+        enabled=True,
+        sessionmaker=sessions,
+        clarification_service=clarification_service,
+        dispatcher=dispatcher,
+        batch_size=20,
+        clock=clock,
+    )
+    await questions.run()
+    await questions.run()
+    assert len(sent_messages) == 1
+
+    async with sessions() as session:
+        suggestion = await session.get(CRMTaskSuggestion, first.id)
+        clarification = await session.scalar(sa.select(CRMTaskClarification))
+        assert suggestion is not None and clarification is not None
+        code = _clarification_code(clarification)
+    result = await clarification_service.answer(
+        code=code,
+        expected_suggestion_version=suggestion.version,
+        answer={
+            "kind": "task_details",
+            "decision": "replace",
+            "title": "Prepare the inspection follow-up",
+            "description": "Send the inspection agenda to the buyer.",
+            "priority": "normal",
+        },
+        now=NOW + timedelta(minutes=1),
+    )
+    assert result.handoff_link is not None
+    assert "#handoff=" in result.handoff_link
+    with pytest.raises(SydneyClarificationError, match="stale_clarification"):
+        await clarification_service.answer(
+            code=code,
+            expected_suggestion_version=suggestion.version,
+            answer={"kind": "task_details", "decision": "confirm_current"},
+            now=NOW + timedelta(minutes=2),
+        )
+
+    handoff_token = result.handoff_link.split("#handoff=", 1)[1]
+    async with sessions() as session:
+        current = await session.get(CRMTaskSuggestion, first.id)
+        assert current is not None
+        current_version = current.version
+        current_hash = current.payload_hash
+    from services.task_suggestion_approval_service import TaskSuggestionApprovalService
+
+    approvals = TaskSuggestionApprovalService()
+    async with sessions() as session, session.begin():
+        _, issued = await approvals.exchange_handoff(
+            session,
+            suggestion_id=first.id,
+            administrator_id=admin.id,
+            handoff=handoff_token,
+            expected_version=current_version,
+            expected_payload_hash=current_hash,
+            now=NOW + timedelta(minutes=2),
+        )
+    task_request_id = UUID("00000000-0000-0000-0000-000000000907")
+    async with sessions() as session, session.begin():
+        created = await approvals.approve(
+            session,
+            suggestion_id=first.id,
+            administrator_id=admin.id,
+            approval=issued.token,
+            expected_version=current_version,
+            expected_payload_hash=current_hash,
+            request_id=task_request_id,
+            client_timezone="America/New_York",
+            now=NOW + timedelta(minutes=3),
+        )
+    async with sessions() as session, session.begin():
+        replayed = await approvals.approve(
+            session,
+            suggestion_id=first.id,
+            administrator_id=admin.id,
+            approval=issued.token,
+            expected_version=current_version,
+            expected_payload_hash=current_hash,
+            request_id=task_request_id,
+            client_timezone="America/New_York",
+            now=NOW + timedelta(minutes=4),
+        )
+    assert replayed.replayed is True
+    assert replayed.task.id == created.task.id
+    async with sessions() as session:
+        assert await session.scalar(sa.text("SELECT count(*) FROM crm_tasks")) == 1
+        assert (
+            await session.scalar(sa.select(sa.func.count(SydneyQuestionOutbox.id))) == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_question_job_has_one_reminder_fixed_release_and_stale_late_answer(
+    e2e_runtime,
+):
+    from models.agent_action_audit import AgentActionAudit
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from services.crm_task_suggestion_service import canonical_task_payload_hash
+    from services.sydney_clarification_service import SydneyClarificationError
+    from services.sydney_telegram_dispatcher import (
+        SydneyTelegramDispatcher,
+        SydneyTelegramDispatcherConfig,
+        TelegramDispatchError,
+    )
+    from workers.jobs.sydney_questions import SydneyQuestionsJob
+
+    _engine, sessions = e2e_runtime
+    suggestion = CRMTaskSuggestion(
+        source_type="sydney_chat",
+        source_scope_key="sydney:clock-e2e",
+        source_action_key="sydney-clock-e2e",
+        source_request_id=UUID("00000000-0000-0000-0000-000000000908"),
+        contact_resolution_state="not_provided",
+        title="Send the disclosure package",
+        description="Send it after Brandon confirms the timing.",
+        priority="normal",
+        task_status="open",
+        state="needs_clarification",
+        clarification_state="pending",
+        blocker_codes=["ambiguous_due_at"],
+        payload_hash=canonical_task_payload_hash(
+            title="Send the disclosure package",
+            description="Send it after Brandon confirms the timing.",
+            priority="normal",
+            due_at=None,
+            contact_id=None,
+            status="open",
+        ),
+        model_schema_version="sydney-task-v1",
+        obligation_fingerprint="9" * 64,
+        confidence=1,
+        rationale="Controlled clock fixture.",
+        version=1,
+    )
+    async with sessions() as session:
+        session.add(suggestion)
+        await session.commit()
+        await session.refresh(suggestion)
+
+    clock = _MutableClock(NOW)
+    sent = 0
+
+    def send_message(**_kwargs):
+        from services.sydney_telegram_dispatcher import TelegramHTTPResponse
+
+        nonlocal sent
+        sent += 1
+        if sent == 1:
+            return TelegramHTTPResponse(
+                status_code=400,
+                payload={"ok": False, "error_code": 400},
+            )
+        return _telegram_response(message_id=800 + sent)
+
+    clarification_service = _clarification_service(sessions)
+    dispatcher = SydneyTelegramDispatcher(
+        sessionmaker=sessions,
+        executor=_InlineExecutor(),
+        send_message=send_message,
+        config=SydneyTelegramDispatcherConfig(
+            enabled=True,
+            bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+            brandon_chat_id=CHAT_ID,
+            clarification_code_keys={CODE_KEY_VERSION: CODE_KEY},
+            active_code_key_version=CODE_KEY_VERSION,
+            provider_deadline_seconds=2,
+            provider_socket_timeout_seconds=1,
+        ),
+        clock=clock,
+    )
+    job = SydneyQuestionsJob(
+        enabled=True,
+        sessionmaker=sessions,
+        clarification_service=clarification_service,
+        dispatcher=dispatcher,
+        batch_size=20,
+        clock=clock,
+    )
+    await job.run()
+    async with sessions() as session:
+        clarification = await session.scalar(sa.select(CRMTaskClarification))
+        assert clarification is not None
+        code = _clarification_code(clarification)
+        initial = await session.scalar(
+            sa.select(SydneyQuestionOutbox).where(
+                SydneyQuestionOutbox.attempt_kind == "initial"
+            )
+        )
+        assert initial is not None and initial.state == "failed"
+        initial_snapshot = (
+            initial.id,
+            initial.dedupe_key,
+            initial.question_context_json,
+            initial.rendered_payload_hash,
+        )
+        audit = AgentActionAudit(
+            actor="command_admin",
+            action_id="task9-e2e-telegram-retry",
+            method="POST",
+            path="/api/v1/admin/sydney/reconcile",
+            status_code=200,
+            allowed=True,
+        )
+        session.add(audit)
+        await session.commit()
+        await session.refresh(audit)
+    await dispatcher.reconcile_attempt(
+        initial.id,
+        "failed",
+        "not_delivered",
+        "Controlled provider rejection.",
+        audit.id,
+        None,
+        None,
+    )
+    retry_id = await dispatcher.create_initial_retry(
+        initial.id,
+        "Controlled provider rejection.",
+        audit.id,
+    )
+    with pytest.raises(TelegramDispatchError, match="telegram_retry_stale"):
+        await dispatcher.create_initial_retry(
+            initial.id,
+            "Controlled provider rejection.",
+            audit.id,
+        )
+    await job.run()
+    await job.run()
+
+    clock.value = NOW + timedelta(hours=24)
+    await job.run()
+    await job.run()
+    async with sessions() as session:
+        attempts_at_24h = await session.scalar(
+            sa.select(sa.func.count(SydneyQuestionOutbox.id))
+        )
+        attempts = list(
+            (
+                await session.scalars(
+                    sa.select(SydneyQuestionOutbox).order_by(
+                        SydneyQuestionOutbox.created_at,
+                        SydneyQuestionOutbox.id,
+                    )
+                )
+            ).all()
+        )
+    assert attempts_at_24h == 3
+    assert sent == 3
+    attempts_by_kind = {attempt.attempt_kind: attempt for attempt in attempts}
+    assert set(attempts_by_kind) == {"initial", "initial_retry", "reminder"}
+    assert attempts_by_kind["initial_retry"].id == retry_id
+    assert attempts_by_kind["initial_retry"].parent_initial_attempt_id == initial.id
+    assert attempts_by_kind["reminder"].reply_to_attempt_id == retry_id
+    assert (
+        attempts_by_kind["initial"].id,
+        attempts_by_kind["initial"].dedupe_key,
+        attempts_by_kind["initial"].question_context_json,
+        attempts_by_kind["initial"].rendered_payload_hash,
+    ) == initial_snapshot
+
+    clock.value = NOW + timedelta(hours=48)
+    await job.run()
+    await job.run()
+    async with sessions() as session:
+        clarification = await session.get(CRMTaskClarification, clarification.id)
+        assert clarification is not None and clarification.state == "timed_out"
+    with pytest.raises(SydneyClarificationError, match="stale_clarification"):
+        await clarification_service.answer(
+            code=code,
+            expected_suggestion_version=1,
+            answer={
+                "kind": "due_at",
+                "decision": "no_due_date",
+            },
+            now=clock.value + timedelta(seconds=1),
+        )
+    async with sessions() as session:
+        assert (
+            await session.scalar(sa.select(sa.func.count(SydneyQuestionOutbox.id))) == 3
+        )
+
+
+def test_task7_task8_rollout_flags_keep_all_task9_jobs_dormant_by_default() -> None:
+    from config import Settings
+    from workers.integration_worker import build_job_registry
+
+    config = Settings(JWT_SECRET="test-secret")
+    registry = build_job_registry(config=config)
+    registry.initialize()
+    snapshot = {
+        name: enabled for name, enabled, _interval in registry.readiness_snapshot()
+    }
+    assert snapshot == {
+        "gmail_history": False,
+        "gmail_receipts": False,
+        "instagram_health": False,
+        "integration_alerts": True,
+        "notification_delivery": True,
+        "sydney_questions": False,
+    }
+    assert config.GMAIL_TASK_INTAKE_ENABLED is False
+    assert config.SYDNEY_TASK_QUESTIONS_ENABLED is False
+    assert config.CRM_TASK_ARCHIVE_ENABLED is False
+
+
+@pytest.mark.asyncio
+async def test_question_job_enforces_five_round_ceiling_without_sixth_outbox(
+    e2e_runtime,
+) -> None:
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from services.crm_task_suggestion_service import canonical_task_payload_hash
+
+    _engine, sessions = e2e_runtime
+    suggestion = CRMTaskSuggestion(
+        source_type="sydney_chat",
+        source_scope_key="sydney:round-ceiling-e2e",
+        source_action_key="sydney-round-ceiling-e2e",
+        source_request_id=UUID("00000000-0000-0000-0000-000000000909"),
+        contact_resolution_state="not_provided",
+        title="Confirm the follow-up time",
+        description="The due time remains ambiguous.",
+        priority="normal",
+        task_status="open",
+        state="needs_clarification",
+        clarification_state="pending",
+        blocker_codes=["ambiguous_due_at"],
+        payload_hash=canonical_task_payload_hash(
+            title="Confirm the follow-up time",
+            description="The due time remains ambiguous.",
+            priority="normal",
+            due_at=None,
+            contact_id=None,
+            status="open",
+        ),
+        model_schema_version="sydney-task-v1",
+        obligation_fingerprint="8" * 64,
+        confidence=1,
+        rationale="Controlled round-ceiling fixture.",
+        version=6,
+    )
+    async with sessions() as session:
+        session.add(suggestion)
+        await session.flush()
+        for round_number in range(1, 6):
+            session.add(
+                CRMTaskClarification(
+                    suggestion_id=suggestion.id,
+                    suggestion_version=round_number,
+                    field_name="due_at",
+                    round_number=round_number,
+                    telegram_chat_id=CHAT_ID,
+                    code_hash=bytes([round_number]) * 32,
+                    code_key_version=CODE_KEY_VERSION,
+                    options_json="{}",
+                    state="answered",
+                    answer_json='{"decision":"no_due_date","kind":"due_at"}',
+                    deadline_anchor_kind="created",
+                    deadline_anchored_at=NOW - timedelta(days=round_number),
+                    slot_deadline_at=(
+                        NOW - timedelta(days=round_number) + timedelta(hours=48)
+                    ),
+                    resolved_at=NOW,
+                    created_at=NOW - timedelta(days=round_number),
+                    updated_at=NOW,
+                )
+            )
+        await session.commit()
+        await session.refresh(suggestion)
+
+    result = await _clarification_service(sessions).enqueue_next(
+        suggestion_id=suggestion.id,
+        party_label="Client",
+        subject_preview="Follow-up time",
+        now=NOW,
+    )
+    assert result.created is False
+    assert result.reason == "clarification_round_limit"
+    async with sessions() as session:
+        stored = await session.get(CRMTaskSuggestion, suggestion.id)
+        clarification_count = await session.scalar(
+            sa.select(sa.func.count(CRMTaskClarification.id)).where(
+                CRMTaskClarification.suggestion_id == suggestion.id
+            )
+        )
+        outbox_count = await session.scalar(
+            sa.select(sa.func.count(SydneyQuestionOutbox.id))
+        )
+    assert stored is not None
+    assert stored.clarification_state == "manual_review_required"
+    assert clarification_count == 5
+    assert outbox_count == 0
+
+
+def test_no_raw_gmail_body_is_declared_on_any_durable_intake_model() -> None:
+    from models.gmail_task_intake import (
+        GmailExtractedObligation,
+        GmailExtractionAttempt,
+        GmailMessageOrigin,
+        GmailMessageReceipt,
+    )
+
+    durable_columns = {
+        column.name
+        for model in (
+            GmailMessageReceipt,
+            GmailMessageOrigin,
+            GmailExtractionAttempt,
+            GmailExtractedObligation,
+        )
+        for column in model.__table__.columns
+    }
+    assert "body" not in durable_columns
+    assert "body_text" not in durable_columns
+    assert "raw_body" not in durable_columns
+    assert "raw_response" not in durable_columns

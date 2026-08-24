@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -32,7 +33,7 @@ async def worker_database(runtime_database):
         connection.execute(
             sa.text(
                 "TRUNCATE TABLE gmail_sync_accounts, notification_jobs, settings, "
-                "integration_worker_heartbeats CASCADE"
+                "integration_health_states, integration_worker_heartbeats CASCADE"
             )
         )
     engine = create_async_engine(async_test_url(url), pool_pre_ping=True)
@@ -73,6 +74,206 @@ def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
         "_disabled_until_provider_task_lands"
         not in source.split('"gmail_history"', 1)[1].split('"sydney_questions"', 1)[0]
     )
+
+
+def test_task9_job_modules_are_real_and_registry_uses_deterministic_schedules() -> None:
+    from config import Settings
+    from workers.integration_worker import build_job_registry
+    from workers.jobs.gmail_receipts import GmailReceiptJob
+    from workers.jobs.integration_alerts import IntegrationAlertsJob
+    from workers.jobs.sydney_questions import SydneyQuestionsJob
+
+    async def no_op() -> None:
+        return None
+
+    config = Settings(
+        JWT_SECRET="test-secret",
+        GMAIL_TASK_INTAKE_ENABLED=True,
+        SYDNEY_TASK_QUESTIONS_ENABLED=True,
+    )
+    registry = build_job_registry(
+        config=config,
+        gmail_runner=no_op,
+        receipt_runner=no_op,
+        sydney_runner=no_op,
+        alert_runner=no_op,
+    )
+    registry.initialize()
+    assert registry.readiness_snapshot() == (
+        ("gmail_history", True, 120),
+        ("gmail_receipts", True, 30),
+        ("instagram_health", False, 86400),
+        ("integration_alerts", True, 60),
+        ("notification_delivery", True, 60),
+        ("sydney_questions", True, 30),
+    )
+    assert GmailReceiptJob.__module__ == "workers.jobs.gmail_receipts"
+    assert SydneyQuestionsJob.__module__ == "workers.jobs.sydney_questions"
+    assert IntegrationAlertsJob.__module__ == "workers.jobs.integration_alerts"
+
+
+@pytest.mark.asyncio
+async def test_integration_alert_job_leases_and_deduplicates_transition_events(
+    worker_database,
+) -> None:
+    from models.integration_health import IntegrationHealthState
+    from models.notification_job import NotificationJob
+    from services.integration_health_service import (
+        record_integration_failure,
+        record_integration_success,
+    )
+    from workers.jobs.integration_alerts import IntegrationAlertsJob
+
+    _engine, sessionmaker = worker_database
+    current = datetime(2026, 8, 24, 14, 0, tzinfo=UTC)
+
+    async with sessionmaker() as session:
+        await record_integration_failure(
+            session,
+            provider="gmail_task_intake",
+            state="degraded",
+            checked_at=current,
+            error_category="provider_timeout",
+            raw_error="must not persist",
+        )
+        await session.commit()
+
+    clock_value = current
+    job = IntegrationAlertsJob(
+        sessionmaker=sessionmaker,
+        clock=lambda: clock_value,
+    )
+    await job.run()
+    await job.run()
+
+    clock_value = current + timedelta(hours=24)
+    await job.run()
+    await job.run()
+
+    async with sessionmaker() as session:
+        await record_integration_success(
+            session,
+            provider="gmail_task_intake",
+            checked_at=current + timedelta(hours=25),
+        )
+        await session.commit()
+    clock_value = current + timedelta(hours=25)
+    await job.run()
+    await job.run()
+    clock_value = current + timedelta(hours=26)
+    await job.run()
+
+    async with sessionmaker() as session:
+        await record_integration_failure(
+            session,
+            provider="gmail_task_intake",
+            state="degraded",
+            checked_at=current + timedelta(hours=27),
+            error_category="provider_timeout",
+            raw_error="must not persist again",
+        )
+        await session.commit()
+    clock_value = current + timedelta(hours=27)
+    await job.run()
+    await job.run()
+
+    async with sessionmaker() as session:
+        health = await session.get(IntegrationHealthState, "gmail_task_intake")
+        notifications = list(
+            (
+                await session.scalars(
+                    sa.select(NotificationJob).order_by(NotificationJob.created_at)
+                )
+            ).all()
+        )
+    assert len(notifications) == 4
+    assert [job.payload_dict["event"] for job in notifications] == [
+        "opened",
+        "reminder",
+        "recovered",
+        "opened",
+    ]
+    assert len({job.dedupe_key for job in notifications}) == 4
+    assert all("must not persist" not in job.payload_json for job in notifications)
+    assert health is not None
+    assert health.last_alerted_at == current + timedelta(hours=27)
+
+
+@pytest.mark.asyncio
+async def test_receipt_job_only_claims_the_oauth_bound_gmail_account(
+    worker_database,
+) -> None:
+    from models.gmail_task_intake import GmailMessageReceipt, GmailSyncAccount
+    from workers.jobs.gmail_receipts import GmailReceiptJob
+
+    _engine, sessionmaker = worker_database
+    first_account = GmailSyncAccount(
+        id=uuid4(),
+        workspace_email="first@example.test",
+        mode="shadow",
+    )
+    second_account = GmailSyncAccount(
+        id=uuid4(),
+        workspace_email="second@example.test",
+        mode="shadow",
+    )
+    first_receipt = GmailMessageReceipt(
+        account_id=first_account.id,
+        gmail_message_id="bound-account-message",
+        gmail_thread_id="bound-account-thread",
+        direction="received",
+        message_at=datetime(2026, 8, 24, 14, 0, tzinfo=UTC),
+        labels_json='["INBOX"]',
+        processing_state="pending",
+    )
+    second_receipt = GmailMessageReceipt(
+        account_id=second_account.id,
+        gmail_message_id="other-account-message",
+        gmail_thread_id="other-account-thread",
+        direction="received",
+        message_at=datetime(2026, 8, 24, 14, 0, tzinfo=UTC),
+        labels_json='["INBOX"]',
+        processing_state="pending",
+    )
+    async with sessionmaker() as session:
+        session.add_all((first_account, second_account))
+        await session.flush()
+        session.add_all((first_receipt, second_receipt))
+        await session.commit()
+
+    seen: list[object] = []
+
+    class _BoundHistoryService:
+        async def process_receipt(self, receipt_id, *, consumer):
+            del consumer
+            seen.append(receipt_id)
+
+    async def bound_service():
+        return first_account.id, _BoundHistoryService()
+
+    job = GmailReceiptJob(
+        enabled=True,
+        sessionmaker=sessionmaker,
+        history_service_provider=bound_service,
+        extractor=object(),
+        reconciliation_service=object(),
+    )
+    await job.run()
+    assert seen == [first_receipt.id]
+
+
+def test_task9_jobs_are_not_scheduled_from_fastapi_main_lifespan() -> None:
+    main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
+    for forbidden in (
+        "gmail_receipts",
+        "sydney_questions",
+        "integration_alerts",
+        "run_gmail_history_job",
+        "run_gmail_receipts_job",
+        "run_sydney_questions_job",
+        "run_integration_alerts_job",
+    ):
+        assert forbidden not in main_source
 
 
 def test_job_registry_validates_before_becoming_readiness_eligible() -> None:
@@ -219,6 +420,7 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
         history_probe=probe,
         provider_executor_factory=executor_factory,
         gmail_job_factory=job_factory,
+        gmail_receipt_runner=gmail_runner,
     )
     try:
         assert calls == [
@@ -233,6 +435,11 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
         )
         assert gmail_job.enabled is True
         assert gmail_job.runner is gmail_runner
+        receipt_job = next(
+            job for job in runtime.registry.jobs if job.name == "gmail_receipts"
+        )
+        assert receipt_job.enabled is True
+        assert receipt_job.runner is gmail_runner
         async with sessionmaker() as session:
             assert (
                 await session.scalar(
@@ -243,6 +450,69 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
     finally:
         await runtime.close()
     assert calls[-3:] == ["executor_wait", "executor_shutdown", "dispose"]
+
+
+@pytest.mark.asyncio
+async def test_sydney_only_startup_registers_real_question_job_without_gmail_probe(
+    worker_database,
+) -> None:
+    import base64
+    import json
+
+    from config import Settings
+    from workers.integration_worker import initialize_worker_runtime
+    from workers.jobs.sydney_questions import SydneyQuestionsJob
+
+    primary_engine, sessionmaker = worker_database
+    config = Settings(
+        JWT_SECRET="test-secret",
+        SYDNEY_TASK_QUESTIONS_ENABLED=True,
+        SYDNEY_TELEGRAM_BOT_TOKEN="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+        SYDNEY_TELEGRAM_BRANDON_CHAT_ID="99887766",
+        SYDNEY_CLARIFICATION_CODE_KEYS_JSON=json.dumps(
+            {"1": base64.b64encode(b"s" * 32).decode("ascii")}
+        ),
+        SYDNEY_CLARIFICATION_ACTIVE_KEY_VERSION=1,
+    )
+    calls: list[str] = []
+
+    class _SharedExecutor:
+        async def wait_for_tracked_calls(self):
+            calls.append("executor_wait")
+
+        def shutdown(self):
+            calls.append("executor_shutdown")
+
+    def executor_factory(*, max_workers):
+        calls.append(f"executor:{max_workers}")
+        return _SharedExecutor()
+
+    def forbidden_history_engine(_config):
+        raise AssertionError("gmail_history_engine_must_stay_disabled")
+
+    async def forbidden_probe(**_kwargs):
+        raise AssertionError("gmail_affinity_probe_must_stay_disabled")
+
+    runtime = await initialize_worker_runtime(
+        config=config,
+        sessionmaker=sessionmaker,
+        primary_engine=primary_engine,
+        history_engine_factory=forbidden_history_engine,
+        history_probe=forbidden_probe,
+        provider_executor_factory=executor_factory,
+    )
+    try:
+        question_job = next(
+            job for job in runtime.registry.jobs if job.name == "sydney_questions"
+        )
+        assert question_job.enabled is True
+        assert isinstance(question_job.runner.__self__, SydneyQuestionsJob)
+        assert runtime.gmail_history_ready is False
+        assert runtime.history_engine is None
+        assert calls == ["executor:4"]
+    finally:
+        await runtime.close()
+    assert calls == ["executor:4", "executor_wait", "executor_shutdown"]
 
 
 async def test_registered_default_gmail_runner_uses_real_service_with_direct_engine(
@@ -456,7 +726,9 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
         assert gmail_job.enabled is True
         assert tuple(job.name for job in runtime.registry.jobs) == (
             "gmail_history",
+            "gmail_receipts",
             "instagram_health",
+            "integration_alerts",
             "notification_delivery",
             "sydney_questions",
         )
@@ -518,6 +790,16 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
         reconstructed_registry = build_job_registry(
             config=config,
             gmail_runner=gmail_job.runner,
+            receipt_runner=next(
+                job.runner
+                for job in runtime.registry.jobs
+                if job.name == "gmail_receipts"
+            ),
+            alert_runner=next(
+                job.runner
+                for job in runtime.registry.jobs
+                if job.name == "integration_alerts"
+            ),
         )
         reconstructed_registry.initialize()
         await run_scheduler_cycle(

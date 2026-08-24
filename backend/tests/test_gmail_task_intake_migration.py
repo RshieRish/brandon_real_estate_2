@@ -5619,9 +5619,7 @@ def test_task2_is_included_once_before_task5_in_the_dedicated_workflow() -> None
         / "gmail-sydney-task-intake.yml"
     ).read_text(encoding="utf-8")
     assert workflow.count("tests/test_gmail_task_intake_migration.py") == 1
-    step_name = (
-        "name: Run the Task 1 through Task 6 persistence and compatibility contracts"
-    )
+    step_name = "name: Run the Task 1 through Task 9 persistence, concurrency, and E2E contracts"
     assert step_name in workflow
     command = workflow.split(step_name, 1)[1].split("- name:", 1)[0]
     assert command.index("tests/test_gmail_task_intake_migration.py") < command.index(
