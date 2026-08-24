@@ -36,6 +36,11 @@ npm run dev
 3. Add environment variables from `.env.example`
 4. Railway auto-detects `Dockerfile` and deploys
 
+The Gmail/Sydney task-intake scheduler is a separate Railway worker. Its exact
+service configuration, probes, rollout switches, recovery procedures, and
+production evidence are documented in
+[`docs/deployment/gmail-sydney-task-intake.md`](docs/deployment/gmail-sydney-task-intake.md).
+
 ### Frontend → Vercel
 1. Import GitHub repo in Vercel
 2. Set root directory to `frontend/`
