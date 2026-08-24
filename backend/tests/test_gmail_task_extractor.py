@@ -174,6 +174,14 @@ async def test_incoming_requests_and_outgoing_commitments_are_typed(
     request = model.requests[0]
     assert request.direction == direction
     assert request.response_model.model_config["extra"] == "forbid"
+    assert f"Trusted provider direction: {direction}" in request.prompt
+    assert request.prompt.index("Trusted provider direction:") < request.prompt.index(
+        "BEGIN_UNTRUSTED_GMAIL_EVIDENCE"
+    )
+    assert (
+        "received requires incoming_request; sent and self_copy require "
+        "outgoing_commitment"
+    ) in request.system_instruction
 
 
 async def test_due_dates_require_an_offset_and_a_valid_timezone_basis() -> None:
