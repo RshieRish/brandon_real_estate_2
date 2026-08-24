@@ -15,7 +15,6 @@ from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
 REVISION = "84d7a5f9b2c3"
-NOW = datetime(2026, 8, 22, 15, 0, tzinfo=timezone.utc)
 CHAT_ID = "424242"
 CODE_KEY = b"k" * 32
 
@@ -228,6 +227,7 @@ async def test_clarification_answer_audit_failure_rolls_back_answer_and_handoff(
     )
 
     sessions = audit_runtime
+    test_now = datetime.now(timezone.utc)
     suggestion = await _seed_suggestion(sessions, blocked=True)
     service = SydneyClarificationService(
         sessionmaker=sessions,
@@ -239,7 +239,7 @@ async def test_clarification_answer_audit_failure_rolls_back_answer_and_handoff(
         suggestion_id=suggestion.id,
         party_label="Client",
         subject_preview="Inspection",
-        now=NOW,
+        now=test_now,
     )
     assert queued.clarification_id is not None
     async with sessions() as session:
@@ -251,15 +251,15 @@ async def test_clarification_answer_audit_failure_rolls_back_answer_and_handoff(
         )
         assert clarification is not None and attempt is not None
         attempt.state = "sending"
-        attempt.attempted_at = NOW
+        attempt.attempted_at = test_now
         attempt.telegram_chat_id = CHAT_ID
-        clarification.first_attempt_at = NOW
+        clarification.first_attempt_at = test_now
         clarification.deadline_anchor_kind = "first_attempt"
-        clarification.deadline_anchored_at = NOW
-        clarification.slot_deadline_at = NOW + timedelta(hours=48)
+        clarification.deadline_anchored_at = test_now
+        clarification.slot_deadline_at = test_now + timedelta(hours=48)
         await session.flush()
         attempt.state = "sent"
-        attempt.sent_at = NOW + timedelta(seconds=1)
+        attempt.sent_at = test_now + timedelta(seconds=1)
         attempt.telegram_message_id = "9001"
         clarification.deadline_anchor_kind = "initial_sent"
         clarification.deadline_anchored_at = attempt.sent_at

@@ -16,7 +16,12 @@ from uuid import UUID
 
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
 
 from models.gmail_task_intake import (
     GmailBackfillRequest,
@@ -244,10 +249,7 @@ async def _post_lock_affinity_probe(
 
     row = (
         await connection.execute(
-            text(
-                "SELECT pg_backend_pid(), "
-                "pg_try_advisory_xact_lock(:account_key)"
-            ),
+            text("SELECT pg_backend_pid(), pg_try_advisory_xact_lock(:account_key)"),
             {"account_key": account_advisory_key(account_id)},
         )
     ).one()
@@ -263,7 +265,9 @@ class GmailHistoryService:
         participant_hash_key: bytes | str,
         alert_sink: Callable[..., Awaitable[None]] | None = None,
         max_pages_per_run: int = 100,
-        backend_pid_reader: Callable[[AsyncConnection], Awaitable[int]] = _read_backend_pid,
+        backend_pid_reader: Callable[
+            [AsyncConnection], Awaitable[int]
+        ] = _read_backend_pid,
         post_lock_probe: (
             Callable[[AsyncConnection, UUID], Awaitable[tuple[int, bool]]] | None
         ) = None,
@@ -311,11 +315,7 @@ class GmailHistoryService:
                 owns_serialization = bool(
                     await connection.scalar(
                         text("SELECT pg_try_advisory_xact_lock(:account_key)"),
-                        {
-                            "account_key": account_advisory_key(
-                                probe_account_id
-                            )
-                        },
+                        {"account_key": account_advisory_key(probe_account_id)},
                     )
                 )
                 return pid, owns_serialization
@@ -345,7 +345,9 @@ class GmailHistoryService:
             join_transaction_mode="control_fully",
         )
 
-    async def _account(self, session: AsyncSession, account_id: UUID) -> GmailSyncAccount:
+    async def _account(
+        self, session: AsyncSession, account_id: UUID
+    ) -> GmailSyncAccount:
         account = await session.get(GmailSyncAccount, account_id)
         if account is None:
             raise GmailAccountBlocked("gmail_account_not_found")
@@ -390,7 +392,9 @@ class GmailHistoryService:
         )
 
     @staticmethod
-    def _receipt(account_id: UUID, message: SanitizedGmailMessage) -> GmailMessageReceipt:
+    def _receipt(
+        account_id: UUID, message: SanitizedGmailMessage
+    ) -> GmailMessageReceipt:
         return GmailMessageReceipt(
             account_id=account_id,
             gmail_message_id=message.message_id,
@@ -423,44 +427,55 @@ class GmailHistoryService:
         ref_ids = [ref.message_id for ref in refs]
         async with self._sessions() as session:
             account = await self._account(session, account_id)
-            existing_rows = list(
-                (
-                    await session.scalars(
-                        select(GmailMessageReceipt).where(
-                            GmailMessageReceipt.account_id == account_id,
-                            GmailMessageReceipt.gmail_message_id.in_(
-                                ref_ids
-                            ),
+            existing_rows = (
+                list(
+                    (
+                        await session.scalars(
+                            select(GmailMessageReceipt).where(
+                                GmailMessageReceipt.account_id == account_id,
+                                GmailMessageReceipt.gmail_message_id.in_(ref_ids),
+                            )
                         )
-                    )
-                ).all()
-            ) if refs else []
-            origin_rows = list(
-                (
-                    await session.scalars(
-                        select(GmailMessageOrigin).where(
-                            GmailMessageOrigin.account_id == account_id,
-                            GmailMessageOrigin.gmail_message_id.in_(ref_ids),
+                    ).all()
+                )
+                if refs
+                else []
+            )
+            origin_rows = (
+                list(
+                    (
+                        await session.scalars(
+                            select(GmailMessageOrigin).where(
+                                GmailMessageOrigin.account_id == account_id,
+                                GmailMessageOrigin.gmail_message_id.in_(ref_ids),
+                            )
                         )
-                    )
-                ).all()
-            ) if refs else []
-            acknowledged_incidents = list(
-                (
-                    await session.scalars(
-                        select(GmailMissingMessageIncident).where(
-                            GmailMissingMessageIncident.account_id == account_id,
-                            GmailMissingMessageIncident.run_id == run_id,
-                            GmailMissingMessageIncident.state == "acknowledged",
-                            GmailMissingMessageIncident.start_history_id
-                            == start_history_id,
-                            GmailMissingMessageIncident.page_number == page_number,
-                            GmailMissingMessageIncident.request_page_token
-                            .is_not_distinct_from(request_page_token),
+                    ).all()
+                )
+                if refs
+                else []
+            )
+            acknowledged_incidents = (
+                list(
+                    (
+                        await session.scalars(
+                            select(GmailMissingMessageIncident).where(
+                                GmailMissingMessageIncident.account_id == account_id,
+                                GmailMissingMessageIncident.run_id == run_id,
+                                GmailMissingMessageIncident.state == "acknowledged",
+                                GmailMissingMessageIncident.start_history_id
+                                == start_history_id,
+                                GmailMissingMessageIncident.page_number == page_number,
+                                GmailMissingMessageIncident.request_page_token.is_not_distinct_from(
+                                    request_page_token
+                                ),
+                            )
                         )
-                    )
-                ).all()
-            ) if run_id is not None else []
+                    ).all()
+                )
+                if run_id is not None
+                else []
+            )
         existing = {row.gmail_message_id: row for row in existing_rows}
         origins = {
             row.gmail_message_id: row
@@ -500,9 +515,8 @@ class GmailHistoryService:
                 and prior_receipt.sender_hmac is None
                 and prior_receipt.recipient_hmacs_json.strip() == "[]"
             )
-            if (
-                ref.message_id in ids
-                or (prior_receipt is not None and not needs_receipt_enrichment)
+            if ref.message_id in ids or (
+                prior_receipt is not None and not needs_receipt_enrichment
             ):
                 continue
             ids.add(ref.message_id)
@@ -523,8 +537,10 @@ class GmailHistoryService:
                 or metadata.thread_id != ref.thread_id
             ):
                 raise GmailProviderFailure("malformed_provider") from None
-            if window_start is not None and window_end is not None and not (
-                window_start <= metadata.message_at < window_end
+            if (
+                window_start is not None
+                and window_end is not None
+                and not (window_start <= metadata.message_at < window_end)
             ):
                 continue
             origin_kind = origin_kinds.get(metadata.message_id)
@@ -624,10 +640,10 @@ class GmailHistoryService:
         stored.subject_preview = evidence.subject_preview
         stored.body_hash = evidence.body_hash
         stored.labels_json = evidence.labels_json
-        if (
-            evidence.processing_state == "ignored"
-            and stored.processing_state in {"pending", "failed"}
-        ):
+        if evidence.processing_state == "ignored" and stored.processing_state in {
+            "pending",
+            "failed",
+        }:
             stored.processing_state = "ignored"
             stored.classification = evidence.classification
             stored.processing_started_at = None
@@ -659,31 +675,32 @@ class GmailHistoryService:
             await self._account(session, account_id)
             run = await session.get(GmailSyncRun, run_id)
             if run is None:
-                raise GmailPagePersistenceError(
-                    "gmail_history_page_persistence_failed"
-                )
-            existing = list(
-                (
-                    await session.scalars(
-                        select(GmailMessageReceipt).where(
-                            GmailMessageReceipt.account_id == account_id,
-                            GmailMessageReceipt.gmail_message_id.in_(
-                                [item.receipt.gmail_message_id for item in metadata_rows]
-                            ),
+                raise GmailPagePersistenceError("gmail_history_page_persistence_failed")
+            existing = (
+                list(
+                    (
+                        await session.scalars(
+                            select(GmailMessageReceipt).where(
+                                GmailMessageReceipt.account_id == account_id,
+                                GmailMessageReceipt.gmail_message_id.in_(
+                                    [
+                                        item.receipt.gmail_message_id
+                                        for item in metadata_rows
+                                    ]
+                                ),
+                            )
                         )
-                    )
-                ).all()
-            ) if metadata_rows else []
-            existing_by_message = {
-                row.gmail_message_id: row for row in existing
-            }
+                    ).all()
+                )
+                if metadata_rows
+                else []
+            )
+            existing_by_message = {row.gmail_message_id: row for row in existing}
             await _invoke(self._after_receipt_lookup)
             receipt_count = 0
             for prepared in metadata_rows:
                 evidence = prepared.receipt
-                stored_receipt = existing_by_message.get(
-                    evidence.gmail_message_id
-                )
+                stored_receipt = existing_by_message.get(evidence.gmail_message_id)
                 if prepared.sent_observation is not None:
                     await self._origin_observer.observe_history_sent_in_session(
                         session,
@@ -1237,9 +1254,7 @@ class GmailHistoryService:
         suffix = hashlib.sha256(cursor.encode("utf-8")).hexdigest()[:16]
         incident_suffix = f":{incident_id}" if incident_id is not None else ""
         discriminator_suffix = (
-            f":{dedupe_discriminator}"
-            if dedupe_discriminator is not None
-            else ""
+            f":{dedupe_discriminator}" if dedupe_discriminator is not None else ""
         )
         payload = {
             "provider": "gmail_task_intake",
@@ -1253,8 +1268,7 @@ class GmailHistoryService:
         if incident_id is not None:
             payload["incident_id"] = str(incident_id)
             payload["detail_path"] = (
-                "/api/v1/agent-control/gmail/missing-message/incidents/"
-                f"{incident_id}"
+                f"/api/v1/agent-control/gmail/missing-message/incidents/{incident_id}"
             )
         return payload
 
@@ -1413,9 +1427,7 @@ class GmailHistoryService:
             needs_profile = account.reseed_history_id is None
             alert_pending = account.last_error_category != "history_cursor_expired"
             workspace_email = account.workspace_email
-            committed_history_id = _validated_history_id(
-                account.committed_history_id
-            )
+            committed_history_id = _validated_history_id(account.committed_history_id)
         finally:
             await session.close()
 
@@ -1440,7 +1452,9 @@ class GmailHistoryService:
                         await session.commit()
                     finally:
                         await session.close()
-                logger.error("Gmail cursor recovery dependency failed: %s", error.category)
+                logger.error(
+                    "Gmail cursor recovery dependency failed: %s", error.category
+                )
                 raise GmailProviderFailure(error.category) from None
             if profile.email_address.strip().lower() != workspace_email:
                 session = self._bound_session(connection)
@@ -1450,13 +1464,17 @@ class GmailHistoryService:
                     account.last_error_category = _alert_pending_category(
                         "gmail_account_identity_mismatch"
                     )
-                    account.last_error_message = "Gmail recovery alert could not be queued."
+                    account.last_error_message = (
+                        "Gmail recovery alert could not be queued."
+                    )
                     if run_id is not None:
                         run = await session.get(GmailSyncRun, run_id)
                         if run is not None:
                             run.state = "failed"
                             run.failure_category = "gmail_account_identity_mismatch"
-                            run.failure_message = "Gmail account identity does not match."
+                            run.failure_message = (
+                                "Gmail account identity does not match."
+                            )
                     await session.commit()
                 finally:
                     await session.close()
@@ -1593,18 +1611,14 @@ class GmailHistoryService:
                 or run.run_kind
                 != ("backfill" if backfill_request_id is not None else "poll")
             ):
-                raise GmailCursorConflict(
-                    "gmail_cursor_compare_and_set_failed"
-                )
+                raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
             incident = await session.scalar(
                 select(GmailMissingMessageIncident)
                 .where(
                     GmailMissingMessageIncident.account_id == account_id,
                     GmailMissingMessageIncident.run_id == run_id,
-                    GmailMissingMessageIncident.gmail_message_id
-                    == message_id,
-                    GmailMissingMessageIncident.gmail_thread_id
-                    == thread_id,
+                    GmailMissingMessageIncident.gmail_message_id == message_id,
+                    GmailMissingMessageIncident.gmail_thread_id == thread_id,
                     GmailMissingMessageIncident.page_number == page_number,
                 )
                 .with_for_update()
@@ -1625,18 +1639,12 @@ class GmailHistoryService:
                 or incident.start_history_id != start_history_id
                 or incident.request_page_token != canonical_page_token
             ):
-                raise GmailCursorConflict(
-                    "gmail_cursor_compare_and_set_failed"
-                )
+                raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
             if backfill_request_id is None:
                 account.blocked_reason = "message_not_found"
             elif account.blocked_reason != "history_cursor_expired":
-                raise GmailCursorConflict(
-                    "gmail_cursor_compare_and_set_failed"
-                )
-            account.last_error_category = _alert_pending_category(
-                "message_not_found"
-            )
+                raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
+            account.last_error_category = _alert_pending_category("message_not_found")
             account.last_error_message = "Gmail recovery alert could not be queued."
             run.failure_category = "message_not_found"
             run.failure_message = _safe_message("message_not_found")
@@ -1651,9 +1659,7 @@ class GmailHistoryService:
                     or request.run_id != run_id
                     or request.state != "running"
                 ):
-                    raise GmailCursorConflict(
-                        "gmail_cursor_compare_and_set_failed"
-                    )
+                    raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
                 request.result_category = "message_not_found"
                 request.result_message = _safe_message("message_not_found")
             await session.commit()
@@ -1705,9 +1711,7 @@ class GmailHistoryService:
             )
             if changed.rowcount != 1:
                 await session.rollback()
-                raise GmailCursorConflict(
-                    "gmail_cursor_compare_and_set_failed"
-                )
+                raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
             run = await session.get(GmailSyncRun, run_id)
             if (
                 run is None
@@ -1715,9 +1719,7 @@ class GmailHistoryService:
                 or run.terminal_history_id != terminal_history_id
             ):
                 await session.rollback()
-                raise GmailCursorConflict(
-                    "gmail_cursor_compare_and_set_failed"
-                )
+                raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
             run.state = "completed"
             run.completed_at = self._clock()
             run.failure_category = None
@@ -1767,9 +1769,7 @@ class GmailHistoryService:
                 )
                 if pending_incident is not None:
                     incident_id = pending_incident.id
-                    incident_alert_pending = (
-                        pending_incident.alert_state == "pending"
-                    )
+                    incident_alert_pending = pending_incident.alert_state == "pending"
                     await session.close()
                     if incident_alert_pending:
                         await self._enqueue_expiry_alert(
@@ -1828,7 +1828,9 @@ class GmailHistoryService:
                     account.last_error_category = _alert_pending_category(
                         "malformed_provider"
                     )
-                    account.last_error_message = "Gmail recovery alert could not be queued."
+                    account.last_error_message = (
+                        "Gmail recovery alert could not be queued."
+                    )
                     await session.commit()
                     await session.close()
                     await self._enqueue_expiry_alert(
@@ -1865,9 +1867,7 @@ class GmailHistoryService:
                             run_terminal_history_id = _validated_history_id(
                                 run.terminal_history_id
                             )
-                            if int(run_terminal_history_id) < int(
-                                run_start_history_id
-                            ):
+                            if int(run_terminal_history_id) < int(run_start_history_id):
                                 raise GmailProviderFailure(
                                     "malformed_provider"
                                 ) from None
@@ -1908,9 +1908,7 @@ class GmailHistoryService:
                             account_id=account_id,
                             event="cursor_conflict",
                         )
-                        raise GmailCursorConflict(
-                            "gmail_cursor_compare_and_set_failed"
-                        )
+                        raise GmailCursorConflict("gmail_cursor_compare_and_set_failed")
                 start_history_id = _validated_history_id(run.start_history_id)
                 run_id = run.id
                 request_token = run.next_page_token
@@ -2214,12 +2212,8 @@ class GmailHistoryService:
             ):
                 raise GmailBackfillValidationError("gmail_backfill_not_available")
             try:
-                expired_history_id = _validated_history_id(
-                    account.committed_history_id
-                )
-                reseed_history_id = _validated_history_id(
-                    account.reseed_history_id
-                )
+                expired_history_id = _validated_history_id(account.committed_history_id)
+                reseed_history_id = _validated_history_id(account.reseed_history_id)
                 if int(reseed_history_id) < int(expired_history_id):
                     raise GmailProviderFailure("malformed_provider") from None
             except GmailProviderFailure:
@@ -2270,7 +2264,9 @@ class GmailHistoryService:
             if request is not None:
                 request.state = "failed"
                 request.result_category = category
-                request.result_message = "Gmail backfill pagination guard stopped the run."
+                request.result_message = (
+                    "Gmail backfill pagination guard stopped the run."
+                )
             if run is not None:
                 run.state = "failed"
                 run.failure_category = category
@@ -2351,7 +2347,9 @@ class GmailHistoryService:
             try:
                 request = await session.get(GmailBackfillRequest, request_id)
                 if request is None or request.account_id != account_id:
-                    raise GmailBackfillValidationError("gmail_backfill_request_not_found")
+                    raise GmailBackfillValidationError(
+                        "gmail_backfill_request_not_found"
+                    )
                 account = await self._account(session, account_id)
                 if (
                     account.blocked_reason != "history_cursor_expired"
@@ -2359,14 +2357,14 @@ class GmailHistoryService:
                     or account.reseed_history_id != request.reseed_history_id
                     or request.state not in {"requested", "running"}
                 ):
-                    raise GmailBackfillValidationError("gmail_backfill_snapshot_changed")
+                    raise GmailBackfillValidationError(
+                        "gmail_backfill_snapshot_changed"
+                    )
                 try:
                     expired_history_id = _validated_history_id(
                         request.expired_history_id
                     )
-                    reseed_history_id = _validated_history_id(
-                        request.reseed_history_id
-                    )
+                    reseed_history_id = _validated_history_id(request.reseed_history_id)
                     if int(reseed_history_id) < int(expired_history_id):
                         raise GmailProviderFailure("malformed_provider") from None
                 except GmailProviderFailure:
@@ -2642,12 +2640,8 @@ class GmailHistoryService:
                 )
             history_ids_valid = False
             try:
-                request_expired_id = _validated_history_id(
-                    request.expired_history_id
-                )
-                request_reseed_id = _validated_history_id(
-                    request.reseed_history_id
-                )
+                request_expired_id = _validated_history_id(request.expired_history_id)
+                request_reseed_id = _validated_history_id(request.reseed_history_id)
                 account_expired_id = _validated_history_id(
                     account.committed_history_id if account is not None else None
                 )
@@ -2739,9 +2733,7 @@ class GmailHistoryService:
                     receipt.processing_state = "failed"
                     receipt.processing_started_at = None
                     receipt.failure_category = "stale_credential_result"
-                    receipt.failure_message = _safe_message(
-                        "stale_credential_result"
-                    )
+                    receipt.failure_message = _safe_message("stale_credential_result")
                     await session.commit()
                     return "stale_credential_result"
 
@@ -2758,9 +2750,7 @@ class GmailHistoryService:
                 or receipt.processing_state != "processing"
                 or receipt.processing_started_at != claimed_at
             ):
-                raise GmailReceiptProcessingError(
-                    "gmail_receipt_claim_lost"
-                ) from None
+                raise GmailReceiptProcessingError("gmail_receipt_claim_lost") from None
             account = await self._account(session, account_id)
             if category == "oauth_revoked":
                 account.blocked_reason = category
@@ -2774,18 +2764,14 @@ class GmailHistoryService:
                 receipt.classification = f"ignored_{category}"
                 receipt.processed_at = self._clock()
                 if category == "message_not_found":
-                    receipt.failure_category = (
-                        "message_not_found_alert_pending"
-                    )
+                    receipt.failure_category = "message_not_found_alert_pending"
                 elif category in {
                     "malformed_provider",
                     "receipt_content_invalid",
                     "receipt_content_mismatch",
                 }:
                     account.blocked_reason = category
-                    account.last_error_category = _alert_pending_category(
-                        category
-                    )
+                    account.last_error_category = _alert_pending_category(category)
                     account.last_error_message = (
                         "Gmail recovery alert could not be queued."
                     )
@@ -2840,7 +2826,10 @@ class GmailHistoryService:
                         GmailMessageReceipt.processing_state.in_(("pending", "failed"))
                         | (
                             (GmailMessageReceipt.processing_state == "processing")
-                            & (GmailMessageReceipt.processing_started_at <= stale_before)
+                            & (
+                                GmailMessageReceipt.processing_started_at
+                                <= stale_before
+                            )
                         )
                     ),
                 )
@@ -2856,7 +2845,9 @@ class GmailHistoryService:
                 current = await claim_session.get(GmailMessageReceipt, receipt_id)
                 return GmailReceiptProcessingResult(
                     receipt_id=receipt_id,
-                    processing_state=(current.processing_state if current else "failed"),
+                    processing_state=(
+                        current.processing_state if current else "failed"
+                    ),
                     classification=(current.classification if current else None),
                     claimed=False,
                 )
@@ -2883,9 +2874,7 @@ class GmailHistoryService:
             )
             if content.message_id != message_id or content.thread_id != thread_id:
                 del content
-                raise _DeterministicReceiptFailure(
-                    "receipt_content_mismatch"
-                ) from None
+                raise _DeterministicReceiptFailure("receipt_content_mismatch") from None
             transient = None
             sanitization_failed = False
             try:
@@ -2899,9 +2888,7 @@ class GmailHistoryService:
                 sanitization_failed = True
             if sanitization_failed:
                 del content
-                raise _DeterministicReceiptFailure(
-                    "receipt_content_invalid"
-                ) from None
+                raise _DeterministicReceiptFailure("receipt_content_invalid") from None
             del content
             assert transient is not None
             final_state = transient.processing_state
@@ -2914,6 +2901,36 @@ class GmailHistoryService:
             body_hash = transient.body_hash
             labels_json = json.dumps(list(transient.labels))
             if final_state != "ignored":
+                # Bind sanitized, body-free source identity to this exact
+                # processing lease before extractor/reconciliation opens its
+                # own transactions. A stale worker cannot publish evidence for
+                # a newer lease, and raw body text never enters this update.
+                async with self._sessions() as evidence_session:
+                    changed = await evidence_session.execute(
+                        update(GmailMessageReceipt)
+                        .where(
+                            GmailMessageReceipt.id == receipt_id,
+                            GmailMessageReceipt.processing_state == "processing",
+                            GmailMessageReceipt.processing_started_at == now,
+                        )
+                        .values(
+                            direction=direction,
+                            message_at=message_at,
+                            sender_hmac=sender_hmac,
+                            recipient_hmacs_json=recipient_hmacs_json,
+                            subject_preview=subject_preview,
+                            body_hash=body_hash,
+                            labels_json=labels_json,
+                            classification=classification,
+                            failure_category=None,
+                            failure_message=None,
+                        )
+                    )
+                    if changed.rowcount != 1:
+                        await evidence_session.rollback()
+                        del transient
+                        raise GmailReceiptProcessingError("gmail_receipt_claim_lost")
+                    await evidence_session.commit()
                 try:
                     await consumer(transient)
                     final_state = "processed"
@@ -2973,13 +2990,11 @@ class GmailHistoryService:
                 "malformed_provider",
                 "oauth_revoked",
             }:
-                persisted_category = (
-                    await self._persist_deterministic_receipt_failure(
-                        receipt_id=receipt_id,
-                        account_id=receipt.account_id,
-                        claimed_at=now,
-                        category=error.category,
-                    )
+                persisted_category = await self._persist_deterministic_receipt_failure(
+                    receipt_id=receipt_id,
+                    account_id=receipt.account_id,
+                    claimed_at=now,
+                    category=error.category,
                 )
                 if persisted_category == "message_not_found":
                     await self._ensure_pending_receipt_alert_before_history(
@@ -3012,9 +3027,7 @@ class GmailHistoryService:
                 account_id=receipt.account_id,
                 event=error.category,
             )
-            raise GmailReceiptProcessingError(
-                f"gmail_{error.category}"
-            ) from None
+            raise GmailReceiptProcessingError(f"gmail_{error.category}") from None
         except BaseException as error:
             if isinstance(error, asyncio.CancelledError):
                 await self._fail_receipt(receipt_id, now, "transient_processing")
@@ -3048,6 +3061,11 @@ class GmailHistoryService:
                 .values(
                     processing_state="failed",
                     processing_started_at=None,
+                    sender_hmac=None,
+                    recipient_hmacs_json="[]",
+                    subject_preview=None,
+                    body_hash=None,
+                    classification=None,
                     failure_category=category,
                     failure_message=(
                         "Gmail receipt processing timed out."
@@ -3102,9 +3120,7 @@ async def acknowledge_missing_message_incident(
         expected_request_page_token = parse_gmail_page_token(
             expected_request_page_token
         )
-        expected_start_history_id = _validated_history_id(
-            expected_start_history_id
-        )
+        expected_start_history_id = _validated_history_id(expected_start_history_id)
         if expected_reseed_history_id is not None:
             expected_reseed_history_id = _validated_history_id(
                 expected_reseed_history_id
@@ -3175,10 +3191,8 @@ async def acknowledge_missing_message_incident(
                 and backfill_request is not None
                 and backfill_request.state == "running"
                 and backfill_request.id == backfill_request_id
-                and backfill_request.expired_history_id
-                == expected_start_history_id
-                and backfill_request.reseed_history_id
-                == expected_reseed_history_id
+                and backfill_request.expired_history_id == expected_start_history_id
+                and backfill_request.reseed_history_id == expected_reseed_history_id
                 and account.reseed_history_id == expected_reseed_history_id
             )
     if (
@@ -3221,9 +3235,7 @@ async def acknowledge_missing_message_incident(
             "expected_page_number": expected_page_number,
             "expected_version": expected_version,
             "backfill_request_id": (
-                str(backfill_request_id)
-                if backfill_request_id is not None
-                else None
+                str(backfill_request_id) if backfill_request_id is not None else None
             ),
             "reason_length": len(normalized_reason),
         },

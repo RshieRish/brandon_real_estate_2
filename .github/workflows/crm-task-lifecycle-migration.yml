@@ -131,11 +131,20 @@ jobs:
             chmod 0644 "$PGDATA/server.crt"
             chmod 0600 "$PGDATA/server.key"
           '
-          docker exec "$POSTGRES_CONTAINER" \
-            psql --set ON_ERROR_STOP=1 \
-              --username "$POSTGRES_USER" \
-              --dbname "$CRM_TASK_TEST_DATABASE_NAME" \
-              --command "ALTER SYSTEM SET ssl = 'on'"
+          for attempt in {1..30}; do
+            if docker exec "$POSTGRES_CONTAINER" \
+              psql --set ON_ERROR_STOP=1 \
+                --username "$POSTGRES_USER" \
+                --dbname "$CRM_TASK_TEST_DATABASE_NAME" \
+                --command "ALTER SYSTEM SET ssl = 'on'"; then
+              break
+            fi
+            if [[ "$attempt" -eq 30 ]]; then
+              echo "PostgreSQL did not remain ready for TLS setup" >&2
+              exit 1
+            fi
+            sleep 1
+          done
           docker exec --user root "$POSTGRES_CONTAINER" sh -euxc '
             {
               echo "local all all trust"

@@ -19,9 +19,7 @@ from models.setting import Setting
 _ACCOUNT_BINDING_KEY = "google_workspace_gmail_account_id"
 _REFRESH_TOKEN_KEY = "google_workspace_refresh_token"
 _WORKSPACE_GMAIL_BINDING_LOCK_KEY = 5_921_914_720_764_681_105
-_CREDENTIAL_GENERATION_DOMAIN = (
-    b"sws:gmail-task-intake:credential-generation:v1\x00"
-)
+_CREDENTIAL_GENERATION_DOMAIN = b"sws:gmail-task-intake:credential-generation:v1\x00"
 _PROGRESS_STATES = frozenset(
     {"started", "completed", "degraded", "failed", "timed_out"}
 )
@@ -90,12 +88,8 @@ def _build_gmail_history_service(
         participant_hash_key=participant_hash_key,
         alert_sink=alert_sink,
         max_pages_per_run=max_pages_per_run,
-        receipt_processing_deadline_seconds=(
-            receipt_processing_deadline_seconds
-        ),
-        receipt_processing_stale_after_seconds=(
-            receipt_processing_stale_after_seconds
-        ),
+        receipt_processing_deadline_seconds=(receipt_processing_deadline_seconds),
+        receipt_processing_stale_after_seconds=(receipt_processing_stale_after_seconds),
         origin_observer=origin_observer,
         credential_is_current=credential_is_current,
     )
@@ -145,9 +139,7 @@ class GmailHistoryJob:
         self._provider_deadline_seconds = provider_deadline_seconds
         self._max_pages_per_run = max_pages_per_run
         self._whole_job_deadline_seconds = whole_job_deadline_seconds
-        self._receipt_processing_deadline_seconds = (
-            receipt_processing_deadline_seconds
-        )
+        self._receipt_processing_deadline_seconds = receipt_processing_deadline_seconds
         self._receipt_processing_stale_after_seconds = (
             receipt_processing_stale_after_seconds
         )
@@ -236,6 +228,24 @@ class GmailHistoryJob:
             GmailPaginationGuard,
         )
 
+        account_id, service = await self.bound_service()
+        try:
+            await service.sync_account(account_id)
+        except (
+            GmailAccountBlocked,
+            GmailCursorConflict,
+            GmailPaginationGuard,
+            GmailProviderFailure,
+        ):
+            # These outcomes are already reduced to bounded durable state by
+            # GmailHistoryService. They must not starve later registry jobs
+            # (especially notification delivery) by restarting the worker.
+            return False
+        return True
+
+    async def bound_service(self):
+        """Build a service from one atomic database credential snapshot."""
+
         (
             account_id,
             workspace_email,
@@ -270,19 +280,7 @@ class GmailHistoryJob:
             alert_sink=self._alert_sink,
             credential_is_current=credential_is_current,
         )
-        try:
-            await service.sync_account(account_id)
-        except (
-            GmailAccountBlocked,
-            GmailCursorConflict,
-            GmailPaginationGuard,
-            GmailProviderFailure,
-        ):
-            # These outcomes are already reduced to bounded durable state by
-            # GmailHistoryService. They must not starve later registry jobs
-            # (especially notification delivery) by restarting the worker.
-            return False
-        return True
+        return account_id, service
 
     async def run(self) -> None:
         if not self._enabled:

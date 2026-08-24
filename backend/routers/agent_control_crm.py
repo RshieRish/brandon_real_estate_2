@@ -326,6 +326,8 @@ async def create_task_draft(
             db, payload.contact_id
         )
         source_scope = f"sydney:agent-control:{payload.request_id}"
+        task_details_pending = not payload.description.strip()
+        blocker_codes = ["missing_required_field"] if task_details_pending else []
         row = CRMTaskSuggestion(
             source_type="sydney_chat",
             source_scope_key=source_scope,
@@ -339,11 +341,11 @@ async def create_task_draft(
             priority=payload.priority,
             due_at=payload.due_at,
             task_status="open",
-            state="pending_review",
-            clarification_state="not_required",
-            blocker_codes=[],
+            state=("needs_clarification" if task_details_pending else "pending_review"),
+            clarification_state=("pending" if task_details_pending else "not_required"),
+            blocker_codes=blocker_codes,
             owner_clarification_pending=False,
-            task_details_clarification_pending=False,
+            task_details_clarification_pending=task_details_pending,
             payload_hash=payload_hash,
             model_schema_version="sydney-agent-draft-v1",
             obligation_fingerprint=payload_hash,

@@ -35,6 +35,7 @@ on:
       - "backend/tests/test_verify_atlas_tools.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
+      - "backend/tests/test_gmail_task_intake_e2e.py"
       - "backend/tests/test_workspace_actions.py"
       - "backend/tests/test_workspace_oauth.py"
       - "backend/requirements.txt"
@@ -94,6 +95,7 @@ on:
       - "backend/tests/test_verify_atlas_tools.py"
       - "backend/tests/test_integration_worker.py"
       - "backend/tests/test_integration_worker_deployment.py"
+      - "backend/tests/test_gmail_task_intake_e2e.py"
       - "backend/tests/test_workspace_actions.py"
       - "backend/tests/test_workspace_oauth.py"
       - "backend/requirements.txt"
@@ -227,10 +229,19 @@ jobs:
             chmod 0644 "$PGDATA/server.crt"
             chmod 0600 "$PGDATA/server.key"
           '
-          docker exec "$POSTGRES_CONTAINER" psql --set ON_ERROR_STOP=1 \
-            --username "$POSTGRES_USER" \
-            --dbname "$GMAIL_TASK_TEST_DATABASE_NAME" \
-            --command "ALTER SYSTEM SET ssl = 'on'"
+          for attempt in {1..30}; do
+            if docker exec "$POSTGRES_CONTAINER" psql --set ON_ERROR_STOP=1 \
+              --username "$POSTGRES_USER" \
+              --dbname "$GMAIL_TASK_TEST_DATABASE_NAME" \
+              --command "ALTER SYSTEM SET ssl = 'on'"; then
+              break
+            fi
+            if [[ "$attempt" -eq 30 ]]; then
+              echo "PostgreSQL did not remain ready for TLS setup" >&2
+              exit 1
+            fi
+            sleep 1
+          done
           docker exec --user root "$POSTGRES_CONTAINER" sh -euxc '
             {
               echo "local all all trust"
@@ -273,7 +284,7 @@ jobs:
               connection.close()
           PY
 
-      - name: Run the Task 1 through Task 6 persistence and compatibility contracts
+      - name: Run the Task 1 through Task 9 persistence, concurrency, and E2E contracts
         working-directory: backend
         run: |
           python -m pytest -q \
@@ -303,7 +314,8 @@ jobs:
             tests/test_gmail_task_intake_admin.py \
             tests/test_agent_control_crm.py \
             tests/test_agent_control_transactional_audit.py \
-            tests/test_gmail_task_router_registration.py
+            tests/test_gmail_task_router_registration.py \
+            tests/test_gmail_task_intake_e2e.py
 
       - name: Remove the exact disposable fixtures
         if: always()

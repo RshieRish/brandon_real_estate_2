@@ -20,6 +20,7 @@ from config import resolve_workspace_oauth_client_settings
 
 _PARTICIPANT_DOMAIN = b"sws:gmail-task-intake:participant:v1\x00"
 _MIN_PARTICIPANT_KEY_BYTES = 32
+_MIN_RECEIPT_FINALIZATION_MARGIN_SECONDS = 5.0
 _MAX_BODY_CHARS = 12_000
 _BODY_SCAN_MULTIPLIER = 4
 _BODY_SCAN_PADDING = 4_096
@@ -63,9 +64,7 @@ _QUOTED_THREAD_START = re.compile(
     r"_{5,}\s*"
     r")$"
 )
-_SIGNATURE_START = re.compile(
-    r"(?im)^(?:\s*--\s*|\s*sent from my(?:\s+[^\n]*)?)$"
-)
+_SIGNATURE_START = re.compile(r"(?im)^(?:\s*--\s*|\s*sent from my(?:\s+[^\n]*)?)$")
 _TRACKING_URL = re.compile(r"https?://[^\s<>\"']{1,2048}", re.IGNORECASE)
 _TRACKING_MARKERS = (
     "tracking",
@@ -188,9 +187,8 @@ def _participant_key(value: object) -> bytes:
         encoded = normalized.encode("ascii")
     except UnicodeEncodeError:
         raise RuntimeError("participant_hash_key_invalid") from None
-    if (
-        len(encoded) < _MIN_PARTICIPANT_KEY_BYTES
-        or any(byte < 33 or byte > 126 for byte in encoded)
+    if len(encoded) < _MIN_PARTICIPANT_KEY_BYTES or any(
+        byte < 33 or byte > 126 for byte in encoded
     ):
         raise RuntimeError("participant_hash_key_invalid")
     return encoded
@@ -277,21 +275,31 @@ def validate_gmail_runtime_settings(config: object) -> GmailRuntimeSettings:
         )
 
     participant_key = _participant_key(_setting(config, "GMAIL_PARTICIPANT_HASH_KEY"))
-    if not isinstance(max_workers, int) or isinstance(max_workers, bool) or max_workers <= 0:
+    if (
+        not isinstance(max_workers, int)
+        or isinstance(max_workers, bool)
+        or max_workers <= 0
+    ):
         raise RuntimeError("provider_workers_invalid")
     if not _positive_finite(provider_deadline):
         raise RuntimeError("provider_deadline_invalid")
     if not _positive_finite(socket_timeout):
         raise RuntimeError("provider_socket_timeout_invalid")
-    if float(socket_timeout) > float(provider_deadline):
+    if float(socket_timeout) >= float(provider_deadline):
         raise RuntimeError("provider_socket_timeout_exceeds_deadline")
     if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages <= 0:
         raise RuntimeError("gmail_history_max_pages_invalid")
     if not _positive_finite(job_deadline):
         raise RuntimeError("gmail_history_job_deadline_invalid")
-    if not _positive_finite(receipt_deadline):
+    if (
+        not _positive_finite(receipt_deadline)
+        or float(receipt_deadline) - float(provider_deadline)
+        < _MIN_RECEIPT_FINALIZATION_MARGIN_SECONDS
+    ):
         raise RuntimeError("gmail_receipt_processing_deadline_invalid")
-    if not _positive_finite(stale_after) or float(stale_after) <= float(receipt_deadline):
+    if not _positive_finite(stale_after) or float(stale_after) <= float(
+        receipt_deadline
+    ):
         raise RuntimeError("gmail_receipt_stale_threshold_invalid")
 
     oauth_client = resolve_workspace_oauth_client_settings(config)
@@ -371,7 +379,9 @@ def _normalized_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return normalized
 
 
-def _header_addresses(headers: Mapping[str, str], names: tuple[str, ...]) -> tuple[str, ...]:
+def _header_addresses(
+    headers: Mapping[str, str], names: tuple[str, ...]
+) -> tuple[str, ...]:
     values = [headers[name] for name in names if headers.get(name, "").strip()]
     try:
         parsed = getaddresses(values)
@@ -571,8 +581,7 @@ def sanitize_gmail_message(
             else None
         ),
         recipient_hmacs=tuple(
-            participant_hmac(address, participant_hash_key)
-            for address in recipients
+            participant_hmac(address, participant_hash_key) for address in recipients
         ),
         subject_preview=_subject_preview(headers),
         body_hash=hashlib.sha256(transient_body.encode("utf-8")).hexdigest(),

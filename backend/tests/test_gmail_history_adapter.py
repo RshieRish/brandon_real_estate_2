@@ -976,6 +976,52 @@ def test_single_attempt_http_never_replays_an_ambiguous_post(
     assert connection.close_calls == 1
 
 
+def test_single_attempt_http_supports_limit_aware_httplib2_decompression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.gmail_history_adapter as adapter_module
+    from services.gmail_history_adapter import _SingleAttemptHttp
+
+    class _Response:
+        def read(self) -> bytes:
+            return b"compressed-response"
+
+    class _Connection:
+        sock = object()
+
+        def request(self, *_args, **_kwargs) -> None:
+            return None
+
+        def getresponse(self) -> _Response:
+            return _Response()
+
+        def close(self) -> None:
+            self.sock = None
+
+    calls: list[tuple[object, bytes, object]] = []
+
+    def decompress(response, content: bytes, limit_kwargs):
+        calls.append((response, content, limit_kwargs))
+        return b"decoded-response"
+
+    monkeypatch.setattr(adapter_module.httplib2, "Response", lambda response: response)
+    monkeypatch.setattr(adapter_module.httplib2, "_decompressContent", decompress)
+
+    transport = _SingleAttemptHttp(timeout=0.25)
+    transport.limit_kwargs = {"max_length": 1024}
+    response, content = transport._conn_request(
+        _Connection(),
+        "/gmail/v1/users/me/profile",
+        "GET",
+        None,
+        {},
+    )
+
+    assert isinstance(response, _Response)
+    assert content == b"decoded-response"
+    assert calls == [(response, b"compressed-response", transport.limit_kwargs)]
+
+
 @pytest.mark.parametrize("status", [301, 302, 307, 308, 401])
 def test_single_attempt_http_does_not_follow_redirect_or_auth_challenge(
     status: int,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
 import socket
 from collections.abc import Awaitable, Callable, Coroutine
@@ -30,7 +32,10 @@ from services.notification_service import (
     run_notification_retry_pass,
 )
 from workers.health_app import WorkerReadinessProbe, create_health_app
-from workers.jobs.gmail_history import run_gmail_history_job
+from workers.jobs.gmail_history import GmailHistoryJob, run_gmail_history_job
+from workers.jobs.gmail_receipts import GmailReceiptJob, build_gmail_model_call
+from workers.jobs.integration_alerts import IntegrationAlertsJob
+from workers.jobs.sydney_questions import SydneyQuestionsJob
 
 
 EXPECTED_MIGRATION = "84d7a5f9b2c3"
@@ -202,6 +207,10 @@ async def _notification_job() -> None:
     await run_notification_retry_pass(limit=20)
 
 
+async def _integration_alert_job() -> None:
+    await IntegrationAlertsJob(sessionmaker=AsyncSessionLocal).run()
+
+
 async def _unavailable_provider_job() -> None:
     raise RuntimeError("enabled provider job is not installed")
 
@@ -210,8 +219,14 @@ def build_job_registry(
     *,
     config=settings,
     gmail_runner: Callable[[], Awaitable[None]] | None = None,
+    receipt_runner: Callable[[], Awaitable[None]] | None = None,
+    sydney_runner: Callable[[], Awaitable[None]] | None = None,
+    alert_runner: Callable[[], Awaitable[None]] | None = None,
 ) -> JobRegistry:
     effective_gmail_runner = gmail_runner or _unavailable_provider_job
+    effective_receipt_runner = receipt_runner or _unavailable_provider_job
+    effective_sydney_runner = sydney_runner or _unavailable_provider_job
+    effective_alert_runner = alert_runner or _integration_alert_job
     return JobRegistry(
         (
             JobDefinition("notification_delivery", 60, True, _notification_job),
@@ -222,10 +237,22 @@ def build_job_registry(
                 effective_gmail_runner,
             ),
             JobDefinition(
+                "gmail_receipts",
+                30,
+                config.GMAIL_TASK_INTAKE_ENABLED,
+                effective_receipt_runner,
+            ),
+            JobDefinition(
                 "sydney_questions",
-                60,
+                30,
                 config.SYDNEY_TASK_QUESTIONS_ENABLED,
-                _unavailable_provider_job,
+                effective_sydney_runner,
+            ),
+            JobDefinition(
+                "integration_alerts",
+                60,
+                True,
+                effective_alert_runner,
             ),
             JobDefinition(
                 "instagram_health",
@@ -246,11 +273,13 @@ async def initialize_worker_runtime(
     history_probe=probe_gmail_history_session_affinity,
     provider_executor_factory=BoundedProviderExecutor,
     gmail_job_factory=gmail_history_job_runner,
+    gmail_receipt_runner: Callable[[], Awaitable[None]] | None = None,
 ) -> WorkerRuntime:
     """Validate and compose resources before registry readiness or heartbeat."""
 
     gmail = validate_gmail_runtime_settings(config)
-    if not gmail.enabled:
+    sydney_enabled = bool(config.SYDNEY_TASK_QUESTIONS_ENABLED)
+    if not gmail.enabled and not sydney_enabled:
         registry = build_job_registry(config=config)
         registry.initialize()
         return WorkerRuntime(
@@ -258,44 +287,133 @@ async def initialize_worker_runtime(
             gmail_history_ready=False,
         )
 
-    history_engine = history_engine_factory(config)
+    history_engine = history_engine_factory(config) if gmail.enabled else None
     provider_executor = None
     try:
-        await history_probe(
-            history_engine=history_engine,
-            primary_engine=primary_engine,
-        )
+        if gmail.enabled:
+            await history_probe(
+                history_engine=history_engine,
+                primary_engine=primary_engine,
+            )
         provider_executor = provider_executor_factory(
             max_workers=gmail.provider_max_workers
         )
-        runner = gmail_job_factory(
-            enabled=True,
-            sessionmaker=sessionmaker,
-            history_engine=history_engine,
-            provider_executor=provider_executor,
-            participant_hash_key=gmail.participant_hash_key,
-            workspace_client_id=gmail.workspace_oauth_client_id,
-            workspace_client_secret=gmail.workspace_oauth_client_secret,
-            socket_timeout_seconds=gmail.socket_timeout_seconds,
-            provider_deadline_seconds=gmail.provider_deadline_seconds,
-            max_pages_per_run=gmail.max_pages_per_run,
-            whole_job_deadline_seconds=gmail.whole_job_deadline_seconds,
-            receipt_processing_deadline_seconds=(
-                gmail.receipt_processing_deadline_seconds
-            ),
-            receipt_processing_stale_after_seconds=(
-                gmail.receipt_processing_stale_after_seconds
-            ),
-            alert_sink=_durable_gmail_alert_sink(sessionmaker),
-        )
+        gmail_runner = None
+        receipt_runner = None
+        if gmail.enabled:
+            gmail_kwargs = {
+                "enabled": True,
+                "sessionmaker": sessionmaker,
+                "history_engine": history_engine,
+                "provider_executor": provider_executor,
+                "participant_hash_key": gmail.participant_hash_key,
+                "workspace_client_id": gmail.workspace_oauth_client_id,
+                "workspace_client_secret": gmail.workspace_oauth_client_secret,
+                "socket_timeout_seconds": gmail.socket_timeout_seconds,
+                "provider_deadline_seconds": gmail.provider_deadline_seconds,
+                "max_pages_per_run": gmail.max_pages_per_run,
+                "whole_job_deadline_seconds": gmail.whole_job_deadline_seconds,
+                "receipt_processing_deadline_seconds": (
+                    gmail.receipt_processing_deadline_seconds
+                ),
+                "receipt_processing_stale_after_seconds": (
+                    gmail.receipt_processing_stale_after_seconds
+                ),
+                "alert_sink": _durable_gmail_alert_sink(sessionmaker),
+            }
+            if gmail_job_factory is gmail_history_job_runner:
+                history_job = GmailHistoryJob(**gmail_kwargs)
+                gmail_runner = history_job.run
+                from services.gmail_obligation_reconciliation import (
+                    GmailObligationReconciliationService,
+                )
+                from services.gmail_task_extractor import GmailTaskExtractor
+
+                extractor = GmailTaskExtractor(
+                    executor=provider_executor,
+                    model_call=build_gmail_model_call(
+                        api_key=config.GEMINI_API_KEY,
+                        socket_timeout_seconds=gmail.socket_timeout_seconds,
+                    ),
+                    deadline_seconds=gmail.provider_deadline_seconds,
+                )
+                receipt_runner = GmailReceiptJob(
+                    enabled=True,
+                    sessionmaker=sessionmaker,
+                    history_service_provider=history_job.bound_service,
+                    extractor=extractor,
+                    reconciliation_service=GmailObligationReconciliationService(
+                        sessionmaker=sessionmaker
+                    ),
+                    stale_after_seconds=(gmail.receipt_processing_stale_after_seconds),
+                ).run
+            else:
+                # Preserve the injected Task 3 construction seam. Production
+                # always takes the fully composed branch above.
+                gmail_runner = gmail_job_factory(**gmail_kwargs)
+                if gmail_receipt_runner is None:
+                    raise RuntimeError("gmail_receipt_runner_required")
+                receipt_runner = gmail_receipt_runner
+
+        sydney_runner = None
+        if sydney_enabled:
+            from services.sydney_clarification_service import (
+                SydneyClarificationService,
+            )
+            from services.sydney_telegram_dispatcher import (
+                SydneyTelegramDispatcher,
+                SydneyTelegramDispatcherConfig,
+                send_telegram_message,
+            )
+
+            raw_keys = json.loads(config.SYDNEY_CLARIFICATION_CODE_KEYS_JSON)
+            if not isinstance(raw_keys, dict):
+                raise ValueError("sydney_clarification_keys_invalid")
+            code_keys = {
+                int(version): base64.b64decode(value, validate=True)
+                for version, value in raw_keys.items()
+            }
+            telegram_config = SydneyTelegramDispatcherConfig(
+                enabled=True,
+                bot_token=config.SYDNEY_TELEGRAM_BOT_TOKEN,
+                brandon_chat_id=config.SYDNEY_TELEGRAM_BRANDON_CHAT_ID,
+                clarification_code_keys=code_keys,
+                active_code_key_version=(
+                    config.SYDNEY_CLARIFICATION_ACTIVE_KEY_VERSION
+                ),
+                provider_deadline_seconds=gmail.provider_deadline_seconds,
+                provider_socket_timeout_seconds=gmail.socket_timeout_seconds,
+            )
+            clarification_service = SydneyClarificationService(
+                sessionmaker=sessionmaker,
+                brandon_chat_id=telegram_config.brandon_chat_id,
+                clarification_code_keys=dict(telegram_config.clarification_code_keys),
+                active_code_key_version=telegram_config.active_code_key_version,
+            )
+            dispatcher = SydneyTelegramDispatcher(
+                sessionmaker=sessionmaker,
+                executor=provider_executor,
+                send_message=send_telegram_message,
+                config=telegram_config,
+                clock=lambda: datetime.now(UTC),
+            )
+            sydney_runner = SydneyQuestionsJob(
+                enabled=True,
+                sessionmaker=sessionmaker,
+                clarification_service=clarification_service,
+                dispatcher=dispatcher,
+            ).run
         registry = build_job_registry(
             config=config,
-            gmail_runner=runner,
+            gmail_runner=gmail_runner,
+            receipt_runner=receipt_runner,
+            sydney_runner=sydney_runner,
+            alert_runner=IntegrationAlertsJob(sessionmaker=sessionmaker).run,
         )
         registry.initialize()
         return WorkerRuntime(
             registry=registry,
-            gmail_history_ready=True,
+            gmail_history_ready=gmail.enabled,
             history_engine=history_engine,
             provider_executor=provider_executor,
         )

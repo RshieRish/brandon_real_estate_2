@@ -81,7 +81,15 @@ class _SingleAttemptHttp(httplib2.Http):
                 content = response.read()
             response = httplib2.Response(response)
             if method != "HEAD":
-                content = httplib2._decompressContent(response, content)
+                limit_kwargs = getattr(self, "limit_kwargs", None)
+                if limit_kwargs is None:
+                    content = httplib2._decompressContent(response, content)
+                else:
+                    content = httplib2._decompressContent(
+                        response,
+                        content,
+                        limit_kwargs,
+                    )
             return response, content
         except BaseException:
             conn.close()

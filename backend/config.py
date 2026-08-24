@@ -74,7 +74,9 @@ class Settings(BaseSettings):
     INTEGRATION_PROVIDER_DEADLINE_SECONDS: float = 30.0
     GMAIL_HISTORY_MAX_PAGES_PER_RUN: int = 100
     GMAIL_HISTORY_JOB_DEADLINE_SECONDS: float = 300.0
-    GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS: float = 30.0
+    # The receipt boundary must outlive the provider deadline so the worker can
+    # durably finalize a timed-out extraction attempt before its lease closes.
+    GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS: float = 35.0
     GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS: float = 120.0
 
 
