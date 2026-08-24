@@ -71,7 +71,7 @@ def test_runtime_config_defaults_are_disabled_and_have_no_hash_key_fallback() ->
     assert config.INTEGRATION_PROVIDER_MAX_WORKERS == 4
     assert config.GMAIL_HISTORY_MAX_PAGES_PER_RUN == 100
     assert config.GMAIL_HISTORY_JOB_DEADLINE_SECONDS == 300.0
-    assert config.GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS == 30.0
+    assert config.GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS == 35.0
     assert config.GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS == 120.0
 
 
@@ -102,8 +102,15 @@ def test_runtime_config_defaults_are_disabled_and_have_no_hash_key_fallback() ->
         ),
         (
             {
-                "GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS": 30,
-                "GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS": 30,
+                "INTEGRATION_PROVIDER_DEADLINE_SECONDS": 30,
+                "GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS": 34.999,
+            },
+            "gmail_receipt_processing_deadline_invalid",
+        ),
+        (
+            {
+                "GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS": 35,
+                "GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS": 35,
             },
             "gmail_receipt_stale_threshold_invalid",
         ),

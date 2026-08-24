@@ -395,7 +395,7 @@ async def initialize_worker_runtime(
                 executor=provider_executor,
                 send_message=send_telegram_message,
                 config=telegram_config,
-                clock=None,
+                clock=lambda: datetime.now(UTC),
             )
             sydney_runner = SydneyQuestionsJob(
                 enabled=True,

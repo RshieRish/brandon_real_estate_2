@@ -90,10 +90,29 @@ class SydneyQuestionsJob:
             )
             return tuple(rows.all())
 
+    async def _sending_attempt_ids(self) -> tuple[UUID, ...]:
+        async with self._sessionmaker() as session:
+            rows = await session.scalars(
+                sa.select(SydneyQuestionOutbox.id)
+                .where(SydneyQuestionOutbox.state == "sending")
+                .order_by(
+                    SydneyQuestionOutbox.created_at,
+                    SydneyQuestionOutbox.id,
+                )
+                .limit(self._batch_size)
+            )
+            return tuple(rows.all())
+
     async def run(self) -> None:
         if not self._enabled:
             return
         now = self._clock().astimezone(timezone.utc)
+        for attempt_id in await self._sending_attempt_ids():
+            try:
+                await self._dispatcher.recover_interrupted_attempt(attempt_id)
+            except TelegramDispatchError:
+                continue
+
         clarification_ids = await self._pending_clarification_ids()
         for clarification_id in clarification_ids:
             await self._dispatcher.release_expired_clarification(clarification_id)

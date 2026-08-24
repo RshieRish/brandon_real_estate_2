@@ -92,6 +92,35 @@ def test_gmail_runtime_requires_inner_socket_timeout_below_outer_deadline() -> N
         validate_gmail_runtime_settings(config)
 
 
+def test_gmail_runtime_reserves_receipt_finalization_after_provider_deadline() -> None:
+    from services.gmail_message_sanitizer import validate_gmail_runtime_settings
+
+    config = SimpleNamespace(
+        GMAIL_TASK_INTAKE_ENABLED=True,
+        GMAIL_PARTICIPANT_HASH_KEY="x" * 32,
+        INTEGRATION_PROVIDER_MAX_WORKERS=1,
+        INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS=5,
+        INTEGRATION_PROVIDER_DEADLINE_SECONDS=30,
+        GMAIL_HISTORY_MAX_PAGES_PER_RUN=1,
+        GMAIL_HISTORY_JOB_DEADLINE_SECONDS=60,
+        GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS=34.999,
+        GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS=120,
+        GOOGLE_WORKSPACE_CLIENT_ID="worker-client-id",
+        GOOGLE_WORKSPACE_CLIENT_SECRET="worker-client-secret",
+        GOOGLE_WORKSPACE_REDIRECT_URI="https://example.test/oauth/callback",
+        DATABASE_URL="postgresql+asyncpg://worker@localhost/task_intake",
+        GMAIL_HISTORY_DATABASE_URL=(
+            "postgresql+asyncpg://worker@localhost/task_intake?ssl=require"
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="^gmail_receipt_processing_deadline_invalid$",
+    ):
+        validate_gmail_runtime_settings(config)
+
+
 def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
     from workers import integration_worker
     from workers.jobs.gmail_history import run_gmail_history_job
@@ -387,7 +416,7 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
         INTEGRATION_PROVIDER_DEADLINE_SECONDS=20,
         GMAIL_HISTORY_MAX_PAGES_PER_RUN=17,
         GMAIL_HISTORY_JOB_DEADLINE_SECONDS=55,
-        GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS=12,
+        GMAIL_RECEIPT_PROCESSING_DEADLINE_SECONDS=25,
         GMAIL_RECEIPT_PROCESSING_STALE_AFTER_SECONDS=60,
     )
     calls: list[str] = []
@@ -438,7 +467,7 @@ async def test_enabled_gmail_startup_probes_before_job_registration_or_heartbeat
         assert kwargs["provider_deadline_seconds"] == 20
         assert kwargs["max_pages_per_run"] == 17
         assert kwargs["whole_job_deadline_seconds"] == 55
-        assert kwargs["receipt_processing_deadline_seconds"] == 12
+        assert kwargs["receipt_processing_deadline_seconds"] == 25
         assert kwargs["receipt_processing_stale_after_seconds"] == 60
         return gmail_runner
 
@@ -538,6 +567,9 @@ async def test_sydney_only_startup_registers_real_question_job_without_gmail_pro
         )
         assert question_job.enabled is True
         assert isinstance(question_job.runner.__self__, SydneyQuestionsJob)
+        dispatcher_clock = question_job.runner.__self__._dispatcher._clock
+        assert callable(dispatcher_clock)
+        assert dispatcher_clock().tzinfo is UTC
         assert runtime.gmail_history_ready is False
         assert runtime.history_engine is None
         assert calls == ["executor:4"]

@@ -45,6 +45,7 @@ TELEGRAM_RESPONSE_MAX_BYTES = 64 * 1024
 _TELEGRAM_TEXT_MAX = 4096
 _CHAT_ID_RE = re.compile(r"-?[1-9][0-9]*")
 _BOT_TOKEN_RE = re.compile(r"[1-9][0-9]{4,15}:[A-Za-z0-9_-]{20,128}")
+TELEGRAM_INTERRUPTED_RECOVERY_MARGIN_SECONDS = 5.0
 
 
 class TelegramConfigurationError(RuntimeError):
@@ -404,6 +405,7 @@ class SydneyTelegramDispatcher:
         self._send_message: Callable[..., TelegramHTTPResponse] = send_message
         self._config = config
         self._clock: Callable[[], datetime] = clock
+        self._active_attempt_ids: set[UUID] = set()
 
     async def _identity_for_attempt(
         self, session: AsyncSession, attempt_id: UUID
@@ -426,6 +428,15 @@ class SydneyTelegramDispatcher:
     async def dispatch_attempt(self, attempt_id):
         if not self._config.enabled or not isinstance(attempt_id, UUID):
             raise _dispatch_error("telegram_dispatch_disabled", TelegramDispatchError)
+        if attempt_id in self._active_attempt_ids:
+            raise _dispatch_error("telegram_attempt_stale", TelegramDispatchError)
+        self._active_attempt_ids.add(attempt_id)
+        try:
+            return await self._dispatch_active_attempt(attempt_id)
+        finally:
+            self._active_attempt_ids.discard(attempt_id)
+
+    async def _dispatch_active_attempt(self, attempt_id: UUID):
         now = self._clock().astimezone(timezone.utc)
         async with self._sessionmaker() as session:
             async with session.begin():
@@ -795,17 +806,28 @@ class SydneyTelegramDispatcher:
                 return True
 
     async def recover_interrupted_attempt(self, attempt_id):
-        if not isinstance(attempt_id, UUID):
+        if not isinstance(attempt_id, UUID) or attempt_id in self._active_attempt_ids:
             return False
         now = self._clock().astimezone(timezone.utc)
+        stale_before = now - timedelta(
+            seconds=(
+                self._config.provider_deadline_seconds
+                + TELEGRAM_INTERRUPTED_RECOVERY_MARGIN_SECONDS
+            )
+        )
         async with self._sessionmaker() as session:
             async with session.begin():
                 attempt = await session.scalar(
                     sa.select(SydneyQuestionOutbox)
-                    .where(SydneyQuestionOutbox.id == attempt_id)
+                    .where(
+                        SydneyQuestionOutbox.id == attempt_id,
+                        SydneyQuestionOutbox.state == "sending",
+                        SydneyQuestionOutbox.attempted_at.is_not(None),
+                        SydneyQuestionOutbox.attempted_at < stale_before,
+                    )
                     .with_for_update()
                 )
-                if attempt is None or attempt.state != "sending":
+                if attempt is None:
                     return False
                 attempt.state = "delivery_uncertain"
                 attempt.failure_category = "worker_interrupted"

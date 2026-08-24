@@ -1013,6 +1013,26 @@ class GmailTaskExtractor:
         self._deadline_seconds = deadline_seconds
         self._schema_version = schema_version
 
+    @staticmethod
+    def _provider_call_key(*, account_id: UUID, thread_id: str) -> str:
+        return f"gmail-task-extract:{account_id}:{thread_id}"
+
+    def provider_call_state(self, *, account_id: UUID, thread_id: str) -> str:
+        """Check executor contention before creating a durable attempt row."""
+
+        if (
+            not isinstance(account_id, UUID)
+            or type(thread_id) is not str
+            or not thread_id
+        ):
+            raise _fixed_error("gmail_extraction_invalid_source")
+        return self._executor.call_state(
+            key=self._provider_call_key(
+                account_id=account_id,
+                thread_id=thread_id,
+            )
+        )
+
     async def extract(
         self,
         *,
@@ -1120,7 +1140,10 @@ class GmailTaskExtractor:
         raw_response: object | None = None
         try:
             raw_response = await self._executor.run(
-                key=f"gmail-task-extract:{account_id}:{thread_id}",
+                key=self._provider_call_key(
+                    account_id=account_id,
+                    thread_id=thread_id,
+                ),
                 function=lambda model_request=request: self._model_call(
                     model_request
                 ),

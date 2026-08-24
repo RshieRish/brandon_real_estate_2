@@ -20,6 +20,7 @@ from config import resolve_workspace_oauth_client_settings
 
 _PARTICIPANT_DOMAIN = b"sws:gmail-task-intake:participant:v1\x00"
 _MIN_PARTICIPANT_KEY_BYTES = 32
+_MIN_RECEIPT_FINALIZATION_MARGIN_SECONDS = 5.0
 _MAX_BODY_CHARS = 12_000
 _BODY_SCAN_MULTIPLIER = 4
 _BODY_SCAN_PADDING = 4_096
@@ -290,7 +291,11 @@ def validate_gmail_runtime_settings(config: object) -> GmailRuntimeSettings:
         raise RuntimeError("gmail_history_max_pages_invalid")
     if not _positive_finite(job_deadline):
         raise RuntimeError("gmail_history_job_deadline_invalid")
-    if not _positive_finite(receipt_deadline):
+    if (
+        not _positive_finite(receipt_deadline)
+        or float(receipt_deadline) - float(provider_deadline)
+        < _MIN_RECEIPT_FINALIZATION_MARGIN_SECONDS
+    ):
         raise RuntimeError("gmail_receipt_processing_deadline_invalid")
     if not _positive_finite(stale_after) or float(stale_after) <= float(
         receipt_deadline

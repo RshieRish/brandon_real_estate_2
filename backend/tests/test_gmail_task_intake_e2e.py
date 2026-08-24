@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
@@ -244,6 +246,9 @@ def _receipt_harness(
     adapter,
     model_call,
     origin_observer=None,
+    max_workers: int = 2,
+    provider_deadline_seconds: float = 1,
+    receipt_processing_deadline_seconds: float = 2,
 ):
     from services.gmail_history_service import GmailHistoryService
     from services.gmail_obligation_reconciliation import (
@@ -253,20 +258,20 @@ def _receipt_harness(
     from services.integration_health_service import BoundedProviderExecutor
     from workers.jobs.gmail_receipts import GmailReceiptJob
 
-    executor = BoundedProviderExecutor(max_workers=2)
+    executor = BoundedProviderExecutor(max_workers=max_workers)
     history = GmailHistoryService(
         engine=engine,
         adapter=adapter,
         participant_hash_key=PARTICIPANT_KEY,
         origin_observer=origin_observer,
-        receipt_processing_deadline_seconds=2,
+        receipt_processing_deadline_seconds=receipt_processing_deadline_seconds,
         receipt_processing_stale_after_seconds=10,
         clock=lambda: NOW,
     )
     extractor = GmailTaskExtractor(
         executor=executor,
         model_call=model_call,
-        deadline_seconds=1,
+        deadline_seconds=provider_deadline_seconds,
     )
     receipts = GmailReceiptJob(
         enabled=True,
@@ -794,6 +799,230 @@ async def test_received_request_and_sydney_commitment_in_one_thread_have_two_sou
 
 
 @pytest.mark.asyncio
+async def test_provider_timeout_attempt_is_durable_before_receipt_deadline(
+    e2e_runtime,
+) -> None:
+    from models.gmail_task_intake import GmailExtractionAttempt, GmailMessageReceipt
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="provider-timeout-finalization-1",
+                thread_id="provider-timeout-finalization-thread-1",
+                direction="received",
+                body="Please send the disclosure package tomorrow.",
+            )
+        ]
+    )
+    provider_entered = threading.Event()
+    provider_release = threading.Event()
+
+    def stalled_model_call(_request):
+        provider_entered.set()
+        provider_release.wait(timeout=5)
+        return {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind="incoming_request")],
+        }
+
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=stalled_model_call,
+        max_workers=1,
+        provider_deadline_seconds=0.05,
+        receipt_processing_deadline_seconds=0.5,
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+        assert provider_entered.is_set()
+        async with sessions() as session:
+            receipt = await session.scalar(sa.select(GmailMessageReceipt))
+            attempt = await session.scalar(sa.select(GmailExtractionAttempt))
+        assert receipt is not None and receipt.processing_state == "failed"
+        assert receipt.failure_category == "transient_processing"
+        assert attempt is not None and attempt.state == "failed"
+        assert attempt.error_category == "provider_timeout"
+        assert attempt.completed_at is not None
+    finally:
+        provider_release.set()
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_running_provider_future_adds_no_no_call_extraction_attempts(
+    e2e_runtime,
+) -> None:
+    from models.gmail_task_intake import GmailExtractionAttempt, GmailMessageReceipt
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="running-provider-attempt-1",
+                thread_id="running-provider-thread-1",
+                direction="received",
+                body="Please send the disclosure package tomorrow.",
+            )
+        ]
+    )
+    provider_entered = threading.Event()
+    provider_release = threading.Event()
+    model_calls = 0
+
+    def model_call(_request):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            provider_entered.set()
+            provider_release.wait(timeout=5)
+        return {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind="incoming_request")],
+        }
+
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=model_call,
+        max_workers=1,
+        provider_deadline_seconds=0.05,
+        receipt_processing_deadline_seconds=0.5,
+    )
+    try:
+        await harness.history.sync_account(account.id)
+        await harness.receipts.run()
+        assert provider_entered.is_set()
+        await asyncio.gather(*(harness.receipts.run() for _ in range(4)))
+        await harness.receipts.run()
+        async with sessions() as session:
+            attempts_while_running = list(
+                (
+                    await session.scalars(
+                        sa.select(GmailExtractionAttempt).order_by(
+                            GmailExtractionAttempt.attempt_number
+                        )
+                    )
+                ).all()
+            )
+            receipt = await session.scalar(sa.select(GmailMessageReceipt))
+        assert len(attempts_while_running) == 1
+        assert attempts_while_running[0].state == "failed"
+        assert attempts_while_running[0].error_category == "provider_timeout"
+        assert receipt is not None and receipt.processing_state == "failed"
+        assert model_calls == 1
+
+        provider_release.set()
+        await harness.executor.wait_for_tracked_calls()
+        await harness.receipts.run()
+        await harness.receipts.run()
+        async with sessions() as session:
+            attempts_after_exit = list(
+                (
+                    await session.scalars(
+                        sa.select(GmailExtractionAttempt).order_by(
+                            GmailExtractionAttempt.attempt_number
+                        )
+                    )
+                ).all()
+            )
+        assert [attempt.state for attempt in attempts_after_exit] == [
+            "failed",
+            "succeeded",
+        ]
+        assert model_calls == 2
+    finally:
+        provider_release.set()
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_saturated_provider_adds_no_attempt_until_capacity_can_make_call(
+    e2e_runtime,
+) -> None:
+    from models.gmail_task_intake import GmailExtractionAttempt
+    from services.integration_health_service import ProviderCallTimedOut
+
+    engine, sessions = e2e_runtime
+    account = await _seed_account(sessions)
+    adapter = _ControlledGmailAdapter(
+        [
+            _message(
+                message_id="saturated-provider-attempt-1",
+                thread_id="saturated-provider-thread-1",
+                direction="received",
+                body="Please send the disclosure package tomorrow.",
+            )
+        ]
+    )
+    blocker_entered = threading.Event()
+    blocker_release = threading.Event()
+    model_calls = 0
+
+    def model_call(_request):
+        nonlocal model_calls
+        model_calls += 1
+        return {
+            "schema_version": "gmail-task-v1",
+            "actions": [_model_action(kind="incoming_request")],
+        }
+
+    def blocker() -> None:
+        blocker_entered.set()
+        blocker_release.wait(timeout=5)
+
+    harness = _receipt_harness(
+        engine=engine,
+        sessions=sessions,
+        adapter=adapter,
+        model_call=model_call,
+        max_workers=1,
+        provider_deadline_seconds=0.05,
+        receipt_processing_deadline_seconds=0.5,
+    )
+    try:
+        blocking_call = asyncio.create_task(
+            harness.executor.run(
+                key="unrelated-provider-call",
+                function=blocker,
+                deadline_seconds=0.05,
+            )
+        )
+        assert await asyncio.to_thread(blocker_entered.wait, 1)
+        with pytest.raises(ProviderCallTimedOut, match="provider_timeout"):
+            await blocking_call
+        await harness.history.sync_account(account.id)
+        await asyncio.gather(*(harness.receipts.run() for _ in range(4)))
+        await harness.receipts.run()
+        async with sessions() as session:
+            attempt_count = await session.scalar(
+                sa.select(sa.func.count(GmailExtractionAttempt.id))
+            )
+        assert attempt_count == 0
+        assert model_calls == 0
+
+        blocker_release.set()
+        await harness.executor.wait_for_tracked_calls()
+        await harness.receipts.run()
+        async with sessions() as session:
+            attempts = list(
+                (await session.scalars(sa.select(GmailExtractionAttempt))).all()
+            )
+        assert len(attempts) == 1
+        assert attempts[0].state == "succeeded"
+        assert model_calls == 1
+    finally:
+        blocker_release.set()
+        await harness.close()
+
+
+@pytest.mark.asyncio
 async def test_invalid_model_output_is_lease_bound_atomic_and_has_no_n_plus_one_call(
     e2e_runtime,
 ):
@@ -1233,6 +1462,215 @@ async def test_question_job_has_one_reminder_fixed_release_and_stale_late_answer
         assert (
             await session.scalar(sa.select(sa.func.count(SydneyQuestionOutbox.id))) == 3
         )
+
+
+@pytest.mark.asyncio
+async def test_question_job_recovers_only_restart_stale_sending_attempt_once(
+    e2e_runtime,
+) -> None:
+    from models.agent_action_audit import AgentActionAudit
+    from models.gmail_task_intake import CRMTaskSuggestion
+    from models.sydney_tasks import CRMTaskClarification, SydneyQuestionOutbox
+    from services.crm_task_suggestion_service import canonical_task_payload_hash
+    from services.integration_health_service import BoundedProviderExecutor
+    from services.sydney_telegram_dispatcher import (
+        SydneyTelegramDispatcher,
+        SydneyTelegramDispatcherConfig,
+        TelegramDispatchError,
+    )
+    from workers.jobs.sydney_questions import SydneyQuestionsJob
+
+    _engine, sessions = e2e_runtime
+    suggestion = CRMTaskSuggestion(
+        source_type="sydney_chat",
+        source_scope_key="sydney:restart-recovery-e2e",
+        source_action_key="sydney-restart-recovery-e2e",
+        source_request_id=UUID("00000000-0000-0000-0000-000000000910"),
+        contact_resolution_state="not_provided",
+        title="Confirm the restart-safe follow-up time",
+        description="The due time remains ambiguous after a worker restart.",
+        priority="normal",
+        task_status="open",
+        state="needs_clarification",
+        clarification_state="pending",
+        blocker_codes=["ambiguous_due_at"],
+        payload_hash=canonical_task_payload_hash(
+            title="Confirm the restart-safe follow-up time",
+            description="The due time remains ambiguous after a worker restart.",
+            priority="normal",
+            due_at=None,
+            contact_id=None,
+            status="open",
+        ),
+        model_schema_version="sydney-task-v1",
+        obligation_fingerprint="8" * 64,
+        confidence=1,
+        rationale="Controlled restart recovery fixture.",
+        version=1,
+    )
+    async with sessions() as session:
+        session.add(suggestion)
+        await session.commit()
+
+    clock = _MutableClock(NOW)
+    provider_entered = threading.Event()
+    provider_release = threading.Event()
+    send_calls = 0
+
+    def stalled_send(**_kwargs):
+        nonlocal send_calls
+        send_calls += 1
+        provider_entered.set()
+        provider_release.wait(timeout=5)
+        return _telegram_response(message_id=910)
+
+    provider_deadline = 2.0
+    recovery_margin = 5.0
+    active_executor = BoundedProviderExecutor(max_workers=1)
+    clarification_service = _clarification_service(sessions)
+    telegram_config = SydneyTelegramDispatcherConfig(
+        enabled=True,
+        bot_token="123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+        brandon_chat_id=CHAT_ID,
+        clarification_code_keys={CODE_KEY_VERSION: CODE_KEY},
+        active_code_key_version=CODE_KEY_VERSION,
+        provider_deadline_seconds=provider_deadline,
+        provider_socket_timeout_seconds=1,
+    )
+    active_dispatcher = SydneyTelegramDispatcher(
+        sessionmaker=sessions,
+        executor=active_executor,
+        send_message=stalled_send,
+        config=telegram_config,
+        clock=clock,
+    )
+    active_job = SydneyQuestionsJob(
+        enabled=True,
+        sessionmaker=sessions,
+        clarification_service=clarification_service,
+        dispatcher=active_dispatcher,
+        batch_size=20,
+        clock=clock,
+    )
+    active_run = asyncio.create_task(active_job.run())
+    try:
+        assert await asyncio.to_thread(provider_entered.wait, 1)
+        async with sessions() as session:
+            clarification = await session.scalar(sa.select(CRMTaskClarification))
+            initial = await session.scalar(
+                sa.select(SydneyQuestionOutbox).where(
+                    SydneyQuestionOutbox.attempt_kind == "initial"
+                )
+            )
+        assert clarification is not None
+        assert initial is not None and initial.state == "sending"
+
+        clock.value = NOW + timedelta(seconds=provider_deadline + recovery_margin + 1)
+        await active_job.run()
+        async with sessions() as session:
+            active_attempt = await session.get(SydneyQuestionOutbox, initial.id)
+        assert active_attempt is not None and active_attempt.state == "sending"
+        assert send_calls == 1
+
+        provider_release.set()
+        await asyncio.wait_for(active_run, timeout=2)
+        async with sessions() as session:
+            sent_attempt = await session.get(SydneyQuestionOutbox, initial.id)
+        assert sent_attempt is not None and sent_attempt.state == "sent"
+
+        clock.value = sent_attempt.sent_at + timedelta(hours=24)
+        reminder_id = await active_dispatcher.enqueue_due_reminder(clarification.id)
+        assert isinstance(reminder_id, UUID)
+        crash_started_at = clock.value
+        async with sessions() as session, session.begin():
+            reminder = await session.get(SydneyQuestionOutbox, reminder_id)
+            assert reminder is not None and reminder.state == "pending"
+            reminder.state = "sending"
+            reminder.attempted_at = crash_started_at
+            reminder.telegram_chat_id = CHAT_ID
+            reminder.updated_at = crash_started_at
+
+        restart_clock = _MutableClock(
+            crash_started_at + timedelta(seconds=provider_deadline + recovery_margin)
+        )
+        restart_send_calls = 0
+
+        def forbidden_restart_send(**_kwargs):
+            nonlocal restart_send_calls
+            restart_send_calls += 1
+            return _telegram_response(message_id=911)
+
+        restarted_dispatcher = SydneyTelegramDispatcher(
+            sessionmaker=sessions,
+            executor=_InlineExecutor(),
+            send_message=forbidden_restart_send,
+            config=telegram_config,
+            clock=restart_clock,
+        )
+        restarted_job = SydneyQuestionsJob(
+            enabled=True,
+            sessionmaker=sessions,
+            clarification_service=clarification_service,
+            dispatcher=restarted_dispatcher,
+            batch_size=20,
+            clock=restart_clock,
+        )
+        await restarted_job.run()
+        async with sessions() as session:
+            boundary_attempt = await session.get(SydneyQuestionOutbox, reminder_id)
+        assert boundary_attempt is not None and boundary_attempt.state == "sending"
+
+        restart_clock.value += timedelta(microseconds=1)
+        await asyncio.gather(restarted_job.run(), restarted_job.run())
+        recovered_at = restart_clock.value
+        async with sessions() as session:
+            recovered = await session.get(SydneyQuestionOutbox, reminder_id)
+            audit = AgentActionAudit(
+                actor="command_admin",
+                action_id="task9-restart-telegram-reconciliation",
+                method="POST",
+                path="/api/v1/admin/sydney/reconcile",
+                status_code=200,
+                allowed=True,
+            )
+            session.add(audit)
+            await session.commit()
+            await session.refresh(audit)
+        assert recovered is not None and recovered.state == "delivery_uncertain"
+        assert recovered.failure_category == "worker_interrupted"
+        assert recovered.updated_at == recovered_at
+        assert restart_send_calls == 0
+        assert send_calls == 1
+
+        assert await restarted_dispatcher.reconcile_attempt(
+            reminder_id,
+            "delivery_uncertain",
+            "not_delivered",
+            "Operator verified the interrupted reminder was not delivered.",
+            audit.id,
+            None,
+            None,
+        )
+        with pytest.raises(
+            TelegramDispatchError,
+            match="telegram_reconciliation_stale",
+        ):
+            await restarted_dispatcher.reconcile_attempt(
+                reminder_id,
+                "delivery_uncertain",
+                "not_delivered",
+                "Replay must not mutate the attempt.",
+                audit.id,
+                None,
+                None,
+            )
+    finally:
+        provider_release.set()
+        if not active_run.done():
+            active_run.cancel()
+            await asyncio.gather(active_run, return_exceptions=True)
+        await active_executor.wait_for_tracked_calls()
+        active_executor.shutdown()
 
 
 def test_task7_task8_rollout_flags_keep_all_task9_jobs_dormant_by_default() -> None:

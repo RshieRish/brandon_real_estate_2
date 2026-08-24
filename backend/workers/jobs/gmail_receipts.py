@@ -32,6 +32,25 @@ _FAILURE_CATEGORY_BY_EXTRACTOR_ERROR = {
     "gmail_extraction_provider_failed": "provider_failed",
     "gmail_extraction_invalid_source": "provider_failed",
 }
+_NO_CALL_EXTRACTION_ERRORS = frozenset(
+    {
+        "gmail_extraction_already_running",
+        "gmail_extraction_provider_saturated",
+    }
+)
+
+
+def _no_call_error(provider_state: str) -> GmailTaskExtractionError:
+    category = {
+        "running": "gmail_extraction_already_running",
+        "saturated": "gmail_extraction_provider_saturated",
+    }.get(provider_state)
+    if category is None:
+        raise RuntimeError("gmail_extraction_provider_state_invalid")
+    error = GmailTaskExtractionError(category)
+    error.__cause__ = None
+    error.__context__ = None
+    return error
 
 
 def build_gmail_model_call(
@@ -142,6 +161,12 @@ class GmailReceiptJob:
             return tuple(rows.all())
 
     async def _consume(self, receipt_id: UUID, account_id: UUID, message) -> None:
+        provider_state = self._extractor.provider_call_state(
+            account_id=account_id,
+            thread_id=message.thread_id,
+        )
+        if provider_state != "ready":
+            raise _no_call_error(provider_state)
         try:
             claim = await self._reconciliation.claim_attempt(
                 receipt_id=receipt_id,
@@ -162,7 +187,13 @@ class GmailReceiptJob:
                 message=message,
             )
         except GmailTaskExtractionError as error:
-            category = _FAILURE_CATEGORY_BY_EXTRACTOR_ERROR.get(str(error))
+            error_category = str(error)
+            if error_category in _NO_CALL_EXTRACTION_ERRORS:
+                # The attempt remains running and is replayed with the next
+                # receipt lease. No immutable failure is consumed when the
+                # executor did not start a provider call.
+                raise
+            category = _FAILURE_CATEGORY_BY_EXTRACTOR_ERROR.get(error_category)
             if category is None:
                 category = "provider_failed"
             await self._reconciliation.fail_attempt(

@@ -182,6 +182,20 @@ class BoundedProviderExecutor:
         )
         self._tracked: dict[str, asyncio.Future[object]] = {}
 
+    def call_state(self, *, key: str) -> str:
+        """Return whether one provider key can start without mutating state."""
+
+        if type(key) is not str or not key:
+            raise ValueError("provider_key_invalid")
+        existing = self._tracked.get(key)
+        if existing is not None and not existing.done():
+            return "running"
+        if len([future for future in self._tracked.values() if not future.done()]) >= (
+            self._max_workers
+        ):
+            return "saturated"
+        return "ready"
+
     async def run(
         self,
         *,
@@ -196,12 +210,10 @@ class BoundedProviderExecutor:
             or deadline_seconds <= 0
         ):
             raise ValueError("deadline_seconds must be positive")
-        existing = self._tracked.get(key)
-        if existing is not None and not existing.done():
+        call_state = self.call_state(key=key)
+        if call_state == "running":
             raise ProviderJobStillRunning("provider_job_already_running")
-        if len([future for future in self._tracked.values() if not future.done()]) >= (
-            self._max_workers
-        ):
+        if call_state == "saturated":
             raise ProviderExecutorSaturated("provider_executor_saturated")
 
         loop = asyncio.get_running_loop()
