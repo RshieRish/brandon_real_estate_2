@@ -63,6 +63,62 @@ def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop
     assert "INSTAGRAM_INTEGRATION_ENABLED" not in main_source
 
 
+def test_gmail_model_uses_strict_json_schema_provider_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.gmail_task_extractor import GmailObligationModelResponse
+    from workers.jobs.gmail_receipts import build_gmail_model_call
+
+    observed: dict[str, object] = {}
+
+    class _ModelClient:
+        def __init__(self, **_kwargs):
+            self.models = self
+
+        def generate_content(self, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(
+                text='{"schema_version":"gmail-task-v1","actions":[]}'
+            )
+
+    monkeypatch.setattr("google.genai.Client", _ModelClient)
+    model_call = build_gmail_model_call(
+        api_key="test-gemini-key",
+        socket_timeout_seconds=1,
+    )
+    result = model_call(
+        SimpleNamespace(
+            prompt="Controlled schema probe.",
+            system_instruction="Return only the supplied schema.",
+            response_model=GmailObligationModelResponse,
+        )
+    )
+
+    config = observed["config"]
+    assert config.response_schema is None
+    schema = config.response_json_schema
+    assert isinstance(schema, dict)
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["GmailObligationModelAction"][
+        "additionalProperties"
+    ] is False
+
+    def assert_provider_supported(value: object) -> None:
+        if isinstance(value, dict):
+            assert "default" not in value
+            assert "maxItems" not in value
+            assert "maxLength" not in value
+            assert "minLength" not in value
+            for nested in value.values():
+                assert_provider_supported(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                assert_provider_supported(nested)
+
+    assert_provider_supported(schema)
+    assert result == '{"schema_version":"gmail-task-v1","actions":[]}'
+
+
 def test_gmail_runtime_requires_inner_socket_timeout_below_outer_deadline() -> None:
     from services.gmail_message_sanitizer import validate_gmail_runtime_settings
 

@@ -38,6 +38,24 @@ _NO_CALL_EXTRACTION_ERRORS = frozenset(
         "gmail_extraction_provider_saturated",
     }
 )
+_UNSUPPORTED_GEMINI_JSON_SCHEMA_KEYS = frozenset(
+    {"default", "maxItems", "maxLength", "minLength"}
+)
+
+
+def _gemini_json_response_schema(response_model: Any) -> dict[str, Any]:
+    def normalize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: normalize(nested)
+                for key, nested in value.items()
+                if key not in _UNSUPPORTED_GEMINI_JSON_SCHEMA_KEYS
+            }
+        if isinstance(value, list):
+            return [normalize(nested) for nested in value]
+        return value
+
+    return normalize(response_model.model_json_schema())
 
 
 def _no_call_error(provider_state: str) -> GmailTaskExtractionError:
@@ -88,7 +106,9 @@ def build_gmail_model_call(
             config=types.GenerateContentConfig(
                 system_instruction=request.system_instruction,
                 response_mime_type="application/json",
-                response_schema=request.response_model,
+                response_json_schema=_gemini_json_response_schema(
+                    request.response_model
+                ),
                 temperature=0,
             ),
         )
