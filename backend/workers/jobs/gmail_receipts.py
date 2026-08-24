@@ -112,9 +112,11 @@ def build_gmail_model_call(
                 temperature=0,
             ),
         )
-        # GmailTaskExtractor owns the bounded, strict parse and releases this
-        # transient provider value before any durable reconciliation write.
-        return response.text
+        # Preserve the provider's schema-parsed object. Gemini formats
+        # response.text for display, so forwarding that string would fail the
+        # extractor's canonical-JSON byte check even when the same response
+        # has already passed the configured JSON schema.
+        return response.parsed
 
     return call
 

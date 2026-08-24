@@ -78,7 +78,14 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
         def generate_content(self, **kwargs):
             observed.update(kwargs)
             return SimpleNamespace(
-                text='{"schema_version":"gmail-task-v1","actions":[]}'
+                text=(
+                    '{\n  "schema_version": "gmail-task-v1",\n'
+                    '  "actions": []\n}'
+                ),
+                parsed={
+                    "schema_version": "gmail-task-v1",
+                    "actions": [],
+                },
             )
 
     monkeypatch.setattr("google.genai.Client", _ModelClient)
@@ -116,7 +123,10 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
                 assert_provider_supported(nested)
 
     assert_provider_supported(schema)
-    assert result == '{"schema_version":"gmail-task-v1","actions":[]}'
+    assert result == {
+        "schema_version": "gmail-task-v1",
+        "actions": [],
+    }
 
 
 def test_gmail_runtime_requires_inner_socket_timeout_below_outer_deadline() -> None:
