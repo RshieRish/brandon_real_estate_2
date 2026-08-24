@@ -765,6 +765,7 @@ def test_repository_ci_runs_the_real_tls_postgresql_migration_contract() -> None
         "CRM_TASK_TEST_DATABASE_URL:",
         "SSL_CERT_FILE:",
         "ALTER SYSTEM SET ssl = 'on'",
+        "PostgreSQL did not remain ready for TLS setup",
         "hostnossl all all 0.0.0.0/0 reject",
         "pg_stat_ssl",
         'sslmode="verify-full"',

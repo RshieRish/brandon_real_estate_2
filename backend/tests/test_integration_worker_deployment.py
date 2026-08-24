@@ -283,6 +283,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         'CI: "true"',
         "SSL_CERT_FILE:",
         "ALTER SYSTEM SET ssl = 'on'",
+        "PostgreSQL did not remain ready for TLS setup",
         "hostnossl all all 0.0.0.0/0 reject",
         "pg_stat_ssl",
         'sslmode="verify-full"',
