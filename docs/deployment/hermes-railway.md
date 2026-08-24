@@ -2,6 +2,10 @@
 
 This runbook is for the private Brandon AI / Atlas assistant foundation.
 
+For the separate Gmail/Sydney integration worker, provider switches, cursor and
+Telegram recovery, rollback, and Task 9 production evidence, see
+[`gmail-sydney-task-intake.md`](gmail-sydney-task-intake.md).
+
 ## Verified Railway Context
 
 - Railway project: `enchanting-perception`
