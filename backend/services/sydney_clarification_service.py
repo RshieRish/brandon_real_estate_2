@@ -26,6 +26,7 @@ from pydantic import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from config import settings
 from models.command import CRMContact
 from models.gmail_task_intake import CRMTaskSuggestion
 from models.sydney_tasks import (
@@ -242,8 +243,9 @@ def build_handoff_link(*, suggestion_id: UUID, token: str) -> str:
     if not isinstance(suggestion_id, UUID):
         raise _fixed_error("invalid_suggestion_id")
     canonical = parse_approval_token(token)
+    base_url = settings.COMMAND_PUBLIC_BASE_URL.rstrip("/")
     return (
-        f"/admin/command/task-suggestions?suggestion={suggestion_id}"
+        f"{base_url}/admin/command/task-suggestions?suggestion={suggestion_id}"
         f"#handoff={canonical}"
     )
 

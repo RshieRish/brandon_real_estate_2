@@ -85,6 +85,23 @@ def test_registry_advertises_exactly_six_review_only_crm_actions():
     assert action_ids.intersection(NEW_ACTIONS | FORBIDDEN_ACTIONS) == NEW_ACTIONS
 
 
+def test_agent_approval_link_is_absolute_and_keeps_secret_in_fragment():
+    from services.task_suggestion_approval_service import approval_link
+
+    suggestion_id = uuid4()
+    token = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+    link = approval_link(suggestion_id=suggestion_id, token=token)
+
+    before_fragment, fragment = link.split("#", 1)
+    assert before_fragment == (
+        "https://www.soldwithsweeney.com/admin/command/task-suggestions"
+        f"?suggestion={suggestion_id}"
+    )
+    assert token not in before_fragment
+    assert fragment == f"handoff={token}"
+
+
 def test_clarification_schema_rejects_hermes_identity_claims():
     from pydantic import ValidationError
 
@@ -379,7 +396,11 @@ async def test_approval_link_contains_secret_only_in_fragment_and_creates_no_tas
         )
     before_fragment, fragment = result.approval_link.split("#", 1)
     assert (
-        before_fragment == f"/admin/command/task-suggestions?suggestion={suggestion.id}"
+        before_fragment
+        == (
+            "https://www.soldwithsweeney.com/admin/command/task-suggestions"
+            f"?suggestion={suggestion.id}"
+        )
     )
     assert (
         fragment.startswith("handoff=") and len(fragment.removeprefix("handoff=")) == 43

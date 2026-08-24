@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     AGENT_CONTROL_TOKEN: str = ""
     AGENT_CONTROL_ENABLED: bool = False
     AGENT_CONTROL_RECENT_LIMIT: int = 10
+    COMMAND_PUBLIC_BASE_URL: str = "https://www.soldwithsweeney.com"
     CRM_TASK_ARCHIVE_ENABLED: bool = False
     # Dedicated integration-worker rollout gates. They remain disabled until
     # each provider-specific migration and live verification gate is complete.

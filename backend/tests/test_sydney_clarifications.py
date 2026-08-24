@@ -421,7 +421,7 @@ def test_handoff_link_places_only_opaque_secret_in_fragment() -> None:
     token = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     link = module.build_handoff_link(suggestion_id=suggestion_id, token=token)
     assert link == (
-        "/admin/command/task-suggestions?"
+        "https://www.soldwithsweeney.com/admin/command/task-suggestions?"
         "suggestion=00000000-0000-4000-8000-000000000010"
         "#handoff=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     )
@@ -1413,7 +1413,8 @@ async def test_five_distinct_causes_resolve_in_priority_order_across_restarts(
     assert final_result is not None
     assert final_result.next_clarification_id is None
     assert final_result.handoff_link == (
-        f"/admin/command/task-suggestions?suggestion={suggestion.id}"
+        "https://www.soldwithsweeney.com/admin/command/task-suggestions"
+        f"?suggestion={suggestion.id}"
         f"#handoff={token}"
     )
     async with sessions() as session:
@@ -1568,7 +1569,8 @@ async def test_valid_due_answer_locks_suggestion_then_clarification_and_versions
     assert result.suggestion_id == suggestion.id
     assert result.suggestion_version == 2
     assert result.handoff_link == (
-        f"/admin/command/task-suggestions?suggestion={suggestion.id}"
+        "https://www.soldwithsweeney.com/admin/command/task-suggestions"
+        f"?suggestion={suggestion.id}"
         f"#handoff={token}"
     )
     assert token_calls == [32]

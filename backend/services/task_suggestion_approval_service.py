@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models.command import CRMTask
 from models.gmail_task_intake import CRMTaskSuggestion
 from models.sydney_tasks import CRMTaskSuggestionEvent, TaskSuggestionApprovalNonce
@@ -491,7 +492,11 @@ task_suggestion_approval_service = TaskSuggestionApprovalService()
 
 def approval_link(*, suggestion_id: UUID, token: str) -> str:
     parse_approval_token(token)
-    return f"/admin/command/task-suggestions?suggestion={suggestion_id}#handoff={token}"
+    base_url = settings.COMMAND_PUBLIC_BASE_URL.rstrip("/")
+    return (
+        f"{base_url}/admin/command/task-suggestions?suggestion={suggestion_id}"
+        f"#handoff={token}"
+    )
 
 
 __all__ = [
