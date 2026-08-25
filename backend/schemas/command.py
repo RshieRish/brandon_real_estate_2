@@ -116,6 +116,39 @@ class TaskLifecycleRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class TaskBulkArchiveItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: DatabaseInteger
+    request_id: UUID
+    expected_version: DatabaseInteger
+
+
+class TaskBulkArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[TaskBulkArchiveItem] = Field(min_length=1, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def require_unique_identities(self):
+        task_ids = [item.task_id for item in self.items]
+        request_ids = [item.request_id for item in self.items]
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("bulk archive task IDs must be unique")
+        if len(set(request_ids)) != len(request_ids):
+            raise ValueError("bulk archive request IDs must be unique")
+        return self
+
+
 class TaskLinkCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -131,6 +164,48 @@ class TaskOut(TaskCreate):
     archive_reason: str | None
     version: int
     class Config: from_attributes = True
+
+
+class TaskBulkArchiveResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: DatabaseInteger
+    status: Literal["archived", "conflict", "not_found", "invalid"]
+    code: Literal[
+        "task_version_conflict",
+        "task_archived",
+        "task_request_mismatch",
+        "task_lifecycle_state_invalid",
+        "task_not_found",
+        "task_request_invalid",
+    ] | None = None
+    task: TaskOut | None = None
+
+    @model_validator(mode="after")
+    def require_status_fields(self):
+        if self.status == "archived":
+            if self.code is not None or self.task is None:
+                raise ValueError("archived results require a task and no error code")
+        elif self.status == "conflict":
+            if self.code not in {
+                "task_version_conflict",
+                "task_archived",
+                "task_request_mismatch",
+                "task_lifecycle_state_invalid",
+            } or self.task is None:
+                raise ValueError("conflict results require a conflict code and task")
+        elif self.status == "not_found":
+            if self.code != "task_not_found" or self.task is not None:
+                raise ValueError("not-found results require only the not-found code")
+        elif self.code != "task_request_invalid" or self.task is not None:
+            raise ValueError("invalid results require only the invalid code")
+        return self
+
+
+class TaskBulkArchiveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[TaskBulkArchiveResult] = Field(min_length=1, max_length=500)
 
 
 class TaskLinkOut(BaseModel):

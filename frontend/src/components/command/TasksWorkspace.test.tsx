@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   agreements: vi.fn(),
   listings: vi.fn(),
   archiveTask: vi.fn(),
+  bulkArchiveTasks: vi.fn(),
   restoreTask: vi.fn(),
 }));
 
@@ -38,6 +39,7 @@ vi.mock('@/lib/command/api', async (importOriginal) => {
       agreements: apiMocks.agreements,
       listings: apiMocks.listings,
       archiveTask: apiMocks.archiveTask,
+      bulkArchiveTasks: apiMocks.bulkArchiveTasks,
       restoreTask: apiMocks.restoreTask,
     },
   };
@@ -125,7 +127,178 @@ describe('TasksWorkspace archive lifecycle', () => {
     apiMocks.agreements.mockReset().mockResolvedValue([]);
     apiMocks.listings.mockReset().mockResolvedValue([]);
     apiMocks.archiveTask.mockReset().mockResolvedValue(archivedTask);
+    apiMocks.bulkArchiveTasks.mockReset();
     apiMocks.restoreTask.mockReset().mockResolvedValue(activeTask);
+  });
+
+  it('paginates matching tasks at 25 rows with accessible page controls', async () => {
+    const rows = Array.from({ length: 26 }, (_, index): Task => ({
+      ...activeTask,
+      id: index + 1,
+      title: `Task ${index + 1}`,
+    }));
+    const user = await renderWorkspace(rows);
+
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Task 1')).toBeInTheDocument();
+    expect(screen.getByText('Task 25')).toBeInTheDocument();
+    expect(screen.queryByText('Task 26')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Task 26')).toBeInTheDocument();
+    expect(screen.queryByText('Task 1')).not.toBeInTheDocument();
+  });
+
+  it('selects one page and then every matching task across all pages', async () => {
+    const rows = Array.from({ length: 26 }, (_, index): Task => ({
+      ...activeTask,
+      id: index + 1,
+      title: `Task ${index + 1}`,
+    }));
+    const user = await renderWorkspace(rows);
+    const pageCheckbox = screen.getByRole('checkbox', {
+      name: 'Select all tasks on this page',
+    });
+
+    await user.click(pageCheckbox);
+    expect(screen.getByText('25 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all 26 matching tasks' }))
+      .toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Select all 26 matching tasks' }));
+    expect(screen.getByText('26 selected')).toBeInTheDocument();
+    expect(screen.getByText('All 26 matching tasks selected')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Task 26' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select all tasks on this page' })).toBeChecked();
+  });
+
+  it('keeps individual selection across pages and clears it when filters change', async () => {
+    const rows = Array.from({ length: 26 }, (_, index): Task => ({
+      ...activeTask,
+      id: index + 1,
+      title: `Task ${index + 1}`,
+    }));
+    const user = await renderWorkspace(rows);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select Task 1' }));
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Task 26' }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task status' }), 'completed');
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Page 2 of 2')).not.toBeInTheDocument();
+  });
+
+  it('confirms and submits one protected bulk archive request for selected tasks', async () => {
+    const second = { ...activeTask, id: 12, title: 'Call Alex', version: 6 };
+    const archivedFirst = {
+      ...activeTask,
+      archived_at: '2026-08-24T20:00:00Z',
+      archive_reason: 'Finished elsewhere',
+      version: 4,
+    };
+    const archivedSecond = {
+      ...second,
+      archived_at: '2026-08-24T20:00:01Z',
+      archive_reason: 'Finished elsewhere',
+      version: 7,
+    };
+    apiMocks.bulkArchiveTasks.mockResolvedValueOnce({
+      results: [
+        { task_id: 7, status: 'archived', code: null, task: archivedFirst },
+        { task_id: 12, status: 'archived', code: null, task: archivedSecond },
+      ],
+    });
+    const user = await renderWorkspace([activeTask, second]);
+    await user.click(screen.getByRole('checkbox', { name: 'Select all tasks on this page' }));
+    const trigger = screen.getByRole('button', { name: 'Archive selected' });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Archive 2 selected tasks' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    await user.type(
+      within(dialog).getByRole('textbox', { name: 'Archive reason (optional)' }),
+      '  Finished elsewhere  ',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Archive 2 tasks' }));
+
+    await waitFor(() => expect(apiMocks.bulkArchiveTasks).toHaveBeenCalledTimes(1));
+    const payload = apiMocks.bulkArchiveTasks.mock.calls[0]?.[0];
+    expect(payload.reason).toBe('Finished elsewhere');
+    expect(payload.items).toEqual([
+      expect.objectContaining({ task_id: 7, expected_version: 3 }),
+      expect.objectContaining({ task_id: 12, expected_version: 6 }),
+    ]);
+    expect(payload.items[0].request_id).toMatch(UUID_PATTERN);
+    expect(payload.items[1].request_id).toMatch(UUID_PATTERN);
+    expect(payload.items[0].request_id).not.toBe(payload.items[1].request_id);
+    expect(await screen.findByText('2 tasks were archived.')).toBeInTheDocument();
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
+  });
+
+  it('retains conflicted tasks selected after a mixed bulk archive response', async () => {
+    const conflicted = { ...activeTask, id: 12, title: 'Call Alex', version: 6 };
+    const archivedFirst = {
+      ...activeTask,
+      archived_at: '2026-08-24T20:00:00Z',
+      archive_reason: null,
+      version: 4,
+    };
+    const currentConflict = { ...conflicted, version: 7, description: 'Changed elsewhere' };
+    apiMocks.bulkArchiveTasks.mockResolvedValueOnce({
+      results: [
+        { task_id: 7, status: 'archived', code: null, task: archivedFirst },
+        {
+          task_id: 12,
+          status: 'conflict',
+          code: 'task_version_conflict',
+          task: currentConflict,
+        },
+      ],
+    });
+    const user = await renderWorkspace([activeTask, conflicted]);
+    await user.click(screen.getByRole('checkbox', { name: 'Select all tasks on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Archive selected' }));
+    await user.click(screen.getByRole('button', { name: 'Archive 2 tasks' }));
+
+    expect(await screen.findByText('1 task was archived.')).toBeInTheDocument();
+    expect(screen.getByText('1 task could not be archived. Review the selected task and try again.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Call Alex' })).toBeChecked();
+    expect(screen.getByText('Changed elsewhere')).toBeInTheDocument();
+    expect(screen.queryByText('Call Jane')).not.toBeInTheDocument();
+  });
+
+  it('reconciles an uncertain bulk outcome once without retrying the archive request', async () => {
+    const second = { ...activeTask, id: 12, title: 'Call Alex', version: 6 };
+    const archivedFirst = {
+      ...activeTask,
+      archived_at: '2026-08-24T20:00:00Z',
+      archive_reason: null,
+      version: 4,
+    };
+    apiMocks.bulkArchiveTasks.mockRejectedValueOnce(
+      new CommandOutcomeUncertainError(new TypeError('network interrupted')),
+    );
+    const user = await renderWorkspace([activeTask, second]);
+    apiMocks.tasks.mockResolvedValueOnce([archivedFirst, second]);
+    await user.click(screen.getByRole('checkbox', { name: 'Select all tasks on this page' }));
+    await user.click(screen.getByRole('button', { name: 'Archive selected' }));
+    await user.click(screen.getByRole('button', { name: 'Archive 2 tasks' }));
+
+    expect(await screen.findByText('1 task was archived. Confirmed after refreshing.'))
+      .toBeInTheDocument();
+    expect(apiMocks.bulkArchiveTasks).toHaveBeenCalledTimes(1);
+    expect(apiMocks.tasks).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Call Alex' })).toBeChecked();
+    expect(screen.queryByText('Call Jane')).not.toBeInTheDocument();
   });
 
   it('switches between filtered active tasks and archived tasks without dropping either collection', async () => {

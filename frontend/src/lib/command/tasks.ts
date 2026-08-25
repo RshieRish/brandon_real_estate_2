@@ -72,6 +72,35 @@ export type TaskLifecycleRequest = Readonly<{
   reason?: string;
 }>;
 
+export type TaskBulkArchiveItem = Readonly<{
+  task_id: number;
+  request_id: string;
+  expected_version: number;
+}>;
+
+export type TaskBulkArchiveRequest = Readonly<{
+  items: readonly TaskBulkArchiveItem[];
+  reason?: string;
+}>;
+
+export type TaskBulkArchiveResult = Readonly<{
+  task_id: number;
+  status: 'archived' | 'conflict' | 'not_found' | 'invalid';
+  code:
+    | 'task_version_conflict'
+    | 'task_archived'
+    | 'task_request_mismatch'
+    | 'task_lifecycle_state_invalid'
+    | 'task_not_found'
+    | 'task_request_invalid'
+    | null;
+  task: Task | null;
+}>;
+
+export type TaskBulkArchiveResponse = Readonly<{
+  results: readonly TaskBulkArchiveResult[];
+}>;
+
 export type TaskConflict = Readonly<{
   code: 'task_version_conflict' | 'task_archived' | 'task_request_mismatch';
   current_version: number;
@@ -496,6 +525,105 @@ function decodeTaskLifecycleRequest(input: TaskLifecycleRequest): TaskLifecycleR
   return decoded;
 }
 
+function decodeTaskBulkArchiveRequest(input: TaskBulkArchiveRequest): TaskBulkArchiveRequest {
+  const read = inputObject(input, ['items', 'reason'], ['items'], 'request');
+  const rawItems = read('items');
+  if (!Array.isArray(rawItems) || rawItems.length < 1 || rawItems.length > 500) {
+    return invalid('request.items', 'array length 1..500');
+  }
+  const items = rawItems.map((value, index): TaskBulkArchiveItem => {
+    const item = exactObject(
+      value,
+      ['task_id', 'request_id', 'expected_version'],
+      `request.items[${index}]`,
+    );
+    return {
+      task_id: databaseInteger(item('task_id'), `request.items[${index}].task_id`),
+      request_id: uuidValue(item('request_id'), `request.items[${index}].request_id`),
+      expected_version: databaseInteger(
+        item('expected_version'),
+        `request.items[${index}].expected_version`,
+      ),
+    };
+  }).sort((left, right) => left.task_id - right.task_id);
+  if (new Set(items.map((item) => item.task_id)).size !== items.length) {
+    return invalid('request.items', 'unique task IDs');
+  }
+  if (new Set(items.map((item) => item.request_id)).size !== items.length) {
+    return invalid('request.items', 'unique request IDs');
+  }
+  const decoded: { items: readonly TaskBulkArchiveItem[]; reason?: string } = { items };
+  if (Object.prototype.hasOwnProperty.call(input, 'reason')) {
+    const reason = stringValue(read('reason'), 'request.reason', 0, 500).trim();
+    if (reason.length > 0) decoded.reason = reason;
+  }
+  return decoded;
+}
+
+const BULK_CONFLICT_CODES = [
+  'task_version_conflict',
+  'task_archived',
+  'task_request_mismatch',
+  'task_lifecycle_state_invalid',
+] as const;
+
+function decodeTaskBulkArchiveResponse(
+  input: unknown,
+  requestedItems: readonly TaskBulkArchiveItem[],
+  path = 'response',
+): TaskBulkArchiveResponse {
+  const response = exactObject(input, ['results'], path);
+  const rawResults = response('results');
+  if (!Array.isArray(rawResults) || rawResults.length !== requestedItems.length) {
+    return invalid(`${path}.results`, `array length ${requestedItems.length}`);
+  }
+  const results = rawResults.map((value, index): TaskBulkArchiveResult => {
+    const resultPath = `${path}.results[${index}]`;
+    const read = exactObject(value, ['task_id', 'status', 'code', 'task'], resultPath);
+    const requested = requestedItems[index];
+    if (requested === undefined) return invalid(resultPath, 'requested task result');
+    const taskId = databaseInteger(read('task_id'), `${resultPath}.task_id`);
+    if (taskId !== requested.task_id) {
+      return invalid(`${resultPath}.task_id`, `task id ${requested.task_id}`);
+    }
+    const status = enumValue(
+      read('status'),
+      ['archived', 'conflict', 'not_found', 'invalid'] as const,
+      `${resultPath}.status`,
+    );
+    const rawCode = read('code');
+    const rawTask = read('task');
+    if (status === 'archived') {
+      if (rawCode !== null) return invalid(`${resultPath}.code`, 'null');
+      const task = decodeTask(rawTask, `${resultPath}.task`);
+      if (task.id !== taskId) return invalid(`${resultPath}.task.id`, `task id ${taskId}`);
+      if (task.archived_at === null) return invalid(`${resultPath}.task.archived_at`, 'archived state');
+      if (
+        task.version !== requested.expected_version
+        && task.version !== requested.expected_version + 1
+      ) {
+        return invalid(
+          `${resultPath}.task.version`,
+          `version ${requested.expected_version} or ${requested.expected_version + 1}`,
+        );
+      }
+      return { task_id: taskId, status, code: null, task };
+    }
+    if (status === 'conflict') {
+      const code = enumValue(rawCode, BULK_CONFLICT_CODES, `${resultPath}.code`);
+      const task = decodeTask(rawTask, `${resultPath}.task`);
+      if (task.id !== taskId) return invalid(`${resultPath}.task.id`, `task id ${taskId}`);
+      return { task_id: taskId, status, code, task };
+    }
+    if (rawTask !== null) return invalid(`${resultPath}.task`, 'null');
+    const code = status === 'not_found'
+      ? enumValue(rawCode, ['task_not_found'] as const, `${resultPath}.code`)
+      : enumValue(rawCode, ['task_request_invalid'] as const, `${resultPath}.code`);
+    return { task_id: taskId, status, code, task: null };
+  });
+  return { results };
+}
+
 function fallbackDetail(status: number): string {
   return `Command request failed (${status})`;
 }
@@ -734,6 +862,20 @@ export async function archiveTask(
   options?: TaskRequestOptions,
 ): Promise<Task> {
   return changeArchiveState('archive', taskId, input, options);
+}
+
+export async function bulkArchiveTasks(
+  input: TaskBulkArchiveRequest,
+  options?: TaskRequestOptions,
+): Promise<TaskBulkArchiveResponse> {
+  const body = decodeTaskBulkArchiveRequest(input);
+  return taskMutation({
+    path: '/tasks/bulk-archive',
+    method: 'POST',
+    body,
+    decode: (value, path) => decodeTaskBulkArchiveResponse(value, body.items, path),
+    signal: options?.signal,
+  });
 }
 
 export async function restoreTask(

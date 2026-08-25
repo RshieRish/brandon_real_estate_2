@@ -14,6 +14,7 @@ import {
 import {
   addTaskLink as addTypedTaskLink,
   archiveTask as archiveTypedTask,
+  bulkArchiveTasks as bulkArchiveTypedTasks,
   CommandConflictError,
   CommandCreateConflictError,
   CommandOutcomeUncertainError,
@@ -27,6 +28,10 @@ import {
   restoreTask as restoreTypedTask,
   updateTask as updateTypedTask,
   type Task,
+  type TaskBulkArchiveItem,
+  type TaskBulkArchiveRequest,
+  type TaskBulkArchiveResponse,
+  type TaskBulkArchiveResult,
   type TaskConflict,
   type TaskCreateConflict,
   type TaskCreateInput,
@@ -54,6 +59,10 @@ export {
 };
 export type {
   Task,
+  TaskBulkArchiveItem,
+  TaskBulkArchiveRequest,
+  TaskBulkArchiveResponse,
+  TaskBulkArchiveResult,
   TaskConflict,
   TaskCreateConflict,
   TaskCreateInput,
@@ -226,5 +235,6 @@ export const commandApi = {
   taskLinks: loadTaskLinks,
   updateTask: updateTypedTask,
   archiveTask: archiveTypedTask,
+  bulkArchiveTasks: bulkArchiveTypedTasks,
   restoreTask: restoreTypedTask,
 };
