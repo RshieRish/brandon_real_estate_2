@@ -3,7 +3,7 @@
 **Date:** 2026-08-25  
 **Author:** Brainstormed with Codex  
 **Scope:** Sydney/Hermes, Telegram, FastAPI agent control, PostgreSQL, the integration worker, Command contacts, and Railway  
-**Status:** Approved in conversation; written specification awaiting review
+**Status:** Approved after written specification review
 
 ---
 
