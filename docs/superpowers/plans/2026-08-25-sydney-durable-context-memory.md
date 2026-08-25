@@ -162,11 +162,11 @@ Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
 **Files:** Create `backend/services/sydney_context_service.py`, `backend/tests/test_sydney_context_service.py`, `backend/tests/test_sydney_context_postgres.py`.
 
-- [ ] **Step 1: Write failing service tests** proving stable identity/session lineage, event batch limit 100, pre-persistence redaction, UTF-8 segment ordering, duplicate source-key replay returning the original event, conflicting replay rejection, content/aggregate hashes, append-only enforcement, and concurrent duplicate ingest through two PostgreSQL connections.
-- [ ] **Step 2: Run the focused unit and PostgreSQL tests.** Expected: FAIL because the context service is absent.
-- [ ] **Step 3: Implement the exact async transaction boundaries** `ingest_event_batch(db, request, configured_secrets=()) -> ContextEventBatchResponse` and `reconcile_session(db, identity_id, hermes_session_id, expected) -> ReconciliationResult`. Resolve identity and session inside the caller transaction. Lock an existing conflicting source key, compare event type/content hash/ordered segment hashes, and return the stored UUID only for an exact replay. Insert event and all segments atomically. Never accept precomputed caller hashes as authoritative.
-- [ ] **Step 4: Re-run focused tests.** Expected: all pass, including two-connection idempotency.
-- [ ] **Step 5: Commit:** `feat: ingest Sydney conversation events`.
+- [x] **Step 1: Write failing service tests** proving stable identity/session lineage, event batch limit 100, pre-persistence redaction, UTF-8 segment ordering, duplicate source-key replay returning the original event, conflicting replay rejection, content/aggregate hashes, append-only enforcement, and concurrent duplicate ingest through two PostgreSQL connections.
+- [x] **Step 2: Run the focused unit and PostgreSQL tests.** Expected: FAIL because the context service is absent.
+- [x] **Step 3: Implement the exact async transaction boundaries** `ingest_event_batch(db, request, configured_secrets=()) -> ContextEventBatchResponse` and `reconcile_session(db, identity_id, hermes_session_id, expected) -> ReconciliationResult`. Resolve identity and session inside the caller transaction. Lock an existing conflicting source key, compare event type/content hash/ordered segment hashes, and return the stored UUID only for an exact replay. Insert event and all segments atomically. Never accept precomputed caller hashes as authoritative.
+- [x] **Step 4: Re-run focused tests.** Expected: all pass, including two-connection idempotency.
+- [x] **Step 5: Commit:** `feat: ingest Sydney conversation events`.
 
 ## Task 4: Implement deterministic retrieval and canonical history search
 
