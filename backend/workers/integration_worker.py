@@ -221,11 +221,13 @@ def build_job_registry(
     gmail_runner: Callable[[], Awaitable[None]] | None = None,
     receipt_runner: Callable[[], Awaitable[None]] | None = None,
     sydney_runner: Callable[[], Awaitable[None]] | None = None,
+    projection_runner: Callable[[], Awaitable[None]] | None = None,
     alert_runner: Callable[[], Awaitable[None]] | None = None,
 ) -> JobRegistry:
     effective_gmail_runner = gmail_runner or _unavailable_provider_job
     effective_receipt_runner = receipt_runner or _unavailable_provider_job
     effective_sydney_runner = sydney_runner or _unavailable_provider_job
+    effective_projection_runner = projection_runner or _unavailable_provider_job
     effective_alert_runner = alert_runner or _integration_alert_job
     return JobRegistry(
         (
@@ -247,6 +249,19 @@ def build_job_registry(
                 30,
                 config.SYDNEY_TASK_QUESTIONS_ENABLED,
                 effective_sydney_runner,
+            ),
+            JobDefinition(
+                "sydney_context_projection",
+                60,
+                bool(
+                    getattr(config, "SYDNEY_DURABLE_CONTEXT_ENABLED", False)
+                    and getattr(
+                        config,
+                        "SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED",
+                        False,
+                    )
+                ),
+                effective_projection_runner,
             ),
             JobDefinition(
                 "integration_alerts",
@@ -279,7 +294,11 @@ async def initialize_worker_runtime(
 
     gmail = validate_gmail_runtime_settings(config)
     sydney_enabled = bool(config.SYDNEY_TASK_QUESTIONS_ENABLED)
-    if not gmail.enabled and not sydney_enabled:
+    projection_enabled = bool(
+        getattr(config, "SYDNEY_DURABLE_CONTEXT_ENABLED", False)
+        and getattr(config, "SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED", False)
+    )
+    if not gmail.enabled and not sydney_enabled and not projection_enabled:
         registry = build_job_registry(config=config)
         registry.initialize()
         return WorkerRuntime(
@@ -403,11 +422,33 @@ async def initialize_worker_runtime(
                 clarification_service=clarification_service,
                 dispatcher=dispatcher,
             ).run
+        projection_runner = None
+        if projection_enabled:
+            from workers.jobs.sydney_context_projection import (
+                SydneyContextProjectionJob,
+                build_sydney_projection_model_call,
+            )
+
+            projection_runner = SydneyContextProjectionJob(
+                enabled=True,
+                sessionmaker=sessionmaker,
+                provider_executor=provider_executor,
+                model_call=build_sydney_projection_model_call(
+                    api_key=config.GEMINI_API_KEY,
+                    socket_timeout_seconds=(
+                        config.INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS
+                    ),
+                ),
+                provider_deadline_seconds=(
+                    config.INTEGRATION_PROVIDER_DEADLINE_SECONDS
+                ),
+            ).run
         registry = build_job_registry(
             config=config,
             gmail_runner=gmail_runner,
             receipt_runner=receipt_runner,
             sydney_runner=sydney_runner,
+            projection_runner=projection_runner,
             alert_runner=IntegrationAlertsJob(sessionmaker=sessionmaker).run,
         )
         registry.initialize()

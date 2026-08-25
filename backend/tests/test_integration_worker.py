@@ -54,6 +54,7 @@ def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop
     settings = Settings(JWT_SECRET="test-secret")
     assert settings.GMAIL_TASK_INTAKE_ENABLED is False
     assert settings.SYDNEY_TASK_QUESTIONS_ENABLED is False
+    assert settings.SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED is False
     assert settings.INSTAGRAM_INTEGRATION_ENABLED is False
 
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
@@ -216,12 +217,15 @@ def test_task9_job_modules_are_real_and_registry_uses_deterministic_schedules() 
         JWT_SECRET="test-secret",
         GMAIL_TASK_INTAKE_ENABLED=True,
         SYDNEY_TASK_QUESTIONS_ENABLED=True,
+        SYDNEY_DURABLE_CONTEXT_ENABLED=True,
+        SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED=True,
     )
     registry = build_job_registry(
         config=config,
         gmail_runner=no_op,
         receipt_runner=no_op,
         sydney_runner=no_op,
+        projection_runner=no_op,
         alert_runner=no_op,
     )
     registry.initialize()
@@ -231,6 +235,7 @@ def test_task9_job_modules_are_real_and_registry_uses_deterministic_schedules() 
         ("instagram_health", False, 86400),
         ("integration_alerts", True, 60),
         ("notification_delivery", True, 60),
+        ("sydney_context_projection", True, 60),
         ("sydney_questions", True, 30),
     )
     assert GmailReceiptJob.__module__ == "workers.jobs.gmail_receipts"

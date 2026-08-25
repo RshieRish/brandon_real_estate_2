@@ -233,12 +233,12 @@ crm.command_contact_audiences.preview
 
 **Files:** Create `backend/services/sydney_context_projection.py`, `backend/workers/jobs/sydney_context_projection.py`, `backend/tests/test_sydney_context_projection.py`; modify `backend/workers/integration_worker.py`, `backend/config.py`, and `backend/tests/test_integration_worker.py`.
 
-- [ ] **Step 1: Write failing tests** for disabled-by-default registration, bounded source range, strict Pydantic/JSON schema, mandatory source-event provenance, rejection of foreign/missing IDs, canonical fact supersession, immutable checkpoint insertion, low output limit, Gemini health pause, and raw-history operation when projection fails.
-- [ ] **Step 2: Run projection and worker tests.** Expected: FAIL because the job is absent.
-- [ ] **Step 3: Implement `SydneyContextProjectionResult` with exact structured fields and `extra='forbid'`.** Build a bounded transcript from committed events, call Gemini through the existing structured-output client pattern, validate every returned source ID against the claimed range, insert a checkpoint/fact operations in one transaction, and record only bounded health categories. Never call tools or mutate CRM data.
-- [ ] **Step 4: Register `sydney_context_projection` with a deterministic 60-second schedule only when both durable context and projection flags are enabled. Update `EXPECTED_MIGRATION` to `85e8b7c9d4f1`.**
-- [ ] **Step 5: Re-run projection, worker, deployment-contract, and integration-health tests.** Expected: all pass.
-- [ ] **Step 6: Commit:** `feat: project Sydney context checkpoints`.
+- [x] **Step 1: Write failing tests** for disabled-by-default registration, bounded source range, strict Pydantic/JSON schema, mandatory source-event provenance, rejection of foreign/missing IDs, canonical fact supersession, immutable checkpoint insertion, low output limit, Gemini health pause, and raw-history operation when projection fails.
+- [x] **Step 2: Run projection and worker tests.** Expected: FAIL because the job is absent.
+- [x] **Step 3: Implement `SydneyContextProjectionResult` with exact structured fields and `extra='forbid'`.** Build a bounded transcript from committed events, call Gemini through the existing structured-output client pattern, validate every returned source ID against the claimed range, insert a checkpoint/fact operations in one transaction, and record only bounded health categories. Never call tools or mutate CRM data.
+- [x] **Step 4: Register `sydney_context_projection` with a deterministic 60-second schedule only when both durable context and projection flags are enabled. Update `EXPECTED_MIGRATION` to `85e8b7c9d4f1`.**
+- [x] **Step 5: Re-run projection, worker, deployment-contract, and integration-health tests.** Expected: all pass.
+- [x] **Step 6: Commit:** `feat: project Sydney context checkpoints`.
 
 ## Task 9: Extend the MCP registry without changing the existing 22 tools
 

@@ -348,6 +348,132 @@ async def test_run_fifo_claim_and_tool_ledger_prevent_duplicate_side_effects(
 
 
 @pytest.mark.asyncio
+async def test_projection_candidate_checkpoint_and_fact_supersession_are_source_linked(
+    context_sessions,
+) -> None:
+    from models.sydney_context import AgentContextCheckpoint, AgentMemoryFact
+    from schemas.sydney_context import SydneyContextProjectionResult
+    from services.sydney_context_projection import (
+        apply_projection_result,
+        select_projection_candidate,
+    )
+    from services.sydney_context_service import ingest_event_batch
+
+    _engine, factory = context_sessions
+    base = _request()
+    batch = base.model_copy(
+        update={
+            "events": [
+                base.events[0],
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "session-1:message-2",
+                        "event_type": "assistant",
+                        "role": "assistant",
+                        "occurred_at": base.events[0].occurred_at
+                        + timedelta(seconds=1),
+                        "content": "The gold folder is preferred.",
+                    }
+                ),
+            ]
+        }
+    )
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, batch)
+        await session.commit()
+    async with factory() as session:
+        candidate = await select_projection_candidate(session)
+        assert candidate is not None
+        assert candidate.source_event_ids == tuple(ingested.event_ids)
+        result = SydneyContextProjectionResult(
+            schema_version="sydney-context-v1",
+            rolling_summary="Brandon prefers the gold folder.",
+            source_event_ids=list(candidate.source_event_ids),
+            fact_operations=[
+                {
+                    "operation": "upsert",
+                    "canonical_key": "preference.folder",
+                    "kind": "preference",
+                    "value": {"name": "gold"},
+                    "confidence": 0.95,
+                    "source_event_ids": [candidate.source_event_ids[-1]],
+                }
+            ],
+        )
+        first = await apply_projection_result(session, candidate, result)
+        replay = await apply_projection_result(session, candidate, result)
+        assert first.id == replay.id
+        await session.commit()
+
+    async with factory() as session:
+        checkpoints = list(
+            (await session.scalars(sa.select(AgentContextCheckpoint))).all()
+        )
+        facts = list((await session.scalars(sa.select(AgentMemoryFact))).all())
+    assert len(checkpoints) == 1
+    assert checkpoints[0].source_event_ids == ingested.event_ids
+    assert len(facts) == 1
+    assert facts[0].status == "active"
+    assert facts[0].source_event_ids == [ingested.event_ids[-1]]
+
+    continuation = batch.model_copy(
+        update={
+            "events": [
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "session-1:message-3",
+                        "occurred_at": base.events[0].occurred_at
+                        + timedelta(seconds=2),
+                        "content": "The blue folder replaces that preference.",
+                    }
+                )
+            ]
+        }
+    )
+    async with factory() as session:
+        continued = await ingest_event_batch(session, continuation)
+        await session.commit()
+    async with factory() as session:
+        next_candidate = await select_projection_candidate(session)
+        assert next_candidate is not None
+        assert next_candidate.source_event_ids == tuple(continued.event_ids)
+        next_result = SydneyContextProjectionResult(
+            schema_version="sydney-context-v1",
+            rolling_summary="Brandon now prefers the blue folder.",
+            source_event_ids=list(next_candidate.source_event_ids),
+            fact_operations=[
+                {
+                    "operation": "upsert",
+                    "canonical_key": "preference.folder",
+                    "kind": "preference",
+                    "value": {"name": "blue"},
+                    "confidence": 0.96,
+                    "source_event_ids": list(next_candidate.source_event_ids),
+                }
+            ],
+        )
+        await apply_projection_result(session, next_candidate, next_result)
+        await session.commit()
+    async with factory() as session:
+        facts = list(
+            (
+                await session.scalars(
+                    sa.select(AgentMemoryFact).order_by(AgentMemoryFact.created_at)
+                )
+            ).all()
+        )
+        checkpoint_count = int(
+            await session.scalar(
+                sa.select(sa.func.count()).select_from(AgentContextCheckpoint)
+            )
+            or 0
+        )
+    assert checkpoint_count == 2
+    assert [fact.status for fact in facts] == ["superseded", "active"]
+    assert facts[-1].value_json == {"name": "blue"}
+
+
+@pytest.mark.asyncio
 async def test_two_connections_claim_one_eligible_run_once(context_sessions) -> None:
     from schemas.sydney_context import ContextRunClaimRequest, ContextRunStartRequest
     from services.sydney_context_service import (
