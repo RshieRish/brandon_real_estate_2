@@ -244,12 +244,12 @@ crm.command_contact_audiences.preview
 
 **Files:** Modify `hermes/atlas_backend_mcp.py`, `hermes/verify_atlas_tools.py`, `hermes/overlay/manifest.json`, `backend/tests/test_atlas_backend_mcp.py`, `backend/tests/test_verify_atlas_tools.py`, and `backend/tests/test_hermes_overlay.py`.
 
-- [ ] **Step 1: Change tests first** so the original 22 names remain byte-for-byte ordered and these three unique read tools are appended: `context_history_search`, `command_contacts_search`, `command_contact_audience_preview`. Assert the registry has exactly 25 unique tools and all trusted-write/actual-send additions remain absent.
-- [ ] **Step 2: Add schema/mapping tests** for history query/date/type/window modes, Command filters/pagination, audience preview, secret-free backend errors, and the exact descriptions. `contacts_search` must say “Google Contacts only; never Command.” `command_contacts_search` must say “Command only; never Google Contacts or the admin UI.”
-- [ ] **Step 3: Run the MCP/overlay/verifier tests.** Expected: FAIL because the registry still contains 22 tools.
-- [ ] **Step 4: Append the three tool specs and update the verifier/manifest exact-order contract.** Do not rename, reorder, or remove any current tool.
-- [ ] **Step 5: Re-run the focused suite.** Expected: all pass with `count=25`, `unique_count=25`, `original_22_unchanged=true`.
-- [ ] **Step 6: Commit:** `feat: expose Sydney context and Command reads`.
+- [x] **Step 1: Change tests first** so the original 22 names remain byte-for-byte ordered and these three unique read tools are appended: `context_history_search`, `command_contacts_search`, `command_contact_audience_preview`. Assert the registry has exactly 25 unique tools and all trusted-write/actual-send additions remain absent.
+- [x] **Step 2: Add schema/mapping tests** for history query/date/type/window modes, Command filters/pagination, audience preview, secret-free backend errors, and the exact descriptions. `contacts_search` must say “Google Contacts only; never Command.” `command_contacts_search` must say “Command only; never Google Contacts or the admin UI.”
+- [x] **Step 3: Run the MCP/overlay/verifier tests.** Expected: FAIL because the registry still contains 22 tools.
+- [x] **Step 4: Append the three tool specs and update the verifier/manifest exact-order contract.** Do not rename, reorder, or remove any current tool.
+- [x] **Step 5: Re-run the focused suite.** Expected: all pass with `count=25`, `unique_count=25`, `original_22_unchanged=true`.
+- [x] **Step 6: Commit:** `feat: expose Sydney context and Command reads`.
 
 ## Task 10: Add the Hermes local spool and durable memory provider
 

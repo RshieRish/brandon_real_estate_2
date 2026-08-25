@@ -73,7 +73,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
         tools = self.bridge.list_tools()
         tool_names = {tool["name"] for tool in tools}
 
-        self.assertEqual(len(tools), 22)
+        self.assertEqual(len(tools), 25)
         self.assertEqual(
             [tool["name"] for tool in tools],
             [
@@ -99,6 +99,9 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 "crm_task_drafts_create",
                 "crm_task_suggestions_approval_link",
                 "crm_task_suggestions_dismiss_proposal",
+                "context_history_search",
+                "command_contacts_search",
+                "command_contact_audience_preview",
             ],
         )
         self.assertEqual(
@@ -126,6 +129,9 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 "crm_task_drafts_create",
                 "crm_task_suggestions_approval_link",
                 "crm_task_suggestions_dismiss_proposal",
+                "context_history_search",
+                "command_contacts_search",
+                "command_contact_audience_preview",
             },
         )
         for tool in tools:
@@ -156,6 +162,43 @@ class AtlasBackendMcpTests(unittest.TestCase):
         self.assertEqual(retry_schema["type"], "string")
         self.assertEqual(retry_schema["format"], "uuid")
         self.assertIn("not-delivered", retry_schema["description"].lower())
+        self.assertEqual(
+            by_name["contacts_search"]["description"],
+            "Search Google Contacts only; never Command.",
+        )
+
+        history = by_name["context_history_search"]
+        self.assertEqual(
+            history["description"],
+            "Search Sydney's durable conversation history by text, date, type, event window, or recent conversation.",
+        )
+        self.assertEqual(
+            set(history["inputSchema"]["properties"]),
+            {
+                "identity_id",
+                "query",
+                "event_types",
+                "started_at",
+                "ended_at",
+                "around_event_id",
+                "recent_conversations",
+                "limit",
+                "window_size",
+            },
+        )
+        self.assertEqual(history["inputSchema"]["required"], ["identity_id"])
+        command_search = by_name["command_contacts_search"]
+        self.assertEqual(
+            command_search["description"],
+            "Search Command only; never Google Contacts or the admin UI.",
+        )
+        self.assertEqual(
+            command_search["inputSchema"]["properties"]["page_size"]["maximum"],
+            25,
+        )
+        preview = by_name["command_contact_audience_preview"]
+        self.assertNotIn("page", preview["inputSchema"]["properties"])
+        self.assertNotIn("page_size", preview["inputSchema"]["properties"])
 
         answer_schema = by_name["crm_task_clarifications_answer"]["inputSchema"]
         self.assertEqual(
@@ -205,6 +248,33 @@ class AtlasBackendMcpTests(unittest.TestCase):
             "crm_tasks_restore",
         }
         self.assertFalse(tool_names.intersection(forbidden))
+        self.assertEqual(
+            [tool["name"] for tool in tools][:22],
+            [
+                "status_read",
+                "actions_list",
+                "leads_recent",
+                "bookings_recent",
+                "workspace_status",
+                "drive_search",
+                "drive_file_read",
+                "gmail_search",
+                "gmail_thread_read",
+                "gmail_draft_create",
+                "gmail_send",
+                "docs_create",
+                "sheets_append",
+                "calendar_events_read",
+                "calendar_event_create",
+                "contacts_search",
+                "crm_tasks_read",
+                "crm_task_suggestions_read",
+                "crm_task_clarifications_answer",
+                "crm_task_drafts_create",
+                "crm_task_suggestions_approval_link",
+                "crm_task_suggestions_dismiss_proposal",
+            ],
+        )
         self.assertEqual(
             {
                 name: by_name[name]["description"]
@@ -473,6 +543,69 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 {"suggestion_id": suggestion_id, "replayed": False},
             )
 
+    def test_context_and_command_read_tools_map_exact_bounded_bodies(self):
+        identity_id = str(uuid4())
+        event_id = str(uuid4())
+        client = FakeBackendClient(response={"ok": True})
+        history = {
+            "identity_id": identity_id,
+            "query": "gold folder",
+            "event_types": ["user", "assistant"],
+            "started_at": "2026-08-01T00:00:00Z",
+            "ended_at": "2026-08-25T23:59:59Z",
+            "around_event_id": event_id,
+            "recent_conversations": False,
+            "limit": 10,
+            "window_size": 3,
+        }
+        search = {
+            "query": "Alex",
+            "stage": "lead",
+            "tag_ids": [7],
+            "sources": ["kw_command"],
+            "origins": ["recovered"],
+            "page": 2,
+            "page_size": 25,
+        }
+        preview = {
+            "stage": "lead",
+            "tag_ids": [7],
+            "sources": ["kw_command"],
+            "origins": ["recovered"],
+        }
+
+        self.bridge.call_tool("context_history_search", history, client=client)
+        self.bridge.call_tool("command_contacts_search", search, client=client)
+        self.bridge.call_tool(
+            "command_contact_audience_preview",
+            preview,
+            client=client,
+        )
+
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "method": "POST",
+                    "path": "/api/v1/agent-control/context/history/search",
+                    "params": {},
+                    "body": history,
+                },
+                {
+                    "method": "POST",
+                    "path": "/api/v1/agent-control/crm/command-contacts/search",
+                    "params": {},
+                    "body": search,
+                },
+                {
+                    "method": "POST",
+                    "path": "/api/v1/agent-control/crm/command-contact-audiences/preview",
+                    "params": {},
+                    "body": preview,
+                },
+            ],
+        )
+
     def test_backend_timeout_is_bounded_and_errors_do_not_leak_secrets(self):
         client = self.bridge.BackendClient(
             base_url="https://backend.example.test",
@@ -691,7 +824,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
             client=client,
         )
         self.assertEqual(listed["id"], 2)
-        self.assertEqual(len(listed["result"]["tools"]), 22)
+        self.assertEqual(len(listed["result"]["tools"]), 25)
 
         called = self.bridge.handle_request(
             {

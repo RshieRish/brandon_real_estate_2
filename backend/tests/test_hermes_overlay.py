@@ -35,6 +35,11 @@ CRM_TOOLS = [
     "crm_task_suggestions_approval_link",
     "crm_task_suggestions_dismiss_proposal",
 ]
+NEW_READ_TOOLS = [
+    "context_history_search",
+    "command_contacts_search",
+    "command_contact_audience_preview",
+]
 
 
 def _load_overlay_module(name: str):
@@ -77,9 +82,10 @@ class HermesOverlayTests(unittest.TestCase):
 
         self.assertEqual(manifest["upstream"]["commit"], UPSTREAM_COMMIT)
         self.assertEqual(manifest["tools"]["include"][:16], EXISTING_TOOLS)
-        self.assertEqual(manifest["tools"]["include"][16:], CRM_TOOLS)
-        self.assertEqual(len(manifest["tools"]["include"]), 22)
-        self.assertEqual(len(set(manifest["tools"]["include"])), 22)
+        self.assertEqual(manifest["tools"]["include"][16:22], CRM_TOOLS)
+        self.assertEqual(manifest["tools"]["include"][22:], NEW_READ_TOOLS)
+        self.assertEqual(len(manifest["tools"]["include"]), 25)
+        self.assertEqual(len(set(manifest["tools"]["include"])), 25)
 
     def test_apply_overlay_is_idempotent_for_the_pinned_checkout_contract(self):
         overlay = _load_overlay_module("apply_overlay.py")
@@ -201,7 +207,7 @@ class HermesOverlayTests(unittest.TestCase):
             )
             self.assertEqual(list(source.glob(".atlas-overlay-*")), [])
 
-    def test_bootstrap_preserves_existing_config_and_writes_exact_22_tool_contract(
+    def test_bootstrap_preserves_existing_config_and_writes_exact_25_tool_contract(
         self,
     ):
         bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
@@ -219,7 +225,10 @@ class HermesOverlayTests(unittest.TestCase):
         atlas = config["mcp_servers"]["atlas_backend"]
         self.assertEqual(atlas["command"], "python")
         self.assertEqual(atlas["args"], ["/app/atlas_backend_mcp.py"])
-        self.assertEqual(atlas["tools"]["include"], EXISTING_TOOLS + CRM_TOOLS)
+        self.assertEqual(
+            atlas["tools"]["include"],
+            EXISTING_TOOLS + CRM_TOOLS + NEW_READ_TOOLS,
+        )
         self.assertFalse(atlas["tools"]["resources"])
         self.assertFalse(atlas["tools"]["prompts"])
 

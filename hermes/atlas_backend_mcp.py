@@ -368,7 +368,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     },
     "contacts_search": {
         "name": "contacts_search",
-        "description": "Search Brandon's Google Contacts for recipient context.",
+        "description": "Search Google Contacts only; never Command.",
         "method": "POST",
         "path": "/api/v1/agent-control/workspace/contacts/search",
         "inputSchema": _object_schema(
@@ -475,6 +475,130 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "reason": {"type": "string", "minLength": 1, "maxLength": 500},
             },
             ["suggestion_id", "request_id", "expected_version", "reason"],
+        ),
+    },
+    "context_history_search": {
+        "name": "context_history_search",
+        "description": (
+            "Search Sydney's durable conversation history by text, date, type, "
+            "event window, or recent conversation."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/context/history/search",
+        "inputSchema": _object_schema(
+            {
+                "identity_id": {"type": "string", "format": "uuid"},
+                "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                "event_types": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "user",
+                            "assistant",
+                            "tool_call",
+                            "tool_result",
+                            "approval",
+                            "error",
+                            "continuation",
+                            "attachment_reference",
+                        ],
+                    },
+                },
+                "started_at": {"type": "string", "format": "date-time"},
+                "ended_at": {"type": "string", "format": "date-time"},
+                "around_event_id": {"type": "string", "format": "uuid"},
+                "recent_conversations": {"type": "boolean"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                "window_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                },
+            },
+            ["identity_id"],
+        ),
+    },
+    "command_contacts_search": {
+        "name": "command_contacts_search",
+        "description": "Search Command only; never Google Contacts or the admin UI.",
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/command-contacts/search",
+        "inputSchema": _object_schema(
+            {
+                "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                "stage": {"type": "string", "minLength": 1, "maxLength": 50},
+                "tag_ids": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {"type": "integer", "minimum": 1},
+                },
+                "sources": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                        "type": "string",
+                        "enum": ["internal_crm", "kw_command", "legacy_lead"],
+                    },
+                },
+                "origins": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "internal_only",
+                            "lead_backed",
+                            "legacy_only",
+                            "recovered",
+                        ],
+                    },
+                },
+                "page": {"type": "integer", "minimum": 1},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 25},
+            }
+        ),
+    },
+    "command_contact_audience_preview": {
+        "name": "command_contact_audience_preview",
+        "description": (
+            "Preview an exact masked Command-only audience; never send, draft, "
+            "or scrape the admin UI."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/command-contact-audiences/preview",
+        "inputSchema": _object_schema(
+            {
+                "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                "stage": {"type": "string", "minLength": 1, "maxLength": 50},
+                "tag_ids": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {"type": "integer", "minimum": 1},
+                },
+                "sources": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                        "type": "string",
+                        "enum": ["internal_crm", "kw_command", "legacy_lead"],
+                    },
+                },
+                "origins": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "internal_only",
+                            "lead_backed",
+                            "legacy_only",
+                            "recovered",
+                        ],
+                    },
+                },
+            }
         ),
     },
 }
