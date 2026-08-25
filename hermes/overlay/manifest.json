@@ -3,6 +3,18 @@
     "repository": "https://github.com/praveen-ks-2001/hermes-agent-template.git",
     "commit": "7224d7c1a4dcffe9304f49bc843f55716f5561b4"
   },
+  "hermes_upstream": {
+    "repository": "https://github.com/NousResearch/hermes-agent.git",
+    "tag": "v2026.5.29.2",
+    "commit": "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5",
+    "source_sha256": {
+      "agent/credential_pool.py": "c4b78ca292ebb7072d56c17f3c7b7307cac3a33532cb1bb55f640373c55382e5",
+      "agent/agent_init.py": "2fdea13cbce18a3d8eb0d0fae432d6ebb64efb221721ca9a179bcfe76956dfd3",
+      "gateway/run.py": "9e3a780cfa36ac8931ad42481a56d4c55d9643efc1f7ec9b595fa886967d0a3f",
+      "agent/conversation_loop.py": "b096615e1d21e935c0f8b950cca2f5868f8eecdee6e09244a6e60982817b0b75",
+      "agent/tool_executor.py": "4c9f59aa5063520a2d20baec1acbb9640b92a64c7e6dedc92817670158b0ad01"
+    }
+  },
   "tools": {
     "include": [
       "status_read",

@@ -1,14 +1,27 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import tempfile
+from typing import Optional
 import unittest
 from unittest.mock import patch
 
 
 UPSTREAM_COMMIT = "7224d7c1a4dcffe9304f49bc843f55716f5561b4"
+HERMES_TAG = "v2026.5.29.2"
+HERMES_COMMIT = "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5"
+HERMES_HASHES = {
+    "agent/credential_pool.py": "c4b78ca292ebb7072d56c17f3c7b7307cac3a33532cb1bb55f640373c55382e5",
+    "agent/agent_init.py": "2fdea13cbce18a3d8eb0d0fae432d6ebb64efb221721ca9a179bcfe76956dfd3",
+    "gateway/run.py": "9e3a780cfa36ac8931ad42481a56d4c55d9643efc1f7ec9b595fa886967d0a3f",
+    "agent/conversation_loop.py": "b096615e1d21e935c0f8b950cca2f5868f8eecdee6e09244a6e60982817b0b75",
+    "agent/tool_executor.py": "4c9f59aa5063520a2d20baec1acbb9640b92a64c7e6dedc92817670158b0ad01",
+}
 EXISTING_TOOLS = [
     "status_read",
     "actions_list",
@@ -40,6 +53,15 @@ NEW_READ_TOOLS = [
     "command_contacts_search",
     "command_contact_audience_preview",
 ]
+
+TEMPLATE_DOCKERFILE = """\
+FROM python:3.12-slim
+ARG HERMES_REF=v2026.5.29.2
+RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \\
+    cd /opt/hermes-agent && \\
+    uv pip install --system --no-cache -e \".[all]\"
+COPY start.sh /app/start.sh
+"""
 
 
 def _load_overlay_module(name: str):
@@ -81,6 +103,13 @@ class HermesOverlayTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text())
 
         self.assertEqual(manifest["upstream"]["commit"], UPSTREAM_COMMIT)
+        self.assertEqual(manifest["hermes_upstream"]["tag"], HERMES_TAG)
+        self.assertEqual(manifest["hermes_upstream"]["commit"], HERMES_COMMIT)
+        self.assertEqual(
+            manifest["hermes_upstream"]["repository"],
+            "https://github.com/NousResearch/hermes-agent.git",
+        )
+        self.assertEqual(manifest["hermes_upstream"]["source_sha256"], HERMES_HASHES)
         self.assertEqual(manifest["tools"]["include"][:16], EXISTING_TOOLS)
         self.assertEqual(manifest["tools"]["include"][16:22], CRM_TOOLS)
         self.assertEqual(manifest["tools"]["include"][22:], NEW_READ_TOOLS)
@@ -91,7 +120,7 @@ class HermesOverlayTests(unittest.TestCase):
         overlay = _load_overlay_module("apply_overlay.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
             source = Path(temporary_directory)
-            (source / "Dockerfile").write_text("COPY start.sh /app/start.sh\n")
+            (source / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
             (source / "start.sh").write_text(
                 "#!/bin/bash\nexec python /app/server.py\n"
             )
@@ -108,6 +137,13 @@ class HermesOverlayTests(unittest.TestCase):
                 "atlas_backend_mcp.py",
                 "atlas_backend_bootstrap.py",
                 "atlas_backend_overlay_manifest.json",
+                "install_sydney_overlay.py",
+                "sydney_spool.py",
+                "sydney_memory_provider.py",
+                "sydney_retry.py",
+                "sydney_backfill.py",
+                "sydney_runtime.py",
+                "sydney_gateway.py",
             }
             second_context = self._apply_context(
                 overlay,
@@ -138,12 +174,30 @@ class HermesOverlayTests(unittest.TestCase):
             self.assertTrue((source / "atlas_backend_mcp.py").is_file())
             self.assertTrue((source / "atlas_backend_bootstrap.py").is_file())
             self.assertTrue((source / "atlas_backend_overlay_manifest.json").is_file())
+            for name in (
+                "install_sydney_overlay.py",
+                "sydney_spool.py",
+                "sydney_memory_provider.py",
+                "sydney_retry.py",
+                "sydney_backfill.py",
+                "sydney_runtime.py",
+                "sydney_gateway.py",
+            ):
+                self.assertTrue((source / name).is_file(), name)
+            self.assertIn(
+                "python /app/install_sydney_overlay.py --source /opt/hermes-agent",
+                first_dockerfile,
+            )
+            self.assertLess(
+                first_dockerfile.index("python /app/install_sydney_overlay.py"),
+                first_dockerfile.index('uv pip install --system --no-cache -e'),
+            )
 
     def test_apply_overlay_refuses_unrelated_dirty_source_without_mutation(self):
         overlay = _load_overlay_module("apply_overlay.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
             source = Path(temporary_directory)
-            (source / "Dockerfile").write_text("COPY start.sh /app/start.sh\n")
+            (source / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
             (source / "start.sh").write_text(
                 "#!/bin/bash\nexec python /app/server.py\n"
             )
@@ -162,7 +216,7 @@ class HermesOverlayTests(unittest.TestCase):
         overlay = _load_overlay_module("apply_overlay.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
             source = Path(temporary_directory)
-            (source / "Dockerfile").write_text("COPY start.sh /app/start.sh\n")
+            (source / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
             (source / "start.sh").write_text("#!/bin/bash\npython server.py\n")
             before = {path.name: path.read_bytes() for path in source.iterdir()}
             context = self._apply_context(overlay, source)
@@ -177,7 +231,7 @@ class HermesOverlayTests(unittest.TestCase):
         overlay = _load_overlay_module("apply_overlay.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
             source = Path(temporary_directory)
-            (source / "Dockerfile").write_text("COPY start.sh /app/start.sh\n")
+            (source / "Dockerfile").write_text(TEMPLATE_DOCKERFILE)
             (source / "start.sh").write_text(
                 "#!/bin/bash\nexec python /app/server.py\n"
             )
@@ -231,6 +285,243 @@ class HermesOverlayTests(unittest.TestCase):
         )
         self.assertFalse(atlas["tools"]["resources"])
         self.assertFalse(atlas["tools"]["prompts"])
+        self.assertEqual(config["session_reset"], {"mode": "none"})
+        self.assertEqual(config["agent"]["max_turns"], 16)
+        self.assertEqual(
+            config["compression"],
+            {
+                "enabled": True,
+                "threshold": 0.08,
+                "target": 0.02,
+                "protect_last": 20,
+                "abort_on_summary_failure": True,
+            },
+        )
+        self.assertEqual(
+            config["tool_guardrails"],
+            {
+                "enabled": True,
+                "exact_failure_limit": 5,
+                "same_tool_failure_limit": 8,
+                "no_progress_limit": 5,
+            },
+        )
+        self.assertNotIn("provider", config.get("memory", {}))
+
+    def test_bootstrap_enables_sydney_only_for_master_flag_and_allowlisted_identity(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "config.yaml"
+            changed = bootstrap.configure_atlas_backend(
+                config_path,
+                backend_url="https://backend.example.test",
+                token="not-a-real-token",
+                durable_context_enabled=True,
+                external_user_id="brandon-id",
+                allowed_external_user_ids={"brandon-id"},
+            )
+            config = bootstrap.load_yaml(config_path)
+        self.assertTrue(changed)
+        self.assertEqual(config["memory"]["provider"], "sydney")
+
+    def test_exact_hermes_installer_applies_twice_without_byte_drift(self):
+        checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_EXACT_CHECKOUT is not configured")
+        installer = _load_overlay_module("install_sydney_overlay.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "hermes"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", "--detach", HERMES_COMMIT],
+                check=True,
+            )
+            installer.install(source)
+            first = {
+                str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob("*.py")
+                if ".git" not in path.parts
+            }
+            installer.install(source)
+            second = {
+                str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob("*.py")
+                if ".git" not in path.parts
+            }
+            self.assertEqual(second, first)
+            self.assertIn("plugins/memory/sydney/__init__.py", first)
+            self.assertIn("agent/sydney_runtime.py", first)
+            self.assertIn("gateway/sydney_gateway.py", first)
+
+            credential_pool = (source / "agent/credential_pool.py").read_text()
+            agent_init = (source / "agent/agent_init.py").read_text()
+            gateway_run = (source / "gateway/run.py").read_text()
+            conversation_loop = (source / "agent/conversation_loop.py").read_text()
+            tool_executor = (source / "agent/tool_executor.py").read_text()
+            self.assertIn("(?:in|after)", credential_pool)
+            self.assertIn("SYDNEY_MEMORY_REGISTRATION", agent_init)
+            self.assertIn("SYDNEY_INBOUND_SPOOL_BEFORE_MODEL", gateway_run)
+            self.assertIn("sydney_continuation_watcher", gateway_run)
+            self.assertIn("SYDNEY_RETRY_AND_USAGE_GUARD", conversation_loop)
+            self.assertIn("SYDNEY_TOOL_BEFORE", tool_executor)
+            self.assertIn("SYDNEY_TOOL_AFTER", tool_executor)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "compileall",
+                    "-q",
+                    str(source / "agent"),
+                    str(source / "gateway"),
+                    str(source / "plugins/memory/sydney"),
+                ],
+                check=True,
+            )
+
+    def test_exact_hermes_patch_preserves_the_runtime_behavior_contract(self):
+        checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_EXACT_CHECKOUT is not configured")
+        installer = _load_overlay_module("install_sydney_overlay.py")
+        retry = _load_overlay_module("sydney_retry.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "hermes"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", "--detach", HERMES_COMMIT],
+                check=True,
+            )
+            installer.install(source)
+            credential_pool = (source / "agent/credential_pool.py").read_text()
+            gateway_run = (source / "gateway/run.py").read_text()
+            agent_init = (source / "agent/agent_init.py").read_text()
+            conversation_loop = (source / "agent/conversation_loop.py").read_text()
+            tool_executor = (source / "agent/tool_executor.py").read_text()
+
+            namespace = {"re": __import__("re"), "Optional": Optional}
+            function_source = credential_pool[
+                credential_pool.index("def _extract_retry_delay_seconds") : credential_pool.index(
+                    "\ndef _normalize_error_context",
+                    credential_pool.index("def _extract_retry_delay_seconds"),
+                )
+            ]
+            exec(function_source, namespace)
+            self.assertEqual(namespace["_extract_retry_delay_seconds"]("retry in 47s"), 47)
+            self.assertLess(
+                gateway_run.index("record_inbound_before_model(\n"),
+                gateway_run.index("result = agent.run_conversation"),
+            )
+            self.assertLess(
+                tool_executor.index("# SYDNEY_TOOL_BEFORE\n"),
+                tool_executor.index("result = agent._invoke_tool"),
+            )
+            self.assertGreater(
+                tool_executor.index("# SYDNEY_TOOL_AFTER\n"),
+                tool_executor.index("is_error, _ = _detect_tool_failure"),
+            )
+            self.assertIn("SydneyMemoryProvider", agent_init)
+            self.assertIn('compression_target_ratio = float(_compression_cfg.get("target"', agent_init)
+            self.assertIn('compression_protect_last = int(_compression_cfg.get("protect_last"', agent_init)
+            self.assertIn("reserve_input_budget(agent, approx_request_tokens)", conversation_loop)
+            self.assertIn("defer_retry_if_needed", conversation_loop)
+            self.assertNotIn("/new", retry.AUTOMATIC_CONTINUATION_MESSAGE)
+            self.assertNotIn("/reset", retry.AUTOMATIC_CONTINUATION_MESSAGE)
+            self.assertNotIn("/compact", retry.AUTOMATIC_CONTINUATION_MESSAGE)
+
+    def test_exact_template_overlay_applies_twice_without_byte_drift(self):
+        checkout = os.environ.get("HERMES_TEMPLATE_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_TEMPLATE_EXACT_CHECKOUT is not configured")
+        overlay = _load_overlay_module("apply_overlay.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "template"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", "--detach", UPSTREAM_COMMIT],
+                check=True,
+            )
+            overlay.apply_overlay(source)
+            first = {
+                str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob("*")
+                if path.is_file() and ".git" not in path.parts
+            }
+            overlay.apply_overlay(source)
+            second = {
+                str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob("*")
+                if path.is_file() and ".git" not in path.parts
+            }
+            self.assertEqual(second, first)
+
+    def test_exact_hermes_installer_rolls_back_replace_failure(self):
+        checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_EXACT_CHECKOUT is not configured")
+        installer = _load_overlay_module("install_sydney_overlay.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "hermes"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", "--detach", HERMES_COMMIT],
+                check=True,
+            )
+            real_replace = os.replace
+            calls = 0
+
+            def fail_third_replace(source_path, target_path):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("injected replace failure")
+                real_replace(source_path, target_path)
+
+            with (
+                patch.object(installer.os, "replace", side_effect=fail_third_replace),
+                self.assertRaises(OSError),
+            ):
+                installer.install(source)
+            status = subprocess.run(
+                ["git", "-C", str(source), "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(status, "")
+            self.assertFalse((source / "plugins/memory/sydney").exists())
+
+    def test_exact_hermes_installer_rejects_unrelated_dirty_checkout(self):
+        checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_EXACT_CHECKOUT is not configured")
+        installer = _load_overlay_module("install_sydney_overlay.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "hermes"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "checkout", "--quiet", "--detach", HERMES_COMMIT],
+                check=True,
+            )
+            (source / "README.md").write_text("unrelated dirty change\n")
+            before = (source / "README.md").read_bytes()
+            with self.assertRaises(ValueError):
+                installer.install(source)
+            self.assertEqual((source / "README.md").read_bytes(), before)
 
     def test_bootstrap_keeps_identical_config_without_replacing_it(self):
         bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")

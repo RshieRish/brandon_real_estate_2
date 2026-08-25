@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 from uuid import UUID
 
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_memory_provider import SydneyMemoryProvider
+from sydney_memory_provider import SydneyMemoryProvider  # noqa: E402
 
 
 class FakeBackend:
@@ -29,7 +31,27 @@ class FakeBackend:
 
     def start_run(self, payload: dict) -> dict:
         self.calls.append(("run", payload))
-        return {"run": {"id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"}}
+        return {
+            "run": {
+                "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "state": "queued",
+            }
+        }
+
+    def claim_runs(self, payload: dict) -> dict:
+        self.calls.append(("claim", payload))
+        return {
+            "runs": [
+                {
+                    "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "state": "running",
+                    "lease_owner": payload["lease_owner"],
+                    "attempt_count": 1,
+                }
+            ]
+        }
 
     def retrieve_context(self, payload: dict) -> dict:
         self.calls.append(("retrieve", payload))
@@ -108,12 +130,52 @@ def test_provider_identity_is_stable_and_inbound_is_local_before_backend(
     assert UUID(logical_id).version == 5
 
     provider.drain_once()
-    assert [call[0] for call in backend.calls] == ["ingest", "run"]
+    assert [call[0] for call in backend.calls] == ["ingest", "run", "claim"]
     assert backend.calls[1][1]["inbound_event_id"] == (
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     )
     assert backend.calls[1][1]["session_id"] == ("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
     assert provider.spool.pending_count == 0
+
+
+def test_run_completion_uses_the_claimed_lease_and_persists_final_event(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("telegram-message-1", "Finish this")
+    provider.drain_once()
+
+    provider.complete_active_run("Finished automatically.")
+
+    update = [payload for name, payload in backend.calls if name == "run_update"][-1]
+    assert update["state"] == "succeeded"
+    assert update["lease_owner"].startswith("hermes:")
+    assert update["final_response_event_id"] == (
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    )
+
+
+def test_replayed_inbound_restores_a_claimed_run_lease_after_restart(
+    tmp_path: Path,
+) -> None:
+    first_backend = FakeBackend()
+    first = _provider(tmp_path, first_backend)
+    first.record_inbound("telegram-message-1", "Continue after restart")
+    first.drain_once()
+    first.spool.set_meta(
+        "claimed_run:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        {"lease_owner": "hermes:replacement:42", "attempt_count": 2},
+    )
+    first.shutdown()
+
+    second_backend = FakeBackend()
+    second = _provider(tmp_path, second_backend)
+    second.record_inbound("telegram-message-1", "Continue after restart")
+    second.complete_active_run("Recovered.")
+
+    update = [payload for name, payload in second_backend.calls if name == "run_update"][-1]
+    assert update["lease_owner"] == "hermes:replacement:42"
 
 
 def test_prefetch_uses_fresh_source_linked_context_then_cached_fallback(
@@ -274,5 +336,26 @@ def test_non_primary_context_does_not_persist(tmp_path: Path) -> None:
         chat_id="private-chat",
         agent_context="subagent",
     )
+    assert provider.is_available() is False
+    assert provider.record_inbound("message-1", "Do not store") is None
+
+
+def test_provider_rejects_an_identity_outside_the_runtime_allowlist(
+    tmp_path: Path,
+) -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user"},
+        clear=False,
+    ):
+        provider.initialize(
+            "session-unauthorized",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="not-approved",
+            chat_id="private-chat",
+            agent_context="primary",
+        )
     assert provider.is_available() is False
     assert provider.record_inbound("message-1", "Do not store") is None

@@ -21,6 +21,13 @@ OVERLAY_TARGETS = {
     "atlas_backend_mcp.py",
     "atlas_backend_bootstrap.py",
     "atlas_backend_overlay_manifest.json",
+    "install_sydney_overlay.py",
+    "sydney_spool.py",
+    "sydney_memory_provider.py",
+    "sydney_retry.py",
+    "sydney_backfill.py",
+    "sydney_runtime.py",
+    "sydney_gateway.py",
 }
 
 
@@ -111,6 +118,28 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
         "COPY start.sh /app/start.sh",
         "COPY atlas_backend_overlay_manifest.json /app/atlas_backend_overlay_manifest.json",
     )
+    pre_clone_copies = "\n".join(
+        [
+            "COPY install_sydney_overlay.py /app/install_sydney_overlay.py",
+            "COPY sydney_spool.py /app/sydney_spool.py",
+            "COPY sydney_memory_provider.py /app/sydney_memory_provider.py",
+            "COPY sydney_retry.py /app/sydney_retry.py",
+            "COPY sydney_backfill.py /app/sydney_backfill.py",
+            "COPY sydney_runtime.py /app/sydney_runtime.py",
+            "COPY sydney_gateway.py /app/sydney_gateway.py",
+            "COPY atlas_backend_overlay_manifest.json /app/sydney_overlay_manifest.json",
+        ]
+    )
+    dockerfile = _insert_before_once(
+        dockerfile,
+        "RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \\",
+        pre_clone_copies,
+    )
+    dockerfile = _insert_before_once(
+        dockerfile,
+        '    uv pip install --system --no-cache -e',
+        "    python /app/install_sydney_overlay.py --source /opt/hermes-agent && \\",
+    )
     start_script = _insert_before_once(
         start_script,
         "exec python /app/server.py",
@@ -126,6 +155,23 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
             OVERLAY_DIRECTORY / "atlas_backend_bootstrap.py"
         ).read_bytes(),
         source / "atlas_backend_overlay_manifest.json": MANIFEST_PATH.read_bytes(),
+        source / "install_sydney_overlay.py": (
+            OVERLAY_DIRECTORY / "install_sydney_overlay.py"
+        ).read_bytes(),
+        source / "sydney_spool.py": (OVERLAY_DIRECTORY / "sydney_spool.py").read_bytes(),
+        source / "sydney_memory_provider.py": (
+            OVERLAY_DIRECTORY / "sydney_memory_provider.py"
+        ).read_bytes(),
+        source / "sydney_retry.py": (OVERLAY_DIRECTORY / "sydney_retry.py").read_bytes(),
+        source / "sydney_backfill.py": (
+            OVERLAY_DIRECTORY / "sydney_backfill.py"
+        ).read_bytes(),
+        source / "sydney_runtime.py": (
+            OVERLAY_DIRECTORY / "sydney_runtime.py"
+        ).read_bytes(),
+        source / "sydney_gateway.py": (
+            OVERLAY_DIRECTORY / "sydney_gateway.py"
+        ).read_bytes(),
     }
 
 

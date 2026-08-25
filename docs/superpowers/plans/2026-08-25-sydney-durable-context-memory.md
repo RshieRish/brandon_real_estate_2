@@ -276,11 +276,11 @@ crm.command_contact_audiences.preview
 
 **Files:** Create `hermes/overlay/install_sydney_overlay.py`, `hermes/overlay/sydney_backfill.py`, `backend/tests/test_sydney_backfill.py`; modify `hermes/overlay/manifest.json`, `hermes/overlay/apply_overlay.py`, `hermes/overlay/atlas_backend_bootstrap.py`, `backend/tests/test_hermes_overlay.py`.
 
-- [ ] **Step 1: Write failing overlay tests** that require template commit `7224d7c1a4dcffe9304f49bc843f55716f5561b4`, official Hermes tag `v2026.5.29.2`, official commit `77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5`, expected SHA-256 for every patched upstream file, atomic/idempotent application, unrelated-dirty rejection, and rollback on injected replace failure.
-- [ ] **Step 2: Write failing behavior tests against a detached exact upstream checkout** proving `retry in` parsing, inbound spool-before-model order, executor before/after hooks, durable prefetch registration, session-reset mode none, compression/turn/loop budgets, and absence of reset instructions in transient error copy.
-- [ ] **Step 3: Run overlay/backfill tests.** Expected: FAIL because the official source pin and installer are absent.
-- [ ] **Step 4: Extend the manifest with exact upstream repository/tag/commit and source-file hashes.** The installer accepts only that checkout, verifies all hashes before mutation, copies the three Sydney modules plus backfill utility, and applies small anchor-checked patches to `agent/credential_pool.py`, memory registration, gateway inbound handling, the continuation-claim poller, usage-metadata accounting, and the central tool executor. It validates every anchor before replacing any file and supports exact desired-state no-op. The continuation poller restores the original inbound event, completed tool results, and current durable context; it appends only a continuation marker and sends one final Telegram response.
-- [ ] **Step 5: Extend bootstrap config** while preserving unrelated values:
+- [x] **Step 1: Write failing overlay tests** that require template commit `7224d7c1a4dcffe9304f49bc843f55716f5561b4`, official Hermes tag `v2026.5.29.2`, official commit `77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5`, expected SHA-256 for every patched upstream file, atomic/idempotent application, unrelated-dirty rejection, and rollback on injected replace failure.
+- [x] **Step 2: Write failing behavior tests against a detached exact upstream checkout** proving `retry in` parsing, inbound spool-before-model order, executor before/after hooks, durable prefetch registration, session-reset mode none, compression/turn/loop budgets, and absence of reset instructions in transient error copy.
+- [x] **Step 3: Run overlay/backfill tests.** Expected: FAIL because the official source pin and installer are absent.
+- [x] **Step 4: Extend the manifest with exact upstream repository/tag/commit and source-file hashes.** The installer accepts only that checkout, verifies all hashes before mutation, copies the three Sydney modules plus backfill utility, and applies small anchor-checked patches to `agent/credential_pool.py`, memory registration, gateway inbound handling, the continuation-claim poller, usage-metadata accounting, and the central tool executor. It validates every anchor before replacing any file and supports exact desired-state no-op. The continuation poller restores the original inbound event, completed tool results, and current durable context; it appends only a continuation marker and sends one final Telegram response.
+- [x] **Step 5: Extend bootstrap config** while preserving unrelated values:
 
 ```yaml
 session_reset:
@@ -303,9 +303,9 @@ memory:
 ```
 
 Only enable the provider when the master environment flag, backend URL/token, and allowlisted Brandon identity are all present.
-- [ ] **Step 6: Implement `sydney_backfill.py`** to read `state.db` in bounded ordered pages, omit hidden reasoning fields, redact before enqueue, preserve message/tool IDs, deduplicate by source key, persist its cursor, and emit content-free reconciliation JSON with session/role/tool counts and ordered hashes.
-- [ ] **Step 7: Apply twice to detached exact template and Hermes checkouts, run upstream-focused tests both times, and verify the second run changes no bytes.** Expected: all pass and unrelated files remain pristine.
-- [ ] **Step 8: Commit:** `feat: install Sydney durable context in Hermes`.
+- [x] **Step 6: Implement `sydney_backfill.py`** to read `state.db` in bounded ordered pages, omit hidden reasoning fields, redact before enqueue, preserve message/tool IDs, deduplicate by source key, persist its cursor, and emit content-free reconciliation JSON with session/role/tool counts and ordered hashes.
+- [x] **Step 7: Apply twice to detached exact template and Hermes checkouts, run upstream-focused tests both times, and verify the second run changes no bytes.** Expected: all pass and unrelated files remain pristine.
+- [x] **Step 8: Commit:** `feat: install Sydney durable context in Hermes`.
 
 ## Task 13: Add end-to-end contracts, CI, and operator documentation
 

@@ -245,6 +245,13 @@ class SydneySpool:
         ).fetchone()
         return default if row is None else json.loads(row[0])
 
+    def meta_items(self, prefix: str = "") -> dict[str, Any]:
+        rows = self.connection.execute(
+            "SELECT key, value_json FROM spool_meta WHERE key LIKE ? ORDER BY key",
+            (f"{prefix}%",),
+        ).fetchall()
+        return {str(row["key"]): json.loads(row["value_json"]) for row in rows}
+
     def set_meta(self, key: str, value: Any) -> None:
         safe = redact_payload(value, key=key)
         with self._lock, self.connection:
@@ -371,6 +378,24 @@ class SydneySpool:
             "SELECT * FROM outbox WHERE source_key=?", (source_key,)
         ).fetchone()
         return None if row is None else self._record(row)
+
+    def find_inbound(self, platform_message_id: str) -> SpoolRecord | None:
+        rows = self.connection.execute(
+            "SELECT * FROM outbox WHERE kind='inbound_bundle' ORDER BY id DESC"
+        ).fetchall()
+        for row in rows:
+            record = self._record(row)
+            if str(record.payload.get("run_start", {}).get("platform_message_id")) == str(
+                platform_message_id
+            ):
+                return record
+        return None
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM session_lineage ORDER BY created_at, session_id"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def acknowledge(self, record_id: int, receipt: dict[str, Any]) -> None:
         encoded = _canonical_json(redact_payload(receipt))

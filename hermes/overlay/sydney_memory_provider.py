@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,10 @@ except ImportError:  # Standalone overlay tests run outside a Hermes checkout.
         pass
 
 
-from sydney_spool import SpoolRecord, SydneySpool, redact_payload, redact_text
+try:
+    from .sydney_spool import SpoolRecord, SydneySpool, redact_payload, redact_text
+except ImportError:
+    from sydney_spool import SpoolRecord, SydneySpool, redact_payload, redact_text
 
 _IDENTITY_NAMESPACE = UUID("23f42827-f36c-4d2d-b403-28bc21cbb52a")
 _DEFAULT_TOKEN_BUDGET = 16_000
@@ -87,6 +91,9 @@ class SydneyBackendClient:
     def update_tool(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/v1/agent-control/context/tools/update", payload)
 
+    def claim_runs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/api/v1/agent-control/context/runs/claim", payload)
+
 
 class SydneyMemoryProvider(MemoryProvider):
     """Mirror visible conversation events and recall bounded canonical history."""
@@ -117,6 +124,8 @@ class SydneyMemoryProvider(MemoryProvider):
         self._identity_id: str | None = None
         self._backend_session_ids: dict[str, str] = {}
         self._active_run_id: str | None = None
+        self._active_lease_owner: str | None = None
+        self._lease_owner = f"hermes:{socket.gethostname()}:{os.getpid()}"
 
     @property
     def name(self) -> str:
@@ -136,12 +145,38 @@ class SydneyMemoryProvider(MemoryProvider):
     def logical_conversation_id(self) -> str:
         return self._logical_conversation_id
 
+    @property
+    def active_run_id(self) -> str | None:
+        return self._active_run_id
+
+    @property
+    def active_lease_owner(self) -> str | None:
+        return self._active_lease_owner
+
     def is_available(self) -> bool:
         if self._initialized:
             return self._primary and self._backend is not None
         enabled = os.environ.get("SYDNEY_DURABLE_CONTEXT_ENABLED", "").lower()
-        return enabled in {"1", "true", "yes", "on"} and bool(
-            os.environ.get("BACKEND_API_URL") and os.environ.get("AGENT_CONTROL_TOKEN")
+        allowed = {
+            value.strip()
+            for value in os.environ.get(
+                "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS", ""
+            ).split(",")
+            if value.strip()
+        }
+        configured_identity = os.environ.get(
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID", ""
+        ).strip()
+        return (
+            enabled in {"1", "true", "yes", "on"}
+            and configured_identity in allowed
+            and bool(
+            (os.environ.get("BACKEND_API_URL") or os.environ.get("BRANDON_BACKEND_URL"))
+            and (
+                os.environ.get("AGENT_CONTROL_TOKEN")
+                or os.environ.get("BRANDON_AGENT_CONTROL_TOKEN")
+            )
+            )
         )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -158,6 +193,15 @@ class SydneyMemoryProvider(MemoryProvider):
             or self._external_user_id
         )
         self._display_label = str(kwargs.get("display_label") or "Sydney user")[:128]
+        allowed = {
+            value.strip()
+            for value in os.environ.get(
+                "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS", ""
+            ).split(",")
+            if value.strip()
+        }
+        if allowed and self._external_user_id not in allowed:
+            self._primary = False
         if not self._primary:
             self._initialized = True
             return
@@ -183,10 +227,14 @@ class SydneyMemoryProvider(MemoryProvider):
 
         if self._backend is None and self._primary:
             backend_url = str(
-                kwargs.get("backend_url") or os.environ.get("BACKEND_API_URL", "")
+                kwargs.get("backend_url")
+                or os.environ.get("BACKEND_API_URL")
+                or os.environ.get("BRANDON_BACKEND_URL", "")
             )
             token = str(
-                kwargs.get("backend_token") or os.environ.get("AGENT_CONTROL_TOKEN", "")
+                kwargs.get("backend_token")
+                or os.environ.get("AGENT_CONTROL_TOKEN")
+                or os.environ.get("BRANDON_AGENT_CONTROL_TOKEN", "")
             )
             if backend_url and token:
                 self._backend = SydneyBackendClient(backend_url, token)
@@ -232,6 +280,9 @@ class SydneyMemoryProvider(MemoryProvider):
         source_key = f"inbound:{self._platform}:{self._external_chat_id}:{message_key}"
         existing = self.spool.get_record(source_key)
         if existing is not None:
+            run_receipt = (existing.receipt or {}).get("run", {}).get("run", {})
+            if run_receipt.get("id"):
+                self.activate_claimed_run(run_receipt)
             return existing.id
         now = occurred_at or datetime.now(timezone.utc).isoformat()
         event_batch = self._event_batch(
@@ -313,17 +364,64 @@ class SydneyMemoryProvider(MemoryProvider):
             run = run_response.get("run") or {}
             if run.get("id"):
                 self._active_run_id = str(run["id"])
-            return {"ingest": ingested, "run": run_response}
+                self.spool.set_meta("active_run_id", self._active_run_id)
+                self.spool.set_meta(
+                    f"run_deadline:{self._active_run_id}",
+                    payload["run_start"]["terminal_deadline_at"],
+                )
+                claim_response = self._backend.claim_runs(
+                    {
+                        "lease_owner": self._lease_owner,
+                        "identity_id": ingested["identity_id"],
+                        "limit": 10,
+                    }
+                )
+                for claimed in claim_response.get("runs") or []:
+                    if str(claimed.get("id") or "") == self._active_run_id:
+                        self.activate_claimed_run(claimed)
+                        break
+            return {
+                "ingest": ingested,
+                "run": run_response,
+                "claim": claim_response if run.get("id") else {"runs": []},
+            }
         if record.kind == "event_batch":
             response = self._backend.ingest_events(payload)
             self._remember_backend_identity(response)
             return response
         if record.kind == "run_update":
-            return self._backend.update_run(payload)
+            response = self._backend.update_run(payload)
+            if payload.get("state") != "running":
+                self._active_lease_owner = None
+            return response
         if record.kind == "tool_before":
             return self._backend.start_tool(payload)
         if record.kind == "tool_after":
             return self._backend.update_tool(payload)
+        if record.kind == "tool_after_bundle":
+            ingested = self._backend.ingest_events(payload["event_batch"])
+            self._remember_backend_identity(ingested)
+            event_ids = ingested.get("event_ids") or []
+            if not event_ids:
+                raise RuntimeError("tool result ingest receipt is incomplete")
+            update = {**payload["tool_update"], "result_event_id": event_ids[0]}
+            return {
+                "ingest": ingested,
+                "tool": self._backend.update_tool(update),
+            }
+        if record.kind == "run_completion_bundle":
+            ingested = self._backend.ingest_events(payload["event_batch"])
+            self._remember_backend_identity(ingested)
+            event_ids = ingested.get("event_ids") or []
+            if not event_ids:
+                raise RuntimeError("run completion ingest receipt is incomplete")
+            update = {**payload["run_update"], "final_response_event_id": event_ids[0]}
+            response = {
+                "ingest": ingested,
+                "run": self._backend.update_run(update),
+            }
+            self._active_lease_owner = None
+            return response
         raise RuntimeError("unsupported Sydney spool record kind")
 
     def drain_once(self, *, limit: int = _DEFAULT_BATCH_LIMIT):
@@ -520,6 +618,10 @@ class SydneyMemoryProvider(MemoryProvider):
             caller_idempotency_key=caller_idempotency_key,
         )
 
+    def tool_replay_receipt(self, source_key: str) -> dict[str, Any] | None:
+        record = self.spool.get_record(source_key)
+        return record.receipt if record is not None else None
+
     def record_tool_after(
         self,
         *,
@@ -527,15 +629,150 @@ class SydneyMemoryProvider(MemoryProvider):
         tool_call_id: str,
         state: str,
         result_event_id: str | None = None,
+        result_content: str | None = None,
+        tool_name: str | None = None,
     ) -> int | None:
         if not self.is_available():
             return None
+        if state == "succeeded" and result_event_id is None and result_content is not None:
+            event_batch = self._event_batch(
+                [
+                    {
+                        "source_event_key": f"run:{run_id}:tool:{tool_call_id}:result",
+                        "event_type": "tool_result",
+                        "role": "tool",
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "content": result_content,
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "metadata": {},
+                    }
+                ]
+            )
+            return self.spool.enqueue(
+                kind="tool_after_bundle",
+                source_key=f"tool:{run_id}:{tool_call_id}:after:{state}",
+                payload={
+                    "event_batch": event_batch,
+                    "tool_update": {
+                        "run_id": run_id,
+                        "tool_call_id": tool_call_id,
+                        "state": state,
+                    },
+                },
+            )
         return self.spool.enqueue_tool_after(
             run_id=run_id,
             tool_call_id=tool_call_id,
             state=state,
             result_event_id=result_event_id,
         )
+
+    def activate_claimed_run(self, run: dict[str, Any]) -> None:
+        run_id = run.get("id")
+        if run_id:
+            self._active_run_id = str(run_id)
+            self.spool.set_meta("active_run_id", self._active_run_id)
+            claimed = self.spool.get_meta(f"claimed_run:{self._active_run_id}", {})
+            lease_owner = run.get("lease_owner") or (
+                claimed.get("lease_owner") if isinstance(claimed, dict) else None
+            )
+            self._active_lease_owner = str(lease_owner) if lease_owner else None
+            if self._active_lease_owner:
+                self.spool.set_meta(
+                    f"claimed_run:{self._active_run_id}",
+                    {
+                        "lease_owner": self._active_lease_owner,
+                        "attempt_count": run.get(
+                            "attempt_count",
+                            claimed.get("attempt_count", 0)
+                            if isinstance(claimed, dict)
+                            else 0,
+                        ),
+                    },
+                )
+
+    def defer_retry(self, error: BaseException, *, attempt: int) -> str | None:
+        if not self.is_available():
+            return None
+        if not self._active_run_id or not self._active_lease_owner:
+            self.drain_once()
+        if not self._active_run_id or not self._active_lease_owner:
+            return None
+        try:
+            from .sydney_retry import plan_retry
+        except ImportError:
+            from sydney_retry import plan_retry
+
+        deadline_raw = self.spool.get_meta(f"run_deadline:{self._active_run_id}")
+        try:
+            deadline = datetime.fromisoformat(str(deadline_raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            deadline = datetime.now(timezone.utc) + timedelta(hours=24)
+        now = datetime.now(timezone.utc)
+        decision = plan_retry(
+            error,
+            attempt=attempt,
+            now=now,
+            deadline=deadline,
+            rng=lambda: 0.5,
+        )
+        if decision.action != "waiting_retry" or decision.next_attempt_at is None:
+            return None
+        payload = {
+            "run_id": self._active_run_id,
+            "state": "waiting_retry",
+            "lease_owner": self._active_lease_owner,
+            "next_attempt_at": decision.next_attempt_at.isoformat(),
+            "provider_category": decision.classification,
+            "error_code": f"provider_{getattr(error, 'status_code', 0) or 0}",
+            "parsed_retry_delay_seconds": decision.delay.total_seconds()
+            if decision.delay
+            else None,
+        }
+        self.spool.enqueue(
+            kind="run_update",
+            source_key=f"run:{self._active_run_id}:waiting:{attempt}",
+            payload=payload,
+        )
+        self.drain_once()
+        return decision.message
+
+    def complete_active_run(self, final_response: str) -> int | None:
+        if (
+            not self.is_available()
+            or not self._active_run_id
+            or not self._active_lease_owner
+            or not final_response
+        ):
+            return None
+        run_id = self._active_run_id
+        event_batch = self._event_batch(
+            [
+                {
+                    "source_event_key": f"run:{run_id}:final_response",
+                    "event_type": "assistant",
+                    "role": "assistant",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "content": final_response,
+                    "metadata": {"run_completion": True},
+                }
+            ]
+        )
+        local_id = self.spool.enqueue(
+            kind="run_completion_bundle",
+            source_key=f"run:{run_id}:completion",
+            payload={
+                "event_batch": event_batch,
+                "run_update": {
+                    "run_id": run_id,
+                    "state": "succeeded",
+                    "lease_owner": self._active_lease_owner,
+                },
+            },
+        )
+        self.drain_once()
+        return local_id
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [
