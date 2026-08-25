@@ -102,8 +102,8 @@ Create a shared PostgreSQL function/trigger that rejects `UPDATE` and `DELETE` o
 
 **Files:** Create `backend/services/sydney_context_redaction.py`, `backend/schemas/sydney_context.py`, `backend/tests/test_sydney_context_redaction.py`; modify `backend/config.py` and `backend/.env.example`.
 
-- [ ] **Step 1: Write failing redaction tests** with nested URLs, JSON strings, bearer headers, OAuth values, API-key/password assignments, signed `#handoff=` fragments, configured-secret values, normal email/phone/address PII, repeated input, and UTF-8 segment boundaries. Assert secrets never appear in output or exception text; normal business PII remains; repeated input has identical redacted text and SHA-256.
-- [ ] **Step 2: Run the red test:**
+- [x] **Step 1: Write failing redaction tests** with nested URLs, JSON strings, bearer headers, OAuth values, API-key/password assignments, signed `#handoff=` fragments, configured-secret values, normal email/phone/address PII, repeated input, and UTF-8 segment boundaries. Assert secrets never appear in output or exception text; normal business PII remains; repeated input has identical redacted text and SHA-256.
+- [x] **Step 2: Run the red test:**
 
 ```bash
 cd backend
@@ -114,7 +114,7 @@ JWT_SECRET=test-secret DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1:543
 
 Expected: collection fails because `services.sydney_context_redaction` is absent.
 
-- [ ] **Step 3: Implement the strict contracts and redactor.** The public primitive is:
+- [x] **Step 3: Implement the strict contracts and redactor.** The public primitive is:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -135,8 +135,8 @@ def split_utf8_text(value: str, *, max_chars: int) -> tuple[str, ...]:
 ```
 
 Use typed markers (`[REDACTED_BEARER_TOKEN]`, `[REDACTED_OAUTH_TOKEN]`, `[REDACTED_PASSWORD]`, `[REDACTED_SIGNED_FRAGMENT]`, `[REDACTED_CONFIGURED_SECRET]`) and a bounded regex set. Do not log input or matched values. Pydantic models must use `extra='forbid'`, bounded strings/lists, UTC timestamps, UUIDs, and exact `Literal` values.
-- [ ] **Step 4: Re-run the focused test and `ruff check` on the three touched Python files.** Expected: all pass.
-- [ ] **Step 5: Commit:** `feat: add Sydney context contracts and redaction`.
+- [x] **Step 4: Re-run the focused test and `ruff check` on the three touched Python files.** Expected: all pass.
+- [x] **Step 5: Commit:** `feat: add Sydney context contracts and redaction`.
 
 ## Task 2: Add the serial PostgreSQL migration and SQLAlchemy models
 
