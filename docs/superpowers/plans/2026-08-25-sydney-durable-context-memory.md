@@ -266,11 +266,11 @@ crm.command_contact_audiences.preview
 
 **Files:** Create `hermes/overlay/sydney_retry.py`, `backend/tests/test_sydney_retry.py`; later copied/installed through `hermes/overlay/install_sydney_overlay.py`.
 
-- [ ] **Step 1: Write failing tests** for structured `RetryInfo`, `Retry-After`, absolute reset, `retry in 47s`, `retry after 47 seconds`, milliseconds, unknown delay, retryable/nonretryable status classes, two immediate retries maximum, jitter bounds, 24-hour deadline, rolling 500,000-token budget, 96,000-token compression threshold, 16-turn ceiling, and side-effect decisions from Task 5.
-- [ ] **Step 2: Run the retry tests.** Expected: FAIL because `sydney_retry` is absent.
-- [ ] **Step 3: Implement pure parsing/classification primitives** `parse_retry_delay(error, now) -> timedelta | None`, `classify_retry(error) -> Literal['retry', 'continue_context', 'terminal']`, `next_retry(attempt, provider_delay, rng) -> timedelta`, and a timestamped `RollingInputBudget`. Provider delay wins over fallback. Unknown transient delays use bounded exponential backoff plus jitter. Application-level immediate retries stop after two; longer waits become `waiting_retry`. Error copy says the request is saved and will continue automatically and never mentions `/new`, `/reset`, or `/compact`.
-- [ ] **Step 4: Re-run the focused suite.** Expected: all pass, including `retry in 47s` yielding exactly 47 seconds before jitter-free provider scheduling.
-- [ ] **Step 5: Commit:** `feat: add automatic Sydney continuation policy`.
+- [x] **Step 1: Write failing tests** for structured `RetryInfo`, `Retry-After`, absolute reset, `retry in 47s`, `retry after 47 seconds`, milliseconds, unknown delay, retryable/nonretryable status classes, two immediate retries maximum, jitter bounds, 24-hour deadline, rolling 500,000-token budget, 96,000-token compression threshold, 16-turn ceiling, and side-effect decisions from Task 5.
+- [x] **Step 2: Run the retry tests.** Expected: FAIL because `sydney_retry` is absent.
+- [x] **Step 3: Implement pure parsing/classification primitives** `parse_retry_delay(error, now) -> timedelta | None`, `classify_retry(error) -> Literal['retry', 'continue_context', 'terminal']`, `next_retry(attempt, provider_delay, rng) -> timedelta`, and a timestamped `RollingInputBudget`. Provider delay wins over fallback. Unknown transient delays use bounded exponential backoff plus jitter. Application-level immediate retries stop after two; longer waits become `waiting_retry`. Error copy says the request is saved and will continue automatically and never mentions `/new`, `/reset`, or `/compact`.
+- [x] **Step 4: Re-run the focused suite.** Expected: all pass, including `retry in 47s` yielding exactly 47 seconds before jitter-free provider scheduling.
+- [x] **Step 5: Commit:** `feat: add automatic Sydney continuation policy`.
 
 ## Task 12: Pin and patch exact Hermes 0.15.2 source reproducibly
 
