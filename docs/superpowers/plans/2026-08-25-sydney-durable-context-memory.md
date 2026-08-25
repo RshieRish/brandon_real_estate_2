@@ -142,8 +142,8 @@ Use typed markers (`[REDACTED_BEARER_TOKEN]`, `[REDACTED_OAUTH_TOKEN]`, `[REDACT
 
 **Files:** Create `backend/models/sydney_context.py`, `backend/alembic/versions/85e8b7c9d4f1_add_sydney_durable_context.py`, `backend/tests/test_sydney_context_models.py`, `backend/tests/test_sydney_context_migration.py`; modify `backend/models/__init__.py`, `backend/tests/test_integration_worker.py`, and every repository assertion that pins `84d7a5f9b2c3` as the forever head.
 
-- [ ] **Step 1: Write failing model and migration tests** for the exact table/column/constraint/index inventory, generated search vector, GIN index, append-only trigger, sole head, serial ancestry, non-destructive upgrade over seeded CRM data, guarded nonempty downgrade, empty downgrade, and upgrade/downgrade roundtrip on the owned PostgreSQL fixture.
-- [ ] **Step 2: Run:**
+- [x] **Step 1: Write failing model and migration tests** for the exact table/column/constraint/index inventory, generated search vector, GIN index, append-only trigger, sole head, serial ancestry, non-destructive upgrade over seeded CRM data, guarded nonempty downgrade, empty downgrade, and upgrade/downgrade roundtrip on the owned PostgreSQL fixture.
+- [x] **Step 2: Run:**
 
 ```bash
 cd backend
@@ -153,10 +153,10 @@ PYTHONPATH=. ../backend/.venv/bin/pytest -q \
 
 Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
-- [ ] **Step 3: Implement the eight SQLAlchemy 2 models** using typed `Mapped` columns, named checks/uniques/FKs/indexes, PostgreSQL UUID/JSONB/ARRAY/TSVECTOR types, and no cascade that can erase canonical events. Export every class from `models.__init__` so Alembic metadata sees them.
-- [ ] **Step 4: Implement revision `85e8b7c9d4f1`** with `down_revision='84d7a5f9b2c3'`, `gen_random_uuid()`, exact checks, generated FTS column, GIN index, append-only trigger, FIFO/lease indexes, and a downgrade guard that raises when owned evidence exists.
-- [ ] **Step 5: Run model/migration tests plus `alembic heads`.** Expected: all tests pass and output is exactly `85e8b7c9d4f1 (head)`.
-- [ ] **Step 6: Commit:** `feat: add Sydney durable context persistence`.
+- [x] **Step 3: Implement the eight SQLAlchemy 2 models** using typed `Mapped` columns, named checks/uniques/FKs/indexes, PostgreSQL UUID/JSONB/ARRAY/TSVECTOR types, and no cascade that can erase canonical events. Export every class from `models.__init__` so Alembic metadata sees them.
+- [x] **Step 4: Implement revision `85e8b7c9d4f1`** with `down_revision='84d7a5f9b2c3'`, `gen_random_uuid()`, exact checks, generated FTS column, GIN index, append-only trigger, FIFO/lease indexes, and a downgrade guard that raises when owned evidence exists.
+- [x] **Step 5: Run model/migration tests plus `alembic heads`.** Expected: all tests pass and output is exactly `85e8b7c9d4f1 (head)`.
+- [x] **Step 6: Commit:** `feat: add Sydney durable context persistence`.
 
 ## Task 3: Implement idempotent ingest and reconciliation
 

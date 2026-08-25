@@ -1,4 +1,14 @@
 from models.agent_action_audit import AgentActionAudit
+from models.sydney_context import (
+    AgentContextCheckpoint,
+    AgentConversationEvent,
+    AgentConversationEventSegment,
+    AgentConversationIdentity,
+    AgentConversationSession,
+    AgentMemoryFact,
+    AgentRunJob,
+    AgentToolInvocation,
+)
 from models.admin_user import AdminUser
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
@@ -56,6 +66,14 @@ from models.sydney_tasks import (
 
 __all__ = [
     "AgentActionAudit",
+    "AgentContextCheckpoint",
+    "AgentConversationEvent",
+    "AgentConversationEventSegment",
+    "AgentConversationIdentity",
+    "AgentConversationSession",
+    "AgentMemoryFact",
+    "AgentRunJob",
+    "AgentToolInvocation",
     "AdminUser",
     "CRMContact",
     "CRMContactAddress",

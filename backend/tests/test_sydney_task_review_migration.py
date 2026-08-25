@@ -221,14 +221,30 @@ def _insert_clarification(
     )
 
 
-def test_revision_84_is_the_sole_serial_head_after_revision_83() -> None:
+def test_revision_84_is_serially_followed_by_the_repository_head() -> None:
     revision = _load_revision()
     assert revision.revision == REVISION
     assert revision.down_revision == DOWN_REVISION
     assert revision.branch_labels is None
     assert revision.depends_on is None
     scripts = _script_directory()
-    assert scripts.get_heads() == [REVISION]
+    assert len(scripts.get_heads()) == 1
+    ancestry: set[str] = set()
+    pending = [scripts.get_revision(scripts.get_current_head())]
+    while pending:
+        item = pending.pop()
+        if item is None or item.revision in ancestry:
+            continue
+        ancestry.add(item.revision)
+        parents = (
+            item.down_revision
+            if isinstance(item.down_revision, tuple)
+            else (item.down_revision,)
+        )
+        pending.extend(
+            scripts.get_revision(parent) for parent in parents if parent is not None
+        )
+    assert REVISION in ancestry
     assert scripts.get_revision(REVISION).down_revision == DOWN_REVISION
 
 

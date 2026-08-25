@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
-REVISION = "84d7a5f9b2c3"
+REVISION = "85e8b7c9d4f1"
 UTC = timezone.utc
 
 
@@ -187,7 +187,7 @@ def test_gmail_runtime_reserves_receipt_finalization_after_provider_deadline() -
         validate_gmail_runtime_settings(config)
 
 
-def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
+def test_worker_targets_current_head_and_registers_real_gmail_job_symbol() -> None:
     from workers import integration_worker
     from workers.jobs.gmail_history import run_gmail_history_job
 
