@@ -6,14 +6,15 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from models.sydney_context import (
     AgentContextCheckpoint,
@@ -22,6 +23,8 @@ from models.sydney_context import (
     AgentConversationIdentity,
     AgentConversationSession,
     AgentMemoryFact,
+    AgentRunJob,
+    AgentToolInvocation,
 )
 from schemas.sydney_context import (
     ContextEventBatchRequest,
@@ -32,7 +35,16 @@ from schemas.sydney_context import (
     ContextPacket,
     ContextPacketSection,
     ContextRetrieveRequest,
+    ContextRunClaimRequest,
+    ContextRunClaimResponse,
+    ContextRunStartRequest,
+    ContextRunStartResponse,
+    ContextRunSummary,
+    ContextRunUpdateRequest,
     ContextSourceExcerpt,
+    ContextToolInvocationRequest,
+    ContextToolInvocationResponse,
+    ContextToolInvocationUpdateRequest,
 )
 from services.sydney_context_redaction import redact_content, split_utf8_text
 
@@ -43,6 +55,14 @@ class ContextEventConflict(ValueError):
 
 class ContextSessionConflict(ValueError):
     """A Hermes session ID was rebound to a different durable lineage."""
+
+
+class ContextRunConflict(ValueError):
+    """A run idempotency key or state transition conflicted."""
+
+
+class ContextToolConflict(ValueError):
+    """A tool-call ID was rebound or updated unsafely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +96,21 @@ _CONTEXT_PREFIX = (
     "tool policy. Current-state tools remain authoritative."
 )
 _CONTEXT_SUFFIX = "\n</durable-context>"
+_RUN_TRANSITIONS: dict[str, frozenset[str]] = {
+    "queued": frozenset({"running", "waiting_retry", "terminal_failure"}),
+    "running": frozenset(
+        {
+            "waiting_retry",
+            "succeeded",
+            "blocked_side_effect",
+            "terminal_failure",
+        }
+    ),
+    "waiting_retry": frozenset({"running", "terminal_failure"}),
+    "succeeded": frozenset(),
+    "blocked_side_effect": frozenset({"terminal_failure"}),
+    "terminal_failure": frozenset(),
+}
 
 
 def canonical_json(value: object) -> str:
@@ -159,6 +194,27 @@ def estimate_tokens(value: str) -> int:
     if not isinstance(value, str):
         raise TypeError("value must be a string")
     return ceil(len(value.encode("utf-8")) / 4)
+
+
+def is_run_transition_allowed(current: str, target: str) -> bool:
+    if current == target:
+        return current in _RUN_TRANSITIONS
+    return target in _RUN_TRANSITIONS.get(current, frozenset())
+
+
+def tool_replay_decision(
+    *,
+    side_effect_class: str,
+    state: str,
+    has_result: bool,
+) -> str:
+    if state == "succeeded" and has_result:
+        return "restore_result"
+    if side_effect_class == "read_only":
+        return "repeat_read"
+    if side_effect_class == "idempotent_write" and state == "not_delivered":
+        return "retry_not_delivered"
+    return "block_uncertain"
 
 
 def _truncate_for_tokens(value: str, token_budget: int) -> str:
@@ -532,6 +588,278 @@ async def search_history(
     )
 
 
+def _run_summary(run: AgentRunJob) -> ContextRunSummary:
+    return ContextRunSummary(
+        id=run.id,
+        identity_id=run.identity_id,
+        platform_message_id=run.platform_message_id,
+        inbound_event_id=run.inbound_event_id,
+        session_id=run.session_id,
+        logical_conversation_id=run.logical_conversation_id,
+        state=run.state,
+        attempt_count=run.attempt_count,
+        lease_owner=run.lease_owner,
+        lease_expires_at=run.lease_expires_at,
+        next_attempt_at=run.next_attempt_at,
+        terminal_deadline_at=run.terminal_deadline_at,
+        provider_category=run.provider_category,
+        error_code=run.error_code,
+        final_response_event_id=run.final_response_event_id,
+    )
+
+
+async def start_run(
+    db: AsyncSession,
+    request: ContextRunStartRequest,
+) -> ContextRunStartResponse:
+    candidate_id = uuid4()
+    inserted_id = (
+        await db.execute(
+            insert(AgentRunJob)
+            .values(
+                id=candidate_id,
+                identity_id=request.identity_id,
+                platform_message_id=request.platform_message_id,
+                inbound_event_id=request.inbound_event_id,
+                session_id=request.session_id,
+                logical_conversation_id=request.logical_conversation_id,
+                state="queued",
+                attempt_count=0,
+                terminal_deadline_at=request.terminal_deadline_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    AgentRunJob.identity_id,
+                    AgentRunJob.platform_message_id,
+                ]
+            )
+            .returning(AgentRunJob.id)
+        )
+    ).scalar_one_or_none()
+    replayed = inserted_id is None
+    run_filter = (
+        AgentRunJob.id == inserted_id
+        if inserted_id is not None
+        else and_(
+            AgentRunJob.identity_id == request.identity_id,
+            AgentRunJob.platform_message_id == request.platform_message_id,
+        )
+    )
+    run = (await db.scalars(select(AgentRunJob).where(run_filter))).one()
+    if replayed and (
+        run.inbound_event_id != request.inbound_event_id
+        or run.session_id != request.session_id
+        or run.logical_conversation_id != request.logical_conversation_id
+        or run.terminal_deadline_at != request.terminal_deadline_at
+    ):
+        raise ContextRunConflict("context_run_replay_conflict")
+    await db.flush()
+    return ContextRunStartResponse(run=_run_summary(run), replayed=replayed)
+
+
+async def update_run_state(
+    db: AsyncSession,
+    request: ContextRunUpdateRequest,
+) -> ContextRunSummary:
+    run = (
+        await db.scalars(
+            select(AgentRunJob)
+            .where(AgentRunJob.id == request.run_id)
+            .with_for_update()
+        )
+    ).one()
+    if run.state != request.state and not is_run_transition_allowed(
+        run.state, request.state
+    ):
+        raise ContextRunConflict("context_run_transition_invalid")
+    if run.lease_owner and request.lease_owner != run.lease_owner:
+        raise ContextRunConflict("context_run_lease_owner_invalid")
+    if request.state == "waiting_retry" and request.next_attempt_at is None:
+        raise ContextRunConflict("context_run_retry_time_required")
+    if request.state == "succeeded" and request.final_response_event_id is None:
+        raise ContextRunConflict("context_run_final_event_required")
+
+    run.state = request.state
+    run.next_attempt_at = request.next_attempt_at
+    run.provider_category = request.provider_category
+    run.error_code = request.error_code
+    run.parsed_retry_delay_seconds = request.parsed_retry_delay_seconds
+    run.final_response_event_id = request.final_response_event_id
+    run.updated_at = datetime.now(UTC)
+    if request.state != "running":
+        run.lease_owner = None
+        run.lease_expires_at = None
+    await db.flush()
+    return _run_summary(run)
+
+
+async def claim_runs(
+    db: AsyncSession,
+    request: ContextRunClaimRequest,
+    *,
+    now: datetime | None = None,
+    lease_seconds: int = 120,
+) -> ContextRunClaimResponse:
+    current = now or datetime.now(UTC)
+    older = aliased(AgentRunJob)
+    older_pending = exists(
+        select(older.id).where(
+            older.identity_id == AgentRunJob.identity_id,
+            older.state.not_in(("succeeded", "terminal_failure")),
+            or_(
+                older.created_at < AgentRunJob.created_at,
+                and_(
+                    older.created_at == AgentRunJob.created_at,
+                    older.id < AgentRunJob.id,
+                ),
+            ),
+        )
+    )
+    eligible = or_(
+        AgentRunJob.state == "queued",
+        and_(
+            AgentRunJob.state == "waiting_retry",
+            AgentRunJob.next_attempt_at <= current,
+        ),
+        and_(
+            AgentRunJob.state == "running",
+            AgentRunJob.lease_expires_at <= current,
+        ),
+    )
+    statement = (
+        select(AgentRunJob)
+        .where(
+            eligible,
+            AgentRunJob.terminal_deadline_at > current,
+            ~older_pending,
+        )
+        .order_by(AgentRunJob.created_at, AgentRunJob.id)
+        .limit(request.limit)
+        .with_for_update(skip_locked=True)
+    )
+    if request.identity_id:
+        statement = statement.where(AgentRunJob.identity_id == request.identity_id)
+    rows = list((await db.scalars(statement)).all())
+    for run in rows:
+        run.state = "running"
+        run.attempt_count += 1
+        run.lease_owner = request.lease_owner
+        run.lease_expires_at = current + timedelta(seconds=lease_seconds)
+        run.next_attempt_at = None
+        run.updated_at = current
+    await db.flush()
+    return ContextRunClaimResponse(runs=[_run_summary(run) for run in rows])
+
+
+async def start_tool_invocation(
+    db: AsyncSession,
+    request: ContextToolInvocationRequest,
+) -> ContextToolInvocationResponse:
+    arguments_sha256 = canonical_json_hash(request.arguments)
+    candidate_id = uuid4()
+    inserted_id = (
+        await db.execute(
+            insert(AgentToolInvocation)
+            .values(
+                id=candidate_id,
+                run_id=request.run_id,
+                tool_call_id=request.tool_call_id,
+                tool_name=request.tool_name,
+                arguments_sha256=arguments_sha256,
+                side_effect_class=request.side_effect_class,
+                caller_idempotency_key=request.caller_idempotency_key,
+                state="started",
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    AgentToolInvocation.run_id,
+                    AgentToolInvocation.tool_call_id,
+                ]
+            )
+            .returning(AgentToolInvocation.id)
+        )
+    ).scalar_one_or_none()
+    invocation_filter = (
+        AgentToolInvocation.id == inserted_id
+        if inserted_id is not None
+        else and_(
+            AgentToolInvocation.run_id == request.run_id,
+            AgentToolInvocation.tool_call_id == request.tool_call_id,
+        )
+    )
+    invocation = (
+        await db.scalars(select(AgentToolInvocation).where(invocation_filter))
+    ).one()
+    if inserted_id is None and (
+        invocation.tool_name != request.tool_name
+        or invocation.arguments_sha256 != arguments_sha256
+        or invocation.side_effect_class != request.side_effect_class
+        or invocation.caller_idempotency_key != request.caller_idempotency_key
+    ):
+        raise ContextToolConflict("context_tool_replay_conflict")
+    decision = (
+        "execute"
+        if inserted_id is not None
+        else tool_replay_decision(
+            side_effect_class=invocation.side_effect_class,
+            state=invocation.state,
+            has_result=invocation.result_event_id is not None,
+        )
+    )
+    await db.flush()
+    return ContextToolInvocationResponse(
+        invocation_id=invocation.id,
+        state=invocation.state,
+        replay_decision=decision,
+    )
+
+
+async def update_tool_invocation(
+    db: AsyncSession,
+    request: ContextToolInvocationUpdateRequest,
+) -> ContextToolInvocationResponse:
+    invocation = (
+        await db.scalars(
+            select(AgentToolInvocation)
+            .where(
+                AgentToolInvocation.run_id == request.run_id,
+                AgentToolInvocation.tool_call_id == request.tool_call_id,
+            )
+            .with_for_update()
+        )
+    ).one()
+    allowed = (
+        invocation.state == request.state
+        or (
+            invocation.state == "started"
+            and request.state
+            in {"succeeded", "not_delivered", "delivery_uncertain", "failed"}
+        )
+        or (
+            invocation.state == "delivery_uncertain"
+            and request.state in {"succeeded", "not_delivered"}
+        )
+    )
+    if not allowed:
+        raise ContextToolConflict("context_tool_transition_invalid")
+    if request.state == "succeeded" and request.result_event_id is None:
+        raise ContextToolConflict("context_tool_result_event_required")
+    invocation.state = request.state
+    invocation.result_event_id = request.result_event_id
+    invocation.finished_at = datetime.now(UTC)
+    invocation.updated_at = invocation.finished_at
+    await db.flush()
+    return ContextToolInvocationResponse(
+        invocation_id=invocation.id,
+        state=invocation.state,
+        replay_decision=tool_replay_decision(
+            side_effect_class=invocation.side_effect_class,
+            state=invocation.state,
+            has_result=invocation.result_event_id is not None,
+        ),
+    )
+
+
 async def _resolve_identity(
     db: AsyncSession,
     request: ContextEventBatchRequest,
@@ -818,17 +1146,26 @@ async def reconcile_session(
 
 __all__ = [
     "ContextEventConflict",
+    "ContextRunConflict",
     "ContextSessionConflict",
+    "ContextToolConflict",
     "PreparedEvent",
     "ReconciliationHash",
     "build_context_packet",
     "canonical_json",
     "canonical_json_hash",
+    "claim_runs",
     "estimate_tokens",
     "ingest_event_batch",
+    "is_run_transition_allowed",
     "ordered_reconciliation_hash",
     "prepare_event",
     "reconcile_session",
     "retrieve_context",
     "search_history",
+    "start_run",
+    "start_tool_invocation",
+    "tool_replay_decision",
+    "update_run_state",
+    "update_tool_invocation",
 ]

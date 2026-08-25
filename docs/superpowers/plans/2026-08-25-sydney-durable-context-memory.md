@@ -182,11 +182,11 @@ Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
 **Files:** Modify `backend/services/sydney_context_service.py`; create `backend/tests/test_sydney_context_runs.py`.
 
-- [ ] **Step 1: Write failing tests** for unique platform-message runs, FIFO per identity, `FOR UPDATE SKIP LOCKED`, stale lease recovery, lease-owner validation, allowed state transitions, attempt/deadline bounds, exact `next_attempt_at`, tool invocation uniqueness, canonical argument hashing, and all side-effect replay decisions.
-- [ ] **Step 2: Run the focused tests.** Expected: FAIL because run/tool service methods are absent.
-- [ ] **Step 3: Implement start/update/claim and the replay classifier.** Use one database transaction per state transition. The classifier must return `repeat_read`, `restore_result`, `retry_not_delivered`, or `block_uncertain`; it must never return an executable decision for a succeeded or delivery-uncertain mutation.
-- [ ] **Step 4: Re-run focused tests, including a two-connection concurrent claim case.** Expected: exactly one claimant receives the oldest eligible run.
-- [ ] **Step 5: Commit:** `feat: persist Sydney continuation runs`.
+- [x] **Step 1: Write failing tests** for unique platform-message runs, FIFO per identity, `FOR UPDATE SKIP LOCKED`, stale lease recovery, lease-owner validation, allowed state transitions, attempt/deadline bounds, exact `next_attempt_at`, tool invocation uniqueness, canonical argument hashing, and all side-effect replay decisions.
+- [x] **Step 2: Run the focused tests.** Expected: FAIL because run/tool service methods are absent.
+- [x] **Step 3: Implement start/update/claim and the replay classifier.** Use one database transaction per state transition. The classifier must return `repeat_read`, `restore_result`, `retry_not_delivered`, or `block_uncertain`; it must never return an executable decision for a succeeded or delivery-uncertain mutation.
+- [x] **Step 4: Re-run focused tests, including a two-connection concurrent claim case.** Expected: exactly one claimant receives the oldest eligible run.
+- [x] **Step 5: Commit:** `feat: persist Sydney continuation runs`.
 
 ## Task 6: Expose protected context endpoints and action audits
 

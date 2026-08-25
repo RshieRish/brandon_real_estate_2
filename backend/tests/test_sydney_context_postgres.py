@@ -218,3 +218,176 @@ async def test_retrieval_and_history_search_return_bounded_source_linked_events(
     assert packet.sections[-1].source_event_ids == [ingested.event_ids[0]]
     assert [event.event_id for event in search.events] == [ingested.event_ids[0]]
     assert [event.event_id for event in window.events] == ingested.event_ids[13:18]
+
+
+@pytest.mark.asyncio
+async def test_run_fifo_claim_and_tool_ledger_prevent_duplicate_side_effects(
+    context_sessions,
+) -> None:
+    from schemas.sydney_context import (
+        ContextRunClaimRequest,
+        ContextRunStartRequest,
+        ContextRunUpdateRequest,
+        ContextToolInvocationRequest,
+        ContextToolInvocationUpdateRequest,
+    )
+    from services.sydney_context_service import (
+        claim_runs,
+        ingest_event_batch,
+        start_run,
+        start_tool_invocation,
+        update_run_state,
+        update_tool_invocation,
+    )
+
+    _engine, factory = context_sessions
+    base = _request()
+    batch = base.model_copy(
+        update={
+            "events": [
+                base.events[0],
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "session-1:message-2",
+                        "event_type": "assistant",
+                        "role": "assistant",
+                        "occurred_at": base.events[0].occurred_at
+                        + timedelta(seconds=1),
+                        "content": "Saved response",
+                    }
+                ),
+            ]
+        }
+    )
+    now = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, batch)
+        first = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingested.identity_id,
+                platform_message_id="telegram-11",
+                inbound_event_id=ingested.event_ids[0],
+                session_id=ingested.session_id,
+                logical_conversation_id=batch.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        replay = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingested.identity_id,
+                platform_message_id="telegram-11",
+                inbound_event_id=ingested.event_ids[0],
+                session_id=ingested.session_id,
+                logical_conversation_id=batch.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.commit()
+    assert replay.replayed is True
+    assert replay.run.id == first.run.id
+
+    async with factory() as session:
+        claimed = await claim_runs(
+            session,
+            ContextRunClaimRequest(lease_owner="atlas-one"),
+            now=now,
+            lease_seconds=120,
+        )
+        await session.commit()
+    assert [run.id for run in claimed.runs] == [first.run.id]
+    assert claimed.runs[0].attempt_count == 1
+
+    async with factory() as session:
+        tool = await start_tool_invocation(
+            session,
+            ContextToolInvocationRequest(
+                run_id=first.run.id,
+                tool_call_id="call-1",
+                tool_name="gmail_send",
+                arguments={"request_id": "stable-id", "subject": "Hello"},
+                side_effect_class="idempotent_write",
+                caller_idempotency_key="stable-id",
+            ),
+        )
+        finished = await update_tool_invocation(
+            session,
+            ContextToolInvocationUpdateRequest(
+                run_id=first.run.id,
+                tool_call_id="call-1",
+                state="succeeded",
+                result_event_id=ingested.event_ids[1],
+            ),
+        )
+        replayed_tool = await start_tool_invocation(
+            session,
+            ContextToolInvocationRequest(
+                run_id=first.run.id,
+                tool_call_id="call-1",
+                tool_name="gmail_send",
+                arguments={"subject": "Hello", "request_id": "stable-id"},
+                side_effect_class="idempotent_write",
+                caller_idempotency_key="stable-id",
+            ),
+        )
+        completed = await update_run_state(
+            session,
+            ContextRunUpdateRequest(
+                run_id=first.run.id,
+                state="succeeded",
+                lease_owner="atlas-one",
+                final_response_event_id=ingested.event_ids[1],
+            ),
+        )
+        await session.commit()
+    assert tool.replay_decision == "execute"
+    assert finished.replay_decision == "restore_result"
+    assert replayed_tool.replay_decision == "restore_result"
+    assert completed.state == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_two_connections_claim_one_eligible_run_once(context_sessions) -> None:
+    from schemas.sydney_context import ContextRunClaimRequest, ContextRunStartRequest
+    from services.sydney_context_service import (
+        claim_runs,
+        ingest_event_batch,
+        start_run,
+    )
+
+    _engine, factory = context_sessions
+    request = _request()
+    now = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, request)
+        await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingested.identity_id,
+                platform_message_id="telegram-claim-race",
+                inbound_event_id=ingested.event_ids[0],
+                session_id=ingested.session_id,
+                logical_conversation_id=request.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.commit()
+
+    async def claim_once(owner: str):
+        async with factory() as session:
+            result = await claim_runs(
+                session,
+                ContextRunClaimRequest(lease_owner=owner),
+                now=now,
+            )
+            await session.commit()
+            return result
+
+    results = await asyncio.gather(claim_once("atlas-a"), claim_once("atlas-b"))
+
+    assert sum(len(result.runs) for result in results) == 1
+    assert {run.lease_owner for result in results for run in result.runs} <= {
+        "atlas-a",
+        "atlas-b",
+    }
