@@ -11,11 +11,6 @@ from math import ceil
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
-
 from models.sydney_context import (
     AgentContextCheckpoint,
     AgentConversationEvent,
@@ -30,6 +25,7 @@ from schemas.sydney_context import (
     ContextEventBatchRequest,
     ContextEventBatchResponse,
     ContextEventInput,
+    ContextEventReceipt,
     ContextHealthResponse,
     ContextHistorySearchRequest,
     ContextHistorySearchResponse,
@@ -42,11 +38,17 @@ from schemas.sydney_context import (
     ContextRunStartResponse,
     ContextRunSummary,
     ContextRunUpdateRequest,
+    ContextSessionReconciliationResponse,
     ContextSourceExcerpt,
     ContextToolInvocationRequest,
     ContextToolInvocationResponse,
     ContextToolInvocationUpdateRequest,
 )
+from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+
 from services.sydney_context_redaction import redact_content, split_utf8_text
 
 
@@ -875,15 +877,19 @@ async def get_context_health(
         or 0
     )
     session_count = int(
-        await db.scalar(select(func.count()).select_from(AgentConversationSession))
-        or 0
+        await db.scalar(select(func.count()).select_from(AgentConversationSession)) or 0
     )
     event_count = int(
         await db.scalar(select(func.count()).select_from(AgentConversationEvent)) or 0
     )
     checkpoint_source_count = int(
         await db.scalar(
-            select(func.coalesce(func.sum(func.cardinality(AgentContextCheckpoint.source_event_ids)), 0))
+            select(
+                func.coalesce(
+                    func.sum(func.cardinality(AgentContextCheckpoint.source_event_ids)),
+                    0,
+                )
+            )
         )
         or 0
     )
@@ -1091,9 +1097,15 @@ async def ingest_event_batch(
         raise ValueError("context_event_batch_too_large")
     identity_id = await _resolve_identity(db, request)
     session_id = await _resolve_session(db, request, identity_id=identity_id)
+    await db.scalar(
+        select(AgentConversationSession.id)
+        .where(AgentConversationSession.id == session_id)
+        .with_for_update()
+    )
     inserted_count = 0
     replayed_count = 0
     event_ids: list[UUID] = []
+    event_receipts: list[ContextEventReceipt] = []
 
     for event in request.events:
         prepared = prepare_event(
@@ -1146,6 +1158,14 @@ async def ingest_event_batch(
             )
             inserted_count += 1
             event_ids.append(inserted_id)
+            event_receipts.append(
+                ContextEventReceipt(
+                    event_id=inserted_id,
+                    event_type=event.event_type,
+                    occurred_at=event.occurred_at,
+                    content_sha256=prepared.content_sha256,
+                )
+            )
             continue
 
         existing = (
@@ -1165,6 +1185,14 @@ async def ingest_event_batch(
             raise ContextEventConflict("context_event_replay_conflict")
         replayed_count += 1
         event_ids.append(existing.id)
+        event_receipts.append(
+            ContextEventReceipt(
+                event_id=existing.id,
+                event_type=existing.event_type,
+                occurred_at=existing.occurred_at,
+                content_sha256=existing.content_sha256,
+            )
+        )
 
     if inserted_count:
         await db.execute(
@@ -1174,6 +1202,7 @@ async def ingest_event_batch(
                 source_event_count=(
                     AgentConversationSession.source_event_count + inserted_count
                 ),
+                reconciliation_hash=None,
                 updated_at=datetime.now(UTC),
             )
         )
@@ -1183,6 +1212,7 @@ async def ingest_event_batch(
         session_id=session_id,
         logical_conversation_id=request.logical_conversation_id,
         event_ids=event_ids,
+        event_receipts=event_receipts,
         inserted_count=inserted_count,
         replayed_count=replayed_count,
     )
@@ -1193,13 +1223,17 @@ async def reconcile_session(
     *,
     identity_id: UUID,
     hermes_session_id: str,
-) -> ReconciliationHash:
+    expected_event_count: int,
+    expected_ordered_hash: str,
+) -> ContextSessionReconciliationResponse:
     session = (
         await db.scalars(
-            select(AgentConversationSession).where(
+            select(AgentConversationSession)
+            .where(
                 AgentConversationSession.identity_id == identity_id,
                 AgentConversationSession.hermes_session_id == hermes_session_id,
             )
+            .with_for_update()
         )
     ).one()
     rows = tuple(
@@ -1219,17 +1253,28 @@ async def reconcile_session(
         ).all()
     )
     result = ordered_reconciliation_hash(rows)
-    await db.execute(
-        update(AgentConversationSession)
-        .where(AgentConversationSession.id == session.id)
-        .values(
-            source_event_count=result.count,
-            reconciliation_hash=result.digest,
-            updated_at=datetime.now(UTC),
-        )
+    matched = (
+        result.count == expected_event_count and result.digest == expected_ordered_hash
     )
+    if matched:
+        await db.execute(
+            update(AgentConversationSession)
+            .where(AgentConversationSession.id == session.id)
+            .values(
+                source_event_count=result.count,
+                reconciliation_hash=result.digest,
+                updated_at=datetime.now(UTC),
+            )
+        )
     await db.flush()
-    return result
+    return ContextSessionReconciliationResponse(
+        identity_id=identity_id,
+        session_id=session.id,
+        hermes_session_id=hermes_session_id,
+        event_count=result.count,
+        ordered_hash=result.digest,
+        matched=matched,
+    )
 
 
 __all__ = [

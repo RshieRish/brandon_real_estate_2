@@ -1,16 +1,66 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sqlite3
 import sys
-
+from pathlib import Path
 
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_backfill import SydneyBackfill  # noqa: E402
-from sydney_spool import SydneySpool  # noqa: E402
+from sydney_backfill import SydneyBackfill
+from sydney_spool import SydneySpool
+
+
+class _ReceiptBackend:
+    def __init__(self) -> None:
+        self.events: dict[str, list[dict]] = {}
+        self.reconciliations: list[dict] = []
+
+    def ingest_events(self, payload: dict) -> dict:
+        from uuid import NAMESPACE_URL, uuid5
+
+        receipts = []
+        for event in payload["events"]:
+            event_id = str(uuid5(NAMESPACE_URL, event["source_event_key"]))
+            receipts.append(
+                {
+                    "event_id": event_id,
+                    "event_type": event["event_type"],
+                    "occurred_at": event["occurred_at"],
+                    "content_sha256": __import__("hashlib")
+                    .sha256(event["content"].encode())
+                    .hexdigest(),
+                }
+            )
+        self.events.setdefault(payload["hermes_session_id"], []).extend(receipts)
+        return {
+            "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "logical_conversation_id": payload["logical_conversation_id"],
+            "event_ids": [receipt["event_id"] for receipt in receipts],
+            "event_receipts": receipts,
+            "inserted_count": len(receipts),
+            "replayed_count": 0,
+        }
+
+    def reconcile_session(self, payload: dict) -> dict:
+        from sydney_spool import ordered_reconciliation_hash
+
+        self.reconciliations.append(payload)
+        rows = self.events[payload["hermes_session_id"]]
+        digest = ordered_reconciliation_hash(rows)
+        return {
+            "identity_id": payload["identity_id"],
+            "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "hermes_session_id": payload["hermes_session_id"],
+            "event_count": len(rows),
+            "ordered_hash": digest,
+            "matched": (
+                payload["expected_event_count"] == len(rows)
+                and payload["expected_ordered_hash"] == digest
+            ),
+        }
 
 
 def _seed_state(path: Path) -> None:
@@ -154,7 +204,9 @@ def _seed_state(path: Path) -> None:
     connection.close()
 
 
-def test_backfill_pages_visible_history_redacts_and_deduplicates(tmp_path: Path) -> None:
+def test_backfill_pages_visible_history_redacts_and_deduplicates(
+    tmp_path: Path,
+) -> None:
     state_path = tmp_path / "state.db"
     _seed_state(state_path)
     spool = SydneySpool(tmp_path / "sydney_spool.db")
@@ -175,6 +227,7 @@ def test_backfill_pages_visible_history_redacts_and_deduplicates(tmp_path: Path)
     assert report["message_count"] == 4
     assert report["role_counts"] == {"assistant": 2, "tool": 1, "user": 1}
     assert report["tool_call_count"] == 1
+    assert report["tool_result_count"] == 1
     assert len(report["ordered_hash"]) == 64
     assert len(report["sessions"]) == 2
     assert spool.pending_count == 5
@@ -191,7 +244,9 @@ def test_backfill_pages_visible_history_redacts_and_deduplicates(tmp_path: Path)
     assert "command_contacts_search" in serialized
 
 
-def test_backfill_cursor_recovers_after_reopen_without_duplicate_rows(tmp_path: Path) -> None:
+def test_backfill_cursor_recovers_after_reopen_without_duplicate_rows(
+    tmp_path: Path,
+) -> None:
     state_path = tmp_path / "state.db"
     spool_path = tmp_path / "sydney_spool.db"
     _seed_state(state_path)
@@ -237,3 +292,42 @@ def test_backfill_report_is_content_free(tmp_path: Path) -> None:
     assert "closing date" not in encoded
     assert "Brandon" not in encoded
     assert "private-chat" not in encoded
+
+
+def test_backfill_drains_and_proves_content_free_exact_reconciliation(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.db"
+    _seed_state(state_path)
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    backfill = SydneyBackfill(
+        state_db=state_path,
+        spool=spool,
+        platform="telegram",
+        external_user_id="brandon",
+        external_chat_id="private-chat",
+        display_label="Brandon",
+    )
+    source = backfill.run()
+    backend = _ReceiptBackend()
+
+    report = backfill.drain_and_reconcile(backend, wait_seconds=1)
+
+    assert spool.pending_count == 0
+    assert report["matched"] is True
+    assert report["unacknowledged_count"] == 0
+    assert report["source"]["message_count"] == source["message_count"]
+    assert report["acknowledged"]["session_count"] == source["session_count"]
+    assert report["acknowledged"]["message_count"] == source["message_count"]
+    assert report["source"]["role_counts"] == report["acknowledged"]["role_counts"]
+    assert report["source"]["tool_call_count"] == 1
+    assert report["acknowledged"]["tool_call_count"] == 1
+    assert report["source"]["tool_result_count"] == 1
+    assert report["acknowledged"]["tool_result_count"] == 1
+    assert report["source"]["ordered_hash"] == report["acknowledged"]["ordered_hash"]
+    assert all(session["matched"] for session in report["sessions"])
+    assert all(
+        len(session["session_key_sha256"]) == 64 for session in report["sessions"]
+    )
+    assert "session-1" not in json.dumps(report)
+    assert "private-chat" not in json.dumps(report)

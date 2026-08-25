@@ -67,13 +67,37 @@ class ContextEventBatchRequest(StrictModel):
     events: list[ContextEventInput] = Field(min_length=1, max_length=100)
 
 
+class ContextEventReceipt(StrictModel):
+    event_id: UUID
+    event_type: EventType
+    occurred_at: datetime
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ContextEventBatchResponse(StrictModel):
     identity_id: UUID
     session_id: UUID
     logical_conversation_id: UUID
     event_ids: list[UUID]
+    event_receipts: list[ContextEventReceipt]
     inserted_count: int = Field(ge=0)
     replayed_count: int = Field(ge=0)
+
+
+class ContextSessionReconciliationRequest(StrictModel):
+    identity_id: UUID
+    hermes_session_id: str = Field(min_length=1, max_length=255)
+    expected_event_count: int = Field(ge=0)
+    expected_ordered_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ContextSessionReconciliationResponse(StrictModel):
+    identity_id: UUID
+    session_id: UUID
+    hermes_session_id: str
+    event_count: int = Field(ge=0)
+    ordered_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    matched: bool
 
 
 class ContextSourceExcerpt(StrictModel):

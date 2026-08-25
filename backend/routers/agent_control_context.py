@@ -5,12 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.exc import NoResultFound
-
 from config import settings
 from database import get_db
+from fastapi import APIRouter, Depends, HTTPException, Request
 from middleware.agent_control import require_agent_control
 from schemas.sydney_context import (
     ContextEventBatchRequest,
@@ -26,6 +23,8 @@ from schemas.sydney_context import (
     ContextRunStartResponse,
     ContextRunSummary,
     ContextRunUpdateRequest,
+    ContextSessionReconciliationRequest,
+    ContextSessionReconciliationResponse,
     ContextToolInvocationRequest,
     ContextToolInvocationResponse,
     ContextToolInvocationUpdateRequest,
@@ -39,6 +38,7 @@ from services.sydney_context_service import (
     claim_runs,
     get_context_health,
     ingest_event_batch,
+    reconcile_session,
     retrieve_context,
     search_history,
     start_run,
@@ -46,6 +46,8 @@ from services.sydney_context_service import (
     update_run_state,
     update_tool_invocation,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import NoResultFound
 
 router = APIRouter(dependencies=[Depends(require_agent_control)])
 
@@ -153,6 +155,41 @@ async def ingest_context_events(
             "inserted_count": result.inserted_count,
             "replayed_count": result.replayed_count,
             "event_count": len(result.event_ids),
+        },
+    )
+    return result
+
+
+@router.post(
+    "/context/sessions/reconcile",
+    response_model=ContextSessionReconciliationResponse,
+)
+async def reconcile_context_session(
+    payload: ContextSessionReconciliationRequest,
+    request: Request,
+    db: Database,
+    agent: Agent,
+) -> ContextSessionReconciliationResponse:
+    _require_master()
+    try:
+        result = await reconcile_session(
+            db,
+            identity_id=payload.identity_id,
+            hermes_session_id=payload.hermes_session_id,
+            expected_event_count=payload.expected_event_count,
+            expected_ordered_hash=payload.expected_ordered_hash,
+        )
+    except _CONTEXT_ERRORS as error:
+        _raise_bounded(error)
+    await _audit(
+        db,
+        request=request,
+        agent=agent,
+        action_id="context.sessions.reconcile",
+        request_meta={"expected_event_count": payload.expected_event_count},
+        response_meta={
+            "event_count": result.event_count,
+            "matched": result.matched,
         },
     )
     return result

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import UUID
 
 SCHEMA_VERSION = 1
 _SECRET_KEY = re.compile(
@@ -77,6 +78,32 @@ def _utc_now() -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _parsed_timestamp(value: Any) -> datetime:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def ordered_reconciliation_hash(rows: list[dict[str, Any]]) -> str:
+    """Match the backend's timestamp/UUID ordered, domain-separated digest."""
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            _parsed_timestamp(row.get("occurred_at")),
+            UUID(str(row["event_id"])).bytes,
+        ),
+    )
+    digest = hashlib.sha256(b"sws:sydney-context:reconciliation:v1\0")
+    for row in ordered:
+        event_type = str(row["event_type"])
+        digest.update(UUID(str(row["event_id"])).bytes)
+        digest.update(len(event_type.encode("utf-8")).to_bytes(2, "big"))
+        digest.update(event_type.encode("utf-8"))
+        digest.update(bytes.fromhex(str(row["content_sha256"])))
+    return digest.hexdigest()
 
 
 def _redact_url(match: re.Match[str]) -> str:
@@ -373,6 +400,107 @@ class SydneySpool:
         ).fetchall()
         return [self._record(row) for row in rows]
 
+    def matching_records(
+        self,
+        *,
+        state: str,
+        source_prefix: str,
+        limit: int | None = None,
+    ) -> list[SpoolRecord]:
+        if state not in {"pending", "acknowledged"}:
+            raise ValueError("unsupported spool state")
+        bounded_limit = None if limit is None else max(1, min(int(limit), 10_000))
+        sql = "SELECT * FROM outbox WHERE state=? AND source_key LIKE ? ORDER BY id"
+        parameters: list[Any] = [state, f"{source_prefix}%"]
+        if bounded_limit is not None:
+            sql += " LIMIT ?"
+            parameters.append(bounded_limit)
+        rows = self.connection.execute(sql, parameters).fetchall()
+        return [self._record(row) for row in rows]
+
+    def matching_count(self, *, state: str, source_prefix: str) -> int:
+        if state not in {"pending", "acknowledged"}:
+            raise ValueError("unsupported spool state")
+        row = self.connection.execute(
+            "SELECT count(*) FROM outbox WHERE state=? AND source_key LIKE ?",
+            (state, f"{source_prefix}%"),
+        ).fetchone()
+        return int(row[0])
+
+    @staticmethod
+    def _event_delivery(
+        record: SpoolRecord,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        if record.kind == "event_batch":
+            return record.payload, record.receipt or {}
+        if record.kind in {
+            "inbound_bundle",
+            "tool_after_bundle",
+            "run_completion_bundle",
+        }:
+            batch = record.payload.get("event_batch")
+            receipt = (record.receipt or {}).get("ingest")
+            if isinstance(batch, dict) and isinstance(receipt, dict):
+                return batch, receipt
+        return None
+
+    def reconciliation_expectations(self) -> dict[str, dict[str, Any]]:
+        """Build exact backend expectations from acknowledged ingest receipts."""
+        pending_sessions: set[str] = set()
+        for record in self.matching_records(state="pending", source_prefix=""):
+            delivery = self._event_delivery(record)
+            if delivery is not None:
+                session_id = str(delivery[0].get("hermes_session_id") or "")
+                if session_id:
+                    pending_sessions.add(session_id)
+
+        rows_by_session: dict[str, dict[str, dict[str, Any]]] = {}
+        identities: dict[str, str] = {}
+        for record in self.matching_records(state="acknowledged", source_prefix=""):
+            delivery = self._event_delivery(record)
+            if delivery is None:
+                continue
+            batch, receipt = delivery
+            session_id = str(batch.get("hermes_session_id") or "")
+            identity_id = str(receipt.get("identity_id") or "")
+            events = batch.get("events")
+            event_receipts = receipt.get("event_receipts")
+            if (
+                not session_id
+                or not identity_id
+                or not isinstance(events, list)
+                or not isinstance(event_receipts, list)
+                or len(events) != len(event_receipts)
+            ):
+                raise SpoolConflict("backend ingest receipt is incomplete")
+            prior_identity = identities.setdefault(session_id, identity_id)
+            if prior_identity != identity_id:
+                raise SpoolConflict("backend identity changed for a session")
+            session_rows = rows_by_session.setdefault(session_id, {})
+            for row in event_receipts:
+                if not isinstance(row, dict):
+                    raise SpoolConflict("backend event receipt is invalid")
+                event_id = str(row.get("event_id") or "")
+                if not event_id:
+                    raise SpoolConflict("backend event receipt is incomplete")
+                existing = session_rows.get(event_id)
+                if existing is not None and existing != row:
+                    raise SpoolConflict("backend event receipt replay changed")
+                session_rows[event_id] = row
+
+        expectations: dict[str, dict[str, Any]] = {}
+        for session_id, indexed_rows in rows_by_session.items():
+            if session_id in pending_sessions:
+                continue
+            rows = list(indexed_rows.values())
+            expectations[session_id] = {
+                "identity_id": identities[session_id],
+                "hermes_session_id": session_id,
+                "expected_event_count": len(rows),
+                "expected_ordered_hash": ordered_reconciliation_hash(rows),
+            }
+        return expectations
+
     def get_record(self, source_key: str) -> SpoolRecord | None:
         row = self.connection.execute(
             "SELECT * FROM outbox WHERE source_key=?", (source_key,)
@@ -385,9 +513,9 @@ class SydneySpool:
         ).fetchall()
         for row in rows:
             record = self._record(row)
-            if str(record.payload.get("run_start", {}).get("platform_message_id")) == str(
-                platform_message_id
-            ):
+            if str(
+                record.payload.get("run_start", {}).get("platform_message_id")
+            ) == str(platform_message_id):
                 return record
         return None
 

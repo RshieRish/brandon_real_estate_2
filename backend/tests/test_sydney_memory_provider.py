@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_memory_provider import SydneyMemoryProvider  # noqa: E402
+from sydney_memory_provider import SydneyMemoryProvider
 
 
 class FakeBackend:
@@ -20,13 +21,38 @@ class FakeBackend:
 
     def ingest_events(self, payload: dict) -> dict:
         self.calls.append(("ingest", payload))
+        receipts = [
+            {
+                "event_id": (
+                    "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+                    if event["source_event_key"].startswith("telegram:")
+                    else str(uuid5(NAMESPACE_URL, event["source_event_key"]))
+                ),
+                "event_type": event["event_type"],
+                "occurred_at": event["occurred_at"],
+                "content_sha256": hashlib.sha256(event["content"].encode()).hexdigest(),
+            }
+            for event in payload["events"]
+        ]
         return {
             "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "logical_conversation_id": payload["logical_conversation_id"],
-            "event_ids": ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"],
+            "event_ids": [receipt["event_id"] for receipt in receipts],
+            "event_receipts": receipts,
             "inserted_count": len(payload["events"]),
             "replayed_count": 0,
+        }
+
+    def reconcile_session(self, payload: dict) -> dict:
+        self.calls.append(("reconcile", payload))
+        return {
+            "identity_id": payload["identity_id"],
+            "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "hermes_session_id": payload["hermes_session_id"],
+            "event_count": payload["expected_event_count"],
+            "ordered_hash": payload["expected_ordered_hash"],
+            "matched": True,
         }
 
     def start_run(self, payload: dict) -> dict:
@@ -130,12 +156,22 @@ def test_provider_identity_is_stable_and_inbound_is_local_before_backend(
     assert UUID(logical_id).version == 5
 
     provider.drain_once()
-    assert [call[0] for call in backend.calls] == ["ingest", "run", "claim"]
+    assert [call[0] for call in backend.calls] == [
+        "ingest",
+        "run",
+        "claim",
+        "reconcile",
+    ]
     assert backend.calls[1][1]["inbound_event_id"] == (
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     )
     assert backend.calls[1][1]["session_id"] == ("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
     assert provider.spool.pending_count == 0
+    cursor = provider.spool.get_reconciliation_cursor("session-1")
+    assert cursor == {
+        "event_count": 1,
+        "ordered_hash": backend.calls[-1][1]["expected_ordered_hash"],
+    }
 
 
 def test_run_completion_uses_the_claimed_lease_and_persists_final_event(
@@ -151,9 +187,13 @@ def test_run_completion_uses_the_claimed_lease_and_persists_final_event(
     update = [payload for name, payload in backend.calls if name == "run_update"][-1]
     assert update["state"] == "succeeded"
     assert update["lease_owner"].startswith("hermes:")
-    assert update["final_response_event_id"] == (
-        "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    completion_ingest = [
+        payload for name, payload in backend.calls if name == "ingest"
+    ][-1]
+    expected_event_id = str(
+        uuid5(NAMESPACE_URL, completion_ingest["events"][0]["source_event_key"])
     )
+    assert update["final_response_event_id"] == expected_event_id
 
 
 def test_replayed_inbound_restores_a_claimed_run_lease_after_restart(
@@ -174,7 +214,9 @@ def test_replayed_inbound_restores_a_claimed_run_lease_after_restart(
     second.record_inbound("telegram-message-1", "Continue after restart")
     second.complete_active_run("Recovered.")
 
-    update = [payload for name, payload in second_backend.calls if name == "run_update"][-1]
+    update = [
+        payload for name, payload in second_backend.calls if name == "run_update"
+    ][-1]
     assert update["lease_owner"] == "hermes:replacement:42"
 
 

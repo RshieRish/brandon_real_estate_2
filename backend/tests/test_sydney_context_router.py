@@ -5,15 +5,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+from database import get_db
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
-from database import get_db
 from middleware.agent_control import require_agent_control
 
 NEW_ACTIONS = {
     "context.events.ingest",
+    "context.sessions.reconcile",
     "context.retrieve",
     "context.history.search",
     "context.runs.start",
@@ -64,7 +64,9 @@ def _batch_payload() -> dict[str, object]:
     }
 
 
-def test_registry_appends_exact_context_actions_without_write_capability_drift() -> None:
+def test_registry_appends_exact_context_actions_without_write_capability_drift() -> (
+    None
+):
     from routers.agent_control import AGENT_ACTIONS
 
     ids = [action.id for action in AGENT_ACTIONS]
@@ -79,13 +81,10 @@ def test_context_routes_keep_agent_auth_and_strict_response_models() -> None:
     from routers import agent_control_context
 
     app = _app()
-    routes = {
-        route.path: route
-        for route in app.routes
-        if isinstance(route, APIRoute)
-    }
+    routes = {route.path: route for route in app.routes if isinstance(route, APIRoute)}
     expected = {
         "/api/v1/agent-control/context/events/batch",
+        "/api/v1/agent-control/context/sessions/reconcile",
         "/api/v1/agent-control/context/retrieve",
         "/api/v1/agent-control/context/history/search",
         "/api/v1/agent-control/context/runs/start",
@@ -110,7 +109,9 @@ def test_master_and_retrieval_flags_fail_closed_before_service_calls() -> None:
 
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             False,
@@ -138,7 +139,9 @@ def test_master_and_retrieval_flags_fail_closed_before_service_calls() -> None:
     }
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,
@@ -176,13 +179,23 @@ def test_ingest_uses_bearer_and_writes_content_free_audit_metadata() -> None:
         session_id=session_id,
         logical_conversation_id=logical_id,
         event_ids=[event_id],
+        event_receipts=[
+            {
+                "event_id": event_id,
+                "event_type": "user",
+                "occurred_at": "2026-08-25T17:00:00Z",
+                "content_sha256": "a" * 64,
+            }
+        ],
         inserted_count=1,
         replayed_count=0,
     )
     audit = AsyncMock()
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,
@@ -212,6 +225,60 @@ def test_ingest_uses_bearer_and_writes_content_free_audit_metadata() -> None:
     assert "private message body" not in repr(audit_payload)
 
 
+def test_reconciliation_route_compares_only_content_free_expected_metadata() -> None:
+    from schemas.sydney_context import ContextSessionReconciliationResponse
+
+    app = _app()
+    client = TestClient(app)
+    identity_id = uuid4()
+    session_id = uuid4()
+    result = ContextSessionReconciliationResponse(
+        identity_id=identity_id,
+        session_id=session_id,
+        hermes_session_id="session-1",
+        event_count=3,
+        ordered_hash="a" * 64,
+        matched=True,
+    )
+    audit = AsyncMock()
+    with (
+        patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
+            True,
+        ),
+        patch(
+            "routers.agent_control_context.reconcile_session",
+            AsyncMock(return_value=result),
+        ) as reconcile,
+        patch("routers.agent_control_context.write_agent_audit", audit),
+    ):
+        response = client.post(
+            "/api/v1/agent-control/context/sessions/reconcile",
+            headers=_headers(),
+            json={
+                "identity_id": str(identity_id),
+                "hermes_session_id": "session-1",
+                "expected_event_count": 3,
+                "expected_ordered_hash": "a" * 64,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["matched"] is True
+    reconcile.assert_awaited_once()
+    assert audit.await_args.kwargs["action_id"] == "context.sessions.reconcile"
+    assert audit.await_args.kwargs["request_meta"] == {"expected_event_count": 3}
+    assert audit.await_args.kwargs["response_meta"] == {
+        "event_count": 3,
+        "matched": True,
+    }
+    assert "a" * 64 not in repr(audit.await_args.kwargs)
+
+
 def test_retry_claim_flag_is_separate_and_wrong_bearer_never_reaches_handler() -> None:
     app = _app()
     client = TestClient(app)
@@ -219,7 +286,9 @@ def test_retry_claim_flag_is_separate_and_wrong_bearer_never_reaches_handler() -
     claim = AsyncMock()
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,
@@ -248,14 +317,14 @@ def test_run_start_contract_rejects_extra_prompt_content() -> None:
         "inbound_event_id": str(uuid4()),
         "session_id": str(uuid4()),
         "logical_conversation_id": str(uuid4()),
-        "terminal_deadline_at": (
-            datetime.now(UTC) + timedelta(hours=24)
-        ).isoformat(),
+        "terminal_deadline_at": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
         "raw_prompt": "must never persist here",
     }
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,
@@ -395,7 +464,9 @@ def test_all_context_operations_return_strict_models_and_content_free_audits() -
 
     common_patches = (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,
@@ -475,14 +546,14 @@ def test_known_context_conflicts_are_bounded_and_never_echo_payloads() -> None:
         "inbound_event_id": str(uuid4()),
         "session_id": str(uuid4()),
         "logical_conversation_id": str(uuid4()),
-        "terminal_deadline_at": (
-            datetime.now(UTC) + timedelta(hours=24)
-        ).isoformat(),
+        "terminal_deadline_at": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
     }
     audit = AsyncMock()
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
         patch(
             "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
             True,

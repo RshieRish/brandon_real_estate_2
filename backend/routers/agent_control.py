@@ -263,6 +263,14 @@ AGENT_ACTIONS = [
         description="Persist redacted Sydney conversation evidence idempotently.",
     ),
     AgentAction(
+        id="context.sessions.reconcile",
+        method="POST",
+        path="/api/v1/agent-control/context/sessions/reconcile",
+        risk_tier="auto_silent",
+        side_effects=True,
+        description="Verify content-free Sydney session counts and ordered hashes.",
+    ),
+    AgentAction(
         id="context.retrieve",
         method="POST",
         path="/api/v1/agent-control/context/retrieve",

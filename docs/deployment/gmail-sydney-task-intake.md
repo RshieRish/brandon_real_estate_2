@@ -151,8 +151,9 @@ Before any enablement, require all of the following:
    activity, exchange only prepares approval, and a separate click remains
    necessary.
 7. The live deployed Atlas check described in
-   `docs/deployment/hermes-railway.md` returns exactly 22 ordered unique tools,
-   retains the original 16, and exposes none of the five trusted write tools.
+   `docs/deployment/hermes-railway.md` returns exactly 25 ordered unique tools,
+   retains the prior 22 unchanged, and exposes none of the five trusted write
+   tools.
 8. Pending unrelated suggestions and incidents are reviewed before enabling the
    global Sydney question job.
 
@@ -255,8 +256,9 @@ extends the original 48-hour clarification deadline. At most one reminder is due
 The live production gate remains the Railway SSH procedure in
 `docs/deployment/hermes-railway.md`. Source inspection, a local registry test, or
 the backend `/actions` response is not a substitute. The verified deployed
-registry contains exactly 22 ordered unique tools: the original 16 plus the six
-CRM review tools. `gmail_send` requires a caller UUID. Confirmed suggestion
+registry after durable-context promotion contains exactly 25 ordered unique
+tools: the original 16, six CRM review tools, and three read-only Sydney/Command
+tools. `gmail_send` requires a caller UUID. Confirmed suggestion
 approval/dismissal, confirmed task creation, archive, and restore remain absent.
 
 ## Task 9 controlled production evidence

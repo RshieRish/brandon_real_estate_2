@@ -311,11 +311,11 @@ Only enable the provider when the master environment flag, backend URL/token, an
 
 **Files:** Create `backend/tests/test_sydney_context_e2e.py`; modify `.github/workflows/gmail-sydney-task-intake.yml`, `hermes/README.md`, `docs/deployment/hermes-railway.md`, `tdtn.md`, and `memory.md`.
 
-- [ ] **Step 1: Write a deterministic no-network E2E** for inbound spool -> backend ingest -> retrieval -> read-only Command search -> tool ledger -> assistant event -> session continuation -> recall. Add synthetic `429 retry in 2s` -> persisted wait -> process restart -> one claim -> one final response, and prove zero Gmail/calendar/CRM writes.
-- [ ] **Step 2: Add exact new test paths and migration `85e8b7c9d4f1` to the existing PostgreSQL/TLS workflow.** Keep previous Gmail/Sydney, MCP, frontend, and migration jobs intact. Add a detached exact-Hermes overlay job and verify 25-tool JSON-RPC output.
-- [ ] **Step 3: Run all task-specific tests, then the recorded backend/frontend baseline commands.** Every new/modified task test must pass; backend failures must not exceed the recorded 17 unrelated failures; frontend remains 661 passed/typecheck green; touched-file checks pass.
-- [ ] **Step 4: Document exact flags, data boundaries, backup/migration order, shadow/backfill/reconcile/retrieval/retry enablement, health queries, rollback, and content-free acceptance evidence.** Update `tdtn.md` and `memory.md` in the same commit as required by `AGENTS.md`.
-- [ ] **Step 5: Commit:** `docs: document Sydney durable context rollout`.
+- [x] **Step 1: Write a deterministic no-network E2E** for inbound spool -> backend ingest -> retrieval -> read-only Command search -> tool ledger -> assistant event -> session continuation -> recall. Add synthetic `429 retry in 2s` -> persisted wait -> process restart -> one claim -> one final response, and prove zero Gmail/calendar/CRM writes.
+- [x] **Step 2: Add exact new test paths and migration `85e8b7c9d4f1` to the existing PostgreSQL/TLS workflow.** Keep previous Gmail/Sydney, MCP, frontend, and migration jobs intact. Add a detached exact-Hermes overlay job and verify 25-tool JSON-RPC output.
+- [x] **Step 3: Run all task-specific tests, then the recorded backend/frontend baseline commands.** Every new/modified task test must pass; backend failures must not exceed the recorded 17 unrelated failures; frontend remains 661 passed/typecheck green; touched-file checks pass.
+- [x] **Step 4: Document exact flags, data boundaries, backup/migration order, shadow/backfill/reconcile/retrieval/retry enablement, health queries, rollback, and content-free acceptance evidence.** Update `tdtn.md` and `memory.md` in the same commit as required by `AGENTS.md`.
+- [x] **Step 5: Commit:** `docs: document Sydney durable context rollout`.
 
 ## Task 14: Review, merge, deploy, backfill, and prove production behavior
 

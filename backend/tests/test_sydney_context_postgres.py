@@ -6,9 +6,8 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from schemas.sydney_context import ContextEventBatchRequest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 REVISION = "85e8b7c9d4f1"
@@ -97,6 +96,77 @@ async def test_ingest_is_exactly_idempotent_and_redacts_before_commit(
         ).all()
     assert "hunter42" not in rows[0].search_text
     assert "".join(row.content for row in rows) == rows[0].search_text
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_requires_exact_receipts_and_new_events_invalidate_it(
+    context_sessions,
+) -> None:
+    from models.sydney_context import AgentConversationSession
+    from services.sydney_context_service import (
+        ingest_event_batch,
+        ordered_reconciliation_hash,
+        reconcile_session,
+    )
+
+    _engine, factory = context_sessions
+    request = _request()
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, request)
+        receipt = ingested.event_receipts[0]
+        expected = ordered_reconciliation_hash(
+            [(receipt.event_id, receipt.event_type, receipt.content_sha256)]
+        )
+        matched = await reconcile_session(
+            session,
+            identity_id=ingested.identity_id,
+            hermes_session_id=request.hermes_session_id,
+            expected_event_count=expected.count,
+            expected_ordered_hash=expected.digest,
+        )
+        await session.commit()
+
+    assert matched.matched is True
+    assert matched.ordered_hash == expected.digest
+
+    async with factory() as session:
+        stored = await session.get(AgentConversationSession, ingested.session_id)
+        assert stored.reconciliation_hash == expected.digest
+
+        second_request = request.model_copy(
+            update={
+                "events": [
+                    request.events[0].model_copy(
+                        update={
+                            "source_event_key": "session-1:message-2",
+                            "occurred_at": request.events[0].occurred_at
+                            + timedelta(seconds=1),
+                            "content": "A later visible event",
+                        }
+                    )
+                ]
+            }
+        )
+        await ingest_event_batch(session, second_request)
+        await session.commit()
+
+    async with factory() as session:
+        stored = await session.get(AgentConversationSession, ingested.session_id)
+        assert stored.reconciliation_hash is None
+        mismatch = await reconcile_session(
+            session,
+            identity_id=ingested.identity_id,
+            hermes_session_id=request.hermes_session_id,
+            expected_event_count=1,
+            expected_ordered_hash=expected.digest,
+        )
+        await session.commit()
+
+    assert mismatch.matched is False
+    assert mismatch.event_count == 2
+    async with factory() as session:
+        stored = await session.get(AgentConversationSession, ingested.session_id)
+        assert stored.reconciliation_hash is None
 
 
 @pytest.mark.asyncio

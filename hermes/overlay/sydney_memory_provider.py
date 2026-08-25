@@ -73,6 +73,12 @@ class SydneyBackendClient:
     def ingest_events(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/v1/agent-control/context/events/batch", payload)
 
+    def reconcile_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post(
+            "/api/v1/agent-control/context/sessions/reconcile",
+            payload,
+        )
+
     def retrieve_context(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/v1/agent-control/context/retrieve", payload)
 
@@ -171,11 +177,14 @@ class SydneyMemoryProvider(MemoryProvider):
             enabled in {"1", "true", "yes", "on"}
             and configured_identity in allowed
             and bool(
-            (os.environ.get("BACKEND_API_URL") or os.environ.get("BRANDON_BACKEND_URL"))
-            and (
-                os.environ.get("AGENT_CONTROL_TOKEN")
-                or os.environ.get("BRANDON_AGENT_CONTROL_TOKEN")
-            )
+                (
+                    os.environ.get("BACKEND_API_URL")
+                    or os.environ.get("BRANDON_BACKEND_URL")
+                )
+                and (
+                    os.environ.get("AGENT_CONTROL_TOKEN")
+                    or os.environ.get("BRANDON_AGENT_CONTROL_TOKEN")
+                )
             )
         )
 
@@ -427,7 +436,42 @@ class SydneyMemoryProvider(MemoryProvider):
     def drain_once(self, *, limit: int = _DEFAULT_BATCH_LIMIT):
         if self._backend is None or self._spool is None:
             return None
-        return self.spool.drain(self._deliver, limit=limit)
+        result = self.spool.drain(self._deliver, limit=limit)
+        self.reconcile_once()
+        return result
+
+    def reconcile_once(self) -> int:
+        if self._backend is None or self._spool is None:
+            return 0
+        reconcile = getattr(self._backend, "reconcile_session", None)
+        if not callable(reconcile):
+            return 0
+        matched_count = 0
+        for session_id, expected in self.spool.reconciliation_expectations().items():
+            cursor = self.spool.get_reconciliation_cursor(session_id)
+            if cursor == {
+                "event_count": expected["expected_event_count"],
+                "ordered_hash": expected["expected_ordered_hash"],
+            }:
+                continue
+            try:
+                response = reconcile(expected)
+            except (BackendRequestError, TimeoutError, OSError):
+                continue
+            exact = bool(response.get("matched")) and (
+                int(response.get("event_count", -1)) == expected["expected_event_count"]
+                and str(response.get("ordered_hash") or "")
+                == expected["expected_ordered_hash"]
+            )
+            if not exact:
+                continue
+            self.spool.set_reconciliation_cursor(
+                session_id,
+                expected["expected_event_count"],
+                expected["expected_ordered_hash"],
+            )
+            matched_count += 1
+        return matched_count
 
     def _drain_loop(self) -> None:
         while not self._stop.is_set():
@@ -634,7 +678,11 @@ class SydneyMemoryProvider(MemoryProvider):
     ) -> int | None:
         if not self.is_available():
             return None
-        if state == "succeeded" and result_event_id is None and result_content is not None:
+        if (
+            state == "succeeded"
+            and result_event_id is None
+            and result_content is not None
+        ):
             event_batch = self._event_batch(
                 [
                     {

@@ -78,7 +78,7 @@ def test_inbound_event_and_run_are_committed_as_one_exactly_replayable_unit(
 def test_secret_material_is_redacted_before_sqlite_persistence(tmp_path: Path) -> None:
     spool = SydneySpool(tmp_path / "sydney_spool.db")
     event_batch, run_start = _bundle()
-    secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+    secret = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
     event_batch["events"][0]["content"] = (
         f"Authorization: Bearer {secret} password=hunter2 "
         "https://example.test/path?access_token=oauth-secret#handoff=signed"
