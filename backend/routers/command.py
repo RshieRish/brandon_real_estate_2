@@ -81,6 +81,9 @@ from schemas.command import (
     SmartPlanStepCreate,
     TagCreate,
     TaskCreate,
+    TaskBulkArchiveRequest,
+    TaskBulkArchiveResponse,
+    TaskBulkArchiveResult,
     TaskLinkCreate,
     TaskLinkOut,
     TaskLifecycleRequest,
@@ -829,6 +832,70 @@ async def task_links(task_id: TaskId, db: AsyncSession = Depends(get_db)):
         record = await db.get(entity_model, row.entity_id) if entity_model else None
         links.append({"id": row.id, "task_id": row.task_id, "entity_type": row.entity_type, "entity_id": row.entity_id, "display_name": task_link_display_name(row.entity_type, record) if record else "Removed internal record", "task_version": task.version})
     return links
+
+
+@router.post("/tasks/bulk-archive", response_model=TaskBulkArchiveResponse)
+async def bulk_archive_tasks(
+    payload: TaskBulkArchiveRequest,
+    db: AsyncSession = Depends(get_db),
+    *,
+    actor_subject: AdminSubject,
+):
+    if not settings.CRM_TASK_ARCHIVE_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Task archive and restore are disabled",
+        )
+
+    results: list[TaskBulkArchiveResult] = []
+    for item in sorted(payload.items, key=lambda candidate: candidate.task_id):
+        try:
+            result = await crm_task_service.archive(
+                db,
+                task_id=item.task_id,
+                request_id=item.request_id,
+                expected_version=item.expected_version,
+                reason=payload.reason,
+                actor=TaskActor(type="admin", id=actor_subject),
+                source=TaskSource(
+                    type="command_ui",
+                    id=str(item.request_id),
+                    key="bulk_archive",
+                ),
+            )
+            results.append(
+                TaskBulkArchiveResult(
+                    task_id=item.task_id,
+                    status="archived",
+                    task=TaskOut.model_validate(result.task),
+                )
+            )
+        except TaskStateConflict as exc:
+            results.append(
+                TaskBulkArchiveResult(
+                    task_id=item.task_id,
+                    status="conflict",
+                    code=exc.code,
+                    task=TaskOut.model_validate(exc.current_task),
+                )
+            )
+        except TaskNotFound:
+            results.append(
+                TaskBulkArchiveResult(
+                    task_id=item.task_id,
+                    status="not_found",
+                    code="task_not_found",
+                )
+            )
+        except TaskCommandValidationError:
+            results.append(
+                TaskBulkArchiveResult(
+                    task_id=item.task_id,
+                    status="invalid",
+                    code="task_request_invalid",
+                )
+            )
+    return TaskBulkArchiveResponse(results=results)
 
 
 async def _change_task_archive_state(

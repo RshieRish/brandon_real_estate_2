@@ -7,6 +7,7 @@ import json
 import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
@@ -35,7 +36,17 @@ from models.crm_task_lifecycle import (
     CRMTaskSource,
 )
 from routers import command as command_router
-from schemas.command import TaskLifecycleRequest, TaskLinkCreate, TaskUpdate
+from schemas.command import (
+    TaskBulkArchiveRequest,
+    TaskLifecycleRequest,
+    TaskLinkCreate,
+    TaskUpdate,
+)
+from services.crm_task_service import (
+    TaskCommandValidationError,
+    TaskNotFound,
+    TaskVersionConflict,
+)
 from services.command_tasks import archive_task_source_key
 from tests.test_crm_task_service import owned_task_database
 
@@ -63,6 +74,19 @@ def task_app(monkeypatch, task_api_database):
 def task_lifecycle_app(monkeypatch, task_app):
     monkeypatch.setitem(settings.__dict__, "CRM_TASK_ARCHIVE_ENABLED", True)
     return task_app
+
+
+@pytest.fixture()
+def task_bulk_app(monkeypatch):
+    monkeypatch.setitem(settings.__dict__, "CRM_TASK_ARCHIVE_ENABLED", True)
+
+    async def fake_db():
+        yield object()
+
+    app = FastAPI()
+    app.dependency_overrides[get_db] = fake_db
+    app.include_router(command_router.router, prefix="/api/v1/command")
+    return app
 
 
 def _token(subject: str = "17") -> str:
@@ -154,6 +178,264 @@ def _lifecycle_payload(
     if reason is not None:
         payload["reason"] = reason
     return payload
+
+
+def _bulk_task_snapshot(task_id: int, *, version: int, archived: bool) -> dict[str, object]:
+    return {
+        "id": task_id,
+        "title": f"Task {task_id}",
+        "contact_id": None,
+        "description": "",
+        "priority": "normal",
+        "due_at": None,
+        "status": "open",
+        "archived_at": "2026-08-24T20:00:00Z" if archived else None,
+        "archive_reason": "Cleanup" if archived else None,
+        "version": version,
+    }
+
+
+def test_bulk_archive_schema_rejects_duplicate_task_and_request_identities() -> None:
+    request_id = uuid4()
+    with pytest.raises(ValidationError):
+        TaskBulkArchiveRequest.model_validate(
+            {
+                "items": [
+                    {"task_id": 7, "request_id": request_id, "expected_version": 1},
+                    {"task_id": 7, "request_id": uuid4(), "expected_version": 2},
+                ]
+            }
+        )
+    with pytest.raises(ValidationError):
+        TaskBulkArchiveRequest.model_validate(
+            {
+                "items": [
+                    {"task_id": 7, "request_id": request_id, "expected_version": 1},
+                    {"task_id": 8, "request_id": request_id, "expected_version": 1},
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"items": []},
+        {
+            "items": [
+                {"task_id": index + 1, "request_id": uuid4(), "expected_version": 1}
+                for index in range(501)
+            ]
+        },
+        {
+            "items": [
+                {"task_id": True, "request_id": uuid4(), "expected_version": 1}
+            ]
+        },
+        {
+            "items": [
+                {
+                    "task_id": 1,
+                    "request_id": uuid4(),
+                    "expected_version": POSTGRES_INTEGER_OVERFLOW,
+                }
+            ]
+        },
+        {
+            "items": [
+                {"task_id": 1, "request_id": uuid4(), "expected_version": 1}
+            ],
+            "unexpected": True,
+        },
+    ],
+    ids=["empty", "too-many", "boolean-id", "overflow-version", "extra-field"],
+)
+def test_bulk_archive_schema_is_strict_and_bounded(payload) -> None:
+    with pytest.raises(ValidationError):
+        TaskBulkArchiveRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_bulk_archive_sorts_items_and_returns_one_archived_result_per_task(
+    monkeypatch, task_bulk_app
+) -> None:
+    calls: list[tuple[int, UUID, int, str | None, str, str]] = []
+
+    async def archive(_db, *, task_id, request_id, expected_version, reason, actor, source):
+        calls.append((task_id, request_id, expected_version, reason, actor.id, source.key))
+        return SimpleNamespace(
+            task=_bulk_task_snapshot(task_id, version=expected_version + 1, archived=True)
+        )
+
+    monkeypatch.setattr(command_router.crm_task_service, "archive", archive)
+    first_id, second_id = uuid4(), uuid4()
+    response = await _request(
+        task_bulk_app,
+        "POST",
+        "/api/v1/command/tasks/bulk-archive",
+        headers=_headers(subject="23"),
+        json={
+            "reason": "Cleanup",
+            "items": [
+                {"task_id": 9, "request_id": str(second_id), "expected_version": 4},
+                {"task_id": 3, "request_id": str(first_id), "expected_version": 2},
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item[0] for item in calls] == [3, 9]
+    assert [(item[3], item[4], item[5]) for item in calls] == [
+        ("Cleanup", "23", "bulk_archive"),
+        ("Cleanup", "23", "bulk_archive"),
+    ]
+    assert response.json() == {
+        "results": [
+            {
+                "task_id": 3,
+                "status": "archived",
+                "code": None,
+                "task": _bulk_task_snapshot(3, version=3, archived=True),
+            },
+            {
+                "task_id": 9,
+                "status": "archived",
+                "code": None,
+                "task": _bulk_task_snapshot(9, version=5, archived=True),
+            },
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_archive_returns_mixed_logical_outcomes_without_hiding_success(
+    monkeypatch, task_bulk_app
+) -> None:
+    current = _bulk_task_snapshot(1, version=5, archived=False)
+
+    async def archive(_db, *, task_id, expected_version, **_kwargs):
+        if task_id == 1:
+            raise TaskVersionConflict("stale", current_task=current)
+        if task_id == 2:
+            raise TaskNotFound("missing")
+        if task_id == 3:
+            raise TaskCommandValidationError("invalid")
+        return SimpleNamespace(
+            task=_bulk_task_snapshot(task_id, version=expected_version + 1, archived=True)
+        )
+
+    monkeypatch.setattr(command_router.crm_task_service, "archive", archive)
+    response = await _request(
+        task_bulk_app,
+        "POST",
+        "/api/v1/command/tasks/bulk-archive",
+        headers=_headers(),
+        json={
+            "items": [
+                {"task_id": task_id, "request_id": str(uuid4()), "expected_version": 1}
+                for task_id in (4, 3, 2, 1)
+            ]
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    results = response.json()["results"]
+    assert [result["task_id"] for result in results] == [1, 2, 3, 4]
+    assert [result["status"] for result in results] == [
+        "conflict",
+        "not_found",
+        "invalid",
+        "archived",
+    ]
+    assert results[0] == {
+        "task_id": 1,
+        "status": "conflict",
+        "code": "task_version_conflict",
+        "task": current,
+    }
+    assert results[1]["code"] == "task_not_found"
+    assert results[2]["code"] == "task_request_invalid"
+    assert results[3]["task"]["archived_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_archive_requires_admin_and_enabled_flag(
+    monkeypatch, task_bulk_app
+) -> None:
+    payload = {
+        "items": [
+            {"task_id": 1, "request_id": str(uuid4()), "expected_version": 1}
+        ]
+    }
+    assert (
+        await _request(
+            task_bulk_app,
+            "POST",
+            "/api/v1/command/tasks/bulk-archive",
+            json=payload,
+        )
+    ).status_code == 401
+    monkeypatch.setitem(settings.__dict__, "CRM_TASK_ARCHIVE_ENABLED", False)
+    disabled = await _request(
+        task_bulk_app,
+        "POST",
+        "/api/v1/command/tasks/bulk-archive",
+        headers=_headers(),
+        json=payload,
+    )
+    assert disabled.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_bulk_archive_real_database_exact_replay_adds_no_lifecycle_events(
+    task_lifecycle_app, task_api_database
+) -> None:
+    first = await _create_task(task_lifecycle_app, title="Bulk first")
+    second = await _create_task(task_lifecycle_app, title="Bulk second")
+    payload = {
+        "reason": "  Completed cleanup  ",
+        "items": [
+            {
+                "task_id": second["id"],
+                "request_id": str(uuid4()),
+                "expected_version": second["version"],
+            },
+            {
+                "task_id": first["id"],
+                "request_id": str(uuid4()),
+                "expected_version": first["version"],
+            },
+        ],
+    }
+    first_response = await _request(
+        task_lifecycle_app,
+        "POST",
+        "/api/v1/command/tasks/bulk-archive",
+        headers=_headers(),
+        json=payload,
+    )
+    replay = await _request(
+        task_lifecycle_app,
+        "POST",
+        "/api/v1/command/tasks/bulk-archive",
+        headers=_headers(),
+        json=payload,
+    )
+
+    assert first_response.status_code == replay.status_code == 200
+    assert replay.json() == first_response.json()
+    results = first_response.json()["results"]
+    assert [row["task_id"] for row in results] == sorted((first["id"], second["id"]))
+    assert all(row["status"] == "archived" for row in results)
+    assert all(row["task"]["archive_reason"] == "Completed cleanup" for row in results)
+
+    _engine, factory = task_api_database
+    async with factory() as verifier:
+        assert await verifier.scalar(
+            sa.select(sa.func.count())
+            .select_from(CRMRecordLifecycleEvent)
+            .where(CRMRecordLifecycleEvent.action == "archive")
+        ) == 2
 
 
 @pytest.mark.asyncio

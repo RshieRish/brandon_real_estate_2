@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   commandApi,
+  CommandOutcomeUncertainError,
   contactsApi,
 } from './api';
 import { CommandDecodeError } from './http';
@@ -97,6 +98,7 @@ describe('commandApi', () => {
       'taskLinks',
       'updateTask',
       'archiveTask',
+      'bulkArchiveTasks',
       'restoreTask',
     ]);
   });
@@ -503,6 +505,106 @@ describe('commandApi', () => {
       method: 'POST',
       body: JSON.stringify({ expected_version: 3, entity_type: 'agreement', entity_id: 15 }),
     }));
+  });
+
+  it('bulk archives tasks in normalized task-ID order with strict results', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-bulk-archive' });
+    const firstRequestId = '11111111-1111-4111-8111-111111111111';
+    const secondRequestId = '22222222-2222-4222-8222-222222222222';
+    const archived = (id: number, version: number) => ({
+      id,
+      title: `Task ${id}`,
+      contact_id: null,
+      description: '',
+      priority: 'normal',
+      due_at: null,
+      status: 'open',
+      archived_at: '2026-08-24T20:00:00Z',
+      archive_reason: 'Cleanup',
+      version,
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [
+          { task_id: 3, status: 'archived', code: null, task: archived(3, 3) },
+          { task_id: 9, status: 'archived', code: null, task: archived(9, 5) },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.bulkArchiveTasks({
+      reason: '  Cleanup  ',
+      items: [
+        { task_id: 9, request_id: secondRequestId, expected_version: 4 },
+        { task_id: 3, request_id: firstRequestId, expected_version: 2 },
+      ],
+    })).resolves.toEqual({
+      results: [
+        { task_id: 3, status: 'archived', code: null, task: archived(3, 3) },
+        { task_id: 9, status: 'archived', code: null, task: archived(9, 5) },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/tasks/bulk-archive'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          items: [
+            { task_id: 3, request_id: firstRequestId, expected_version: 2 },
+            { task_id: 9, request_id: secondRequestId, expected_version: 4 },
+          ],
+          reason: 'Cleanup',
+        }),
+      }),
+    );
+  });
+
+  it('fails closed when a bulk archive response is reordered or malformed', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-bulk-malformed' });
+    const request = {
+      items: [
+        {
+          task_id: 3,
+          request_id: '11111111-1111-4111-8111-111111111111',
+          expected_version: 2,
+        },
+        {
+          task_id: 9,
+          request_id: '22222222-2222-4222-8222-222222222222',
+          expected_version: 4,
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [
+          { task_id: 9, status: 'not_found', code: 'task_not_found', task: null },
+          { task_id: 3, status: 'not_found', code: 'task_not_found', task: null },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(commandApi.bulkArchiveTasks(request))
+      .rejects.toBeInstanceOf(CommandOutcomeUncertainError);
+  });
+
+  it('classifies a bulk archive transport failure as outcome uncertain', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-bulk-network' });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network interrupted')));
+
+    await expect(commandApi.bulkArchiveTasks({
+      items: [{
+        task_id: 3,
+        request_id: '11111111-1111-4111-8111-111111111111',
+        expected_version: 2,
+      }],
+    })).rejects.toBeInstanceOf(CommandOutcomeUncertainError);
   });
 
   it('updates an internal agreement template body', async () => {

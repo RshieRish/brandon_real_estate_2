@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -12,6 +12,16 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react';
 import { TaskEditor } from '@/components/command/TaskEditor';
+import {
+  clampPage,
+  pageCount,
+  reconcileBulkArchiveAttempt,
+  retainEligibleSelection,
+  selectAllMatching,
+  tasksForPage,
+  togglePageSelection,
+  toggleTaskSelection,
+} from '@/components/command/taskBulkSelection';
 import { useFocusContainment } from '@/components/command/shell/useFocusContainment';
 import { applyTaskWorkspaceView, type TaskWorkspaceView } from '@/components/command/workspaceFilters';
 import {
@@ -63,6 +73,12 @@ type RefreshContext = Readonly<{
 
 type LifecycleProgress = Readonly<{
   kind: 'undo' | 'retry';
+  message: string;
+}>;
+
+type BulkArchiveFailure = Readonly<{
+  taskId: number;
+  title: string;
   message: string;
 }>;
 
@@ -142,11 +158,16 @@ export function TasksWorkspace({
   const [menuTaskId, setMenuTaskId] = useState<number | null>(null);
   const [archiveCandidate, setArchiveCandidate] = useState<Task | null>(null);
   const [archiveReason, setArchiveReason] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set());
+  const [bulkArchiveCandidate, setBulkArchiveCandidate] = useState<readonly Task[] | null>(null);
+  const [bulkArchiveReason, setBulkArchiveReason] = useState('');
+  const [bulkArchiveFailures, setBulkArchiveFailures] = useState<readonly BulkArchiveFailure[]>([]);
   const [lifecycleRetry, setLifecycleRetry] = useState<TaskLifecycleAttempt | null>(null);
   const [undoArchive, setUndoArchive] = useState<Task | null>(null);
   const [refreshContext, setRefreshContext] = useState<RefreshContext | null>(null);
   const [lifecycleProgress, setLifecycleProgress] = useState<LifecycleProgress | null>(null);
-  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'undo' | 'retry' | 'refresh' | 'progress' | null>(null);
+  const [focusTarget, setFocusTarget] = useState<'active' | 'archived' | 'bulk' | 'undo' | 'retry' | 'refresh' | 'progress' | null>(null);
 
   const mutationPendingRef = useRef(false);
   const taskCreateAttemptRef = useRef<TaskCreateAttempt | null>(null);
@@ -156,6 +177,9 @@ export function TasksWorkspace({
   const menuTriggerRefs = useRef(new Map<number, HTMLButtonElement>());
   const archiveDialogRef = useRef<HTMLElement>(null);
   const archiveTriggerRef = useRef<HTMLElement | null>(null);
+  const bulkArchiveDialogRef = useRef<HTMLElement>(null);
+  const bulkArchiveTriggerRef = useRef<HTMLButtonElement>(null);
+  const pageSelectionRef = useRef<HTMLInputElement>(null);
   const activeVisibilityRef = useRef<HTMLButtonElement>(null);
   const archivedVisibilityRef = useRef<HTMLButtonElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
@@ -170,6 +194,7 @@ export function TasksWorkspace({
     linkReadGenerationRef.current += 1;
     setMutationError(null);
     setMutationNotice(null);
+    setBulkArchiveFailures([]);
     setMutationRefreshRequired(false);
     setRefreshContext(null);
     setLifecycleRetry(null);
@@ -225,6 +250,8 @@ export function TasksWorkspace({
   useEffect(() => {
     const target = focusTarget === 'undo'
       ? undoRef.current
+      : focusTarget === 'bulk'
+        ? bulkArchiveTriggerRef.current
       : focusTarget === 'retry'
         ? lifecycleRetryRef.current
         : focusTarget === 'refresh'
@@ -257,6 +284,19 @@ export function TasksWorkspace({
     containerRef: archiveDialogRef,
     onDismiss: closeArchiveDialog,
     restoreFocusRef: archiveTriggerRef,
+  });
+
+  const closeBulkArchiveDialog = useCallback(() => {
+    if (mutationPendingRef.current) return;
+    setBulkArchiveCandidate(null);
+    setBulkArchiveReason('');
+  }, []);
+
+  useFocusContainment({
+    active: bulkArchiveCandidate !== null,
+    containerRef: bulkArchiveDialogRef,
+    onDismiss: closeBulkArchiveDialog,
+    restoreFocusRef: bulkArchiveTriggerRef,
   });
 
   function resolveLifecycleRows(
@@ -586,6 +626,133 @@ export function TasksWorkspace({
     ));
   }
 
+  function openBulkArchiveConfirmation() {
+    if (mutationPendingRef.current) return;
+    const selectedTasks = tasks
+      .filter((task) => task.archived_at === null && selectedTaskIds.has(task.id))
+      .sort((left, right) => left.id - right.id);
+    if (selectedTasks.length === 0) return;
+    setBulkArchiveReason('');
+    setBulkArchiveCandidate(selectedTasks);
+  }
+
+  function bulkFailureMessage(status: 'conflict' | 'not_found' | 'invalid'): string {
+    if (status === 'conflict') return 'Changed elsewhere';
+    if (status === 'not_found') return 'No longer exists';
+    return 'Archive request was rejected';
+  }
+
+  function bulkArchiveSummary(count: number): string {
+    return count === 1 ? '1 task was archived.' : `${count} tasks were archived.`;
+  }
+
+  function bulkArchiveErrorSummary(count: number): string {
+    return count === 1
+      ? '1 task could not be archived. Review the selected task and try again.'
+      : `${count} tasks could not be archived. Review the selected tasks and try again.`;
+  }
+
+  async function confirmBulkArchive() {
+    if (bulkArchiveCandidate === null || mutationPendingRef.current) return;
+    const candidates = bulkArchiveCandidate;
+    const reason = bulkArchiveReason.trim();
+    const attempt = candidates.map((task) => ({
+      task_id: task.id,
+      request_id: crypto.randomUUID(),
+      expected_version: task.version,
+      originalTask: task,
+    }));
+    if (!beginTaskMutation()) return;
+    setUndoArchive(null);
+    setBulkArchiveFailures([]);
+    try {
+      const response = await commandApi.bulkArchiveTasks({
+        items: attempt.map(({ task_id, request_id, expected_version }) => ({
+          task_id,
+          request_id,
+          expected_version,
+        })),
+        ...(reason.length > 0 ? { reason } : {}),
+      });
+      const replacements = new Map<number, Task>();
+      const archivedIds = new Set<number>();
+      const failures: BulkArchiveFailure[] = [];
+      for (const result of response.results) {
+        if (result.task !== null) replacements.set(result.task_id, result.task);
+        if (result.status === 'archived') {
+          archivedIds.add(result.task_id);
+          continue;
+        }
+        const original = candidates.find((task) => task.id === result.task_id);
+        failures.push({
+          taskId: result.task_id,
+          title: result.task?.title ?? original?.title ?? `Task ${result.task_id}`,
+          message: bulkFailureMessage(result.status),
+        });
+      }
+      setTasks((current) => current.map((task) => replacements.get(task.id) ?? task));
+      setSelectedTaskIds((current) => new Set(
+        [...current].filter((taskId) => !archivedIds.has(taskId)),
+      ));
+      setBulkArchiveCandidate(null);
+      setBulkArchiveReason('');
+      setBulkArchiveFailures(failures);
+      if (archivedIds.size > 0) setMutationNotice(bulkArchiveSummary(archivedIds.size));
+      setMutationError(failures.length > 0 ? bulkArchiveErrorSummary(failures.length) : null);
+      setFocusTarget(failures.length > 0 ? 'bulk' : visibility);
+      finishTaskMutation();
+    } catch (caught) {
+      setBulkArchiveCandidate(null);
+      setBulkArchiveReason('');
+      if (caught instanceof CommandOutcomeUncertainError) {
+        try {
+          const rows = await refetchAllTasks(false);
+          if (rows === null) throw new Error('stale task refresh');
+          const reconciliation = reconcileBulkArchiveAttempt(
+            attempt,
+            rows,
+          );
+          const retainedIds = [...reconciliation.unchangedIds, ...reconciliation.changedIds];
+          setSelectedTaskIds(new Set(retainedIds));
+          const candidateById = new Map(candidates.map((task) => [task.id, task]));
+          const failures = retainedIds.map((taskId): BulkArchiveFailure => {
+            const authoritative = rows.find((task) => task.id === taskId);
+            return {
+              taskId,
+              title: authoritative?.title ?? candidateById.get(taskId)?.title ?? `Task ${taskId}`,
+              message: reconciliation.unchangedIds.includes(taskId)
+                ? 'Outcome remains unknown'
+                : 'Changed elsewhere',
+            };
+          });
+          setBulkArchiveFailures(failures);
+          setMutationNotice(
+            reconciliation.applied.length > 0
+              ? `${bulkArchiveSummary(reconciliation.applied.length)} Confirmed after refreshing.`
+              : null,
+          );
+          setMutationError(
+            failures.length > 0
+              ? bulkArchiveErrorSummary(failures.length)
+              : null,
+          );
+          setFocusTarget(failures.length > 0 ? 'bulk' : visibility);
+          finishTaskMutation();
+          return;
+        } catch {
+          setMutationRefreshRequired(true);
+          setRefreshContext({ kind: 'generic' });
+          setFocusTarget('refresh');
+          return;
+        }
+      }
+      setBulkArchiveFailures([]);
+      setMutationError(caught instanceof Error ? caught.message : 'Unable to archive selected tasks');
+      setFocusTarget('bulk');
+      finishTaskMutation();
+    }
+  }
+
   function restoreTask(task: Task) {
     if (mutationPendingRef.current) return;
     void runLifecycle(createLifecycleAttempt('restore', task));
@@ -665,9 +832,38 @@ export function TasksWorkspace({
     return (record as Agreement).title;
   }
 
-  const visibleTasks = visibility === 'archived'
-    ? tasks.filter((task) => task.archived_at !== null)
-    : applyTaskWorkspaceView(tasks, { tab: status, due: dueScope }, new Date());
+  const visibleTasks = useMemo(() => (
+    visibility === 'archived'
+      ? tasks.filter((task) => task.archived_at !== null)
+      : applyTaskWorkspaceView(tasks, { tab: status, due: dueScope }, new Date())
+  ), [dueScope, status, tasks, visibility]);
+  const resolvedPage = clampPage(currentPage, visibleTasks.length);
+  const pagedTasks = tasksForPage(visibleTasks, resolvedPage);
+  const pageTaskIds = visibility === 'active' ? pagedTasks.map((task) => task.id) : [];
+  const pageSelectedCount = pageTaskIds.filter((taskId) => selectedTaskIds.has(taskId)).length;
+  const pageIsSelected = pageTaskIds.length > 0 && pageSelectedCount === pageTaskIds.length;
+  const allMatchingSelected = visibility === 'active'
+    && visibleTasks.length > 0
+    && visibleTasks.every((task) => selectedTaskIds.has(task.id));
+
+  useEffect(() => {
+    if (resolvedPage !== currentPage) setCurrentPage(resolvedPage);
+  }, [currentPage, resolvedPage]);
+
+  useEffect(() => {
+    if (pageSelectionRef.current !== null) {
+      pageSelectionRef.current.indeterminate = pageSelectedCount > 0 && !pageIsSelected;
+    }
+  }, [pageIsSelected, pageSelectedCount]);
+
+  useEffect(() => {
+    const eligibleIds = visibility === 'active' ? visibleTasks.map((task) => task.id) : [];
+    setSelectedTaskIds((current) => {
+      const retained = retainEligibleSelection(current, eligibleIds);
+      return retained.size === current.size ? current : retained;
+    });
+  }, [visibility, visibleTasks]);
+
   const displayedError = mutationRefreshRequired
     ? TASK_REFRESH_REQUIRED_MESSAGE
     : mutationError ?? error;
@@ -713,6 +909,53 @@ export function TasksWorkspace({
     document.body,
   );
 
+  const bulkArchiveDialog = bulkArchiveCandidate === null ? null : createPortal(
+    <>
+      <div aria-hidden="true" className="fixed inset-0 z-[119] bg-black/80 backdrop-blur-sm" />
+      <section
+        ref={bulkArchiveDialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bulk-archive-title"
+        tabIndex={-1}
+        className="fixed left-1/2 top-1/2 z-[120] max-h-[calc(100dvh-2rem)] w-[min(92vw,36rem)] -translate-x-1/2 -translate-y-1/2 overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-[#eac469]/35 bg-[#12110f] text-white shadow-[0_28px_90px_rgba(0,0,0,.65)]"
+      >
+        <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(234,196,105,.17),transparent_46%)] px-6 py-5">
+          <p className="text-[10px] font-bold uppercase tracking-[.22em] text-[#eac469]">Bulk task archive</p>
+          <h2 id="bulk-archive-title" className="mt-2 text-xl font-black">
+            Archive {bulkArchiveCandidate.length} selected tasks
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-white/60">
+            These tasks will leave active workflows but remain available in Archived for audit and recovery.
+          </p>
+        </div>
+        <div className="p-6">
+          <label className="grid gap-2 text-sm font-semibold text-white/80">
+            Archive reason (optional)
+            <textarea
+              autoFocus
+              disabled={mutationsLocked}
+              value={bulkArchiveReason}
+              maxLength={500}
+              onChange={(event) => setBulkArchiveReason(event.target.value)}
+              className="command-touch-target min-h-24 min-w-11 resize-y rounded-xl border border-white/15 bg-black/35 px-3 py-3 font-normal text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#eac469]"
+            />
+          </label>
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <button type="button" disabled={mutationsLocked} onClick={closeBulkArchiveDialog} className="command-touch-target min-h-11 min-w-11 rounded-lg border border-white/15 px-4 text-sm font-bold text-white/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#eac469] disabled:opacity-50">Cancel</button>
+            <button type="button" disabled={mutationsLocked} onClick={() => void confirmBulkArchive()} className="command-touch-target inline-flex min-h-11 min-w-11 items-center gap-2 rounded-lg bg-[#eac469] px-4 text-sm font-black text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#eac469] disabled:opacity-50">
+              <Archive aria-hidden="true" size={18} />
+              {mutationsLocked
+                ? `Archiving ${bulkArchiveCandidate.length} tasks…`
+                : `Archive ${bulkArchiveCandidate.length} tasks`}
+            </button>
+          </div>
+        </div>
+      </section>
+    </>,
+    document.body,
+  );
+
   return (
     <div className="min-h-[100dvh] bg-[#080807] p-4 text-white sm:p-6">
       <section aria-labelledby="tasks-workspace-title" className="mx-auto max-w-5xl">
@@ -728,7 +971,12 @@ export function TasksWorkspace({
                 ref={option === 'active' ? activeVisibilityRef : archivedVisibilityRef}
                 type="button"
                 aria-pressed={visibility === option}
-                onClick={() => setVisibility(option)}
+                onClick={() => {
+                  setVisibility(option);
+                  setCurrentPage(1);
+                  setSelectedTaskIds(new Set());
+                  setBulkArchiveFailures([]);
+                }}
                 className={`command-touch-target rounded-lg px-4 text-sm font-bold ${visibility === option ? 'bg-[#eac469] text-black' : 'text-white/60 hover:text-white'}`}
               >
                 {option === 'active' ? 'Active' : 'Archived'}
@@ -752,10 +1000,10 @@ export function TasksWorkspace({
 
         {visibility === 'active' ? (
           <div className="mt-4 flex flex-wrap gap-3">
-            <select aria-label="Task status" value={status} onChange={(event) => setStatus(event.target.value as TaskWorkspaceView['tab'])} className="command-touch-target rounded-lg border border-white/10 bg-black/40 p-2 text-sm">
+            <select aria-label="Task status" value={status} onChange={(event) => { setStatus(event.target.value as TaskWorkspaceView['tab']); setCurrentPage(1); setSelectedTaskIds(new Set()); setBulkArchiveFailures([]); }} className="command-touch-target rounded-lg border border-white/10 bg-black/40 p-2 text-sm">
               <option value="all">All statuses</option><option value="todo">To do</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
             </select>
-            <select aria-label="Task due scope" value={dueScope} onChange={(event) => setDueScope(event.target.value as TaskWorkspaceView['due'])} className="command-touch-target rounded-lg border border-white/10 bg-black/40 p-2 text-sm">
+            <select aria-label="Task due scope" value={dueScope} onChange={(event) => { setDueScope(event.target.value as TaskWorkspaceView['due']); setCurrentPage(1); setSelectedTaskIds(new Set()); setBulkArchiveFailures([]); }} className="command-touch-target rounded-lg border border-white/10 bg-black/40 p-2 text-sm">
               <option value="all">All due dates</option><option value="past">Past due</option>
             </select>
           </div>
@@ -766,6 +1014,13 @@ export function TasksWorkspace({
             <WarningCircle aria-hidden="true" size={18} /><span>{displayedError}</span>
             {lifecycleRetry && !mutationRefreshRequired ? <button ref={lifecycleRetryRef} type="button" disabled={mutationsLocked} onClick={retryLifecycleRequest} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">Retry</button> : null}
             {mutationRefreshRequired ? <button ref={refreshTasksRef} type="button" disabled={refreshingTasks} onClick={() => void refreshAuthoritativeTasks()} className="command-touch-target ml-auto rounded-lg border border-red-200/25 px-3 font-bold text-white disabled:opacity-50">{refreshingTasks ? 'Refreshing…' : 'Refresh tasks'}</button> : null}
+            {bulkArchiveFailures.length > 0 ? (
+              <ul className="basis-full space-y-1 pl-7 text-xs text-red-100/80">
+                {bulkArchiveFailures.map((failure) => (
+                  <li key={failure.taskId}>{failure.title}: {failure.message}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ) : null}
 
@@ -790,8 +1045,54 @@ export function TasksWorkspace({
           </div>
         ) : null}
 
+        {visibility === 'active' && visibleTasks.length > 0 ? (
+          <div className="mt-6 rounded-2xl border border-[#eac469]/20 bg-[linear-gradient(135deg,rgba(234,196,105,.11),rgba(255,255,255,.025))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.06)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="command-touch-target inline-flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2 text-sm font-bold text-white/75">
+                <input
+                  ref={pageSelectionRef}
+                  type="checkbox"
+                  aria-label="Select all tasks on this page"
+                  disabled={mutationsLocked}
+                  checked={pageIsSelected}
+                  onChange={() => setSelectedTaskIds((current) => togglePageSelection(current, pageTaskIds))}
+                  className="h-4 w-4 accent-[#eac469]"
+                />
+                Select this page
+              </label>
+              {selectedTaskIds.size > 0 ? (
+                <span role="status" aria-live="polite" className="rounded-full border border-[#eac469]/25 bg-black/25 px-3 py-1.5 text-xs font-black text-[#f7dda0]">
+                  {selectedTaskIds.size} selected
+                </span>
+              ) : null}
+              {pageIsSelected && !allMatchingSelected && visibleTasks.length > pageTaskIds.length ? (
+                <button
+                  type="button"
+                  disabled={mutationsLocked}
+                  onClick={() => setSelectedTaskIds(selectAllMatching(visibleTasks.map((task) => task.id)))}
+                  aria-label={`Select all ${visibleTasks.length} matching tasks`}
+                  className="command-touch-target min-h-11 rounded-xl border border-[#eac469]/30 px-3 text-xs font-black text-[#eac469] transition-colors hover:bg-[#eac469]/10 disabled:opacity-50"
+                >
+                  Select all {visibleTasks.length} matching tasks
+                </button>
+              ) : null}
+              {allMatchingSelected ? (
+                <span className="text-xs font-semibold text-white/60">All {visibleTasks.length} matching tasks selected</span>
+              ) : null}
+              {selectedTaskIds.size > 0 ? (
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <button type="button" disabled={mutationsLocked} onClick={() => { setSelectedTaskIds(new Set()); setBulkArchiveFailures([]); }} className="command-touch-target min-h-11 rounded-xl px-3 text-xs font-bold text-white/55 hover:text-white disabled:opacity-50">Clear selection</button>
+                  <button ref={bulkArchiveTriggerRef} type="button" disabled={mutationsLocked} onClick={openBulkArchiveConfirmation} className="command-touch-target inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#eac469] px-4 text-sm font-black text-black disabled:opacity-50">
+                    <Archive aria-hidden="true" size={18} />Archive selected
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="mt-6 space-y-3">
-          {visibleTasks.map((task) => (
+          {pagedTasks.map((task) => (
             <article key={task.id} aria-label={`Task ${task.title}`} className="relative overflow-visible rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,.055),rgba(255,255,255,.018))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.05)]">
               {task.archived_at !== null ? (
                 <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-center">
@@ -812,6 +1113,16 @@ export function TasksWorkspace({
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-3">
+                    <label className="command-touch-target grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-white/10 bg-black/20">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${task.title}`}
+                        disabled={mutationsLocked}
+                        checked={selectedTaskIds.has(task.id)}
+                        onChange={() => setSelectedTaskIds((current) => toggleTaskSelection(current, task.id))}
+                        className="h-4 w-4 accent-[#eac469]"
+                      />
+                    </label>
                     <button type="button" disabled={mutationsLocked} onClick={() => void complete(task)} aria-label={`Toggle ${task.title}`} className={`command-touch-target grid h-11 w-11 shrink-0 place-items-center rounded-full border ${task.status === 'completed' ? 'border-[#eac469] bg-[#eac469] text-black' : 'border-white/30'}`}>{task.status === 'completed' ? <Check aria-hidden="true" size={15} /> : null}</button>
                     <span className={task.status === 'completed' ? 'text-white/35 line-through' : 'font-medium'}>{task.title}</span>
                     <span className="text-xs uppercase text-white/45">{task.priority}</span>
@@ -858,6 +1169,14 @@ export function TasksWorkspace({
           {visibleTasks.length === 0 ? <p className="rounded-2xl border border-dashed border-white/15 p-10 text-center text-white/40">{visibility === 'archived' ? 'No archived tasks.' : 'No matching tasks.'}</p> : null}
         </div>
 
+        {visibleTasks.length > 0 ? (
+          <nav aria-label="Task pages" className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[.025] p-2">
+            <button type="button" aria-label="Previous page" disabled={resolvedPage <= 1 || mutationsLocked} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="command-touch-target min-h-11 rounded-lg px-4 text-sm font-bold text-white/60 hover:bg-white/5 hover:text-white disabled:opacity-35">Previous</button>
+            <span className="text-xs font-black uppercase tracking-[.14em] text-white/45">Page {resolvedPage} of {pageCount(visibleTasks.length)}</span>
+            <button type="button" aria-label="Next page" disabled={resolvedPage >= pageCount(visibleTasks.length) || mutationsLocked} onClick={() => setCurrentPage((page) => Math.min(pageCount(visibleTasks.length), page + 1))} className="command-touch-target min-h-11 rounded-lg px-4 text-sm font-bold text-white/60 hover:bg-white/5 hover:text-white disabled:opacity-35">Next</button>
+          </nav>
+        ) : null}
+
         {selected ? (
           <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-4">
             <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#12110f] p-6">
@@ -889,6 +1208,7 @@ export function TasksWorkspace({
         ) : null}
       </section>
       {archiveDialog}
+      {bulkArchiveDialog}
     </div>
   );
 }
