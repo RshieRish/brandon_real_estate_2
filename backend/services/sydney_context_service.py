@@ -30,6 +30,7 @@ from schemas.sydney_context import (
     ContextEventBatchRequest,
     ContextEventBatchResponse,
     ContextEventInput,
+    ContextHealthResponse,
     ContextHistorySearchRequest,
     ContextHistorySearchResponse,
     ContextPacket,
@@ -856,6 +857,93 @@ async def update_tool_invocation(
             side_effect_class=invocation.side_effect_class,
             state=invocation.state,
             has_result=invocation.result_event_id is not None,
+        ),
+    )
+
+
+async def get_context_health(
+    db: AsyncSession,
+    *,
+    flags: dict[str, bool],
+    now: datetime | None = None,
+) -> ContextHealthResponse:
+    """Return content-free durability and retry health aggregates."""
+
+    current = now or datetime.now(UTC)
+    identity_count = int(
+        await db.scalar(select(func.count()).select_from(AgentConversationIdentity))
+        or 0
+    )
+    session_count = int(
+        await db.scalar(select(func.count()).select_from(AgentConversationSession))
+        or 0
+    )
+    event_count = int(
+        await db.scalar(select(func.count()).select_from(AgentConversationEvent)) or 0
+    )
+    checkpoint_source_count = int(
+        await db.scalar(
+            select(func.coalesce(func.sum(func.cardinality(AgentContextCheckpoint.source_event_ids)), 0))
+        )
+        or 0
+    )
+    run_state_rows = (
+        await db.execute(
+            select(AgentRunJob.state, func.count())
+            .group_by(AgentRunJob.state)
+            .order_by(AgentRunJob.state)
+        )
+    ).all()
+    run_states = {str(state): int(count) for state, count in run_state_rows}
+
+    eligible_created_at = await db.scalar(
+        select(func.min(AgentRunJob.created_at)).where(
+            AgentRunJob.terminal_deadline_at > current,
+            or_(
+                AgentRunJob.state == "queued",
+                and_(
+                    AgentRunJob.state == "waiting_retry",
+                    AgentRunJob.next_attempt_at <= current,
+                ),
+                and_(
+                    AgentRunJob.state == "running",
+                    AgentRunJob.lease_expires_at <= current,
+                ),
+            ),
+        )
+    )
+    oldest_age = (
+        max(0.0, (current - eligible_created_at).total_seconds())
+        if eligible_created_at is not None
+        else None
+    )
+    reconciliation = (
+        await db.execute(
+            select(
+                func.count(),
+                func.max(AgentConversationSession.updated_at),
+                func.max(AgentConversationSession.source_event_count),
+            ).where(AgentConversationSession.reconciliation_hash.is_not(None))
+        )
+    ).one()
+    reconciled_count = int(reconciliation[0] or 0)
+    status = "disabled" if not flags.get("durable_context", False) else "ready"
+    if status == "ready" and run_states.get("terminal_failure", 0) > 0:
+        status = "degraded"
+    return ContextHealthResponse(
+        status=status,
+        flags=flags,
+        identity_count=identity_count,
+        session_count=session_count,
+        event_count=event_count,
+        run_states=run_states,
+        checkpoint_lag_events=max(0, event_count - checkpoint_source_count),
+        oldest_eligible_run_age_seconds=oldest_age,
+        reconciled_session_count=reconciled_count,
+        unreconciled_session_count=max(0, session_count - reconciled_count),
+        last_reconciled_at=reconciliation[1],
+        last_reconciled_event_count=(
+            int(reconciliation[2]) if reconciliation[2] is not None else None
         ),
     )
 

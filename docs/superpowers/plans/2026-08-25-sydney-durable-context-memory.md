@@ -192,9 +192,9 @@ Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
 **Files:** Create `backend/routers/agent_control_context.py`, `backend/tests/test_sydney_context_router.py`; modify `backend/main.py`, `backend/routers/agent_control.py`, and `backend/tests/test_agent_control_auth.py`.
 
-- [ ] **Step 1: Write failing HTTP tests** for master-flag disabled, agent-control disabled, missing/wrong/correct bearer token, ingest replay, retrieve flag separation, history search, run start/update/claim, strict validation, sanitized failures, and one content-free action audit per completed request.
-- [ ] **Step 2: Run the router tests.** Expected: FAIL because routes/actions are absent.
-- [ ] **Step 3: Add exact routes:**
+- [x] **Step 1: Write failing HTTP tests** for master-flag disabled, agent-control disabled, missing/wrong/correct bearer token, ingest replay, retrieve flag separation, history search, run start/update/claim, strict validation, sanitized failures, and one content-free action audit per completed request.
+- [x] **Step 2: Run the router tests.** Expected: FAIL because routes/actions are absent.
+- [x] **Step 3: Add exact routes:**
 
 ```text
 POST /api/v1/agent-control/context/events/batch
@@ -207,8 +207,8 @@ GET  /api/v1/agent-control/context/health
 ```
 
 Append exact action IDs `context.events.ingest`, `context.retrieve`, `context.history.search`, `context.runs.start`, `context.runs.update`, `context.runs.claim`, and `context.health.read`. The health route returns canonical counts, oldest eligible run age, retry-state counts, checkpoint lag, last reconciliation metadata, and feature-flag state without identifiers or content. Audit metadata may contain counts, UUIDs, latency, tokens, and result classes only—never text, external IDs, tool arguments, or errors.
-- [ ] **Step 4: Run context router, agent-control auth, transactional-audit, and OpenAPI registration tests.** Expected: all pass and every route is mounted once.
-- [ ] **Step 5: Commit:** `feat: expose Sydney context control API`.
+- [x] **Step 4: Run context router, agent-control auth, transactional-audit, and OpenAPI registration tests.** Expected: all pass and every route is mounted once.
+- [x] **Step 5: Commit:** `feat: expose Sydney context control API`.
 
 ## Task 7: Add explicit Command search and audience preview
 

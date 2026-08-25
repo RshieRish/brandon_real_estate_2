@@ -232,6 +232,10 @@ class ContextHealthResponse(StrictModel):
     run_states: dict[str, int]
     checkpoint_lag_events: int = Field(ge=0)
     oldest_eligible_run_age_seconds: float | None = Field(default=None, ge=0)
+    reconciled_session_count: int = Field(default=0, ge=0)
+    unreconciled_session_count: int = Field(default=0, ge=0)
+    last_reconciled_at: datetime | None = None
+    last_reconciled_event_count: int | None = Field(default=None, ge=0)
 
 
 class ContextProjectionFactOperation(StrictModel):
