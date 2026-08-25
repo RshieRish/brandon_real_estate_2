@@ -326,6 +326,22 @@ AGENT_ACTIONS = [
         side_effects=False,
         description="Read content-free Sydney context health aggregates.",
     ),
+    AgentAction(
+        id="crm.command_contacts.search",
+        method="POST",
+        path="/api/v1/agent-control/crm/command-contacts/search",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Search Command contacts only; never Google Contacts or the admin UI.",
+    ),
+    AgentAction(
+        id="crm.command_contact_audiences.preview",
+        method="POST",
+        path="/api/v1/agent-control/crm/command-contact-audiences/preview",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Preview a masked, checksum-bound Command contact audience without sending.",
+    ),
 ]
 
 

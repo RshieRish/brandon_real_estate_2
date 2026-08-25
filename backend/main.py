@@ -13,6 +13,7 @@ from config import settings
 from routers import (
     admin_integrations,
     agent_control,
+    agent_control_command,
     agent_control_context,
     agent_control_crm,
     analytics,
@@ -94,6 +95,11 @@ app.include_router(
     agent_control_context.router,
     prefix="/api/v1/agent-control",
     tags=["agent-control-context"],
+)
+app.include_router(
+    agent_control_command.router,
+    prefix="/api/v1/agent-control",
+    tags=["agent-control-command"],
 )
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
 app.include_router(

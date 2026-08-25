@@ -214,10 +214,10 @@ Append exact action IDs `context.events.ingest`, `context.retrieve`, `context.hi
 
 **Files:** Create `backend/schemas/agent_control_command.py`, `backend/services/agent_control_command.py`, `backend/routers/agent_control_command.py`, `backend/tests/test_agent_control_command.py`; modify `backend/main.py` and `backend/routers/agent_control.py`.
 
-- [ ] **Step 1: Write failing tests** for name/email/phone general query, stage, tag IDs, source, origin, page size at most 25, deterministic pagination, current primary contact methods, exact result count, masked sample, stable audience checksum/reference, no draft/send/mutation, Command-only outage behavior, and content-free audits.
-- [ ] **Step 2: Run the focused tests.** Expected: FAIL because the protected Command routes are absent.
-- [ ] **Step 3: Implement the adapter over the existing `ContactDirectoryFilters` and `list_contacts`.** Return only contact ID, display name, current primary email/phone, stage, source/origin values, and tag names. Audience preview re-runs the same bounded server-side filters, computes the exact count plus a domain-separated SHA-256 checksum over ordered contact IDs, derives an opaque UUIDv5 audience reference from that checksum, and returns at most five masked sample rows. It does not persist recipient data or grant send authority.
-- [ ] **Step 4: Add routes and action IDs:**
+- [x] **Step 1: Write failing tests** for name/email/phone general query, stage, tag IDs, source, origin, page size at most 25, deterministic pagination, current primary contact methods, exact result count, masked sample, stable audience checksum/reference, no draft/send/mutation, Command-only outage behavior, and content-free audits.
+- [x] **Step 2: Run the focused tests.** Expected: FAIL because the protected Command routes are absent.
+- [x] **Step 3: Implement the adapter over the existing `ContactDirectoryFilters` and `list_contacts`.** Return only contact ID, display name, current primary email/phone, stage, source/origin values, and tag names. Audience preview re-runs the same bounded server-side filters, computes the exact count plus a domain-separated SHA-256 checksum over ordered contact IDs, derives an opaque UUIDv5 audience reference from that checksum, and returns at most five masked sample rows. It does not persist recipient data or grant send authority.
+- [x] **Step 4: Add routes and action IDs:**
 
 ```text
 POST /api/v1/agent-control/crm/command-contacts/search
@@ -226,8 +226,8 @@ crm.command_contacts.search
 crm.command_contact_audiences.preview
 ```
 
-- [ ] **Step 5: Re-run the focused tests and existing Command service/router tests touched by imports.** Expected: all pass.
-- [ ] **Step 6: Commit:** `feat: add Command contact tools for Sydney`.
+- [x] **Step 5: Re-run the focused tests and existing Command service/router tests touched by imports.** Expected: all pass.
+- [x] **Step 6: Commit:** `feat: add Command contact tools for Sydney`.
 
 ## Task 8: Add checkpoint projection behind its own worker flag
 

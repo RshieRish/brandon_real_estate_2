@@ -7,9 +7,9 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
-    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -27,6 +27,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
 from models.gmail_task_intake import _uuid_primary_key
+
+_JSONB = JSONB().with_variant(JSON(), "sqlite")
+_UUID_ARRAY = ARRAY(PostgreSQLUUID(as_uuid=True)).with_variant(JSON(), "sqlite")
+_TSVECTOR = TSVECTOR().with_variant(Text(), "sqlite")
 
 
 class AgentConversationIdentity(Base):
@@ -201,17 +205,16 @@ class AgentConversationEvent(Base):
         DateTime(timezone=True), nullable=False
     )
     token_metadata_json: Mapped[dict[str, int]] = mapped_column(
-        JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
+        _JSONB, default=dict, server_default=text("'{}'"), nullable=False
     )
     metadata_json: Mapped[dict[str, object]] = mapped_column(
-        JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
+        _JSONB, default=dict, server_default=text("'{}'"), nullable=False
     )
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     redaction_status: Mapped[str] = mapped_column(String(16), nullable=False)
     search_text: Mapped[str] = mapped_column(Text, nullable=False)
     search_vector: Mapped[object] = mapped_column(
-        TSVECTOR,
-        Computed("to_tsvector('simple', coalesce(search_text, ''))", persisted=True),
+        _TSVECTOR,
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -296,9 +299,9 @@ class AgentContextCheckpoint(Base):
     )
     schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
     rolling_summary: Mapped[str] = mapped_column(Text, nullable=False)
-    active_state_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    active_state_json: Mapped[dict[str, object]] = mapped_column(_JSONB, nullable=False)
     source_event_ids: Mapped[list[UUID]] = mapped_column(
-        ARRAY(PostgreSQLUUID(as_uuid=True)), nullable=False
+        _UUID_ARRAY, nullable=False
     )
     covered_range_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     produced_at: Mapped[datetime] = mapped_column(
@@ -352,14 +355,14 @@ class AgentMemoryFact(Base):
     )
     canonical_key: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    value_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    value_json: Mapped[dict[str, object]] = mapped_column(_JSONB, nullable=False)
     confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     projection_version: Mapped[str] = mapped_column(String(64), nullable=False)
     source_event_ids: Mapped[list[UUID]] = mapped_column(
-        ARRAY(PostgreSQLUUID(as_uuid=True)), nullable=False
+        _UUID_ARRAY, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
