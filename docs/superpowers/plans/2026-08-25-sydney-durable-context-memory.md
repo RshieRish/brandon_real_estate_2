@@ -255,12 +255,12 @@ crm.command_contact_audiences.preview
 
 **Files:** Create `hermes/overlay/sydney_spool.py`, `hermes/overlay/sydney_memory_provider.py`, `backend/tests/test_sydney_spool.py`, `backend/tests/test_sydney_memory_provider.py`.
 
-- [ ] **Step 1: Write failing tests** for mode-0600 SQLite WAL creation, one-transaction inbound-event/run enqueue, backend acknowledgement, crash/reopen recovery, ordered drain, bounded batches, exact replay, tool-before/tool-after records, cached context fallback, session lineage rotation, and provider prefetch/sync behavior.
-- [ ] **Step 2: Run the focused tests.** Expected: FAIL because spool/provider modules are absent.
-- [ ] **Step 3: Implement a `SydneySpool` with explicit schema version and transactions.** Store redacted event JSON, run transitions, tool ledger rows, acknowledgement state, attempt timestamps, cached context packet, and reconciliation cursor under `${HERMES_HOME}/sydney_spool.db`. Never store backend bearer tokens or unredacted content. Use `PRAGMA journal_mode=WAL`, `synchronous=FULL`, busy timeout, foreign keys, and an exclusive migration transaction.
-- [ ] **Step 4: Implement `SydneyMemoryProvider(MemoryProvider)`.** `initialize` binds stable platform/user/chat/session identity and starts a bounded drain thread; `prefetch` synchronously returns the fresh or cached source-linked packet under 16,000 tokens; `sync_turn` extracts only new visible messages/tool records and queues idempotent batches; `on_session_switch` records continuation lineage; shutdown drains within a fixed deadline. Its history tool delegates to the backend MCP contract rather than querying raw PostgreSQL.
-- [ ] **Step 5: Re-run spool/provider tests, interrupt a subprocess after its local commit, reopen it, and prove the queued row drains exactly once.** Expected: all pass.
-- [ ] **Step 6: Commit:** `feat: add Sydney local context spool`.
+- [x] **Step 1: Write failing tests** for mode-0600 SQLite WAL creation, one-transaction inbound-event/run enqueue, backend acknowledgement, crash/reopen recovery, ordered drain, bounded batches, exact replay, tool-before/tool-after records, cached context fallback, session lineage rotation, and provider prefetch/sync behavior.
+- [x] **Step 2: Run the focused tests.** Expected: FAIL because spool/provider modules are absent.
+- [x] **Step 3: Implement a `SydneySpool` with explicit schema version and transactions.** Store redacted event JSON, run transitions, tool ledger rows, acknowledgement state, attempt timestamps, cached context packet, and reconciliation cursor under `${HERMES_HOME}/sydney_spool.db`. Never store backend bearer tokens or unredacted content. Use `PRAGMA journal_mode=WAL`, `synchronous=FULL`, busy timeout, foreign keys, and an exclusive migration transaction.
+- [x] **Step 4: Implement `SydneyMemoryProvider(MemoryProvider)`.** `initialize` binds stable platform/user/chat/session identity and starts a bounded drain thread; `prefetch` synchronously returns the fresh or cached source-linked packet under 16,000 tokens; `sync_turn` extracts only new visible messages/tool records and queues idempotent batches; `on_session_switch` records continuation lineage; shutdown drains within a fixed deadline. Its history tool delegates to the backend MCP contract rather than querying raw PostgreSQL.
+- [x] **Step 5: Re-run spool/provider tests, interrupt a subprocess after its local commit, reopen it, and prove the queued row drains exactly once.** Expected: all pass.
+- [x] **Step 6: Commit:** `feat: add Sydney local context spool`.
 
 ## Task 11: Add bounded Gemini retry, prompt budgets, and tool-ledger hooks
 
