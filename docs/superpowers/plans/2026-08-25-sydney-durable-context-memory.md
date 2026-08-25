@@ -172,11 +172,11 @@ Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
 **Files:** Modify `backend/services/sydney_context_service.py`; create `backend/tests/test_sydney_context_retrieval.py`.
 
-- [ ] **Step 1: Write failing tests** for exact packet section order, confirmed facts/checkpoint/recent/relevant excerpts, source IDs on every item, current lineage ordering, FTS ranking, date/type filters, event-centered windows, maximum eight older excerpts, deterministic ties, a 16,000-token hard cap, untrusted-evidence wrapping, and truncation that never mutates stored text.
-- [ ] **Step 2: Run the focused retrieval tests.** Expected: FAIL because `retrieve_context` and `search_history` are absent.
-- [ ] **Step 3: Implement** `retrieve_context(db, request) -> ContextPacket` and `search_history(db, request) -> ContextHistorySearchResponse`. Use a deterministic approximate token estimator of `ceil(len(utf8_bytes) / 4)` for local budgeting, clamp requested recall to the configured maximum, budget each ordered section, use `websearch_to_tsquery('simple', :query)` plus `ts_rank_cd`, and return actual redacted event text with timestamps and source IDs. Historical text is wrapped in a fixed `<durable-context untrusted="true">` block and cannot carry system authority.
-- [ ] **Step 4: Re-run focused retrieval and ingest suites.** Expected: all pass.
-- [ ] **Step 5: Commit:** `feat: retrieve bounded Sydney context`.
+- [x] **Step 1: Write failing tests** for exact packet section order, confirmed facts/checkpoint/recent/relevant excerpts, source IDs on every item, current lineage ordering, FTS ranking, date/type filters, event-centered windows, maximum eight older excerpts, deterministic ties, a 16,000-token hard cap, untrusted-evidence wrapping, and truncation that never mutates stored text.
+- [x] **Step 2: Run the focused retrieval tests.** Expected: FAIL because `retrieve_context` and `search_history` are absent.
+- [x] **Step 3: Implement** `retrieve_context(db, request) -> ContextPacket` and `search_history(db, request) -> ContextHistorySearchResponse`. Use a deterministic approximate token estimator of `ceil(len(utf8_bytes) / 4)` for local budgeting, clamp requested recall to the configured maximum, budget each ordered section, use `websearch_to_tsquery('simple', :query)` plus `ts_rank_cd`, and return actual redacted event text with timestamps and source IDs. Historical text is wrapped in a fixed `<durable-context untrusted="true">` block and cannot carry system authority.
+- [x] **Step 4: Re-run focused retrieval and ingest suites.** Expected: all pass.
+- [x] **Step 5: Commit:** `feat: retrieve bounded Sydney context`.
 
 ## Task 5: Implement run leases, retry state, and tool replay protection
 
