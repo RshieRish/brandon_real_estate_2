@@ -708,7 +708,7 @@ def test_backfill_fails_closed_when_history_has_no_exact_chat_index(
         ).run()
 
 
-def test_backfill_fails_closed_when_prior_reset_history_is_unmapped(
+def test_backfill_recovers_unique_private_dm_session_reset_chain(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "state.db"
@@ -743,6 +743,70 @@ def test_backfill_fails_closed_when_prior_reset_history_is_unmapped(
     )
     connection.commit()
     connection.close()
+    sessions_path = tmp_path / "sessions" / "sessions.json"
+    sessions = json.loads(sessions_path.read_text())
+    current = sessions["agent:main:telegram:dm:private-chat"]
+    current["origin"]["chat_id"] = "brandon"
+    sessions_path.write_text(json.dumps(sessions))
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+
+    report = SydneyBackfill(
+        state_db=state_path,
+        spool=spool,
+        platform="telegram",
+        external_user_id="brandon",
+        external_chat_id="brandon",
+        display_label="Brandon",
+    ).run()
+
+    assert report["session_count"] == 3
+    assert report["message_count"] == 5
+    batches = [record.payload for record in spool.pending(limit=100)]
+    assert any(batch["hermes_session_id"] == "prior-reset-session" for batch in batches)
+    assert spool.get_session("session-1")["parent_session_id"] == (
+        "prior-reset-session"
+    )
+
+
+def test_backfill_fails_closed_when_prior_reset_history_is_not_contiguous(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.db"
+    _seed_state(state_path)
+    connection = sqlite3.connect(state_path)
+    connection.execute(
+        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "unlinked-reset-session",
+            "telegram",
+            "brandon",
+            None,
+            1766662000,
+            1766663000,
+            "session_reset",
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO messages(
+            session_id, role, content, timestamp, platform_message_id, observed
+        ) VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "unlinked-reset-session",
+            "user",
+            "Unlinked history must still fail closed.",
+            1766662001,
+            "telegram-unlinked-reset",
+            0,
+        ),
+    )
+    connection.commit()
+    connection.close()
+    sessions_path = tmp_path / "sessions" / "sessions.json"
+    sessions = json.loads(sessions_path.read_text())
+    sessions["agent:main:telegram:dm:private-chat"]["origin"]["chat_id"] = "brandon"
+    sessions_path.write_text(json.dumps(sessions))
     spool = SydneySpool(tmp_path / "sydney_spool.db")
 
     with pytest.raises(RuntimeError, match="unmapped same-user session history"):
@@ -751,7 +815,60 @@ def test_backfill_fails_closed_when_prior_reset_history_is_unmapped(
             spool=spool,
             platform="telegram",
             external_user_id="brandon",
-            external_chat_id="private-chat",
+            external_chat_id="brandon",
+            display_label="Brandon",
+        ).run()
+
+
+def test_backfill_fails_closed_when_private_dm_reset_predecessor_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.db"
+    _seed_state(state_path)
+    connection = sqlite3.connect(state_path)
+    for session_id in ("ambiguous-reset-a", "ambiguous-reset-b"):
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                "telegram",
+                "brandon",
+                None,
+                1766663000,
+                1766663999,
+                "session_reset",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages(
+                session_id, role, content, timestamp, platform_message_id, observed
+            ) VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                "user",
+                "Ambiguous history must not be guessed.",
+                1766663001,
+                f"telegram-{session_id}",
+                0,
+            ),
+        )
+    connection.commit()
+    connection.close()
+    sessions_path = tmp_path / "sessions" / "sessions.json"
+    sessions = json.loads(sessions_path.read_text())
+    sessions["agent:main:telegram:dm:private-chat"]["origin"]["chat_id"] = "brandon"
+    sessions_path.write_text(json.dumps(sessions))
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+
+    with pytest.raises(RuntimeError, match="ambiguous private-DM reset lineage"):
+        SydneyBackfill(
+            state_db=state_path,
+            spool=spool,
+            platform="telegram",
+            external_user_id="brandon",
+            external_chat_id="brandon",
             display_label="Brandon",
         ).run()
 

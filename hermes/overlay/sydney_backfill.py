@@ -32,6 +32,7 @@ except ImportError:
 _IDENTITY_NAMESPACE = UUID("23f42827-f36c-4d2d-b403-28bc21cbb52a")
 _HERMES_STRUCTURED_CONTENT_PREFIX = "\x00json:"
 _CONTINUATION_MARKER_PREFIX = "[System continuation:"
+_RESET_HANDOFF_MAX_GAP_SECONDS = 2.0
 
 
 def _canonical(value: Any) -> str:
@@ -257,6 +258,17 @@ class SydneyBackfill:
                         changed = True
 
         routed_ids = self._routed_session_ids_for_user()
+        if {
+            "parent_session_id",
+            "started_at",
+            "ended_at",
+            "end_reason",
+        }.issubset(columns):
+            self._recover_private_dm_reset_lineage(
+                candidates=candidates,
+                selected_ids=selected_ids,
+                routed_ids=routed_ids,
+            )
         unmapped_same_user_ids = {
             session_id
             for session_id, session in candidates.items()
@@ -366,6 +378,83 @@ class SydneyBackfill:
             ):
                 result.add(session_id)
         return result
+
+    @staticmethod
+    def _is_immediate_session_reset_handoff(
+        parent: dict[str, Any], child: dict[str, Any]
+    ) -> bool:
+        try:
+            parent_ended_at = float(parent.get("ended_at"))
+            child_started_at = float(child.get("started_at"))
+        except (TypeError, ValueError):
+            return False
+        gap = child_started_at - parent_ended_at
+        return (
+            str(parent.get("end_reason") or "") == "session_reset"
+            and 0 <= gap <= _RESET_HANDOFF_MAX_GAP_SECONDS
+        )
+
+    def _recover_private_dm_reset_lineage(
+        self,
+        *,
+        candidates: dict[str, dict[str, Any]],
+        selected_ids: set[str],
+        routed_ids: set[str],
+    ) -> None:
+        """Recover only a unique reset chain leading into a verified private DM.
+
+        Hermes retains one current routing-index entry per chat, so an ordinary
+        session reset removes the direct chat proof for the preceding session.
+        Telegram private DMs independently prove the configured chat and user
+        IDs are identical. From that verified anchor we may walk backward only
+        across a unique, sub-two-second ``session_reset`` handoff. Any routed
+        other-chat session or temporal ambiguity remains excluded/fail-closed.
+        """
+        if (
+            self.platform != "telegram"
+            or not self.external_user_id
+            or self.external_chat_id != self.external_user_id
+            or not self._exact_chat_session_ids()
+        ):
+            return
+
+        changed = True
+        while changed:
+            changed = False
+            for child_id in sorted(selected_ids):
+                child = candidates[child_id]
+                if child.get("user_id") != self.external_user_id or child.get(
+                    "parent_session_id"
+                ):
+                    continue
+                predecessors = [
+                    session_id
+                    for session_id, session in candidates.items()
+                    if session_id not in selected_ids
+                    and session_id not in routed_ids
+                    and session.get("user_id") == self.external_user_id
+                    and self._is_immediate_session_reset_handoff(session, child)
+                ]
+                if len(predecessors) > 1:
+                    raise RuntimeError("ambiguous private-DM reset lineage")
+                if not predecessors:
+                    continue
+                parent_id = predecessors[0]
+                parent = candidates[parent_id]
+                successors = [
+                    session_id
+                    for session_id, session in candidates.items()
+                    if session_id != parent_id
+                    and session.get("user_id") == self.external_user_id
+                    and (session_id not in routed_ids or session_id in selected_ids)
+                    and not session.get("parent_session_id")
+                    and self._is_immediate_session_reset_handoff(parent, session)
+                ]
+                if successors != [child_id]:
+                    raise RuntimeError("ambiguous private-DM reset lineage")
+                child["parent_session_id"] = parent_id
+                selected_ids.add(parent_id)
+                changed = True
 
     def _routed_session_ids_for_user(self) -> set[str]:
         """Return sessions whose routing index proves a chat for this user."""
