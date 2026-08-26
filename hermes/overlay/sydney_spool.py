@@ -1125,6 +1125,94 @@ class SydneySpool:
                 rebound += int(cursor.rowcount == 1)
         return rebound
 
+    def rebind_pending_session_parent(
+        self,
+        session_id: str,
+        parent_session_id: str | None,
+    ) -> int:
+        """Atomically apply one canonical parent to undelivered event batches."""
+        exact_session_id = str(session_id)
+        if not exact_session_id:
+            raise ValueError("session_id is required")
+        exact_parent_session_id = (
+            str(parent_session_id) if parent_session_id is not None else None
+        )
+        if exact_parent_session_id == "":
+            raise ValueError("parent_session_id cannot be empty")
+        rebound = 0
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                rows = self.connection.execute(
+                    "SELECT id, kind, payload_json FROM outbox "
+                    "WHERE state='pending' ORDER BY id"
+                ).fetchall()
+                for row in rows:
+                    payload = json.loads(row["payload_json"])
+                    event_batch = (
+                        payload
+                        if str(row["kind"]) == "event_batch"
+                        else payload.get("event_batch")
+                    )
+                    if (
+                        not isinstance(event_batch, dict)
+                        or str(event_batch.get("hermes_session_id") or "")
+                        != exact_session_id
+                        or event_batch.get("parent_hermes_session_id")
+                        == exact_parent_session_id
+                    ):
+                        continue
+                    event_batch["parent_hermes_session_id"] = exact_parent_session_id
+                    safe_payload = redact_payload(payload)
+                    encoded = _canonical_json(safe_payload)
+                    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+                    cursor = self.connection.execute(
+                        "UPDATE outbox SET payload_json=?, payload_sha256=? "
+                        "WHERE id=? AND state='pending'",
+                        (encoded, digest, int(row["id"])),
+                    )
+                    rebound += int(cursor.rowcount == 1)
+                staged_rows = self.connection.execute(
+                    "SELECT key, value_json FROM spool_meta "
+                    "WHERE key LIKE 'final_delivery:%' ORDER BY key"
+                ).fetchall()
+                for row in staged_rows:
+                    staged = json.loads(row["value_json"])
+                    if not isinstance(staged, dict):
+                        continue
+                    event_batch = staged.get("event_batch")
+                    if (
+                        not isinstance(event_batch, dict)
+                        or str(event_batch.get("hermes_session_id") or "")
+                        != exact_session_id
+                        or event_batch.get("parent_hermes_session_id")
+                        == exact_parent_session_id
+                    ):
+                        continue
+                    source_key = str(staged.get("source_key") or "")
+                    delivered = (
+                        self.connection.execute(
+                            "SELECT state FROM outbox WHERE source_key=?",
+                            (source_key,),
+                        ).fetchone()
+                        if source_key
+                        else None
+                    )
+                    if delivered is not None and delivered["state"] == "acknowledged":
+                        continue
+                    event_batch["parent_hermes_session_id"] = exact_parent_session_id
+                    encoded = _canonical_json(redact_payload(staged))
+                    self.connection.execute(
+                        "UPDATE spool_meta SET value_json=?, updated_at=? WHERE key=?",
+                        (encoded, _utc_now(), str(row["key"])),
+                    )
+                self.connection.execute("COMMIT")
+            except BaseException:
+                if self.connection.in_transaction:
+                    self.connection.execute("ROLLBACK")
+                raise
+        return rebound
+
     def matching_records(
         self,
         *,

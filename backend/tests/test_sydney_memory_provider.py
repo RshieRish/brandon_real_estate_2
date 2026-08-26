@@ -1842,6 +1842,99 @@ def test_provider_initialization_reuses_backfilled_session_lineage(
     )
 
 
+def test_provider_honors_backfill_canonical_parent_for_pending_and_new_events(
+    tmp_path: Path,
+) -> None:
+    from sydney_spool import SydneySpool
+
+    logical_id = "2d8d343b-0e9c-4ce9-ac2c-a2c05a249eff"
+    session_id = "existing-session"
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    spool.rotate_session(
+        session_id=session_id,
+        logical_conversation_id=logical_id,
+        platform="telegram",
+        external_user_id="approved-user",
+        external_chat_id="private-chat",
+        parent_session_id="missing-parent-session",
+        continuation_reason="backfill_continuation",
+    )
+    spool.set_meta(
+        "logical_conversation:"
+        + hashlib.sha256(b"telegram\x1fapproved-user\x1fprivate-chat").hexdigest(),
+        logical_id,
+    )
+    spool.set_meta(
+        "backfill_lineage:"
+        + hashlib.sha256(f"{logical_id}\x1f{session_id}".encode()).hexdigest(),
+        {
+            "schema_version": "sydney-backfill-lineage-v1",
+            "parent_session_id": None,
+        },
+    )
+    spool.enqueue_inbound(
+        {
+            "platform": "telegram",
+            "external_user_id": "approved-user",
+            "external_chat_id": "private-chat",
+            "display_label": "Brandon",
+            "hermes_session_id": session_id,
+            "logical_conversation_id": logical_id,
+            "parent_hermes_session_id": "missing-parent-session",
+            "continuation_reason": "backfill_continuation",
+            "source_version": "hermes-sydney-v1",
+            "events": [
+                {
+                    "source_event_key": "telegram:pending-before-restart:user",
+                    "event_type": "user",
+                    "role": "user",
+                    "occurred_at": "2026-08-26T18:00:00+00:00",
+                    "content": "Pending before restart",
+                    "metadata": {"platform_message_id": "pending-before-restart"},
+                }
+            ],
+        },
+        {
+            "platform_message_id": "pending-before-restart",
+            "terminal_deadline_at": "2026-08-27T18:00:00+00:00",
+        },
+        source_key="inbound:telegram:private-chat:pending-before-restart",
+    )
+    spool.close()
+
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_ENABLED": "true",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "approved-user",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            session_id,
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="approved-user",
+            chat_id="private-chat",
+        )
+
+    provider.record_inbound(
+        "new-after-restart",
+        "New after restart",
+        occurred_at="2026-08-26T18:01:00+00:00",
+    )
+    pending = provider.spool.pending(limit=10)
+
+    assert len(pending) == 2
+    assert all(
+        record.payload["event_batch"]["parent_hermes_session_id"] is None
+        for record in pending
+    )
+
+
 def test_permanent_model_failure_releases_only_after_visible_delivery(
     tmp_path: Path,
 ) -> None:
