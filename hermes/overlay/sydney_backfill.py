@@ -1391,7 +1391,7 @@ def main() -> None:
         )
         if args.reconcile:
             try:
-                from .sydney_memory_provider import SydneyBackendClient
+                from . import SydneyBackendClient
             except ImportError:
                 from sydney_memory_provider import SydneyBackendClient
 
