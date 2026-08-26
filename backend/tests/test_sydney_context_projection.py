@@ -90,7 +90,7 @@ def test_projection_prompt_is_bounded_and_marks_history_as_untrusted() -> None:
         str(event_id) in request.prompt for event_id in candidate.source_event_ids
     )
     assert request.response_model.__name__ == "SydneyContextProjectionResult"
-    assert request.max_output_tokens == 2_048
+    assert request.max_output_tokens == 4_096
 
     injected = replace(
         candidate,
@@ -561,7 +561,7 @@ def test_projection_model_call_uses_strict_schema_and_low_output_limit(
     result = call(request)
 
     config = observed["config"]
-    assert config.max_output_tokens == 2_048
+    assert config.max_output_tokens == 4_096
     assert config.temperature == 0
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema["additionalProperties"] is False
