@@ -23,7 +23,7 @@ def test_verifier_probes_real_server_and_reports_exact_contract() -> None:
     assert completed.returncode == 0, completed.stderr
     proof = json.loads(completed.stdout)
     assert proof == {
-        "count": 22,
+        "count": 25,
         "exact_expected_order": True,
         "forbidden_present": [],
         "gmail_send_request_id_required": True,
@@ -59,9 +59,12 @@ def test_verifier_probes_real_server_and_reports_exact_contract() -> None:
             "crm_task_drafts_create",
             "crm_task_suggestions_approval_link",
             "crm_task_suggestions_dismiss_proposal",
+            "context_history_search",
+            "command_contacts_search",
+            "command_contact_audience_preview",
         ],
-        "original_16_unchanged": True,
-        "unique_count": 22,
+        "original_22_unchanged": True,
+        "unique_count": 25,
     }
 
 

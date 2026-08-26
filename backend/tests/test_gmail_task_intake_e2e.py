@@ -1689,6 +1689,7 @@ def test_task7_task8_rollout_flags_keep_all_task9_jobs_dormant_by_default() -> N
         "instagram_health": False,
         "integration_alerts": True,
         "notification_delivery": True,
+        "sydney_context_projection": False,
         "sydney_questions": False,
     }
     assert config.GMAIL_TASK_INTAKE_ENABLED is False

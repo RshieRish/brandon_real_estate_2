@@ -63,9 +63,63 @@ from services.command_contacts import (
     get_contact_workspace_summary,
     list_contact_celebrations,
     list_contacts,
+    list_contacts_cursor,
 )
 
 NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_cursor_directory_uses_stable_id_snapshot_across_insert_and_reorder(
+    service_db: AsyncSession,
+) -> None:
+    contacts = [
+        CRMContact(
+            first_name=name,
+            last_name="Cursor",
+            email=f"{name.casefold()}@example.com",
+            phone=None,
+            stage="lead",
+        )
+        for name in ("Zulu", "Yankee", "Xray", "Whiskey")
+    ]
+    service_db.add_all(contacts)
+    await service_db.flush()
+
+    first = await list_contacts_cursor(
+        service_db,
+        ContactDirectoryFilters(page_size=2),
+        after_id=None,
+        upper_bound_id=None,
+        now=NOW,
+    )
+    original_ids = [contact.id for contact in contacts]
+    assert [row.id for row in first.rows] == original_ids[:2]
+    assert first.next_after_id == original_ids[1]
+    assert first.upper_bound_id == original_ids[-1]
+
+    contacts[0].first_name = "Alpha"
+    inserted = CRMContact(
+        first_name="New",
+        last_name="Cursor",
+        email="new.cursor@example.com",
+        phone=None,
+        stage="lead",
+    )
+    service_db.add(inserted)
+    await service_db.flush()
+
+    second = await list_contacts_cursor(
+        service_db,
+        ContactDirectoryFilters(page_size=2),
+        after_id=first.next_after_id,
+        upper_bound_id=first.upper_bound_id,
+        now=NOW,
+    )
+
+    assert [row.id for row in second.rows] == original_ids[2:]
+    assert inserted.id not in {row.id for row in second.rows}
+    assert second.has_more is False
 
 
 @pytest_asyncio.fixture()

@@ -1,5 +1,5 @@
-from models.agent_action_audit import AgentActionAudit
 from models.admin_user import AdminUser
+from models.agent_action_audit import AgentActionAudit
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
     CRMContactAddress,
@@ -29,10 +29,6 @@ from models.crm_task_lifecycle import (
     CRMTaskCreationRequest,
     CRMTaskSource,
 )
-from models.integration_health import (
-    IntegrationHealthState,
-    IntegrationWorkerHeartbeat,
-)
 from models.gmail_task_intake import (
     CRMTaskSuggestion,
     CRMTaskSuggestionSource,
@@ -47,6 +43,21 @@ from models.gmail_task_intake import (
     GmailSyncPageCheckpoint,
     GmailSyncRun,
 )
+from models.integration_health import (
+    IntegrationHealthState,
+    IntegrationWorkerHeartbeat,
+)
+from models.sydney_context import (
+    AgentContextCheckpoint,
+    AgentContextProjectionClaim,
+    AgentConversationEvent,
+    AgentConversationEventSegment,
+    AgentConversationIdentity,
+    AgentConversationSession,
+    AgentMemoryFact,
+    AgentRunJob,
+    AgentToolInvocation,
+)
 from models.sydney_tasks import (
     CRMTaskClarification,
     CRMTaskSuggestionEvent,
@@ -56,6 +67,15 @@ from models.sydney_tasks import (
 
 __all__ = [
     "AgentActionAudit",
+    "AgentContextCheckpoint",
+    "AgentContextProjectionClaim",
+    "AgentConversationEvent",
+    "AgentConversationEventSegment",
+    "AgentConversationIdentity",
+    "AgentConversationSession",
+    "AgentMemoryFact",
+    "AgentRunJob",
+    "AgentToolInvocation",
     "AdminUser",
     "CRMContact",
     "CRMContactAddress",

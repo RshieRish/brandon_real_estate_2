@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_CALENDAR_CLIENT_ID: str = ""
     GOOGLE_CALENDAR_CLIENT_SECRET: str = ""
-    GOOGLE_CALENDAR_REDIRECT_URI: str = "http://localhost:8000/api/v1/booking/calendar/callback"
+    GOOGLE_CALENDAR_REDIRECT_URI: str = (
+        "http://localhost:8000/api/v1/booking/calendar/callback"
+    )
     GOOGLE_WORKSPACE_CLIENT_ID: str = ""
     GOOGLE_WORKSPACE_CLIENT_SECRET: str = ""
     GOOGLE_WORKSPACE_REDIRECT_URI: str = ""
@@ -54,6 +56,18 @@ class Settings(BaseSettings):
     GMAIL_TASK_INTAKE_ENABLED: bool = False
     SYDNEY_TASK_QUESTIONS_ENABLED: bool = False
     INSTAGRAM_INTEGRATION_ENABLED: bool = False
+    # Durable Sydney history rolls out in four independently reversible stages.
+    SYDNEY_DURABLE_CONTEXT_ENABLED: bool = False
+    SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED: bool = False
+    SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED: bool = False
+    SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED: bool = False
+    SYDNEY_CONTEXT_RECALL_TOKEN_BUDGET: int = 16_000
+    SYDNEY_CONTEXT_PROMPT_COMPRESS_TOKENS: int = 96_000
+    SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET: int = 500_000
+    SYDNEY_CONTEXT_MAX_TURNS: int = 16
+    SYDNEY_CONTEXT_EVENT_BATCH_LIMIT: int = 100
+    SYDNEY_CONTEXT_SEGMENT_CHARS: int = 16_000
+    SYDNEY_CONTEXT_RUN_LEASE_SECONDS: int = 120
     # Gmail History needs a direct, session-affine PostgreSQL connection so
     # session advisory locks remain held across page-level commits.
     GMAIL_HISTORY_DATABASE_URL: str = ""

@@ -188,16 +188,19 @@ mcp_servers:
         - crm_task_drafts_create
         - crm_task_suggestions_approval_link
         - crm_task_suggestions_dismiss_proposal
+        - context_history_search
+        - command_contacts_search
+        - command_contact_audience_preview
       resources: false
       prompts: false
 ```
 
-The production bridge was verified from inside `atlas-agent` on 2026-08-23.
-`hermes mcp test atlas_backend` connected and discovered 22 tools. A separate raw
-JSON-RPC `tools/list` request against `/app/atlas_backend_mcp.py` returned the exact
-ordered registry above: 22 names, 22 unique names, the original 16 unchanged, and
-the six review tools appended once. The deployed `gmail_send` schema requires a
-caller-supplied UUID `request_id`.
+The production bridge was verified from inside `atlas-agent` on 2026-08-23 with
+the prior 22-tool contract. The Sydney release gate supersedes that count: raw
+JSON-RPC `tools/list` must return exactly 25 ordered unique names, preserve the
+original 22 byte-for-byte and in order, and append only the three read tools
+shown above. The deployed `gmail_send` schema still requires a caller-supplied
+UUID `request_id`.
 
 ### Deployed Task 8 overlay
 
@@ -322,9 +325,9 @@ unset task8_probe_b64
 `initialize`, `notifications/initialized`, and `tools/list`, prints one JSON
 proof object, and exits nonzero unless it confirms:
 
-- exactly 22 ordered and unique names;
-- the first 16 names exactly match the prior production registry;
-- all six CRM review tools are appended once;
+- exactly 25 ordered and unique names;
+- the first 22 names exactly match the prior production registry;
+- the three Sydney/Command read tools are appended once;
 - the five actual approve/dismiss/create-confirmed/archive/restore tools are absent;
 - `gmail_send.inputSchema.required` contains `request_id` and its format is `uuid`.
 
@@ -376,6 +379,9 @@ This foundation exposes operational context plus the protected Workspace action 
 - non-authoritative CRM task review drafts
 - fragment-only Command approval handoff links
 - non-authoritative dismissal review proposals
+- bounded source-linked Sydney history search
+- Command-only contact search
+- server-side Command audience preview
 
 Do not expose confirmed CRM task creation, actual suggestion approval/dismissal,
 archive, restore, SMS, Telegram client replies, or broader backend mutation
@@ -384,3 +390,167 @@ gates. Direct Gmail sending is available only through the `workspace.gmail.send`
 action and requires `confirmed_by_brandon=true` plus a caller UUID. Calendar event
 creation is available only through `workspace.calendar.event.create` and also
 requires `confirmed_by_brandon=true`.
+
+## Sydney Durable Context Controlled Rollout
+
+This release keeps PostgreSQL canonical, `/data/.hermes/state.db` as the local
+Hermes transcript, and `/data/.hermes/sydney_spool.db` as a private crash-safe
+WAL outbox and last-good context cache. It does not delete or compact source
+history. Visible user, assistant, tool-call, and tool-result text is redacted
+before enqueue, including configured secret values, authorization headers, and
+natural-language password/client-secret disclosures. URL redaction recursively
+sanitizes direct, nested percent-encoded, and JSON-wrapped login/callback values
+while retaining benign selectors such as `proposal_id`. Hidden reasoning,
+credentials, and raw binary attachments are not copied into canonical history.
+The event-batch endpoint rejects an aggregate body over 8 MiB before JSON
+decoding. Atlas splits multi-event batches below that cap and fails closed if a
+single event cannot fit.
+
+Tool execution is fenced by the exact live run lease in PostgreSQL. Mutating
+calls are matched across regenerated model call IDs by a canonical argument hash
+or hashed caller idempotency key; a completed result is restored and an
+uncertain result blocks replay. Visible failed tool results are redacted and
+retained as history. Transport timeout/connection exception types are eligible
+for bounded automatic retry even when the provider supplies no status code.
+Inbound and final run references are also provenance checked: only the exact
+conversation's user event can start a run, and only that session's assistant
+event can complete it.
+Hermes hides the prefixed MCP history-search variant from the model and exposes
+only the provider-owned `context_history_search`, which injects the authenticated
+identity server-side.
+
+The four backend switches default to `false` and must be promoted separately:
+
+- `SYDNEY_DURABLE_CONTEXT_ENABLED` allows redacted canonical writes and health.
+- `SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED` allows bounded automatic recall and
+  history search.
+- `SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED` allows the worker to produce
+  source-linked checkpoints and facts.
+- `SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED` allows leased automatic continuation of
+  eligible transient failures.
+
+Atlas also requires the exact private Telegram user/chat mapping and the same
+user in `SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS`. The provider fails closed for
+every non-allowlisted identity. Never put those IDs or any bearer token in a
+deployment message, log, report, or committed file.
+
+### Pre-deployment gates
+
+Development gate recorded 2026-08-26:
+
+- The final changed-test matrix passed `757` with `5` expected exact-checkout
+  skips; the separate Atlas suite passed `16/16`.
+- Fresh detached template `7224d7c1a4dcffe9304f49bc843f55716f5561b4`
+  and Hermes `77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5` sources passed
+  the exact `227/227` gate.
+- The real JSON-RPC verifier returned exactly 25 ordered unique tools, retained
+  the original 22 unchanged, exposed no forbidden tool, and required caller
+  UUID `gmail_send.request_id`.
+- PostgreSQL 17/TLS regressions, sole Alembic head `85e8b7c9d4f1`, focused
+  Ruff, compileall, `git diff --check`, credential scanning, and independent
+  review passed. This is pre-release evidence only and must not be substituted
+  for the live gates below.
+
+1. Record the reviewed branch SHA and require a clean worktree.
+2. Create a mode-0600 custom-format PostgreSQL backup outside the repository and
+   prove `pg_restore --list` can read it.
+3. Confirm all four switches are `false` on the backend and worker, and the
+   master/retry switches are `false` on Atlas.
+4. Deploy the backend and worker from the reviewed SHA, then run `alembic upgrade
+   head` once against production. `alembic current` and `alembic heads` must both
+   identify sole head `85e8b7c9d4f1`.
+5. Apply `hermes/overlay/apply_overlay.py` to a fresh detached template checkout
+   at `7224d7c1a4dcffe9304f49bc843f55716f5561b4`. The inner installer must verify
+   official Hermes tag `v2026.5.29.2`, commit
+   `77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5`, and every pinned upstream hash.
+6. Deploy that exact generated template to `atlas-agent`, preserving the existing
+   `/data` volume. Backend, worker, and Atlas deployments must each reach
+   `SUCCESS`, and their health checks must pass before enablement.
+
+### Shadow ingest, backfill, and reconciliation
+
+Enable only the master switch on the backend, worker, and Atlas. Keep retrieval,
+projection, and retry disabled. Run the backfill inside the Atlas container so
+the transcript never leaves `/data`:
+
+```bash
+env -u RAILWAY_API_TOKEN -u RAILWAY_TOKEN railway ssh \
+  --project aa6c9f9c-46d4-4f5d-b529-86b073de4972 \
+  --service atlas-agent --environment production -- \
+  sh -lc 'cd /opt/hermes-agent && python -m plugins.memory.sydney.sydney_backfill \
+    --state-db /data/.hermes/state.db \
+    --spool /data/.hermes/sydney_spool.db \
+    --platform telegram \
+    --user-id "$SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID" \
+    --chat-id "$SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID" \
+    --display-label "${SYDNEY_DURABLE_CONTEXT_DISPLAY_LABEL:-Brandon}" \
+    --reconcile --wait-seconds 60'
+```
+
+The command exits nonzero unless its content-free JSON report has all of these:
+
+- `matched=true` and `unacknowledged_count=0`;
+- equal source/acknowledged session, message, event, role, tool-call, and
+  tool-result counts;
+- equal source/acknowledged ordered global hashes;
+- one opaque session-key hash per useful session with matching source,
+  acknowledgement, and canonical PostgreSQL hashes.
+
+The backend accepts reconciliation only when the caller's exact event count and
+timestamp/UUID-ordered hash match PostgreSQL. Every later inserted event clears
+the prior reconciliation marker; Atlas restores it automatically only after all
+local receipts for that session are acknowledged. The one-second provider loop
+selects at most 25 dirty sessions and reads persisted per-session aggregates
+instead of rebuilding hashes across lifetime history. Compacted inbound
+tombstones retain a content-free terminal run state,
+so a duplicate platform delivery is reported as already finalized rather than
+as newly queued work. Do not enable retrieval while
+any session or global comparison differs. Backfill resolves only the configured
+Telegram chat's sessions and fails closed when history exists without that exact
+chat mapping. Once shadow mode is live, ordinary turn synchronization copies
+only assistant/tool rows after the current inbound user boundary, so rows already
+covered by backfill cannot be inserted again under live source keys.
+
+### Promotion and acceptance
+
+1. Enable retrieval for Brandon only. Verify a fresh turn automatically recalls
+   a known source-linked fact from an earlier Hermes session within the 16,000
+   token packet cap. Verify `context_history_search` can find older exact
+   evidence without `/new`, `/reset`, or `/compact`.
+2. Enable projection on the worker. Require content-free health to show bounded
+   checkpoint lag and no projection error; every checkpoint/fact must retain
+   cumulative source event IDs. Oversized source events advance through explicit
+   character offsets, so a checkpoint never claims an unprojected remainder.
+   Immutable ingestion sequence, not the source timestamp, determines projection
+   coverage, so delayed events remain eligible. The worker must commit one
+   expiring range lease before Gemini; concurrent workers must produce one
+   provider call for that range, skip the live lease to process other eligible
+   conversations, and apply must consume the exact live lease token.
+3. Run the controlled synthetic `429` continuation with no mutating external
+   tool. Prove one saved run moves through `waiting_retry`, survives a provider
+   restart, is leased once when due, sends one final answer, and produces zero
+   Gmail, Calendar, CRM, or other external writes. The exact private Telegram
+   retry path disables token/interim streaming, stages the final response hash
+   in the private spool before Telegram delivery, and clears that marker only
+   after canonical completion succeeds. Restart with a surviving delivery
+   marker must block duplicate delivery for reconciliation. Then enable retry.
+4. Repeat a real session transition/compression canary and a Command-only
+   contact read. Confirm the same logical conversation continues, MCP remains
+   exactly 25 backend tools, the model sees only one unprefixed
+   `context_history_search`, and no Google Contacts fallback or write occurs.
+5. Record deployment IDs, reviewed SHAs, migration head, content-free counts and
+   hashes, canary event/run IDs, and timestamps in `tdtn.md` and `memory.md`.
+   Never record transcript text, Telegram IDs, tool arguments, or secrets.
+
+### Rollback
+
+Disable retry, projection, and retrieval first, then the master switch on Atlas,
+the worker, and the backend. Redeploy/wait for `SUCCESS`, confirm the gateway and
+existing MCP bridge remain healthy, and leave PostgreSQL rows, `state.db`, and
+the spool intact. Atlas keeps a mode-0600 snapshot of only the config fields
+owned by Sydney and restores them when the master switch is disabled, even if
+the backend bridge URL or token is simultaneously unavailable. A code rollback
+may use the reviewed pre-release image; a
+database restore is reserved for independently confirmed migration corruption
+and uses the validated protected backup. Never delete history merely to clear a
+health mismatch.

@@ -36,14 +36,26 @@ EXPECTED_TOOLS = [
     "crm_task_drafts_create",
     "crm_task_suggestions_approval_link",
     "crm_task_suggestions_dismiss_proposal",
+    "context_history_search",
+    "command_contacts_search",
+    "command_contact_audience_preview",
 ]
-ORIGINAL_TOOLS = EXPECTED_TOOLS[:16]
+ORIGINAL_TOOLS = EXPECTED_TOOLS[:22]
 FORBIDDEN_TOOLS = {
     "crm_task_suggestions_dismiss",
     "crm_task_suggestions_approve",
     "crm_tasks_create_confirmed",
     "crm_tasks_archive",
     "crm_tasks_restore",
+    "context_events_ingest",
+    "context_runs_start",
+    "context_runs_update",
+    "context_runs_claim",
+    "context_tools_start",
+    "context_tools_update",
+    "context_tools_execute",
+    "command_contacts_send",
+    "command_contacts_draft",
 }
 
 
@@ -148,7 +160,7 @@ def _build_proof(tools: list[dict[str, Any]]) -> dict[str, Any]:
         "unique_count": len(set(names)),
         "names": names,
         "exact_expected_order": names == EXPECTED_TOOLS,
-        "original_16_unchanged": names[:16] == ORIGINAL_TOOLS,
+        "original_22_unchanged": names[:22] == ORIGINAL_TOOLS,
         "forbidden_present": sorted(FORBIDDEN_TOOLS.intersection(names)),
         "gmail_send_request_id_required": "request_id"
         in send_schema.get("required", []),
@@ -159,10 +171,10 @@ def _build_proof(tools: list[dict[str, Any]]) -> dict[str, Any]:
 def _contract_matches(proof: dict[str, Any]) -> bool:
     request_schema = proof["gmail_send_request_id_schema"]
     return bool(
-        proof["count"] == 22
-        and proof["unique_count"] == 22
+        proof["count"] == 25
+        and proof["unique_count"] == 25
         and proof["exact_expected_order"]
-        and proof["original_16_unchanged"]
+        and proof["original_22_unchanged"]
         and proof["forbidden_present"] == []
         and proof["gmail_send_request_id_required"]
         and request_schema.get("type") == "string"

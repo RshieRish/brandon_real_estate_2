@@ -9,7 +9,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 BACKEND_ROOT = Path(__file__).parents[1]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
 TASK1_TESTS = (
@@ -50,6 +49,20 @@ TASK6_TESTS = TASK5_TESTS + (
     "tests/test_gmail_task_router_registration.py",
 )
 TASK9_TESTS = TASK6_TESTS + ("tests/test_gmail_task_intake_e2e.py",)
+TASK13_CONTEXT_TESTS = (
+    "tests/test_sydney_context_contracts.py",
+    "tests/test_sydney_context_redaction.py",
+    "tests/test_sydney_context_models.py",
+    "tests/test_sydney_context_migration.py",
+    "tests/test_sydney_context_service.py",
+    "tests/test_sydney_context_retrieval.py",
+    "tests/test_sydney_context_runs.py",
+    "tests/test_sydney_context_postgres.py",
+    "tests/test_sydney_context_router.py",
+    "tests/test_sydney_context_projection.py",
+    "tests/test_agent_control_command.py",
+    "tests/test_sydney_context_e2e.py",
+)
 TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
@@ -338,23 +351,41 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         flags=re.DOTALL,
     )
     assert pytest_step is not None
-    assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))) == (
-        TASK9_TESTS
+    assert (
+        tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body")))
+        == TASK9_TESTS + TASK13_CONTEXT_TESTS
     )
     assert workflow.count('"backend/tests/test_gmail_task_intake_e2e.py"') == 2
 
-    task8_step = re.search(
-        r"name: Run the Task 8 MCP and overlay contract tests\n"
+    task12_step = re.search(
+        r"name: Run the exact MCP, overlay, spool, and retry contracts\n"
         r"\s+working-directory: backend\n"
-        r"\s+run: (?P<body>[^\n]+)",
+        r"(?P<body>.*?)"
+        r"\n\s+- name: Verify the exact 25-tool JSON-RPC registry",
         workflow,
+        flags=re.DOTALL,
     )
-    assert task8_step is not None
-    assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", task8_step.group("body"))) == (
+    assert task12_step is not None
+    assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", task12_step.group("body"))) == (
         "tests/test_atlas_backend_mcp.py",
         "tests/test_hermes_overlay.py",
         "tests/test_verify_atlas_tools.py",
+        "tests/test_sydney_spool.py",
+        "tests/test_sydney_memory_provider.py",
+        "tests/test_sydney_retry.py",
+        "tests/test_sydney_backfill.py",
+        "tests/test_sydney_context_e2e.py",
     )
+    assert "7224d7c1a4dcffe9304f49bc843f55716f5561b4" in workflow
+    assert "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5" in workflow
+    task12_job = re.search(
+        r"^  task12-hermes-overlay:\n(?P<body>.*?)(?=^  [a-z0-9_-]+:|\Z)",
+        workflow,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    assert task12_job is not None
+    assert '"pytest-asyncio==1.3.0"' in task12_job.group("body")
+    assert '"jsonschema==4.26.0"' in task12_job.group("body")
 
     assert 'if [[ "$GMAIL_TASK_TEST_DATABASE_NAME" != *_test ]]' in workflow
     assert 'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]' in workflow

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
-REVISION = "84d7a5f9b2c3"
+REVISION = "85e8b7c9d4f1"
 UTC = timezone.utc
 
 
@@ -54,6 +54,7 @@ def test_worker_feature_flags_default_off_and_web_app_starts_no_integration_loop
     settings = Settings(JWT_SECRET="test-secret")
     assert settings.GMAIL_TASK_INTAKE_ENABLED is False
     assert settings.SYDNEY_TASK_QUESTIONS_ENABLED is False
+    assert settings.SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED is False
     assert settings.INSTAGRAM_INTEGRATION_ENABLED is False
 
     main_source = (Path(__file__).parents[1] / "main.py").read_text(encoding="utf-8")
@@ -78,10 +79,7 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
         def generate_content(self, **kwargs):
             observed.update(kwargs)
             return SimpleNamespace(
-                text=(
-                    '{\n  "schema_version": "gmail-task-v1",\n'
-                    '  "actions": []\n}'
-                ),
+                text=('{\n  "schema_version": "gmail-task-v1",\n  "actions": []\n}'),
                 parsed={
                     "schema_version": "gmail-task-v1",
                     "actions": [],
@@ -106,9 +104,9 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
     schema = config.response_json_schema
     assert isinstance(schema, dict)
     assert schema["additionalProperties"] is False
-    assert schema["$defs"]["GmailObligationModelAction"][
-        "additionalProperties"
-    ] is False
+    assert (
+        schema["$defs"]["GmailObligationModelAction"]["additionalProperties"] is False
+    )
 
     def assert_provider_supported(value: object) -> None:
         if isinstance(value, dict):
@@ -187,7 +185,7 @@ def test_gmail_runtime_reserves_receipt_finalization_after_provider_deadline() -
         validate_gmail_runtime_settings(config)
 
 
-def test_worker_targets_head_84_and_registers_real_gmail_job_symbol() -> None:
+def test_worker_targets_current_head_and_registers_real_gmail_job_symbol() -> None:
     from workers import integration_worker
     from workers.jobs.gmail_history import run_gmail_history_job
 
@@ -216,12 +214,15 @@ def test_task9_job_modules_are_real_and_registry_uses_deterministic_schedules() 
         JWT_SECRET="test-secret",
         GMAIL_TASK_INTAKE_ENABLED=True,
         SYDNEY_TASK_QUESTIONS_ENABLED=True,
+        SYDNEY_DURABLE_CONTEXT_ENABLED=True,
+        SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED=True,
     )
     registry = build_job_registry(
         config=config,
         gmail_runner=no_op,
         receipt_runner=no_op,
         sydney_runner=no_op,
+        projection_runner=no_op,
         alert_runner=no_op,
     )
     registry.initialize()
@@ -231,6 +232,7 @@ def test_task9_job_modules_are_real_and_registry_uses_deterministic_schedules() 
         ("instagram_health", False, 86400),
         ("integration_alerts", True, 60),
         ("notification_delivery", True, 60),
+        ("sydney_context_projection", True, 60),
         ("sydney_questions", True, 30),
     )
     assert GmailReceiptJob.__module__ == "workers.jobs.gmail_receipts"
@@ -877,6 +879,7 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             "instagram_health",
             "integration_alerts",
             "notification_delivery",
+            "sydney_context_projection",
             "sydney_questions",
         )
         receipt_job = next(

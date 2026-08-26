@@ -5,14 +5,16 @@ import random
 import traceback
 from datetime import datetime, timezone
 
+from config import settings
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-from config import settings
+from middleware.context_event_batch_limit import ContextEventBatchLimitMiddleware
 from routers import (
     admin_integrations,
     agent_control,
+    agent_control_command,
+    agent_control_context,
     agent_control_crm,
     analytics,
     auth,
@@ -33,6 +35,7 @@ from routers import (
     link_pack,
     workspace,
 )
+from schemas.sydney_context import CONTEXT_EVENT_BATCH_MAX_BYTES
 from services.blog_service import BlogService
 from services.notification_service import (
     NOTIFICATION_RETRY_INTERVAL_SECONDS,
@@ -67,6 +70,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(
+    ContextEventBatchLimitMiddleware,
+    max_bytes=CONTEXT_EVENT_BATCH_MAX_BYTES,
+)
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(leads.router, prefix="/api/v1/leads", tags=["leads"])
@@ -88,6 +95,16 @@ app.include_router(
     agent_control_crm.router,
     prefix="/api/v1/agent-control",
     tags=["agent-control-crm"],
+)
+app.include_router(
+    agent_control_context.router,
+    prefix="/api/v1/agent-control",
+    tags=["agent-control-context"],
+)
+app.include_router(
+    agent_control_command.router,
+    prefix="/api/v1/agent-control",
+    tags=["agent-control-command"],
 )
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
 app.include_router(

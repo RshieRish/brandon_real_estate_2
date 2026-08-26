@@ -1071,9 +1071,7 @@ def test_legacy_workspace_task_boundary_exposes_exact_lifecycle_state(
             "due_at": None,
             "status": status,
             "archived_at": archived_at,
-            "archive_reason": (
-                "No longer needed" if archived_at is not None else None
-            ),
+            "archive_reason": ("No longer needed" if archived_at is not None else None),
             "version": 3,
         }
     )
@@ -1262,8 +1260,7 @@ def _main_command_routes() -> tuple[APIRoute, ...]:
     return tuple(
         route
         for route in main_app.routes
-        if isinstance(route, APIRoute)
-        and route.path.startswith("/api/v1/command")
+        if isinstance(route, APIRoute) and route.path.startswith("/api/v1/command")
     )
 
 
@@ -1302,7 +1299,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     routes = _main_command_routes()
     inventory = _mounted_inventory(routes)
 
-    assert len(inventory) == 88
+    assert len(inventory) == 97
     assert inventory[:24] == FULL_ROUTE_INVENTORY
     assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
     assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (
@@ -1313,8 +1310,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     )
     assert len(set(inventory)) == len(inventory)
     assert all(
-        route.endpoint.__module__ == "routers.command_contacts"
-        for route in routes[:24]
+        route.endpoint.__module__ == "routers.command_contacts" for route in routes[:24]
     )
     assert all(
         routes[index].endpoint.__module__ == "routers.command"
@@ -1339,16 +1335,14 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
     fresh.include_router(command_router.router, prefix="/api/v1/command")
     fresh.include_router(provenance_router.router, prefix="/api/v1/command")
 
-    routes = tuple(
-        route for route in fresh.routes if isinstance(route, APIRoute)
-    )
+    routes = tuple(route for route in fresh.routes if isinstance(route, APIRoute))
     inventory = tuple(
         (method, route.path)
         for route in routes
         for method in sorted(route.methods or ())
         if method != "HEAD"
     )
-    assert len(inventory) == 88
+    assert len(inventory) == 89
     assert len(set(inventory)) == len(inventory)
     schema = fresh.openapi()
     operation_ids = [
@@ -1357,7 +1351,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method, operation in path.items()
         if method.lower() in {"get", "post", "patch", "delete", "put"}
     ]
-    assert len(operation_ids) == 88
+    assert len(operation_ids) == 89
     assert len(set(operation_ids)) == len(operation_ids)
     expected_response_schemas = {
         ("/api/v1/command/contacts/directory", "get"): "ContactDirectoryPageOut",
@@ -1367,9 +1361,9 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         ("/api/v1/command/contacts/{contact_id}", "get"): "ContactDetailOut",
     }
     for (path, method), model_name in expected_response_schemas.items():
-        response_schema = schema["paths"][path][method]["responses"]["200"][
-            "content"
-        ]["application/json"]["schema"]
+        response_schema = schema["paths"][path][method]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
         assert response_schema["$ref"] == f"#/components/schemas/{model_name}"
 
 
