@@ -1056,7 +1056,10 @@ class SydneySpool:
             source_key=str(row["source_key"]),
             payload=json.loads(row["payload_json"]),
             state=str(row["state"]),
-            attempt_count=int(row["attempt_count"]),
+            # Existing private spools may contain a legacy null counter even
+            # though current schemas default this column to zero. Treat it as
+            # the pre-attempt state instead of crashing the drain thread.
+            attempt_count=int(row["attempt_count"] or 0),
             created_at=str(row["created_at"]),
             last_attempt_at=row["last_attempt_at"],
             acknowledged_at=row["acknowledged_at"],

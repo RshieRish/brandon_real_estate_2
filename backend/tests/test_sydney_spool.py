@@ -526,6 +526,29 @@ def test_ordered_bounded_drain_acknowledges_only_successful_delivery(
     assert spool.get_record("event:1").attempt_count == 1
 
 
+def test_spool_record_tolerates_a_legacy_null_attempt_count(
+    tmp_path: Path,
+) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    spool.enqueue(
+        kind="event_batch",
+        source_key="event:legacy-null-attempt",
+        payload={"index": 1},
+    )
+    row = spool.connection.execute(
+        """
+        SELECT id, kind, source_key, payload_json, state,
+               NULL AS attempt_count, created_at, last_attempt_at,
+               acknowledged_at, receipt_json
+        FROM outbox
+        WHERE source_key='event:legacy-null-attempt'
+        """
+    ).fetchone()
+
+    assert row is not None
+    assert SydneySpool._record(row).attempt_count == 0
+
+
 def test_concurrent_spool_instances_deliver_each_pending_record_once(
     tmp_path: Path,
 ) -> None:

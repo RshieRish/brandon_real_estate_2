@@ -18,6 +18,7 @@ HERMES_COMMIT = "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5"
 HERMES_HASHES = {
     "agent/credential_pool.py": "c4b78ca292ebb7072d56c17f3c7b7307cac3a33532cb1bb55f640373c55382e5",
     "agent/agent_init.py": "2fdea13cbce18a3d8eb0d0fae432d6ebb64efb221721ca9a179bcfe76956dfd3",
+    "agent/gemini_schema.py": "a34dcdea0e3e017402ba6424fadd62505cb6e10960aef52e8ec8be1ea0163a82",
     "gateway/run.py": "9e3a780cfa36ac8931ad42481a56d4c55d9643efc1f7ec9b595fa886967d0a3f",
     "gateway/platforms/base.py": "de4b50de9920534ad17abbb22e5bffdd72149c2425eea73462e36c992960a078",
     "gateway/platforms/telegram.py": "c8054b03463e50e1eda06d5cafa355896e1cd981fe4f8d8ebabc4568de07fee7",
@@ -637,6 +638,7 @@ class HermesOverlayTests(unittest.TestCase):
             telegram = (source / "gateway/platforms/telegram.py").read_text()
             conversation_loop = (source / "agent/conversation_loop.py").read_text()
             tool_executor = (source / "agent/tool_executor.py").read_text()
+            gemini_schema = (source / "agent/gemini_schema.py").read_text()
             self.assertIn("(?:in|after)", credential_pool)
             self.assertIn("SYDNEY_MEMORY_REGISTRATION", agent_init)
             self.assertIn("SYDNEY_MCP_HISTORY_TOOL_HIDE", agent_init)
@@ -652,6 +654,7 @@ class HermesOverlayTests(unittest.TestCase):
             self.assertIn("SYDNEY_RETRY_AND_USAGE_GUARD", conversation_loop)
             self.assertIn("SYDNEY_TOOL_BEFORE", tool_executor)
             self.assertIn("SYDNEY_TOOL_AFTER", tool_executor)
+            self.assertIn("SYDNEY_GEMINI_CONDITIONAL_UNION_FALLBACK", gemini_schema)
             subprocess.run(
                 [
                     sys.executable,
@@ -696,6 +699,46 @@ class HermesOverlayTests(unittest.TestCase):
             agent_init = (source / "agent/agent_init.py").read_text()
             conversation_loop = (source / "agent/conversation_loop.py").read_text()
             tool_executor = (source / "agent/tool_executor.py").read_text()
+            gemini_schema = (source / "agent/gemini_schema.py").read_text()
+
+            gemini_namespace: dict[str, object] = {}
+            exec(gemini_schema, gemini_namespace)
+            sanitize_gemini_tool_parameters = gemini_namespace[
+                "sanitize_gemini_tool_parameters"
+            ]
+            conditional_schema = {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "recent_conversations": {"type": "boolean"},
+                },
+                "anyOf": [
+                    {"required": ["query"]},
+                    {"required": ["recent_conversations"]},
+                ],
+            }
+            sanitized_conditional = sanitize_gemini_tool_parameters(conditional_schema)
+            self.assertNotIn("anyOf", sanitized_conditional)
+            self.assertEqual(
+                set(sanitized_conditional["properties"]),
+                {"query", "recent_conversations"},
+            )
+            typed_union_schema = {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "integer"},
+                        ]
+                    }
+                },
+            }
+            sanitized_typed_union = sanitize_gemini_tool_parameters(typed_union_schema)
+            self.assertEqual(
+                sanitized_typed_union["properties"]["value"]["anyOf"],
+                [{"type": "string"}, {"type": "integer"}],
+            )
 
             namespace = {"re": __import__("re"), "Optional": Optional}
             function_source = credential_pool[

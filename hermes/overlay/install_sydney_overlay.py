@@ -82,6 +82,76 @@ def _patch_credential_pool(contents: str) -> str:
     return _replace_exact(contents, old, new, "credential retry delay")
 
 
+def _patch_gemini_schema(contents: str) -> str:
+    helper_anchor = "\n\ndef sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:"
+    helper_replacement = '''
+
+def _gemini_union_branch_is_self_contained(schema: Dict[str, Any]) -> bool:
+    """Return whether Gemini can validate one ``anyOf`` branch in isolation."""
+
+    # SYDNEY_GEMINI_CONDITIONAL_UNION_FALLBACK
+    # Gemini validates every union branch as a standalone Schema. JSON Schema
+    # conditionals commonly inherit ``type`` and ``properties`` from their
+    # parent, which Gemini rejects before the model can run. Those conditionals
+    # are still enforced by the tool handler, so omit only the unsupported
+    # union while retaining the parent object and its property definitions.
+    schema_type = str(schema.get("type") or "").lower()
+    if not schema_type:
+        return False
+    if "properties" in schema and schema_type != "object":
+        return False
+    required = schema.get("required")
+    if required is None:
+        return True
+    properties = schema.get("properties")
+    return (
+        schema_type == "object"
+        and isinstance(required, list)
+        and isinstance(properties, dict)
+        and all(isinstance(name, str) and name in properties for name in required)
+    )
+
+
+def sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:'''
+    contents = _replace_exact(
+        contents,
+        helper_anchor,
+        helper_replacement,
+        "Gemini conditional union helper",
+    )
+    union_anchor = """\
+        if key == "anyOf":
+            if not isinstance(value, list):
+                continue
+            cleaned[key] = [
+                sanitize_gemini_schema(item)
+                for item in value
+                if isinstance(item, dict)
+            ]
+            continue"""
+    union_replacement = """\
+        if key == "anyOf":
+            if not isinstance(value, list):
+                continue
+            cleaned_union = [
+                sanitize_gemini_schema(item)
+                for item in value
+                if isinstance(item, dict)
+            ]
+            if cleaned_union and all(
+                _gemini_union_branch_is_self_contained(item)
+                for item in cleaned_union
+            ):
+                cleaned[key] = cleaned_union
+            continue"""
+    return _replace_exact(
+        contents,
+        union_anchor,
+        union_replacement,
+        "Gemini conditional union sanitization",
+    )
+
+
 def _patch_agent_init(contents: str) -> str:
     old_guardrails = """\
         agent._tool_guardrails = ToolCallGuardrailController(
@@ -1192,6 +1262,7 @@ def _patch_tool_executor(contents: str) -> str:
 PATCHERS: dict[str, Callable[[str], str]] = {
     "agent/credential_pool.py": _patch_credential_pool,
     "agent/agent_init.py": _patch_agent_init,
+    "agent/gemini_schema.py": _patch_gemini_schema,
     "gateway/run.py": _patch_gateway_run,
     "gateway/platforms/base.py": _patch_gateway_base,
     "gateway/platforms/telegram.py": _patch_telegram,
