@@ -748,6 +748,10 @@ class HermesOverlayTests(unittest.TestCase):
                 gateway_base.index("_sydney_delivery_outcome("),
                 gateway_base.index("processing_ok ="),
             )
+            self.assertIn(
+                "release_active_execution_for_event",
+                gateway_base,
+            )
             self.assertLess(
                 tool_executor.index("# SYDNEY_TOOL_BEFORE\n"),
                 tool_executor.index("result = agent._invoke_tool"),

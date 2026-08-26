@@ -304,6 +304,11 @@ class SydneyMemoryProvider(MemoryProvider):
         self._identity_id: str | None = None
         self._backend_session_ids: dict[str, str] = {}
         self._active_run_id: str | None = None
+        # Process-local proof that a model handler is actively executing the
+        # durable run. This is intentionally never restored from the spool:
+        # persisted run ownership alone must not keep an orphaned lease alive
+        # after a process restart or an escaped background task.
+        self._active_execution_run_id: str | None = None
         self._active_run_hermes_session_id: str | None = None
         self._active_run_attempt_count = 0
         self._active_lease_owner: str | None = None
@@ -740,6 +745,7 @@ class SydneyMemoryProvider(MemoryProvider):
                         )
                     if run_id == self._active_run_id:
                         self._active_run_id = None
+                        self._active_execution_run_id = None
                         self._active_run_hermes_session_id = None
                         self._active_run_attempt_count = 0
                     if self.spool.get_meta("active_run_id") == run_id:
@@ -799,6 +805,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 run_id = str(payload.get("run_id") or "")
                 if run_id == self._active_run_id:
                     self._active_run_id = None
+                    self._active_execution_run_id = None
                     self._active_run_hermes_session_id = None
                     self._active_run_attempt_count = 0
                     self._active_lease_owner = None
@@ -864,6 +871,7 @@ class SydneyMemoryProvider(MemoryProvider):
             )
             self.spool.delete_meta(f"claimed_run:{run_id}")
             self._active_run_id = None
+            self._active_execution_run_id = None
             self._active_run_hermes_session_id = None
             self._active_run_attempt_count = 0
             self._active_lease_owner = None
@@ -904,6 +912,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 self.spool.mark_run_terminal(completed_run_id, state="succeeded")
             if completed_run_id == self._active_run_id:
                 self._active_run_id = None
+                self._active_execution_run_id = None
                 self._active_run_hermes_session_id = None
                 self._active_run_attempt_count = 0
                 self._active_lease_owner = None
@@ -1498,6 +1507,21 @@ class SydneyMemoryProvider(MemoryProvider):
         run = ((inbound.receipt or {}).get("run", {}).get("run", {})) if inbound else {}
         return str(run.get("id") or "") == self._active_run_id
 
+    def begin_active_execution(self, platform_message_id: str) -> str | None:
+        """Bind lease renewal to one live, process-local model execution."""
+        if not self.owns_run_lease(platform_message_id):
+            return None
+        run_id = self._active_run_id
+        if not run_id:
+            return None
+        self._active_execution_run_id = run_id
+        return run_id
+
+    def end_active_execution(self, run_id: str | None) -> None:
+        """Release renewal proof without disturbing a newer execution."""
+        if run_id and run_id == self._active_execution_run_id:
+            self._active_execution_run_id = None
+
     def activate_claimed_inbound(self, platform_message_id: str) -> bool:
         """Load a watcher-acquired lease into a reused in-process provider."""
         if not self.is_available() or not self._retry_enabled:
@@ -1566,6 +1590,7 @@ class SydneyMemoryProvider(MemoryProvider):
             or not self._retry_enabled
             or self._backend is None
             or not self.has_active_run_lease()
+            or self._active_execution_run_id != self._active_run_id
         ):
             return False
         renew = getattr(self._backend, "renew_run", None)
@@ -2128,6 +2153,7 @@ class SydneyMemoryProvider(MemoryProvider):
             return json.dumps({"error": "durable_context_history_unavailable"})
 
     def shutdown(self) -> None:
+        self._active_execution_run_id = None
         self._stop.set()
         deadline = time.monotonic() + self._shutdown_deadline
         while (
