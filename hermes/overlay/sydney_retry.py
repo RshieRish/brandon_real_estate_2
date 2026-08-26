@@ -15,6 +15,10 @@ AUTOMATIC_CONTINUATION_MESSAGE = (
     "Your request is saved. Sydney will continue automatically when the provider "
     "is available."
 )
+AUTOMATIC_TERMINAL_REPLAY_MESSAGE = (
+    "Sydney already recorded a final outcome for this request, so it was not "
+    "queued or run again."
+)
 RetryClass = Literal["retry", "continue_context", "terminal"]
 RetryAction = Literal["retry_now", "waiting_retry", "continue_context", "terminal"]
 PromptAction = Literal[
@@ -48,6 +52,20 @@ _RETRY_TEXT = (
     "deadline exceeded",
     "connection reset",
     "connection timed out",
+)
+_TRANSPORT_EXCEPTION_NAMES = frozenset(
+    {
+        "apiconnectionerror",
+        "connecterror",
+        "connectionerror",
+        "connecttimeout",
+        "networkerror",
+        "readtimeout",
+        "sockettimeout",
+        "timeout",
+        "timeouterror",
+        "writetimeout",
+    }
 )
 
 
@@ -206,6 +224,16 @@ def classify_retry(error: BaseException) -> RetryClass:
         return "retry"
     if status is not None and 400 <= status <= 499:
         return "terminal"
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, ConnectionError)) or any(
+            cls.__name__.casefold() in _TRANSPORT_EXCEPTION_NAMES
+            for cls in type(current).__mro__
+        ):
+            return "retry"
+        current = current.__cause__ or current.__context__
     if any(pattern in message for pattern in _RETRY_TEXT):
         return "retry"
     return "terminal"

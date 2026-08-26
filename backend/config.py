@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_CALENDAR_CLIENT_ID: str = ""
     GOOGLE_CALENDAR_CLIENT_SECRET: str = ""
-    GOOGLE_CALENDAR_REDIRECT_URI: str = "http://localhost:8000/api/v1/booking/calendar/callback"
+    GOOGLE_CALENDAR_REDIRECT_URI: str = (
+        "http://localhost:8000/api/v1/booking/calendar/callback"
+    )
     GOOGLE_WORKSPACE_CLIENT_ID: str = ""
     GOOGLE_WORKSPACE_CLIENT_SECRET: str = ""
     GOOGLE_WORKSPACE_REDIRECT_URI: str = ""

@@ -6,6 +6,7 @@ copied into the pinned Hermes runtime image.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -17,34 +18,119 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qsl,
+    quote,
+    quote_plus,
+    unquote,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+)
 from uuid import UUID
 
 SCHEMA_VERSION = 1
 _SECRET_KEY = re.compile(
     r"(?:^|_)(?:authorization|access_token|refresh_token|id_token|oauth_token|"
-    r"password|passwd|api_key|client_secret|cookie|set_cookie|bearer_token|"
-    r"handoff)(?:$|_)",
+    r"password|passwd|pwd|api_key|client_secret|cookie|set_cookie|bearer_token|"
+    r"token|secret|credential|credentials|handoff)(?:$|_)",
     re.IGNORECASE,
 )
-_BEARER = re.compile(r"(?i)(\b(?:authorization\s*:\s*)?bearer\s+)[^\s,;]+")
-_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:password|passwd|access[_-]?token|refresh[_-]?token|api[_-]?key|"
-    r"client[_-]?secret|oauth[_-]?token)\s*[:=]\s*)([^\s,;&]+)"
+_AUTHORIZATION = re.compile(
+    r"(?i)(\bauthorization\s*:\s*(?:bearer|basic|token)\s+)[^\s,;]+"
 )
-_KNOWN_TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
+_BEARER = re.compile(r"(?i)(\bbearer\s+)[a-z0-9._~+/=-]+")
+_ASSIGNMENT_VALUE = (
+    r'(?:(?:"(?!\[REDACTED_)[^"\r\n]*")|'
+    r"(?:'(?!\[REDACTED_)[^'\r\n]*')|"
+    r'(?!\[REDACTED_)[^"\'\s&,;}#]+)'
+)
+_ASSIGNMENT = re.compile(
+    r"(?i)([\"']?(?:password|passwd|pwd|client[ _-]?secret|secret)"
+    r"[\"']?\s*(?::|=|\bis\b)\s*)" + _ASSIGNMENT_VALUE + r"|"
+    r"([\"']?(?:access[_-]?token|refresh[_-]?token|api[_-]?key|"
+    r"oauth[_-]?token|id[_-]?token|session[_-]?token|handoff|token)"
+    r"[\"']?\s*[:=]\s*)" + _ASSIGNMENT_VALUE
+)
+_COOKIE_HEADER = re.compile(r"(?i)(\bset-cookie\s*:\s*)[^\r\n]+")
+_KNOWN_TOKEN = re.compile(
+    r"\b(?:AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|"
+    r"sk-[A-Za-z0-9_-]{20,})\b"
+)
+_CONTEXT_TOKEN_AFTER = re.compile(
+    r"(?is)(\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b)"
+    r"(?=(?:[ \t]*\r?\n){1,3}[ \t]*(?:here|this)\s+is\s+the\s+"
+    r"(?:api\s+)?token\b)"
+)
+_CONTEXT_TOKEN_BEFORE = re.compile(
+    r"(?i)(\b(?:api\s+|railway\s+|workspace\s+|account\s+)?"
+    r"(?:token|credential|api[_ -]?key)\b\s*(?:is|[:=])?\s*)"
+    r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}|[a-z0-9_-]{20,})"
+)
+_URI_USERINFO = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://(?:[^/\s:@]+):)([^@/\s]+)(@)")
 _URL = re.compile(r"https?://[^\s<>\"']+")
 _URL_SECRET_KEYS = {
     "access_token",
+    "approval",
+    "approval_token",
     "refresh_token",
     "id_token",
     "token",
+    "session",
+    "session_token",
+    "nonce",
+    "handoff",
+    "code",
+    "state",
+    "signature",
+    "sig",
     "api_key",
     "apikey",
     "key",
     "password",
     "client_secret",
 }
+_MAX_NESTED_REDACTION_DEPTH = 4
+_CONFIGURED_SECRET_ENV_NAMES = (
+    "DATABASE_URL",
+    "GMAIL_HISTORY_DATABASE_URL",
+    "GMAIL_PARTICIPANT_HASH_KEY",
+    "AGENT_CONTROL_TOKEN",
+    "BRANDON_AGENT_CONTROL_TOKEN",
+    "GEMINI_API_KEY",
+    "GOOGLE_CLIENT_SECRET",
+    "GOOGLE_CALENDAR_CLIENT_SECRET",
+    "GOOGLE_WORKSPACE_CLIENT_SECRET",
+    "GOOGLE_WORKSPACE_REFRESH_TOKEN",
+    "JWT_SECRET",
+    "SMTP_PASS",
+    "GOOGLE_MAPS_API_KEY",
+    "GOOGLE_CALENDAR_REFRESH_TOKEN",
+    "RENTCAST_API_KEY",
+    "R2_SECRET_ACCESS_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "SYDNEY_TELEGRAM_BOT_TOKEN",
+    "SYDNEY_CLARIFICATION_CODE_KEYS_JSON",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
+def _normalized_secret_key(value: str) -> str:
+    separated_acronyms = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    separated_words = re.sub(
+        r"([a-z0-9])([A-Z])",
+        r"\1_\2",
+        separated_acronyms,
+    )
+    return re.sub(r"[^A-Za-z0-9]+", "_", separated_words).strip("_").lower()
+
+
+def _is_secret_key(value: str) -> bool:
+    return bool(_SECRET_KEY.search(_normalized_secret_key(value)))
 
 
 class SpoolConflict(RuntimeError):
@@ -80,6 +166,36 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _final_delivery_meta_key(
+    platform: str,
+    chat_id: str,
+    platform_message_id: str,
+) -> str:
+    stable_key = f"{platform}\x1f{chat_id}\x1f{platform_message_id}"
+    return "final_delivery:" + hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
+
+
+def control_delivery_source_key(run_id: str, delivery_kind: str) -> str:
+    if delivery_kind not in {"deferred", "terminal_error"}:
+        raise ValueError("control delivery kind is invalid")
+    exact_run_id = str(run_id)
+    if not exact_run_id:
+        raise ValueError("control delivery run id is required")
+    return f"run:{exact_run_id}:control:{delivery_kind}"
+
+
+def _terminal_inbound_meta_key(source_key: str) -> str:
+    digest = hashlib.sha256(str(source_key).encode("utf-8")).hexdigest()
+    return f"terminal_inbound:{digest}"
+
+
+def _tail_live_match_meta_key(direction: str, source_key: str) -> str:
+    if direction not in {"tail", "live"}:
+        raise ValueError("tail/live match direction is invalid")
+    digest = hashlib.sha256(str(source_key).encode("utf-8")).hexdigest()
+    return f"tail_live_match:{direction}:{digest}"
+
+
 def _parsed_timestamp(value: Any) -> datetime:
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -106,20 +222,42 @@ def ordered_reconciliation_hash(rows: list[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
-def _redact_url(match: re.Match[str]) -> str:
+def _redact_query_value(key: str, value: str, *, depth: int, fragment: bool) -> str:
+    if key.lower() in _URL_SECRET_KEYS:
+        return "[REDACTED_SIGNED_FRAGMENT]" if fragment else "[REDACTED_OAUTH_TOKEN]"
+    return _redact_nested_url_value(value, depth=depth + 1)
+
+
+def _redact_url(match: re.Match[str], *, depth: int = 0) -> str:
     raw = match.group(0)
     try:
         parts = urlsplit(raw)
+        query_pairs = parse_qsl(parts.query, keep_blank_values=True)
         query = [
             (
                 key,
-                "[REDACTED_OAUTH_TOKEN]" if key.lower() in _URL_SECRET_KEYS else value,
+                _redact_query_value(key, value, depth=depth, fragment=False),
             )
-            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            for key, value in query_pairs
         ]
         fragment = parts.fragment
-        if fragment.lower().startswith("handoff="):
-            fragment = "handoff=[REDACTED_SIGNED_FRAGMENT]"
+        fragment_pairs = parse_qsl(fragment, keep_blank_values=True)
+        redacted_fragment_pairs = [
+            (
+                key,
+                _redact_query_value(
+                    key,
+                    value,
+                    depth=depth,
+                    fragment=True,
+                ),
+            )
+            for key, value in fragment_pairs
+        ]
+        if query == query_pairs and redacted_fragment_pairs == fragment_pairs:
+            return raw
+        if fragment_pairs:
+            fragment = urlencode(redacted_fragment_pairs)
         return urlunsplit(
             (parts.scheme, parts.netloc, parts.path, urlencode(query), fragment)
         )
@@ -127,33 +265,173 @@ def _redact_url(match: re.Match[str]) -> str:
         return "[REDACTED_URL_WITH_SECRET]"
 
 
+def _redact_nested_url_value(value: str, *, depth: int) -> str:
+    if depth >= _MAX_NESTED_REDACTION_DEPTH:
+        decoded = unquote(value)
+        if decoded != value:
+            nested = _URL.sub(lambda match: _redact_url(match, depth=depth), decoded)
+            if nested != decoded:
+                return quote(nested, safe="")
+        return value
+
+    redacted = _URL.sub(lambda match: _redact_url(match, depth=depth), value)
+    if redacted != value:
+        return redacted
+
+    if value.startswith(("?", "#")):
+        prefix, query_string = value[0], value[1:]
+        pairs = parse_qsl(query_string, keep_blank_values=True)
+        if pairs:
+            fragment = prefix == "#"
+            nested = prefix + urlencode(
+                [
+                    (
+                        key,
+                        _redact_query_value(
+                            key,
+                            item,
+                            depth=depth,
+                            fragment=fragment,
+                        ),
+                    )
+                    for key, item in pairs
+                ]
+            )
+            if nested != value:
+                return nested
+
+    decoded = unquote(value)
+    if decoded != value:
+        nested = _redact_nested_url_value(decoded, depth=depth + 1)
+        nested = _URL.sub(lambda match: _redact_url(match, depth=depth + 1), nested)
+        if nested != decoded:
+            return quote(nested, safe="")
+    return value
+
+
 def redact_text(value: str) -> str:
     """Irreversibly remove common credential forms without logging matches."""
-    redacted = _URL.sub(_redact_url, value)
+    redacted = value
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        safe_parsed = redact_payload(parsed)
+        if safe_parsed != parsed:
+            redacted = _canonical_json(safe_parsed)
+    configured_secrets = {
+        secret
+        for name in _CONFIGURED_SECRET_ENV_NAMES
+        if isinstance((secret := os.environ.get(name)), str) and len(secret) >= 8
+    }
+    redacted = _redact_configured_values(redacted, configured_secrets)
+    redacted = _CONTEXT_TOKEN_AFTER.sub("[REDACTED_CONTEXT_TOKEN]", redacted)
+    redacted = _CONTEXT_TOKEN_BEFORE.sub(r"\1[REDACTED_CONTEXT_TOKEN]", redacted)
+    redacted = _URI_USERINFO.sub(r"\1[REDACTED_URI_PASSWORD]\3", redacted)
+    redacted = _URL.sub(lambda match: _redact_url(match, depth=0), redacted)
+    redacted = _AUTHORIZATION.sub(r"\1[REDACTED_AUTH_TOKEN]", redacted)
     redacted = _BEARER.sub(r"\1[REDACTED_BEARER_TOKEN]", redacted)
-    redacted = _ASSIGNMENT.sub(r"\1[REDACTED_SECRET]", redacted)
-    redacted = _KNOWN_TOKEN.sub("[REDACTED_TOKEN]", redacted)
+    redacted = _COOKIE_HEADER.sub(r"\1[REDACTED_COOKIE]", redacted)
+    redacted = _ASSIGNMENT.sub(
+        lambda match: (match.group(1) or match.group(2) or "") + "[REDACTED_SECRET]",
+        redacted,
+    )
+    redacted = _KNOWN_TOKEN.sub("[REDACTED_PROVIDER_TOKEN]", redacted)
     redacted = re.sub(
-        r"(?i)(#handoff=)[^\s&#]+",
+        r"(?i)([#?&](?:access_token|approval|approval_token|api_key|apikey|"
+        r"client_secret|code|handoff|id_token|key|nonce|oauth_token|password|"
+        r"refresh_token|session|session_token|sig|signature|state|token)=)"
+        r"[^\s&#\"']+",
         r"\1[REDACTED_SIGNED_FRAGMENT]",
         redacted,
     )
+    return _redact_configured_values(redacted, configured_secrets)
+
+
+def _redact_configured_values(value: str, configured_secrets: set[str]) -> str:
+    variants: set[str] = set()
+    for secret in configured_secrets:
+        frontier = {secret}
+        variants.add(secret)
+        for _depth in range(_MAX_NESTED_REDACTION_DEPTH):
+            encoded = {
+                candidate
+                for item in frontier
+                for candidate in (quote(item, safe=""), quote_plus(item, safe=""))
+            }
+            encoded -= variants
+            if not encoded:
+                break
+            variants.update(encoded)
+            frontier = encoded
+    redacted = value
+    for variant in sorted(variants, key=len, reverse=True):
+        if "%" not in variant:
+            redacted = redacted.replace(variant, "[REDACTED_CONFIGURED_SECRET]")
+            continue
+        pieces: list[str] = []
+        index = 0
+        while index < len(variant):
+            if (
+                variant[index] == "%"
+                and index + 2 < len(variant)
+                and all(
+                    character in "0123456789abcdefABCDEF"
+                    for character in variant[index + 1 : index + 3]
+                )
+            ):
+                first, second = variant[index + 1 : index + 3]
+                pieces.append(
+                    "%"
+                    + (
+                        f"[{first.lower()}{first.upper()}]"
+                        if first.isalpha()
+                        else first
+                    )
+                    + (
+                        f"[{second.lower()}{second.upper()}]"
+                        if second.isalpha()
+                        else second
+                    )
+                )
+                index += 3
+                continue
+            pieces.append(re.escape(variant[index]))
+            index += 1
+        redacted = re.sub(
+            "".join(pieces),
+            "[REDACTED_CONFIGURED_SECRET]",
+            redacted,
+        )
     return redacted
 
 
-def redact_payload(value: Any, *, key: str = "") -> Any:
+def redact_payload(
+    value: Any,
+    *,
+    key: str = "",
+    secret_context: bool = False,
+) -> Any:
     """Return a JSON-safe, recursively redacted copy of ``value``."""
-    if key and _SECRET_KEY.search(key):
-        return "[REDACTED_SECRET]"
+    inside_secret = secret_context or bool(key and _is_secret_key(key))
     if isinstance(value, str):
+        if inside_secret:
+            return "[REDACTED_SECRET]"
         return redact_text(value)
     if isinstance(value, dict):
         return {
-            str(item_key): redact_payload(item, key=str(item_key))
+            str(item_key): redact_payload(
+                item,
+                key=str(item_key),
+                secret_context=inside_secret,
+            )
             for item_key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [redact_payload(item) for item in value]
+        return [redact_payload(item, secret_context=inside_secret) for item in value]
+    if inside_secret:
+        return "[REDACTED_SECRET]"
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return redact_text(str(value))
@@ -168,6 +446,14 @@ class SydneySpool:
         descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(descriptor)
         os.chmod(self.path, 0o600)
+        self._drain_lock_path = Path(f"{self.path}.drain.lock")
+        drain_descriptor = os.open(
+            self._drain_lock_path,
+            os.O_CREAT | os.O_RDWR,
+            0o600,
+        )
+        os.close(drain_descriptor)
+        os.chmod(self._drain_lock_path, 0o600)
         self._lock = threading.RLock()
         self.connection = sqlite3.connect(
             self.path,
@@ -224,6 +510,23 @@ class SydneySpool:
                     );
                     CREATE INDEX IF NOT EXISTS ix_sydney_spool_pending
                         ON outbox (state, id);
+                    CREATE TABLE IF NOT EXISTS outbox_tombstones (
+                        source_key TEXT PRIMARY KEY,
+                        original_id INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        payload_sha256 TEXT NOT NULL,
+                        compacted_at TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS reconciliation_events (
+                        event_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        identity_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        occurred_at TEXT NOT NULL,
+                        content_sha256 TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_sydney_reconciliation_events_session
+                        ON reconciliation_events (session_id, occurred_at, event_id);
                     CREATE TABLE IF NOT EXISTS context_cache (
                         session_id TEXT PRIMARY KEY,
                         packet_json TEXT NOT NULL,
@@ -235,6 +538,17 @@ class SydneySpool:
                         ordered_hash TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS reconciliation_state (
+                        session_id TEXT PRIMARY KEY,
+                        identity_id TEXT NOT NULL,
+                        event_count INTEGER NOT NULL,
+                        ordered_hash TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS reconciliation_dirty (
+                        session_id TEXT PRIMARY KEY,
+                        dirty_at TEXT NOT NULL
+                    );
                     INSERT OR IGNORE INTO spool_meta(key, value_json, updated_at)
                         VALUES('schema_version', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
                     COMMIT;
@@ -245,6 +559,40 @@ class SydneySpool:
                 ).fetchone()
                 if existing is None or json.loads(existing[0]) != SCHEMA_VERSION:
                     raise RuntimeError("unsupported Sydney spool schema version")
+                initialized = self.connection.execute(
+                    "SELECT 1 FROM spool_meta "
+                    "WHERE key='reconciliation_state_initialized_v1'"
+                ).fetchone()
+                if initialized is None:
+                    dirty_sessions = {
+                        str(row["session_id"])
+                        for row in self.connection.execute(
+                            "SELECT DISTINCT session_id FROM reconciliation_events"
+                        ).fetchall()
+                    }
+                    rows = self.connection.execute(
+                        "SELECT * FROM outbox WHERE state='acknowledged' ORDER BY id"
+                    ).fetchall()
+                    for row in rows:
+                        delivery = self._event_delivery(self._record(row))
+                        if delivery is not None and delivery[0].get(
+                            "hermes_session_id"
+                        ):
+                            session_id = self._index_reconciliation_delivery(*delivery)
+                            dirty_sessions.add(session_id)
+                    with self.connection:
+                        for session_id in sorted(dirty_sessions):
+                            self._refresh_reconciliation_state(session_id)
+                            self.connection.execute(
+                                "INSERT OR IGNORE INTO reconciliation_dirty"
+                                "(session_id, dirty_at) VALUES(?, ?)",
+                                (session_id, _utc_now()),
+                            )
+                        self.connection.execute(
+                            "INSERT INTO spool_meta(key, value_json, updated_at) "
+                            "VALUES('reconciliation_state_initialized_v1', 'true', ?)",
+                            (_utc_now(),),
+                        )
             except Exception:
                 if self.connection.in_transaction:
                     self.connection.execute("ROLLBACK")
@@ -291,6 +639,279 @@ class SydneySpool:
                 (key, _canonical_json(safe), _utc_now()),
             )
 
+    def has_tail_live_match(self, tail_source_key: str) -> bool:
+        value = self.get_meta(_tail_live_match_meta_key("tail", tail_source_key))
+        if value is None:
+            return False
+        if not isinstance(value, dict) or not re.fullmatch(
+            r"[0-9a-f]{64}", str(value.get("live_source_sha256") or "")
+        ):
+            raise SpoolConflict("tail/live match metadata is invalid")
+        return True
+
+    def has_live_tail_match(self, live_source_key: str) -> bool:
+        value = self.get_meta(_tail_live_match_meta_key("live", live_source_key))
+        if value is None:
+            return False
+        if not isinstance(value, dict) or not re.fullmatch(
+            r"[0-9a-f]{64}", str(value.get("tail_source_sha256") or "")
+        ):
+            raise SpoolConflict("live/tail match metadata is invalid")
+        return True
+
+    def record_tail_live_match(
+        self,
+        *,
+        tail_source_key: str,
+        live_source_key: str,
+    ) -> None:
+        """Persist one crash-safe one-to-one recovery match without raw content."""
+        tail_digest = hashlib.sha256(tail_source_key.encode("utf-8")).hexdigest()
+        live_digest = hashlib.sha256(live_source_key.encode("utf-8")).hexdigest()
+        pairs = (
+            (
+                _tail_live_match_meta_key("tail", tail_source_key),
+                {"live_source_sha256": live_digest},
+            ),
+            (
+                _tail_live_match_meta_key("live", live_source_key),
+                {"tail_source_sha256": tail_digest},
+            ),
+        )
+        with self._lock, self.connection:
+            for key, expected in pairs:
+                row = self.connection.execute(
+                    "SELECT value_json FROM spool_meta WHERE key=?", (key,)
+                ).fetchone()
+                if row is not None and json.loads(row["value_json"]) != expected:
+                    raise SpoolConflict("tail/live source was already matched")
+            now = _utc_now()
+            for key, expected in pairs:
+                self.connection.execute(
+                    """
+                    INSERT INTO spool_meta(key, value_json, updated_at)
+                    VALUES(?, ?, ?)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    (key, _canonical_json(expected), now),
+                )
+
+    def delete_meta(self, key: str) -> None:
+        with self._lock, self.connection:
+            self.connection.execute("DELETE FROM spool_meta WHERE key=?", (key,))
+
+    def stage_final_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+        run_id: str,
+        lease_owner: str,
+        response_sha256: str,
+    ) -> None:
+        """Durably mark the final platform-send boundary before any send."""
+        values = {
+            "platform": platform,
+            "chat_id": chat_id,
+            "platform_message_id": platform_message_id,
+            "run_id": run_id,
+            "lease_owner": lease_owner,
+        }
+        if not all(isinstance(value, str) and value for value in values.values()):
+            raise ValueError("final delivery identity is incomplete")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(response_sha256)):
+            raise ValueError("final delivery response hash is invalid")
+        key = _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        existing = self.get_meta(key)
+        candidate = {
+            "run_id": run_id,
+            "lease_owner": lease_owner,
+            "response_sha256": response_sha256,
+        }
+        if isinstance(existing, dict):
+            stored = {name: existing.get(name) for name in candidate}
+            if stored != candidate:
+                raise SpoolConflict("final delivery replay does not match")
+            return
+        self.set_meta(key, {**candidate, "staged_at": _utc_now()})
+
+    def stage_control_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+        run_id: str,
+        lease_owner: str | None,
+        response_sha256: str,
+        delivery_kind: str,
+        event_batch: dict[str, Any],
+        run_update: dict[str, Any] | None,
+    ) -> str:
+        """Stage one visible non-final run outcome before the platform send."""
+        values = (platform, chat_id, platform_message_id, run_id)
+        if not all(isinstance(value, str) and value for value in values):
+            raise ValueError("control delivery identity is incomplete")
+        if delivery_kind not in {"deferred", "terminal_error"}:
+            raise ValueError("control delivery kind is invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(response_sha256)):
+            raise ValueError("control delivery response hash is invalid")
+        if not isinstance(event_batch, dict) or not event_batch.get("events"):
+            raise ValueError("control delivery event batch is invalid")
+        if delivery_kind == "terminal_error" and not isinstance(run_update, dict):
+            raise ValueError("terminal control delivery requires a run update")
+        if delivery_kind == "deferred" and run_update is not None:
+            raise ValueError("deferred control delivery cannot terminalize the run")
+
+        source_key = control_delivery_source_key(run_id, delivery_kind)
+        prior_record = self.get_record(source_key)
+        if prior_record is not None:
+            return "delivered" if prior_record.state == "acknowledged" else "pending"
+
+        key = _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        candidate = redact_payload(
+            {
+                "delivery_kind": delivery_kind,
+                "run_id": run_id,
+                "lease_owner": lease_owner,
+                "response_sha256": response_sha256,
+                "event_batch": event_batch,
+                "run_update": run_update,
+                "source_key": source_key,
+            }
+        )
+        existing = self.get_meta(key)
+        if isinstance(existing, dict):
+            stored = {name: existing.get(name) for name in candidate}
+            if stored != candidate:
+                raise SpoolConflict("control delivery replay does not match")
+            return "pending"
+        self.set_meta(key, {**candidate, "staged_at": _utc_now()})
+        return "staged"
+
+    def confirm_control_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+        response_sha256: str,
+        delivery_kind: str,
+        ambiguous: bool = False,
+    ) -> int:
+        """Promote a staged control outcome into the durable backend outbox."""
+        key = _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        existing = self.get_meta(key)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("delivery_kind") != delivery_kind
+            or existing.get("response_sha256") != response_sha256
+            or not existing.get("run_id")
+            or not isinstance(existing.get("event_batch"), dict)
+        ):
+            raise SpoolConflict("control delivery confirmation does not match")
+        source_key = str(
+            existing.get("source_key")
+            or control_delivery_source_key(str(existing["run_id"]), delivery_kind)
+        )
+        local_id = self.enqueue(
+            kind="control_delivery_bundle",
+            source_key=source_key,
+            payload={
+                "run_id": str(existing["run_id"]),
+                "delivery_kind": delivery_kind,
+                "delivery_confirmed": True,
+                "delivery_ambiguous": bool(ambiguous),
+                "response_sha256": response_sha256,
+                "event_batch": existing["event_batch"],
+                "run_update": existing.get("run_update"),
+                "delivery_key": [platform, chat_id, platform_message_id],
+            },
+        )
+        self.set_meta(
+            key,
+            {
+                **existing,
+                "confirmed_at": existing.get("confirmed_at") or _utc_now(),
+                "delivery_ambiguous": bool(
+                    existing.get("delivery_ambiguous") or ambiguous
+                ),
+            },
+        )
+        return local_id
+
+    def get_final_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+    ) -> dict[str, Any] | None:
+        value = self.get_meta(
+            _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        )
+        return value if isinstance(value, dict) else None
+
+    def clear_final_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+    ) -> None:
+        self.delete_meta(
+            _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        )
+
+    def stage_degraded_final_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+        response_sha256: str,
+    ) -> None:
+        """Stage a locally produced response while the backend is unavailable."""
+        values = (platform, chat_id, platform_message_id)
+        if not all(isinstance(value, str) and value for value in values):
+            raise ValueError("degraded final delivery identity is incomplete")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(response_sha256)):
+            raise ValueError("degraded final delivery response hash is invalid")
+        key = _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        existing = self.get_meta(key)
+        candidate = {
+            "degraded": True,
+            "response_sha256": response_sha256,
+        }
+        if isinstance(existing, dict):
+            stored = {name: existing.get(name) for name in candidate}
+            if stored != candidate:
+                raise SpoolConflict("degraded final delivery replay does not match")
+            return
+        self.set_meta(key, {**candidate, "staged_at": _utc_now()})
+
+    def confirm_degraded_final_delivery(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+        response_sha256: str,
+    ) -> None:
+        """Record authoritative platform confirmation for a degraded response."""
+        key = _final_delivery_meta_key(platform, chat_id, platform_message_id)
+        existing = self.get_meta(key)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("degraded") is not True
+            or existing.get("response_sha256") != response_sha256
+        ):
+            raise SpoolConflict("degraded final delivery confirmation does not match")
+        if existing.get("confirmed_at"):
+            return
+        self.set_meta(key, {**existing, "confirmed_at": _utc_now()})
+
     def enqueue(
         self,
         *,
@@ -312,6 +933,17 @@ class SydneySpool:
                         "source key replay does not match stored payload"
                     )
                 return int(existing["id"])
+            tombstone = self.connection.execute(
+                "SELECT original_id, kind, payload_sha256 FROM outbox_tombstones "
+                "WHERE source_key=?",
+                (source_key,),
+            ).fetchone()
+            if tombstone is not None:
+                if tombstone["kind"] != kind or tombstone["payload_sha256"] != digest:
+                    raise SpoolConflict(
+                        "source key replay does not match compacted payload"
+                    )
+                return int(tombstone["original_id"])
             cursor = self.connection.execute(
                 """
                 INSERT INTO outbox(kind, source_key, payload_json, payload_sha256, created_at)
@@ -334,10 +966,46 @@ class SydneySpool:
             payload={"event_batch": event_batch, "run_start": run_start},
         )
 
+    def enqueue_degraded_completion(
+        self,
+        event_batch: dict[str, Any],
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+    ) -> int:
+        stable_key = f"{platform}\x1f{chat_id}\x1f{platform_message_id}"
+        source_key = (
+            "degraded_completion:"
+            + hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
+        )
+        return self.enqueue(
+            kind="degraded_completion_bundle",
+            source_key=source_key,
+            payload={
+                "event_batch": event_batch,
+                "delivery_key": [platform, chat_id, platform_message_id],
+            },
+        )
+
+    def find_degraded_completion(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        platform_message_id: str,
+    ) -> SpoolRecord | None:
+        stable_key = f"{platform}\x1f{chat_id}\x1f{platform_message_id}"
+        return self.get_record(
+            "degraded_completion:"
+            + hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
+        )
+
     def enqueue_tool_before(
         self,
         *,
         run_id: str,
+        lease_owner: str,
         tool_call_id: str,
         tool_name: str,
         arguments: dict[str, Any],
@@ -346,6 +1014,7 @@ class SydneySpool:
     ) -> int:
         payload = {
             "run_id": run_id,
+            "lease_owner": lease_owner,
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "arguments": arguments,
@@ -362,6 +1031,7 @@ class SydneySpool:
         self,
         *,
         run_id: str,
+        lease_owner: str,
         tool_call_id: str,
         state: str,
         result_event_id: str | None = None,
@@ -371,6 +1041,7 @@ class SydneySpool:
             source_key=f"tool:{run_id}:{tool_call_id}:after:{state}",
             payload={
                 "run_id": run_id,
+                "lease_owner": lease_owner,
                 "tool_call_id": tool_call_id,
                 "state": state,
                 "result_event_id": result_event_id,
@@ -399,6 +1070,57 @@ class SydneySpool:
             (bounded,),
         ).fetchall()
         return [self._record(row) for row in rows]
+
+    def rebind_pending_run_lease(self, run_id: str, lease_owner: str) -> int:
+        """Fence exact pending run records to a newly acquired backend lease."""
+        exact_run_id = str(run_id)
+        exact_lease_owner = str(lease_owner)
+        if not exact_run_id or not exact_lease_owner:
+            raise ValueError("run_id and lease_owner are required")
+        lease_paths = {
+            "run_update": (),
+            "tool_before": (),
+            "tool_before_bundle": ("tool_start",),
+            "tool_after": (),
+            "tool_after_bundle": ("tool_update",),
+            "run_completion_bundle": ("run_update",),
+            "control_delivery_bundle": ("run_update",),
+        }
+        rebound = 0
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT id, kind, payload_json FROM outbox "
+                "WHERE state='pending' ORDER BY id"
+            ).fetchall()
+            for row in rows:
+                path = lease_paths.get(str(row["kind"]))
+                if path is None:
+                    continue
+                payload = json.loads(row["payload_json"])
+                target = payload
+                for key in path:
+                    if not isinstance(target, dict):
+                        target = None
+                        break
+                    target = target.get(key)
+                if (
+                    not isinstance(target, dict)
+                    or str(target.get("run_id") or "") != exact_run_id
+                    or "lease_owner" not in target
+                    or str(target.get("lease_owner") or "") == exact_lease_owner
+                ):
+                    continue
+                target["lease_owner"] = exact_lease_owner
+                safe_payload = redact_payload(payload)
+                encoded = _canonical_json(safe_payload)
+                digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+                cursor = self.connection.execute(
+                    "UPDATE outbox SET payload_json=?, payload_sha256=? "
+                    "WHERE id=? AND state='pending'",
+                    (encoded, digest, int(row["id"])),
+                )
+                rebound += int(cursor.rowcount == 1)
+        return rebound
 
     def matching_records(
         self,
@@ -435,8 +1157,11 @@ class SydneySpool:
             return record.payload, record.receipt or {}
         if record.kind in {
             "inbound_bundle",
+            "tool_before_bundle",
             "tool_after_bundle",
             "run_completion_bundle",
+            "degraded_completion_bundle",
+            "control_delivery_bundle",
         }:
             batch = record.payload.get("event_batch")
             receipt = (record.receipt or {}).get("ingest")
@@ -444,68 +1169,372 @@ class SydneySpool:
                 return batch, receipt
         return None
 
-    def reconciliation_expectations(self) -> dict[str, dict[str, Any]]:
-        """Build exact backend expectations from acknowledged ingest receipts."""
-        pending_sessions: set[str] = set()
+    def _index_reconciliation_delivery(
+        self,
+        batch: dict[str, Any],
+        receipt: dict[str, Any],
+    ) -> str:
+        session_id = str(batch.get("hermes_session_id") or "")
+        identity_id = str(receipt.get("identity_id") or "")
+        events = batch.get("events")
+        event_receipts = receipt.get("event_receipts")
+        if (
+            not session_id
+            or not identity_id
+            or not isinstance(events, list)
+            or not isinstance(event_receipts, list)
+            or len(events) != len(event_receipts)
+        ):
+            raise SpoolConflict("backend ingest receipt is incomplete")
+        for row in event_receipts:
+            if not isinstance(row, dict):
+                raise SpoolConflict("backend event receipt is invalid")
+            values = (
+                str(row.get("event_id") or ""),
+                session_id,
+                identity_id,
+                str(row.get("event_type") or ""),
+                str(row.get("occurred_at") or ""),
+                str(row.get("content_sha256") or ""),
+            )
+            if not all(values):
+                raise SpoolConflict("backend event receipt is incomplete")
+            existing = self.connection.execute(
+                "SELECT event_id, session_id, identity_id, event_type, "
+                "occurred_at, content_sha256 FROM reconciliation_events "
+                "WHERE event_id=?",
+                (values[0],),
+            ).fetchone()
+            if existing is not None and tuple(existing) != values:
+                raise SpoolConflict("backend event receipt replay changed")
+            if existing is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO reconciliation_events(
+                        event_id, session_id, identity_id, event_type,
+                        occurred_at, content_sha256
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+        return session_id
+
+    def _refresh_reconciliation_state(self, session_id: str) -> None:
+        rows = self.connection.execute(
+            "SELECT event_id, identity_id, event_type, occurred_at, content_sha256 "
+            "FROM reconciliation_events WHERE session_id=? "
+            "ORDER BY occurred_at, event_id",
+            (str(session_id),),
+        ).fetchall()
+        if not rows:
+            self.connection.execute(
+                "DELETE FROM reconciliation_state WHERE session_id=?",
+                (str(session_id),),
+            )
+            return
+        identities = {str(row["identity_id"]) for row in rows}
+        if len(identities) != 1:
+            raise SpoolConflict("backend identity changed for a session")
+        receipt_rows = [
+            {
+                "event_id": str(row["event_id"]),
+                "event_type": str(row["event_type"]),
+                "occurred_at": str(row["occurred_at"]),
+                "content_sha256": str(row["content_sha256"]),
+            }
+            for row in rows
+        ]
+        self.connection.execute(
+            """
+            INSERT INTO reconciliation_state(
+                session_id, identity_id, event_count, ordered_hash, updated_at
+            ) VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                identity_id=excluded.identity_id,
+                event_count=excluded.event_count,
+                ordered_hash=excluded.ordered_hash,
+                updated_at=excluded.updated_at
+            """,
+            (
+                str(session_id),
+                identities.pop(),
+                len(receipt_rows),
+                ordered_reconciliation_hash(receipt_rows),
+                _utc_now(),
+            ),
+        )
+
+    def dirty_reconciliation_sessions(self, *, limit: int = 25) -> list[str]:
+        bounded = max(1, min(int(limit), 100))
+        rows = self.connection.execute(
+            "SELECT session_id FROM reconciliation_dirty "
+            "ORDER BY dirty_at, session_id LIMIT ?",
+            (bounded,),
+        ).fetchall()
+        return [str(row["session_id"]) for row in rows]
+
+    def mark_reconciliation_clean(self, session_id: str) -> None:
+        with self._lock, self.connection:
+            self.connection.execute(
+                "DELETE FROM reconciliation_dirty WHERE session_id=?",
+                (str(session_id),),
+            )
+
+    def reconciliation_expectation(self, session_id: str) -> dict[str, Any] | None:
+        """Build one exact expectation without scanning lifetime history."""
+        exact_session_id = str(session_id)
+        if not exact_session_id:
+            raise ValueError("session_id is required")
         for record in self.matching_records(state="pending", source_prefix=""):
             delivery = self._event_delivery(record)
-            if delivery is not None:
-                session_id = str(delivery[0].get("hermes_session_id") or "")
-                if session_id:
-                    pending_sessions.add(session_id)
+            if (
+                delivery is not None
+                and str(delivery[0].get("hermes_session_id") or "") == exact_session_id
+            ):
+                return None
 
-        rows_by_session: dict[str, dict[str, dict[str, Any]]] = {}
-        identities: dict[str, str] = {}
-        for record in self.matching_records(state="acknowledged", source_prefix=""):
+        state = self.connection.execute(
+            "SELECT identity_id, event_count, ordered_hash "
+            "FROM reconciliation_state WHERE session_id=?",
+            (exact_session_id,),
+        ).fetchone()
+        if state is None:
+            return None
+        return {
+            "identity_id": str(state["identity_id"]),
+            "hermes_session_id": exact_session_id,
+            "expected_event_count": int(state["event_count"]),
+            "expected_ordered_hash": str(state["ordered_hash"]),
+        }
+
+    def reconciliation_expectations(self) -> dict[str, dict[str, Any]]:
+        """Build all expectations for explicit backfill/reconciliation commands."""
+        session_ids = {
+            str(row["session_id"])
+            for row in self.connection.execute(
+                "SELECT session_id FROM reconciliation_state ORDER BY session_id"
+            ).fetchall()
+        }
+        expectations: dict[str, dict[str, Any]] = {}
+        for session_id in sorted(session_ids):
+            expectation = self.reconciliation_expectation(session_id)
+            if expectation is not None:
+                expectations[session_id] = expectation
+        return expectations
+
+    @staticmethod
+    def _payload_run_id(record: SpoolRecord) -> str:
+        payload = record.payload
+        for path in (
+            (),
+            ("tool_start",),
+            ("tool_update",),
+            ("run_update",),
+        ):
+            candidate: Any = payload
+            for key in path:
+                candidate = candidate.get(key) if isinstance(candidate, dict) else None
+            if isinstance(candidate, dict) and candidate.get("run_id"):
+                return str(candidate["run_id"])
+        return ""
+
+    @staticmethod
+    def _inbound_receipt_run_id(record: SpoolRecord) -> str:
+        if record.kind != "inbound_bundle":
+            return ""
+        return str(
+            (((record.receipt or {}).get("run") or {}).get("run") or {}).get("id") or ""
+        )
+
+    def mark_run_terminal(self, run_id: str, *, state: str) -> None:
+        if state not in {"succeeded", "blocked_side_effect", "terminal_failure"}:
+            raise ValueError("run terminal state is invalid")
+        exact_run_id = str(run_id)
+        if not exact_run_id:
+            raise ValueError("run id is required")
+        self.set_meta(f"run_terminal:{exact_run_id}", {"state": state})
+
+    def run_terminal_state(self, run_id: str) -> str | None:
+        value = self.get_meta(f"run_terminal:{run_id!s}")
+        state = value.get("state") if isinstance(value, dict) else None
+        return (
+            str(state)
+            if state in {"succeeded", "blocked_side_effect", "terminal_failure"}
+            else None
+        )
+
+    def is_run_terminal(self, run_id: str) -> bool:
+        return self.run_terminal_state(run_id) is not None
+
+    def has_unresolved_inbound_runs(self) -> bool:
+        for record in self.matching_records(state="pending", source_prefix="inbound:"):
+            if record.kind == "inbound_bundle":
+                return True
+        for record in self.matching_records(
+            state="acknowledged",
+            source_prefix="inbound:",
+        ):
+            run_id = self._inbound_receipt_run_id(record)
+            if run_id and not self.is_run_terminal(run_id):
+                return True
+        return False
+
+    def compact_reconciled_session(self, session_id: str) -> int:
+        """Discard reconciled bodies while retaining fixed replay/proof rows."""
+        exact_session_id = str(session_id)
+        cursor = self.get_reconciliation_cursor(exact_session_id)
+        expectation = self.reconciliation_expectation(exact_session_id)
+        if (
+            cursor is None
+            or expectation is None
+            or cursor
+            != {
+                "event_count": expectation["expected_event_count"],
+                "ordered_hash": expectation["expected_ordered_hash"],
+            }
+        ):
+            return 0
+        acknowledged = self.matching_records(
+            state="acknowledged",
+            source_prefix="",
+        )
+        candidate_ids: set[int] = set()
+        run_ids: set[str] = set()
+        for record in acknowledged:
             delivery = self._event_delivery(record)
             if delivery is None:
                 continue
-            batch, receipt = delivery
-            session_id = str(batch.get("hermes_session_id") or "")
-            identity_id = str(receipt.get("identity_id") or "")
-            events = batch.get("events")
-            event_receipts = receipt.get("event_receipts")
-            if (
-                not session_id
-                or not identity_id
-                or not isinstance(events, list)
-                or not isinstance(event_receipts, list)
-                or len(events) != len(event_receipts)
-            ):
-                raise SpoolConflict("backend ingest receipt is incomplete")
-            prior_identity = identities.setdefault(session_id, identity_id)
-            if prior_identity != identity_id:
-                raise SpoolConflict("backend identity changed for a session")
-            session_rows = rows_by_session.setdefault(session_id, {})
-            for row in event_receipts:
-                if not isinstance(row, dict):
-                    raise SpoolConflict("backend event receipt is invalid")
-                event_id = str(row.get("event_id") or "")
-                if not event_id:
-                    raise SpoolConflict("backend event receipt is incomplete")
-                existing = session_rows.get(event_id)
-                if existing is not None and existing != row:
-                    raise SpoolConflict("backend event receipt replay changed")
-                session_rows[event_id] = row
-
-        expectations: dict[str, dict[str, Any]] = {}
-        for session_id, indexed_rows in rows_by_session.items():
-            if session_id in pending_sessions:
+            batch, _receipt = delivery
+            if str(batch.get("hermes_session_id") or "") != exact_session_id:
                 continue
-            rows = list(indexed_rows.values())
-            expectations[session_id] = {
-                "identity_id": identities[session_id],
-                "hermes_session_id": session_id,
-                "expected_event_count": len(rows),
-                "expected_ordered_hash": ordered_reconciliation_hash(rows),
-            }
-        return expectations
+            candidate_ids.add(record.id)
+            if record.kind == "inbound_bundle":
+                run_id = str(
+                    (((record.receipt or {}).get("run") or {}).get("run") or {}).get(
+                        "id"
+                    )
+                    or ""
+                )
+                if run_id:
+                    run_ids.add(run_id)
+        for record in acknowledged:
+            if self._payload_run_id(record) in run_ids:
+                candidate_ids.add(record.id)
+        unresolved_run_ids = {
+            run_id for run_id in run_ids if not self.is_run_terminal(run_id)
+        }
+        for record in acknowledged:
+            record_run_id = self._inbound_receipt_run_id(
+                record
+            ) or self._payload_run_id(record)
+            if record_run_id in unresolved_run_ids:
+                candidate_ids.discard(record.id)
+        if not candidate_ids:
+            return 0
+        for record in self.matching_records(state="pending", source_prefix=""):
+            delivery = self._event_delivery(record)
+            if (
+                delivery is not None
+                and str(delivery[0].get("hermes_session_id") or "") == exact_session_id
+            ):
+                return 0
+            if self._payload_run_id(record) in run_ids:
+                return 0
+        compacted = 0
+        with self._lock, self.connection:
+            for record in acknowledged:
+                if record.id not in candidate_ids:
+                    continue
+                row = self.connection.execute(
+                    "SELECT payload_sha256 FROM outbox WHERE id=? AND state='acknowledged'",
+                    (record.id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                if record.kind == "inbound_bundle":
+                    run_id = self._inbound_receipt_run_id(record)
+                    terminal_state = self.run_terminal_state(run_id) if run_id else None
+                    if run_id and terminal_state:
+                        self.connection.execute(
+                            """
+                            INSERT INTO spool_meta(key, value_json, updated_at)
+                            VALUES(?, ?, ?)
+                            ON CONFLICT(key) DO UPDATE SET
+                                value_json=excluded.value_json,
+                                updated_at=excluded.updated_at
+                            """,
+                            (
+                                _terminal_inbound_meta_key(record.source_key),
+                                _canonical_json(
+                                    {"run_id": run_id, "state": terminal_state}
+                                ),
+                                _utc_now(),
+                            ),
+                        )
+                self.connection.execute(
+                    """
+                    INSERT INTO outbox_tombstones(
+                        source_key, original_id, kind, payload_sha256, compacted_at
+                    ) VALUES(?, ?, ?, ?, ?)
+                    ON CONFLICT(source_key) DO NOTHING
+                    """,
+                    (
+                        record.source_key,
+                        record.id,
+                        record.kind,
+                        str(row["payload_sha256"]),
+                        _utc_now(),
+                    ),
+                )
+                cursor = self.connection.execute(
+                    "DELETE FROM outbox WHERE id=? AND state='acknowledged'",
+                    (record.id,),
+                )
+                compacted += int(cursor.rowcount == 1)
+        if compacted:
+            self.connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        return compacted
 
     def get_record(self, source_key: str) -> SpoolRecord | None:
         row = self.connection.execute(
             "SELECT * FROM outbox WHERE source_key=?", (source_key,)
         ).fetchone()
-        return None if row is None else self._record(row)
+        if row is not None:
+            return self._record(row)
+        tombstone = self.connection.execute(
+            "SELECT * FROM outbox_tombstones WHERE source_key=?", (source_key,)
+        ).fetchone()
+        if tombstone is None:
+            return None
+        receipt: dict[str, Any] = {"compacted": True}
+        if str(tombstone["kind"]) == "inbound_bundle":
+            terminal = self.get_meta(
+                _terminal_inbound_meta_key(str(tombstone["source_key"]))
+            )
+            if (
+                isinstance(terminal, dict)
+                and terminal.get("run_id")
+                and terminal.get("state")
+                in {"succeeded", "blocked_side_effect", "terminal_failure"}
+            ):
+                receipt["run"] = {
+                    "run": {
+                        "id": str(terminal["run_id"]),
+                        "state": str(terminal["state"]),
+                    }
+                }
+        return SpoolRecord(
+            id=int(tombstone["original_id"]),
+            kind=str(tombstone["kind"]),
+            source_key=str(tombstone["source_key"]),
+            payload={},
+            state="acknowledged",
+            attempt_count=0,
+            created_at=str(tombstone["compacted_at"]),
+            last_attempt_at=None,
+            acknowledged_at=str(tombstone["compacted_at"]),
+            receipt=receipt,
+        )
 
     def find_inbound(self, platform_message_id: str) -> SpoolRecord | None:
         rows = self.connection.execute(
@@ -516,6 +1545,18 @@ class SydneySpool:
             if str(
                 record.payload.get("run_start", {}).get("platform_message_id")
             ) == str(platform_message_id):
+                return record
+        return None
+
+    def find_inbound_for_run(self, run_id: str) -> SpoolRecord | None:
+        exact_run_id = str(run_id)
+        rows = self.connection.execute(
+            "SELECT * FROM outbox WHERE kind='inbound_bundle' "
+            "AND state='acknowledged' ORDER BY id DESC"
+        ).fetchall()
+        for row in rows:
+            record = self._record(row)
+            if self._inbound_receipt_run_id(record) == exact_run_id:
                 return record
         return None
 
@@ -537,6 +1578,24 @@ class SydneySpool:
             )
             if cursor.rowcount != 1:
                 raise SpoolConflict("outbox record was already acknowledged")
+            row = self.connection.execute(
+                "SELECT * FROM outbox WHERE id=? AND state='acknowledged'",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                raise SpoolConflict("acknowledged outbox record is missing")
+            delivery = self._event_delivery(self._record(row))
+            if delivery is not None and delivery[0].get("hermes_session_id"):
+                session_id = self._index_reconciliation_delivery(*delivery)
+                self._refresh_reconciliation_state(session_id)
+                self.connection.execute(
+                    """
+                    INSERT INTO reconciliation_dirty(session_id, dirty_at)
+                    VALUES(?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET dirty_at=excluded.dirty_at
+                    """,
+                    (session_id, _utc_now()),
+                )
 
     def record_failure(self, record_id: int) -> None:
         with self._lock, self.connection:
@@ -553,21 +1612,38 @@ class SydneySpool:
         handler: Callable[[SpoolRecord], dict[str, Any]],
         *,
         limit: int = 100,
+        source_prefix: str = "",
     ) -> DrainResult:
-        attempted = acknowledged = failed = 0
-        for record in self.pending(limit=limit):
-            attempted += 1
-            try:
-                receipt = handler(record)
-                if not isinstance(receipt, dict):
-                    raise TypeError("spool delivery must return a receipt object")
-                self.acknowledge(record.id, receipt)
-                acknowledged += 1
-            except Exception:  # noqa: BLE001 - delivery callbacks are external code.
-                self.record_failure(record.id)
-                failed += 1
-                break
-        return DrainResult(attempted, acknowledged, failed)
+        descriptor = os.open(
+            self._drain_lock_path,
+            os.O_CREAT | os.O_RDWR,
+            0o600,
+        )
+        try:
+            os.chmod(self._drain_lock_path, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            attempted = acknowledged = failed = 0
+            records = self.matching_records(
+                state="pending",
+                source_prefix=source_prefix,
+                limit=limit,
+            )
+            for record in records:
+                attempted += 1
+                try:
+                    receipt = handler(record)
+                    if not isinstance(receipt, dict):
+                        raise TypeError("spool delivery must return a receipt object")
+                    self.acknowledge(record.id, receipt)
+                    acknowledged += 1
+                except Exception:  # noqa: BLE001 - external delivery boundary.
+                    self.record_failure(record.id)
+                    failed += 1
+                    break
+            return DrainResult(attempted, acknowledged, failed)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def rotate_session(
         self,
@@ -645,9 +1721,20 @@ class SydneySpool:
         ).fetchone()
         return None if row is None else json.loads(row[0])
 
-    def get_latest_cached_context(self) -> dict[str, Any] | None:
+    def get_latest_cached_context(
+        self, *, logical_conversation_id: str
+    ) -> dict[str, Any] | None:
         row = self.connection.execute(
-            "SELECT packet_json FROM context_cache ORDER BY fetched_at DESC LIMIT 1"
+            """
+            SELECT context_cache.packet_json
+            FROM context_cache
+            JOIN session_lineage
+              ON session_lineage.session_id = context_cache.session_id
+            WHERE session_lineage.logical_conversation_id = ?
+            ORDER BY context_cache.fetched_at DESC, context_cache.session_id DESC
+            LIMIT 1
+            """,
+            (logical_conversation_id,),
         ).fetchone()
         return None if row is None else json.loads(row[0])
 

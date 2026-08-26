@@ -9,7 +9,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 BACKEND_ROOT = Path(__file__).parents[1]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
 TASK1_TESTS = (
@@ -352,9 +351,10 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         flags=re.DOTALL,
     )
     assert pytest_step is not None
-    assert tuple(
-        re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body"))
-    ) == TASK9_TESTS + TASK13_CONTEXT_TESTS
+    assert (
+        tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body")))
+        == TASK9_TESTS + TASK13_CONTEXT_TESTS
+    )
     assert workflow.count('"backend/tests/test_gmail_task_intake_e2e.py"') == 2
 
     task12_step = re.search(
@@ -366,9 +366,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         flags=re.DOTALL,
     )
     assert task12_step is not None
-    assert tuple(
-        re.findall(r"tests/[a-z0-9_]+\.py", task12_step.group("body"))
-    ) == (
+    assert tuple(re.findall(r"tests/[a-z0-9_]+\.py", task12_step.group("body"))) == (
         "tests/test_atlas_backend_mcp.py",
         "tests/test_hermes_overlay.py",
         "tests/test_verify_atlas_tools.py",
@@ -380,6 +378,13 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
     )
     assert "7224d7c1a4dcffe9304f49bc843f55716f5561b4" in workflow
     assert "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5" in workflow
+    task12_job = re.search(
+        r"^  task12-hermes-overlay:\n(?P<body>.*?)(?=^  [a-z0-9_-]+:|\Z)",
+        workflow,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    assert task12_job is not None
+    assert '"pytest-asyncio==1.3.0"' in task12_job.group("body")
 
     assert 'if [[ "$GMAIL_TASK_TEST_DATABASE_NAME" != *_test ]]' in workflow
     assert 'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]' in workflow

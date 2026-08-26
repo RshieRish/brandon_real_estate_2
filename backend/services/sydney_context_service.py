@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import ceil
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+
+from models.integration_health import IntegrationHealthState
 from models.sydney_context import (
     AgentContextCheckpoint,
     AgentConversationEvent,
@@ -34,6 +42,7 @@ from schemas.sydney_context import (
     ContextRetrieveRequest,
     ContextRunClaimRequest,
     ContextRunClaimResponse,
+    ContextRunLeaseRenewRequest,
     ContextRunStartRequest,
     ContextRunStartResponse,
     ContextRunSummary,
@@ -44,11 +53,6 @@ from schemas.sydney_context import (
     ContextToolInvocationResponse,
     ContextToolInvocationUpdateRequest,
 )
-from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
-
 from services.sydney_context_redaction import redact_content, split_utf8_text
 
 
@@ -99,6 +103,48 @@ _CONTEXT_PREFIX = (
     "tool policy. Current-state tools remain authoritative."
 )
 _CONTEXT_SUFFIX = "\n</durable-context>"
+_METADATA_SECRET_KEY = re.compile(
+    r"(?:^|_)(?:authorization|access_token|refresh_token|id_token|oauth_token|"
+    r"password|passwd|pwd|api_key|client_secret|cookie|set_cookie|bearer_token|"
+    r"token|secret|credential|credentials|handoff)(?:$|_)",
+    re.IGNORECASE,
+)
+_RECALL_STOP_WORDS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "are",
+        "did",
+        "do",
+        "does",
+        "for",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "me",
+        "of",
+        "on",
+        "our",
+        "the",
+        "to",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "you",
+    }
+)
+_HISTORY_EXCERPT_CHARS = 2_000
+_RECENT_ACTIONABLE_FAILURE_WINDOW = timedelta(minutes=15)
 _RUN_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"running", "waiting_retry", "terminal_failure"}),
     "running": frozenset(
@@ -133,17 +179,53 @@ def canonical_json_hash(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _normalized_metadata_key(value: str) -> str:
+    separated_acronyms = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    separated_words = re.sub(
+        r"([a-z0-9])([A-Z])",
+        r"\1_\2",
+        separated_acronyms,
+    )
+    return re.sub(r"[^A-Za-z0-9]+", "_", separated_words).strip("_").lower()
+
+
 def _redact_metadata(
     metadata: dict[str, Any],
     *,
     configured_secrets: Sequence[str],
 ) -> dict[str, Any]:
-    serialized = canonical_json(metadata)
-    redacted = redact_content(
-        serialized,
-        configured_secrets=configured_secrets,
-    ).text
-    loaded = json.loads(redacted)
+    def redact_value(
+        value: Any,
+        *,
+        key: str = "",
+        secret_context: bool = False,
+    ) -> Any:
+        inside_secret = secret_context or bool(
+            key and _METADATA_SECRET_KEY.search(_normalized_metadata_key(key))
+        )
+        if isinstance(value, str):
+            if inside_secret:
+                return "[REDACTED_SECRET]"
+            return redact_content(
+                value,
+                configured_secrets=configured_secrets,
+            ).text
+        if isinstance(value, dict):
+            return {
+                str(item_key): redact_value(
+                    item,
+                    key=str(item_key),
+                    secret_context=inside_secret,
+                )
+                for item_key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [redact_value(item, secret_context=inside_secret) for item in value]
+        if inside_secret:
+            return "[REDACTED_SECRET]"
+        return value
+
+    loaded = json.loads(canonical_json(redact_value(metadata)))
     if not isinstance(loaded, dict):
         raise TypeError("event metadata must be an object")
     return loaded
@@ -196,7 +278,12 @@ def ordered_reconciliation_hash(
 def estimate_tokens(value: str) -> int:
     if not isinstance(value, str):
         raise TypeError("value must be a string")
-    return ceil(len(value.encode("utf-8")) / 4)
+    # Gemini's tokenizer is not available in this service process. A UTF-8
+    # byte can always be represented by at most one byte-level token, so the
+    # encoded byte count is a conservative upper bound for mixed prose, code,
+    # CJK, emoji, and identifier-heavy packets. The prior bytes/4 heuristic was
+    # an average and could undercount the hard retrieval budget.
+    return len(value.encode("utf-8"))
 
 
 def is_run_transition_allowed(current: str, target: str) -> bool:
@@ -223,7 +310,7 @@ def tool_replay_decision(
 def _truncate_for_tokens(value: str, token_budget: int) -> str:
     if token_budget <= 0:
         return ""
-    maximum_bytes = token_budget * 4
+    maximum_bytes = token_budget
     encoded = value.encode("utf-8")
     if len(encoded) <= maximum_bytes:
         return value
@@ -239,6 +326,63 @@ def _truncate_for_tokens(value: str, token_budget: int) -> str:
     return marker if marker_bytes <= maximum_bytes else ""
 
 
+def _truncate_from_tail_for_tokens(value: str, token_budget: int) -> str:
+    if token_budget <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= token_budget:
+        return value
+    marker = "…"
+    marker_bytes = len(marker.encode("utf-8"))
+    allowed = max(0, token_budget - marker_bytes)
+    truncated = encoded[-allowed:] if allowed else b""
+    while truncated:
+        try:
+            return marker + truncated.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated = truncated[1:]
+    return marker if marker_bytes <= token_budget else ""
+
+
+def _truncate_recent_events_for_tokens(
+    value: str,
+    source_event_ids: Sequence[UUID],
+    token_budget: int,
+    event_chunks: Sequence[tuple[UUID, str]] | None,
+) -> tuple[str, list[UUID]]:
+    if estimate_tokens(value) <= token_budget:
+        return value, list(source_event_ids)
+    if event_chunks is None:
+        if len(source_event_ids) != 1:
+            return "", []
+        text = _truncate_from_tail_for_tokens(value, token_budget)
+        return text, list(source_event_ids) if text else []
+
+    omission_marker = "…\n"
+    remaining = token_budget - estimate_tokens(omission_marker)
+    selected_chunks: list[str] = []
+    selected_ids: list[UUID] = []
+    for event_id, chunk in reversed(event_chunks):
+        separator_tokens = 1 if selected_chunks else 0
+        needed = estimate_tokens(chunk) + separator_tokens
+        if needed > remaining:
+            if not selected_chunks:
+                if estimate_tokens(chunk) <= token_budget:
+                    return chunk, [event_id]
+                text = _truncate_from_tail_for_tokens(chunk, token_budget)
+                return text, [event_id] if text else []
+            break
+        selected_chunks.append(chunk)
+        selected_ids.append(event_id)
+        remaining -= needed
+
+    if not selected_chunks:
+        return "", []
+    selected_chunks.reverse()
+    selected_ids.reverse()
+    return omission_marker + "\n".join(selected_chunks), selected_ids
+
+
 def build_context_packet(
     *,
     identity_id: UUID,
@@ -247,43 +391,100 @@ def build_context_packet(
     token_budget: int,
     newest_event_id: UUID | None,
     degraded: bool = False,
+    recent_event_entries: Sequence[tuple[UUID, str]] | None = None,
 ) -> ContextPacket:
     if type(token_budget) is not int or token_budget < 1:
         raise ValueError("token_budget must be positive")
     ordered = sorted(sections, key=lambda section: _SECTION_ORDER[section.kind])
-    selected: list[ContextPacketSection] = []
-    rendered = _CONTEXT_PREFIX
+    recent_sections = [
+        section for section in ordered if section.kind == "recent_events"
+    ]
+    entries = list(recent_event_entries) if recent_event_entries is not None else None
+    if entries is not None:
+        if len(recent_sections) != 1:
+            raise ValueError("recent_event_entries require one recent_events section")
+        recent_section = recent_sections[0]
+        if [event_id for event_id, _text in entries] != list(
+            recent_section.source_event_ids
+        ) or "\n".join(text for _event_id, text in entries) != recent_section.text:
+            raise ValueError("recent_event_entries must exactly match recent_events")
+
+    safe_sections: list[
+        tuple[ContextPacketSection, str, list[tuple[UUID, str]] | None]
+    ] = []
     for section in ordered:
-        heading = f"\n\n[{section.kind}]\n"
-        base_with_suffix = rendered + heading + _CONTEXT_SUFFIX
-        remaining = token_budget - estimate_tokens(base_with_suffix)
-        if remaining <= 0:
-            break
-        text = _truncate_for_tokens(section.text, remaining)
-        if not text:
-            break
-        candidate = (
-            base_with_suffix.removesuffix(_CONTEXT_SUFFIX) + text + _CONTEXT_SUFFIX
+        if not section.text:
+            continue
+        event_chunks = None
+        if section.kind == "recent_events" and entries is not None:
+            event_chunks = [
+                (event_id, html.escape(text, quote=True)) for event_id, text in entries
+            ]
+        safe_sections.append(
+            (section, html.escape(section.text, quote=True), event_chunks)
         )
-        while text and estimate_tokens(candidate) > token_budget:
-            text = text[:-1]
-            candidate = (
-                base_with_suffix.removesuffix(_CONTEXT_SUFFIX) + text + _CONTEXT_SUFFIX
-            )
-        if not text:
+    skeleton = (
+        _CONTEXT_PREFIX
+        + "".join(
+            f"\n\n[{section.kind}]\n" for section, _text, _chunks in safe_sections
+        )
+        + _CONTEXT_SUFFIX
+    )
+    content_budget = max(0, token_budget - estimate_tokens(skeleton))
+    needs = [estimate_tokens(text) for _section, text, _chunks in safe_sections]
+    allocations = [0 for _need in needs]
+    remaining = content_budget
+    active = [index for index, need in enumerate(needs) if need > 0]
+    # Water-fill every section before giving one oversized section the rest.
+    # This keeps current state and recent events visible even when retained
+    # facts are much larger than the packet budget.
+    while remaining > 0 and active:
+        share = max(1, remaining // len(active))
+        progressed = False
+        for index in tuple(active):
+            grant = min(needs[index] - allocations[index], share, remaining)
+            if grant > 0:
+                allocations[index] += grant
+                remaining -= grant
+                progressed = True
+            if allocations[index] >= needs[index]:
+                active.remove(index)
+            if remaining <= 0:
+                break
+        if not progressed:
             break
-        rendered = candidate.removesuffix(_CONTEXT_SUFFIX)
+
+    selected: list[ContextPacketSection] = []
+    rendered_parts = [_CONTEXT_PREFIX]
+    for (section, safe_text, event_chunks), allocation in zip(
+        safe_sections,
+        allocations,
+        strict=True,
+    ):
+        if allocation <= 0:
+            continue
+        source_event_ids = list(section.source_event_ids)
+        if section.kind == "recent_events":
+            text, source_event_ids = _truncate_recent_events_for_tokens(
+                safe_text,
+                source_event_ids,
+                allocation,
+                event_chunks,
+            )
+        else:
+            text = _truncate_for_tokens(safe_text, allocation)
+        if not text:
+            continue
+        rendered_parts.extend((f"\n\n[{section.kind}]\n", text))
         selected.append(
             ContextPacketSection(
                 kind=section.kind,
                 text=text,
-                source_event_ids=section.source_event_ids,
+                source_event_ids=source_event_ids,
                 estimated_tokens=estimate_tokens(text),
             )
         )
-        if text != section.text:
-            break
-    rendered += _CONTEXT_SUFFIX
+    rendered = "".join(rendered_parts) + _CONTEXT_SUFFIX
     return ContextPacket(
         identity_id=identity_id,
         logical_conversation_id=logical_conversation_id,
@@ -314,6 +515,20 @@ def _event_text(event: AgentConversationEvent) -> str:
         f"{event.occurred_at.isoformat()} {label}: {event.search_text} "
         f"[source:{event.id}]"
     )
+
+
+def _recall_query_text(value: str) -> str:
+    """Turn a natural-language question into a bounded any-keyword query."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for term in re.findall(r"[^\W_]+", value.casefold(), flags=re.UNICODE):
+        if len(term) < 2 or term in _RECALL_STOP_WORDS or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= 32:
+            break
+    return " OR ".join(terms) if terms else value
 
 
 async def retrieve_context(
@@ -378,7 +593,10 @@ async def retrieve_context(
     recent.reverse()
     recent_ids = [event.id for event in recent]
 
-    query = func.websearch_to_tsquery("simple", request.current_user_text)
+    query = func.websearch_to_tsquery(
+        "simple",
+        _recall_query_text(request.current_user_text),
+    )
     relevant_statement = (
         select(AgentConversationEvent)
         .join(
@@ -389,7 +607,7 @@ async def retrieve_context(
             AgentConversationEvent.identity_id == request.identity_id,
             AgentConversationSession.logical_conversation_id
             == request.logical_conversation_id,
-            AgentConversationEvent.search_vector.op("@@")(query),
+            _event_search_predicate(query),
         )
     )
     if recent_ids:
@@ -400,7 +618,7 @@ async def retrieve_context(
         (
             await db.scalars(
                 relevant_statement.order_by(
-                    func.ts_rank_cd(AgentConversationEvent.search_vector, query).desc(),
+                    _event_search_rank(query).desc(),
                     AgentConversationEvent.occurred_at.desc(),
                     AgentConversationEvent.id.desc(),
                 ).limit(8)
@@ -464,13 +682,14 @@ async def retrieve_context(
                 estimated_tokens=estimate_tokens(checkpoint.rolling_summary),
             )
         )
-    if recent:
-        text_value = "\n".join(_event_text(event) for event in recent)
+    recent_event_entries = [(event.id, _event_text(event)) for event in recent]
+    if recent_event_entries:
+        text_value = "\n".join(text for _event_id, text in recent_event_entries)
         sections.append(
             ContextPacketSection(
                 kind="recent_events",
                 text=text_value,
-                source_event_ids=[event.id for event in recent],
+                source_event_ids=[event_id for event_id, _text in recent_event_entries],
                 estimated_tokens=estimate_tokens(text_value),
             )
         )
@@ -491,6 +710,7 @@ async def retrieve_context(
         sections=sections,
         token_budget=request.token_budget,
         newest_event_id=newest_event_id,
+        recent_event_entries=recent_event_entries or None,
     )
 
 
@@ -505,64 +725,227 @@ def _history_filters(request: ContextHistorySearchRequest) -> list[Any]:
     return filters
 
 
+def _event_search_predicate(query: Any) -> Any:
+    segment_match = exists(
+        select(1).where(
+            AgentConversationEventSegment.event_id == AgentConversationEvent.id,
+            AgentConversationEventSegment.search_vector.op("@@")(query),
+        )
+    )
+    return or_(AgentConversationEvent.search_vector.op("@@")(query), segment_match)
+
+
+def _event_search_rank(query: Any) -> Any:
+    segment_rank = (
+        select(
+            func.max(
+                func.ts_rank_cd(AgentConversationEventSegment.search_vector, query)
+            )
+        )
+        .where(AgentConversationEventSegment.event_id == AgentConversationEvent.id)
+        .correlate(AgentConversationEvent)
+        .scalar_subquery()
+    )
+    return func.greatest(
+        func.ts_rank_cd(AgentConversationEvent.search_vector, query),
+        func.coalesce(segment_rank, 0.0),
+    )
+
+
+def _history_excerpt(content: str, query: str | None) -> tuple[str, bool]:
+    if len(content) <= _HISTORY_EXCERPT_CHARS:
+        return content, False
+    marker = "\n[...]\n"
+    if query:
+        folded = content.casefold()
+        terms = sorted(
+            set(re.findall(r"[\w-]+", query.casefold())),
+            key=len,
+            reverse=True,
+        )
+        positions = [folded.find(term) for term in terms]
+        positions = [position for position in positions if position >= 0]
+        if positions:
+            position = min(positions)
+            body_start = max(0, position - (_HISTORY_EXCERPT_CHARS // 3))
+            prefix = "[...]\n" if body_start else ""
+            provisional_capacity = _HISTORY_EXCERPT_CHARS - len(prefix) - len(marker)
+            suffix = marker if body_start + provisional_capacity < len(content) else ""
+            capacity = _HISTORY_EXCERPT_CHARS - len(prefix) - len(suffix)
+            body = content[body_start : body_start + capacity]
+            return prefix + body + suffix, True
+    half = (_HISTORY_EXCERPT_CHARS - len(marker)) // 2
+    excerpt = (
+        content[:half]
+        + marker
+        + content[-(_HISTORY_EXCERPT_CHARS - half - len(marker)) :]
+    )
+    return excerpt, True
+
+
+def _around_event_predicates(
+    target: AgentConversationEvent,
+) -> tuple[Any, Any]:
+    """Return stable cursor predicates for one timestamp/UUID ordered event."""
+    before = or_(
+        AgentConversationEvent.occurred_at < target.occurred_at,
+        and_(
+            AgentConversationEvent.occurred_at == target.occurred_at,
+            AgentConversationEvent.id <= target.id,
+        ),
+    )
+    after = or_(
+        AgentConversationEvent.occurred_at > target.occurred_at,
+        and_(
+            AgentConversationEvent.occurred_at == target.occurred_at,
+            AgentConversationEvent.id > target.id,
+        ),
+    )
+    return before, after
+
+
 async def search_history(
     db: AsyncSession,
     request: ContextHistorySearchRequest,
 ) -> ContextHistorySearchResponse:
     filters = _history_filters(request)
+    logical_conversation_ids: dict[UUID, UUID] = {}
+    truncated = False
     if request.around_event_id:
-        target = (
-            await db.scalars(
-                select(AgentConversationEvent).where(
+        target_row = (
+            await db.execute(
+                select(
+                    AgentConversationEvent,
+                    AgentConversationSession.logical_conversation_id,
+                )
+                .join(
+                    AgentConversationSession,
+                    AgentConversationSession.id == AgentConversationEvent.session_id,
+                )
+                .where(
                     AgentConversationEvent.id == request.around_event_id,
                     AgentConversationEvent.identity_id == request.identity_id,
                 )
             )
         ).one_or_none()
-        if target is None:
+        if target_row is None:
             return ContextHistorySearchResponse(events=[], total=0, truncated=False)
-        before = list(
+        target, target_logical_conversation_id = target_row
+        before_target, after_target = _around_event_predicates(target)
+        before_rows = list(
             (
                 await db.scalars(
                     select(AgentConversationEvent)
+                    .join(
+                        AgentConversationSession,
+                        AgentConversationSession.id
+                        == AgentConversationEvent.session_id,
+                    )
                     .where(
                         *filters,
-                        AgentConversationEvent.occurred_at <= target.occurred_at,
+                        AgentConversationSession.logical_conversation_id
+                        == target_logical_conversation_id,
+                        before_target,
                     )
                     .order_by(
                         AgentConversationEvent.occurred_at.desc(),
                         AgentConversationEvent.id.desc(),
                     )
-                    .limit(request.window_size + 1)
+                    .limit(request.window_size + 2)
                 )
             ).all()
         )
-        after = list(
+        after_rows = list(
             (
                 await db.scalars(
                     select(AgentConversationEvent)
+                    .join(
+                        AgentConversationSession,
+                        AgentConversationSession.id
+                        == AgentConversationEvent.session_id,
+                    )
                     .where(
                         *filters,
-                        AgentConversationEvent.occurred_at > target.occurred_at,
+                        AgentConversationSession.logical_conversation_id
+                        == target_logical_conversation_id,
+                        after_target,
                     )
                     .order_by(
                         AgentConversationEvent.occurred_at,
                         AgentConversationEvent.id,
                     )
-                    .limit(request.window_size)
+                    .limit(request.window_size + 1)
                 )
             ).all()
         )
+        truncated = (
+            len(before_rows) > request.window_size + 1
+            or len(after_rows) > request.window_size
+        )
+        before = before_rows[: request.window_size + 1]
+        after = after_rows[: request.window_size]
         events = list(reversed(before)) + after
-        total = len(events)
+        logical_conversation_ids = {
+            event.id: target_logical_conversation_id for event in events
+        }
+        total = len(events) + int(truncated)
+    elif request.recent_conversations:
+        ranked = (
+            select(
+                AgentConversationEvent.id.label("event_id"),
+                AgentConversationSession.logical_conversation_id.label(
+                    "logical_conversation_id"
+                ),
+                func.row_number()
+                .over(
+                    partition_by=AgentConversationSession.logical_conversation_id,
+                    order_by=(
+                        AgentConversationEvent.occurred_at.desc(),
+                        AgentConversationEvent.id.desc(),
+                    ),
+                )
+                .label("conversation_rank"),
+            )
+            .join(
+                AgentConversationSession,
+                AgentConversationSession.id == AgentConversationEvent.session_id,
+            )
+            .where(*filters)
+        )
+        if request.query:
+            query = func.websearch_to_tsquery("simple", request.query)
+            ranked = ranked.where(_event_search_predicate(query))
+        ranked_rows = ranked.subquery()
+        rows = list(
+            (
+                await db.execute(
+                    select(
+                        AgentConversationEvent,
+                        ranked_rows.c.logical_conversation_id,
+                    )
+                    .join(
+                        ranked_rows,
+                        ranked_rows.c.event_id == AgentConversationEvent.id,
+                    )
+                    .where(ranked_rows.c.conversation_rank == 1)
+                    .order_by(
+                        AgentConversationEvent.occurred_at.desc(),
+                        AgentConversationEvent.id.desc(),
+                    )
+                    .limit(request.limit + 1)
+                )
+            ).all()
+        )
+        events = [row[0] for row in rows[: request.limit]]
+        logical_conversation_ids = {row[0].id: row[1] for row in rows[: request.limit]}
+        total = len(rows)
+        truncated = total > len(events)
     else:
         statement = select(AgentConversationEvent).where(*filters)
         if request.query:
             query = func.websearch_to_tsquery("simple", request.query)
-            statement = statement.where(
-                AgentConversationEvent.search_vector.op("@@")(query)
-            ).order_by(
-                func.ts_rank_cd(AgentConversationEvent.search_vector, query).desc(),
+            statement = statement.where(_event_search_predicate(query)).order_by(
+                _event_search_rank(query).desc(),
                 AgentConversationEvent.occurred_at.desc(),
                 AgentConversationEvent.id.desc(),
             )
@@ -574,20 +957,25 @@ async def search_history(
         rows = list((await db.scalars(statement.limit(request.limit + 1))).all())
         events = rows[: request.limit]
         total = len(rows)
-    excerpts = [
-        ContextSourceExcerpt(
-            event_id=event.id,
-            event_type=event.event_type,
-            occurred_at=event.occurred_at,
-            content=event.search_text,
-            tool_name=event.tool_name,
+        truncated = total > len(events)
+    excerpts = []
+    for event in events:
+        content, content_truncated = _history_excerpt(event.search_text, request.query)
+        excerpts.append(
+            ContextSourceExcerpt(
+                event_id=event.id,
+                logical_conversation_id=logical_conversation_ids.get(event.id),
+                event_type=event.event_type,
+                occurred_at=event.occurred_at,
+                content=content,
+                content_truncated=content_truncated,
+                tool_name=event.tool_name,
+            )
         )
-        for event in events
-    ]
     return ContextHistorySearchResponse(
         events=excerpts,
         total=total,
-        truncated=total > len(excerpts),
+        truncated=truncated,
     )
 
 
@@ -611,10 +999,54 @@ def _run_summary(run: AgentRunJob) -> ContextRunSummary:
     )
 
 
+async def _validated_run_inbound_event(
+    db: AsyncSession,
+    request: ContextRunStartRequest,
+) -> AgentConversationEvent:
+    event = await db.scalar(
+        select(AgentConversationEvent)
+        .join(
+            AgentConversationSession,
+            AgentConversationSession.id == AgentConversationEvent.session_id,
+        )
+        .where(
+            AgentConversationEvent.id == request.inbound_event_id,
+            AgentConversationEvent.identity_id == request.identity_id,
+            AgentConversationEvent.session_id == request.session_id,
+            AgentConversationEvent.event_type == "user",
+            AgentConversationSession.identity_id == request.identity_id,
+            AgentConversationSession.logical_conversation_id
+            == request.logical_conversation_id,
+        )
+    )
+    if event is None:
+        raise ContextRunConflict("context_run_inbound_event_invalid")
+    return event
+
+
+async def _validated_run_final_event(
+    db: AsyncSession,
+    run: AgentRunJob,
+    final_response_event_id: UUID,
+) -> AgentConversationEvent:
+    event = await db.scalar(
+        select(AgentConversationEvent).where(
+            AgentConversationEvent.id == final_response_event_id,
+            AgentConversationEvent.identity_id == run.identity_id,
+            AgentConversationEvent.session_id == run.session_id,
+            AgentConversationEvent.event_type == "assistant",
+        )
+    )
+    if event is None:
+        raise ContextRunConflict("context_run_final_event_invalid")
+    return event
+
+
 async def start_run(
     db: AsyncSession,
     request: ContextRunStartRequest,
 ) -> ContextRunStartResponse:
+    await _validated_run_inbound_event(db, request)
     candidate_id = uuid4()
     inserted_id = (
         await db.execute(
@@ -663,6 +1095,8 @@ async def start_run(
 async def update_run_state(
     db: AsyncSession,
     request: ContextRunUpdateRequest,
+    *,
+    now: datetime | None = None,
 ) -> ContextRunSummary:
     run = (
         await db.scalars(
@@ -671,24 +1105,59 @@ async def update_run_state(
             .with_for_update()
         )
     ).one()
-    if run.state != request.state and not is_run_transition_allowed(
-        run.state, request.state
-    ):
-        raise ContextRunConflict("context_run_transition_invalid")
-    if run.lease_owner and request.lease_owner != run.lease_owner:
-        raise ContextRunConflict("context_run_lease_owner_invalid")
     if request.state == "waiting_retry" and request.next_attempt_at is None:
         raise ContextRunConflict("context_run_retry_time_required")
     if request.state == "succeeded" and request.final_response_event_id is None:
         raise ContextRunConflict("context_run_final_event_required")
+    if request.final_response_event_id is not None:
+        await _validated_run_final_event(db, run, request.final_response_event_id)
+
+    def normalized_retry_delay(value: object) -> Decimal | None:
+        if value is None:
+            return None
+        return Decimal(str(value)).quantize(Decimal("0.001"))
+
+    replay_fields_match = all(
+        (
+            run.state == request.state,
+            run.next_attempt_at == request.next_attempt_at,
+            run.provider_category == request.provider_category,
+            run.error_code == request.error_code,
+            normalized_retry_delay(run.parsed_retry_delay_seconds)
+            == normalized_retry_delay(request.parsed_retry_delay_seconds),
+            run.final_response_event_id == request.final_response_event_id,
+        )
+    )
+    if run.state == request.state:
+        if not replay_fields_match:
+            raise ContextRunConflict("context_run_update_replay_conflict")
+        return _run_summary(run)
+
+    current = now or datetime.now(UTC)
+    resolving_blocked_run = (
+        run.state == "blocked_side_effect" and request.state == "terminal_failure"
+    )
+    if not resolving_blocked_run:
+        if run.state != "running":
+            raise ContextRunConflict("context_run_not_running")
+        if request.lease_owner != run.lease_owner or not run.lease_owner:
+            raise ContextRunConflict("context_run_lease_owner_invalid")
+        if run.lease_expires_at is None or run.lease_expires_at <= current:
+            raise ContextRunConflict("context_run_lease_expired")
+        if run.terminal_deadline_at <= current:
+            raise ContextRunConflict("context_run_terminal_deadline_exceeded")
+    if not is_run_transition_allowed(run.state, request.state):
+        raise ContextRunConflict("context_run_transition_invalid")
 
     run.state = request.state
     run.next_attempt_at = request.next_attempt_at
     run.provider_category = request.provider_category
     run.error_code = request.error_code
-    run.parsed_retry_delay_seconds = request.parsed_retry_delay_seconds
+    run.parsed_retry_delay_seconds = normalized_retry_delay(
+        request.parsed_retry_delay_seconds
+    )
     run.final_response_event_id = request.final_response_event_id
-    run.updated_at = datetime.now(UTC)
+    run.updated_at = current
     if request.state != "running":
         run.lease_owner = None
         run.lease_expires_at = None
@@ -704,11 +1173,28 @@ async def claim_runs(
     lease_seconds: int = 120,
 ) -> ContextRunClaimResponse:
     current = now or datetime.now(UTC)
+    await db.execute(
+        update(AgentRunJob)
+        .where(
+            AgentRunJob.state.in_(("queued", "running", "waiting_retry")),
+            AgentRunJob.terminal_deadline_at <= current,
+        )
+        .values(
+            state="terminal_failure",
+            lease_owner=None,
+            lease_expires_at=None,
+            next_attempt_at=None,
+            error_code="terminal_deadline_exceeded",
+            updated_at=current,
+        )
+    )
     older = aliased(AgentRunJob)
     older_pending = exists(
         select(older.id).where(
             older.identity_id == AgentRunJob.identity_id,
-            older.state.not_in(("succeeded", "terminal_failure")),
+            older.state.not_in(
+                ("succeeded", "terminal_failure", "blocked_side_effect")
+            ),
             or_(
                 older.created_at < AgentRunJob.created_at,
                 and_(
@@ -742,6 +1228,8 @@ async def claim_runs(
     )
     if request.identity_id:
         statement = statement.where(AgentRunJob.identity_id == request.identity_id)
+    if request.run_id:
+        statement = statement.where(AgentRunJob.id == request.run_id)
     rows = list((await db.scalars(statement)).all())
     for run in rows:
         run.state = "running"
@@ -754,11 +1242,183 @@ async def claim_runs(
     return ContextRunClaimResponse(runs=[_run_summary(run) for run in rows])
 
 
+async def renew_run_lease(
+    db: AsyncSession,
+    request: ContextRunLeaseRenewRequest,
+    *,
+    now: datetime | None = None,
+    lease_seconds: int = 120,
+) -> ContextRunSummary:
+    """Extend only a live lease held by the exact current execution owner."""
+    current = now or datetime.now(UTC)
+    run = (
+        await db.scalars(
+            select(AgentRunJob)
+            .where(AgentRunJob.id == request.run_id)
+            .with_for_update()
+        )
+    ).one()
+    if run.state != "running":
+        raise ContextRunConflict("context_run_not_running")
+    if run.lease_owner != request.lease_owner:
+        raise ContextRunConflict("context_run_lease_owner_invalid")
+    if run.lease_expires_at is None or run.lease_expires_at <= current:
+        raise ContextRunConflict("context_run_lease_expired")
+    if run.terminal_deadline_at <= current:
+        raise ContextRunConflict("context_run_terminal_deadline_exceeded")
+    run.lease_expires_at = min(
+        current + timedelta(seconds=max(1, int(lease_seconds))),
+        run.terminal_deadline_at,
+    )
+    run.updated_at = current
+    await db.flush()
+    return _run_summary(run)
+
+
+async def _lock_live_tool_run(
+    db: AsyncSession,
+    *,
+    run_id: UUID,
+    lease_owner: str,
+    now: datetime,
+) -> AgentRunJob:
+    run = (
+        await db.scalars(
+            select(AgentRunJob).where(AgentRunJob.id == run_id).with_for_update()
+        )
+    ).one()
+    if run.state != "running":
+        raise ContextToolConflict("context_run_not_running")
+    if run.lease_owner != lease_owner:
+        raise ContextToolConflict("context_run_lease_owner_invalid")
+    if run.lease_expires_at is None or run.lease_expires_at <= now:
+        raise ContextToolConflict("context_run_lease_expired")
+    if run.terminal_deadline_at <= now:
+        raise ContextToolConflict("context_run_terminal_deadline_exceeded")
+    return run
+
+
+async def _validated_tool_result_event(
+    db: AsyncSession,
+    invocation: AgentToolInvocation,
+    result_event_id: UUID,
+) -> AgentConversationEvent:
+    event = await db.scalar(
+        select(AgentConversationEvent)
+        .join(AgentRunJob, AgentRunJob.id == invocation.run_id)
+        .where(
+            AgentConversationEvent.id == result_event_id,
+            AgentConversationEvent.identity_id == AgentRunJob.identity_id,
+            AgentConversationEvent.session_id == AgentRunJob.session_id,
+            AgentConversationEvent.event_type == "tool_result",
+            AgentConversationEvent.tool_name == invocation.tool_name,
+            AgentConversationEvent.tool_call_id == invocation.tool_call_id,
+        )
+    )
+    if event is None:
+        raise ContextToolConflict("context_tool_result_event_invalid")
+    return event
+
+
+async def _tool_result_content(
+    db: AsyncSession,
+    invocation: AgentToolInvocation,
+    decision: str,
+) -> str | None:
+    if decision != "restore_result" or invocation.result_event_id is None:
+        return None
+    event = await _validated_tool_result_event(
+        db,
+        invocation,
+        invocation.result_event_id,
+    )
+    return event.search_text
+
+
 async def start_tool_invocation(
     db: AsyncSession,
     request: ContextToolInvocationRequest,
+    *,
+    now: datetime | None = None,
 ) -> ContextToolInvocationResponse:
+    current = now or datetime.now(UTC)
+    await _lock_live_tool_run(
+        db,
+        run_id=request.run_id,
+        lease_owner=request.lease_owner,
+        now=current,
+    )
     arguments_sha256 = canonical_json_hash(request.arguments)
+    invocation = (
+        await db.scalars(
+            select(AgentToolInvocation)
+            .where(
+                AgentToolInvocation.run_id == request.run_id,
+                AgentToolInvocation.tool_call_id == request.tool_call_id,
+            )
+            .with_for_update()
+        )
+    ).one_or_none()
+    if invocation is not None:
+        if (
+            invocation.tool_name != request.tool_name
+            or invocation.arguments_sha256 != arguments_sha256
+            or invocation.side_effect_class != request.side_effect_class
+            or invocation.caller_idempotency_key != request.caller_idempotency_key
+        ):
+            raise ContextToolConflict("context_tool_replay_conflict")
+        decision = tool_replay_decision(
+            side_effect_class=invocation.side_effect_class,
+            state=invocation.state,
+            has_result=invocation.result_event_id is not None,
+        )
+        return ContextToolInvocationResponse(
+            invocation_id=invocation.id,
+            canonical_tool_call_id=invocation.tool_call_id,
+            state=invocation.state,
+            replay_decision=decision,
+            result_content=await _tool_result_content(db, invocation, decision),
+        )
+
+    if request.side_effect_class != "read_only":
+        intent_match = (
+            AgentToolInvocation.caller_idempotency_key == request.caller_idempotency_key
+            if request.caller_idempotency_key
+            else AgentToolInvocation.arguments_sha256 == arguments_sha256
+        )
+        prior_intent = (
+            await db.scalars(
+                select(AgentToolInvocation)
+                .where(
+                    AgentToolInvocation.run_id == request.run_id,
+                    AgentToolInvocation.tool_name == request.tool_name,
+                    intent_match,
+                )
+                .order_by(AgentToolInvocation.started_at, AgentToolInvocation.id)
+                .with_for_update()
+            )
+        ).first()
+        if prior_intent is not None:
+            if prior_intent.side_effect_class != request.side_effect_class or (
+                request.caller_idempotency_key
+                and prior_intent.caller_idempotency_key
+                == request.caller_idempotency_key
+                and prior_intent.arguments_sha256 != arguments_sha256
+            ):
+                raise ContextToolConflict("context_tool_replay_conflict")
+            decision = tool_replay_decision(
+                side_effect_class=prior_intent.side_effect_class,
+                state=prior_intent.state,
+                has_result=prior_intent.result_event_id is not None,
+            )
+            return ContextToolInvocationResponse(
+                invocation_id=prior_intent.id,
+                canonical_tool_call_id=prior_intent.tool_call_id,
+                state=prior_intent.state,
+                replay_decision=decision,
+                result_content=await _tool_result_content(db, prior_intent, decision),
+            )
+
     candidate_id = uuid4()
     inserted_id = (
         await db.execute(
@@ -782,45 +1442,36 @@ async def start_tool_invocation(
             .returning(AgentToolInvocation.id)
         )
     ).scalar_one_or_none()
-    invocation_filter = (
-        AgentToolInvocation.id == inserted_id
-        if inserted_id is not None
-        else and_(
-            AgentToolInvocation.run_id == request.run_id,
-            AgentToolInvocation.tool_call_id == request.tool_call_id,
-        )
-    )
+    if inserted_id is None:
+        raise ContextToolConflict("context_tool_concurrent_conflict")
     invocation = (
-        await db.scalars(select(AgentToolInvocation).where(invocation_filter))
-    ).one()
-    if inserted_id is None and (
-        invocation.tool_name != request.tool_name
-        or invocation.arguments_sha256 != arguments_sha256
-        or invocation.side_effect_class != request.side_effect_class
-        or invocation.caller_idempotency_key != request.caller_idempotency_key
-    ):
-        raise ContextToolConflict("context_tool_replay_conflict")
-    decision = (
-        "execute"
-        if inserted_id is not None
-        else tool_replay_decision(
-            side_effect_class=invocation.side_effect_class,
-            state=invocation.state,
-            has_result=invocation.result_event_id is not None,
+        await db.scalars(
+            select(AgentToolInvocation).where(AgentToolInvocation.id == inserted_id)
         )
-    )
+    ).one()
     await db.flush()
     return ContextToolInvocationResponse(
         invocation_id=invocation.id,
+        canonical_tool_call_id=invocation.tool_call_id,
         state=invocation.state,
-        replay_decision=decision,
+        replay_decision="execute",
+        result_content=None,
     )
 
 
 async def update_tool_invocation(
     db: AsyncSession,
     request: ContextToolInvocationUpdateRequest,
+    *,
+    now: datetime | None = None,
 ) -> ContextToolInvocationResponse:
+    current = now or datetime.now(UTC)
+    await _lock_live_tool_run(
+        db,
+        run_id=request.run_id,
+        lease_owner=request.lease_owner,
+        now=current,
+    )
     invocation = (
         await db.scalars(
             select(AgentToolInvocation)
@@ -831,9 +1482,32 @@ async def update_tool_invocation(
             .with_for_update()
         )
     ).one()
+    if request.state == "succeeded" and request.result_event_id is None:
+        raise ContextToolConflict("context_tool_result_event_required")
+    if request.result_event_id is not None:
+        await _validated_tool_result_event(
+            db,
+            invocation,
+            request.result_event_id,
+        )
+    if invocation.state == request.state:
+        if invocation.result_event_id != request.result_event_id:
+            raise ContextToolConflict("context_tool_update_replay_conflict")
+        decision = tool_replay_decision(
+            side_effect_class=invocation.side_effect_class,
+            state=invocation.state,
+            has_result=invocation.result_event_id is not None,
+        )
+        result_content = await _tool_result_content(db, invocation, decision)
+        return ContextToolInvocationResponse(
+            invocation_id=invocation.id,
+            canonical_tool_call_id=invocation.tool_call_id,
+            state=invocation.state,
+            replay_decision=decision,
+            result_content=result_content,
+        )
     allowed = (
-        invocation.state == request.state
-        or (
+        (
             invocation.state == "started"
             and request.state
             in {"succeeded", "not_delivered", "delivery_uncertain", "failed"}
@@ -842,24 +1516,36 @@ async def update_tool_invocation(
             invocation.state == "delivery_uncertain"
             and request.state in {"succeeded", "not_delivered"}
         )
+        or (
+            invocation.side_effect_class == "read_only"
+            and invocation.state == "failed"
+            and request.state == "succeeded"
+        )
+        or (
+            invocation.side_effect_class == "idempotent_write"
+            and invocation.state == "not_delivered"
+            and request.state in {"succeeded", "delivery_uncertain"}
+        )
     )
     if not allowed:
         raise ContextToolConflict("context_tool_transition_invalid")
-    if request.state == "succeeded" and request.result_event_id is None:
-        raise ContextToolConflict("context_tool_result_event_required")
     invocation.state = request.state
     invocation.result_event_id = request.result_event_id
-    invocation.finished_at = datetime.now(UTC)
+    invocation.finished_at = current
     invocation.updated_at = invocation.finished_at
     await db.flush()
+    decision = tool_replay_decision(
+        side_effect_class=invocation.side_effect_class,
+        state=invocation.state,
+        has_result=invocation.result_event_id is not None,
+    )
+    result_content = await _tool_result_content(db, invocation, decision)
     return ContextToolInvocationResponse(
         invocation_id=invocation.id,
+        canonical_tool_call_id=invocation.tool_call_id,
         state=invocation.state,
-        replay_decision=tool_replay_decision(
-            side_effect_class=invocation.side_effect_class,
-            state=invocation.state,
-            has_result=invocation.result_event_id is not None,
-        ),
+        replay_decision=decision,
+        result_content=result_content,
     )
 
 
@@ -882,14 +1568,37 @@ async def get_context_health(
     event_count = int(
         await db.scalar(select(func.count()).select_from(AgentConversationEvent)) or 0
     )
+    checkpoint_events = select(
+        AgentContextCheckpoint.source_boundary_event_id.label("boundary_event_id"),
+        AgentContextCheckpoint.source_boundary_char_offset.label("boundary_offset"),
+        func.unnest(AgentContextCheckpoint.source_event_ids).label("event_id"),
+    ).subquery()
+    event_lengths = (
+        select(
+            AgentConversationEventSegment.event_id.label("event_id"),
+            func.sum(func.char_length(AgentConversationEventSegment.content)).label(
+                "content_length"
+            ),
+        )
+        .group_by(AgentConversationEventSegment.event_id)
+        .subquery()
+    )
+    fully_covered_checkpoint_events = (
+        select(checkpoint_events.c.event_id)
+        .join(event_lengths, event_lengths.c.event_id == checkpoint_events.c.event_id)
+        .where(
+            or_(
+                checkpoint_events.c.event_id != checkpoint_events.c.boundary_event_id,
+                checkpoint_events.c.boundary_offset >= event_lengths.c.content_length,
+            )
+        )
+        .subquery()
+    )
     checkpoint_source_count = int(
         await db.scalar(
             select(
-                func.coalesce(
-                    func.sum(func.cardinality(AgentContextCheckpoint.source_event_ids)),
-                    0,
-                )
-            )
+                func.count(func.distinct(fully_covered_checkpoint_events.c.event_id))
+            ).select_from(fully_covered_checkpoint_events)
         )
         or 0
     )
@@ -901,6 +1610,27 @@ async def get_context_health(
         )
     ).all()
     run_states = {str(state): int(count) for state, count in run_state_rows}
+    actionable_failure_count = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRunJob)
+            .where(
+                or_(
+                    AgentRunJob.state == "blocked_side_effect",
+                    and_(
+                        AgentRunJob.state == "terminal_failure",
+                        AgentRunJob.updated_at
+                        >= current - _RECENT_ACTIONABLE_FAILURE_WINDOW,
+                        or_(
+                            AgentRunJob.error_code.is_(None),
+                            AgentRunJob.error_code != "superseded_by_newer_inbound",
+                        ),
+                    ),
+                )
+            )
+        )
+        or 0
+    )
 
     eligible_created_at = await db.scalar(
         select(func.min(AgentRunJob.created_at)).where(
@@ -923,18 +1653,39 @@ async def get_context_health(
         if eligible_created_at is not None
         else None
     )
-    reconciliation = (
+    reconciled_filter = AgentConversationSession.reconciliation_hash.is_not(None)
+    reconciled_count = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentConversationSession)
+            .where(reconciled_filter)
+        )
+        or 0
+    )
+    latest_reconciliation = (
         await db.execute(
             select(
-                func.count(),
-                func.max(AgentConversationSession.updated_at),
-                func.max(AgentConversationSession.source_event_count),
-            ).where(AgentConversationSession.reconciliation_hash.is_not(None))
+                AgentConversationSession.updated_at,
+                AgentConversationSession.source_event_count,
+            )
+            .where(reconciled_filter)
+            .order_by(
+                AgentConversationSession.updated_at.desc(),
+                AgentConversationSession.id.desc(),
+            )
+            .limit(1)
         )
-    ).one()
-    reconciled_count = int(reconciliation[0] or 0)
+    ).one_or_none()
+    projection_health = (
+        await db.get(IntegrationHealthState, "sydney_context_projection")
+        if flags.get("projection", False)
+        else None
+    )
+    projection_degraded = (
+        projection_health is not None and projection_health.state != "healthy"
+    )
     status = "disabled" if not flags.get("durable_context", False) else "ready"
-    if status == "ready" and run_states.get("terminal_failure", 0) > 0:
+    if status == "ready" and (actionable_failure_count > 0 or projection_degraded):
         status = "degraded"
     return ContextHealthResponse(
         status=status,
@@ -947,9 +1698,14 @@ async def get_context_health(
         oldest_eligible_run_age_seconds=oldest_age,
         reconciled_session_count=reconciled_count,
         unreconciled_session_count=max(0, session_count - reconciled_count),
-        last_reconciled_at=reconciliation[1],
+        last_reconciled_at=(
+            latest_reconciliation[0] if latest_reconciliation is not None else None
+        ),
         last_reconciled_event_count=(
-            int(reconciliation[2]) if reconciliation[2] is not None else None
+            int(latest_reconciliation[1])
+            if latest_reconciliation is not None
+            and latest_reconciliation[1] is not None
+            else None
         ),
     )
 
@@ -1000,7 +1756,11 @@ async def _resolve_session(
         parent_session_id = await db.scalar(
             select(AgentConversationSession.id).where(
                 AgentConversationSession.hermes_session_id
-                == request.parent_hermes_session_id
+                == request.parent_hermes_session_id,
+                AgentConversationSession.identity_id == identity_id,
+                AgentConversationSession.logical_conversation_id
+                == request.logical_conversation_id,
+                AgentConversationSession.platform == request.platform,
             )
         )
         if parent_session_id is None:
@@ -1092,9 +1852,10 @@ async def ingest_event_batch(
     *,
     configured_secrets: Sequence[str] = (),
     segment_chars: int = 16_000,
+    batch_limit: int = 100,
 ) -> ContextEventBatchResponse:
-    if len(request.events) > 100:
-        raise ValueError("context_event_batch_too_large")
+    if len(request.events) > max(1, min(int(batch_limit), 100)):
+        raise ContextEventConflict("context_event_batch_too_large")
     identity_id = await _resolve_identity(db, request)
     session_id = await _resolve_session(db, request, identity_id=identity_id)
     await db.scalar(

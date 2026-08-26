@@ -79,10 +79,7 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
         def generate_content(self, **kwargs):
             observed.update(kwargs)
             return SimpleNamespace(
-                text=(
-                    '{\n  "schema_version": "gmail-task-v1",\n'
-                    '  "actions": []\n}'
-                ),
+                text=('{\n  "schema_version": "gmail-task-v1",\n  "actions": []\n}'),
                 parsed={
                     "schema_version": "gmail-task-v1",
                     "actions": [],
@@ -107,9 +104,9 @@ def test_gmail_model_uses_strict_json_schema_provider_channel(
     schema = config.response_json_schema
     assert isinstance(schema, dict)
     assert schema["additionalProperties"] is False
-    assert schema["$defs"]["GmailObligationModelAction"][
-        "additionalProperties"
-    ] is False
+    assert (
+        schema["$defs"]["GmailObligationModelAction"]["additionalProperties"] is False
+    )
 
     def assert_provider_supported(value: object) -> None:
         if isinstance(value, dict):
@@ -882,6 +879,7 @@ async def test_registered_default_gmail_runner_uses_real_service_with_direct_eng
             "instagram_health",
             "integration_alerts",
             "notification_delivery",
+            "sydney_context_projection",
             "sydney_questions",
         )
         receipt_job = next(

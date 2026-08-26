@@ -137,7 +137,7 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
     )
     dockerfile = _insert_before_once(
         dockerfile,
-        '    uv pip install --system --no-cache -e',
+        "    uv pip install --system --no-cache -e",
         "    python /app/install_sydney_overlay.py --source /opt/hermes-agent && \\",
     )
     start_script = _insert_before_once(
@@ -158,11 +158,15 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
         source / "install_sydney_overlay.py": (
             OVERLAY_DIRECTORY / "install_sydney_overlay.py"
         ).read_bytes(),
-        source / "sydney_spool.py": (OVERLAY_DIRECTORY / "sydney_spool.py").read_bytes(),
+        source / "sydney_spool.py": (
+            OVERLAY_DIRECTORY / "sydney_spool.py"
+        ).read_bytes(),
         source / "sydney_memory_provider.py": (
             OVERLAY_DIRECTORY / "sydney_memory_provider.py"
         ).read_bytes(),
-        source / "sydney_retry.py": (OVERLAY_DIRECTORY / "sydney_retry.py").read_bytes(),
+        source / "sydney_retry.py": (
+            OVERLAY_DIRECTORY / "sydney_retry.py"
+        ).read_bytes(),
         source / "sydney_backfill.py": (
             OVERLAY_DIRECTORY / "sydney_backfill.py"
         ).read_bytes(),

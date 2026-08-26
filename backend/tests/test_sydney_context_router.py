@@ -5,11 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import pytest
 from database import get_db
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from middleware.agent_control import require_agent_control
+from pydantic import ValidationError
 
 NEW_ACTIONS = {
     "context.events.ingest",
@@ -19,16 +21,26 @@ NEW_ACTIONS = {
     "context.runs.start",
     "context.runs.update",
     "context.runs.claim",
+    "context.runs.renew",
     "context.tools.start",
     "context.tools.update",
     "context.health.read",
 }
 
 
-def _app() -> FastAPI:
+def _app(*, event_batch_max_bytes: int | None = None) -> FastAPI:
     from routers import agent_control_context
 
     app = FastAPI()
+    if event_batch_max_bytes is not None:
+        from middleware.context_event_batch_limit import (
+            ContextEventBatchLimitMiddleware,
+        )
+
+        app.add_middleware(
+            ContextEventBatchLimitMiddleware,
+            max_bytes=event_batch_max_bytes,
+        )
     app.include_router(
         agent_control_context.router,
         prefix="/api/v1/agent-control",
@@ -64,6 +76,45 @@ def _batch_payload() -> dict[str, object]:
     }
 
 
+def test_event_batch_contract_rejects_an_oversized_aggregate_payload() -> None:
+    from schemas.sydney_context import ContextEventBatchRequest
+
+    payload = _batch_payload()
+    event = dict(payload["events"][0])
+    payload["events"] = [
+        {
+            **event,
+            "source_event_key": f"session-1:message-{index}",
+            "content": "x" * 1_000_000,
+        }
+        for index in range(9)
+    ]
+
+    with pytest.raises(ValidationError, match="context_event_batch_too_large"):
+        ContextEventBatchRequest.model_validate(payload)
+
+
+def test_event_batch_limit_rejects_the_wire_body_before_route_handling() -> None:
+    app = _app(event_batch_max_bytes=512)
+    client = TestClient(app)
+    payload = _batch_payload()
+    payload["events"][0]["content"] = "x" * 1_000
+
+    with patch(
+        "routers.agent_control_context.ingest_event_batch",
+        new_callable=AsyncMock,
+    ) as ingest:
+        response = client.post(
+            "/api/v1/agent-control/context/events/batch",
+            headers=_headers(),
+            json=payload,
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "sydney_context_event_batch_too_large"}
+    ingest.assert_not_awaited()
+
+
 def test_registry_appends_exact_context_actions_without_write_capability_drift() -> (
     None
 ):
@@ -75,6 +126,32 @@ def test_registry_appends_exact_context_actions_without_write_capability_drift()
     assert "context.events.delete" not in ids
     assert "context.history.delete" not in ids
     assert "context.tools.execute" not in ids
+
+
+def test_context_redaction_inventory_includes_all_secret_bearing_settings() -> None:
+    from routers.agent_control_context import _configured_secrets
+
+    fixtures = {
+        "DATABASE_URL": "postgresql+asyncpg://fixture:database-secret@db/app",
+        "GMAIL_HISTORY_DATABASE_URL": (
+            "postgresql+asyncpg://fixture:history-secret@direct-db/app"
+        ),
+        "GMAIL_PARTICIPANT_HASH_KEY": "participant-hash-secret-value",
+        "SYDNEY_CLARIFICATION_CODE_KEYS_JSON": '{"1":"clarification-secret"}',
+    }
+    patches = [
+        patch(f"routers.agent_control_context.settings.{name}", value)
+        for name, value in fixtures.items()
+    ]
+    for active_patch in patches:
+        active_patch.start()
+    try:
+        configured = set(_configured_secrets())
+    finally:
+        for active_patch in reversed(patches):
+            active_patch.stop()
+
+    assert set(fixtures.values()).issubset(configured)
 
 
 def test_context_routes_keep_agent_auth_and_strict_response_models() -> None:
@@ -90,6 +167,7 @@ def test_context_routes_keep_agent_auth_and_strict_response_models() -> None:
         "/api/v1/agent-control/context/runs/start",
         "/api/v1/agent-control/context/runs/update",
         "/api/v1/agent-control/context/runs/claim",
+        "/api/v1/agent-control/context/runs/renew",
         "/api/v1/agent-control/context/tools/start",
         "/api/v1/agent-control/context/tools/update",
         "/api/v1/agent-control/context/health",
@@ -163,6 +241,65 @@ def test_master_and_retrieval_flags_fail_closed_before_service_calls() -> None:
     assert response.status_code == 503
     assert response.json() == {"detail": "sydney_context_retrieval_disabled"}
     retrieve.assert_not_awaited()
+
+
+def test_authenticated_health_reports_disabled_state_before_master_enablement() -> None:
+    from schemas.sydney_context import ContextHealthResponse
+
+    app = _app()
+    client = TestClient(app)
+    result = ContextHealthResponse(
+        status="disabled",
+        flags={
+            "durable_context": False,
+            "retrieval": False,
+            "projection": False,
+            "retry": False,
+        },
+        identity_count=0,
+        session_count=0,
+        event_count=0,
+        run_states={},
+        checkpoint_lag_events=0,
+    )
+    with (
+        patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
+            False,
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED",
+            False,
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_PROJECTION_ENABLED",
+            False,
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED",
+            False,
+        ),
+        patch(
+            "routers.agent_control_context.get_context_health",
+            AsyncMock(return_value=result),
+        ) as health,
+        patch(
+            "routers.agent_control_context.write_agent_audit",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = client.get(
+            "/api/v1/agent-control/context/health",
+            headers=_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "disabled"
+    health.assert_awaited_once()
 
 
 def test_ingest_uses_bearer_and_writes_content_free_audit_metadata() -> None:
@@ -429,10 +566,18 @@ def test_all_context_operations_return_strict_models_and_content_free_audits() -
             "context.runs.claim",
         ),
         (
+            "/context/runs/renew",
+            "renew_run_lease",
+            {"run_id": str(run_id), "lease_owner": "atlas-one"},
+            run,
+            "context.runs.renew",
+        ),
+        (
             "/context/tools/start",
             "start_tool_invocation",
             {
                 "run_id": str(run_id),
+                "lease_owner": "atlas-one",
                 "tool_call_id": "tool-call-1",
                 "tool_name": "context_history_search",
                 "arguments": {"query": "private tool argument"},
@@ -440,6 +585,7 @@ def test_all_context_operations_return_strict_models_and_content_free_audits() -
             },
             ContextToolInvocationResponse(
                 invocation_id=uuid4(),
+                canonical_tool_call_id="tool-call-1",
                 state="started",
                 replay_decision="execute",
             ),
@@ -450,11 +596,13 @@ def test_all_context_operations_return_strict_models_and_content_free_audits() -
             "update_tool_invocation",
             {
                 "run_id": str(run_id),
+                "lease_owner": "atlas-one",
                 "tool_call_id": "tool-call-1",
                 "state": "not_delivered",
             },
             ContextToolInvocationResponse(
                 invocation_id=uuid4(),
+                canonical_tool_call_id="tool-call-1",
                 state="not_delivered",
                 replay_decision="retry_not_delivered",
             ),

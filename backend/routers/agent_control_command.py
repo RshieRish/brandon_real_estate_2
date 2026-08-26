@@ -18,6 +18,7 @@ from schemas.agent_control_command import (
 from services.agent_control_audit import write_agent_audit
 from services.agent_control_command import (
     CommandContactAudienceChanged,
+    CommandContactsCursorInvalid,
     CommandContactsUnavailable,
     preview_command_contact_audience,
     search_command_contacts,
@@ -71,6 +72,8 @@ async def command_contacts_search(
 ) -> CommandContactsSearchResponse:
     try:
         result = await search_command_contacts(db, payload)
+    except CommandContactsCursorInvalid:
+        raise HTTPException(422, "command_contacts_cursor_invalid") from None
     except CommandContactsUnavailable:
         raise HTTPException(503, "command_contacts_unavailable") from None
     await _audit(
@@ -80,14 +83,13 @@ async def command_contacts_search(
         action_id="crm.command_contacts.search",
         request_meta={
             **_filter_meta(payload),
-            "page": payload.page,
+            "has_cursor": payload.cursor is not None,
             "page_size": payload.page_size,
         },
         response_meta={
             "count": len(result.contacts),
             "total": result.total,
-            "page": result.page,
-            "page_count": result.page_count,
+            "has_more": result.has_more,
         },
     )
     return result

@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
-from pathlib import Path
 import stat
 import tempfile
+from pathlib import Path
 from typing import Any
-
 
 OVERLAY_DIRECTORY = Path(__file__).resolve().parent
 DEPLOYED_MANIFEST_PATH = OVERLAY_DIRECTORY / "atlas_backend_overlay_manifest.json"
@@ -18,11 +18,21 @@ MANIFEST_PATH = (
     if DEPLOYED_MANIFEST_PATH.exists()
     else OVERLAY_DIRECTORY / "manifest.json"
 )
+_CONFIG_BACKUP_NAME = ".sydney-durable-context-config-backup.yaml"
+_CONFIG_BACKUP_VERSION = 1
 
 
 def _tool_include() -> list[str]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     return list(manifest["tools"]["include"])
+
+
+def _bounded_int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -70,6 +80,103 @@ def _atomic_write(path: Path, contents: bytes) -> bool:
         temporary_path.unlink(missing_ok=True)
 
 
+def _setting_snapshot(config: dict[str, Any], key: str) -> dict[str, Any]:
+    return {
+        "present": key in config,
+        "value": copy.deepcopy(config.get(key)),
+    }
+
+
+def _nested_setting_snapshot(
+    config: dict[str, Any], container_name: str, key: str
+) -> dict[str, Any]:
+    container = config.get(container_name)
+    return {
+        "container_present": container_name in config,
+        "present": isinstance(container, dict) and key in container,
+        "value": (
+            copy.deepcopy(container.get(key)) if isinstance(container, dict) else None
+        ),
+    }
+
+
+def _sydney_config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": _CONFIG_BACKUP_VERSION,
+        "session_reset": _setting_snapshot(config, "session_reset"),
+        "agent_max_turns": _nested_setting_snapshot(config, "agent", "max_turns"),
+        "compression": _setting_snapshot(config, "compression"),
+        "tool_guardrails": _setting_snapshot(config, "tool_guardrails"),
+        "memory_provider": _nested_setting_snapshot(config, "memory", "provider"),
+    }
+
+
+def _restore_setting(
+    config: dict[str, Any], key: str, snapshot: dict[str, Any]
+) -> None:
+    if snapshot.get("present") is True:
+        config[key] = copy.deepcopy(snapshot.get("value"))
+    else:
+        config.pop(key, None)
+
+
+def _restore_nested_setting(
+    config: dict[str, Any],
+    container_name: str,
+    key: str,
+    snapshot: dict[str, Any],
+) -> None:
+    container = config.get(container_name)
+    if not isinstance(container, dict):
+        container = {}
+        config[container_name] = container
+    if snapshot.get("present") is True:
+        container[key] = copy.deepcopy(snapshot.get("value"))
+    else:
+        container.pop(key, None)
+    if snapshot.get("container_present") is not True and not container:
+        config.pop(container_name, None)
+
+
+def _load_config_backup(path: Path) -> dict[str, Any]:
+    import yaml
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    required = {
+        "session_reset",
+        "agent_max_turns",
+        "compression",
+        "tool_guardrails",
+        "memory_provider",
+    }
+    if (
+        not isinstance(loaded, dict)
+        or loaded.get("version") != _CONFIG_BACKUP_VERSION
+        or not required.issubset(loaded)
+        or not all(isinstance(loaded[name], dict) for name in required)
+    ):
+        raise ValueError("Sydney config backup is invalid.")
+    return loaded
+
+
+def _restore_sydney_config(config: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    _restore_setting(config, "session_reset", snapshot["session_reset"])
+    _restore_nested_setting(
+        config,
+        "agent",
+        "max_turns",
+        snapshot["agent_max_turns"],
+    )
+    _restore_setting(config, "compression", snapshot["compression"])
+    _restore_setting(config, "tool_guardrails", snapshot["tool_guardrails"])
+    _restore_nested_setting(
+        config,
+        "memory",
+        "provider",
+        snapshot["memory_provider"],
+    )
+
+
 def configure_atlas_backend(
     config_path: Path,
     *,
@@ -77,15 +184,46 @@ def configure_atlas_backend(
     token: str,
     durable_context_enabled: bool = False,
     external_user_id: str = "",
+    external_chat_id: str = "",
     allowed_external_user_ids: set[str] | None = None,
 ) -> bool:
     """Preserve unrelated config while adding the local-only, pinned bridge entry."""
-    if not backend_url or not token:
-        return False
-
     import yaml
 
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config = load_yaml(config_path)
+    memory_value = config.get("memory")
+    if memory_value is not None and not isinstance(memory_value, dict):
+        raise ValueError("Hermes config.yaml memory must contain an object.")
+    agent_value = config.get("agent")
+    if agent_value is not None and not isinstance(agent_value, dict):
+        raise ValueError("Hermes config.yaml agent must contain an object.")
+    allowlist = allowed_external_user_ids or set()
+    sydney_active = (
+        durable_context_enabled
+        and bool(external_chat_id)
+        and external_user_id in allowlist
+    )
+    backup_path = config_path.parent / _CONFIG_BACKUP_NAME
+
+    if not backend_url or not token:
+        if backup_path.exists():
+            _restore_sydney_config(config, _load_config_backup(backup_path))
+            _atomic_write(
+                config_path,
+                yaml.safe_dump(config, sort_keys=False).encode("utf-8"),
+            )
+            backup_path.unlink(missing_ok=True)
+            _fsync_directory(backup_path.parent)
+            return True
+        if isinstance(memory_value, dict) and memory_value.get("provider") == "sydney":
+            memory_value.pop("provider", None)
+            return _atomic_write(
+                config_path,
+                yaml.safe_dump(config, sort_keys=False).encode("utf-8"),
+            )
+        return False
+
     mcp_servers = config.setdefault("mcp_servers", {})
     if not isinstance(mcp_servers, dict):
         raise ValueError("Hermes config.yaml mcp_servers must contain an object.")
@@ -106,37 +244,61 @@ def configure_atlas_backend(
             "prompts": False,
         },
     }
-    config["session_reset"] = {"mode": "none"}
-    agent = config.setdefault("agent", {})
-    if not isinstance(agent, dict):
-        raise ValueError("Hermes config.yaml agent must contain an object.")
-    agent["max_turns"] = 16
-    config["compression"] = {
-        "enabled": True,
-        "threshold": 0.08,
-        "target": 0.02,
-        "protect_last": 20,
-        "abort_on_summary_failure": True,
-    }
-    config["tool_guardrails"] = {
-        "enabled": True,
-        "exact_failure_limit": 5,
-        "same_tool_failure_limit": 8,
-        "no_progress_limit": 5,
-    }
-    memory = config.setdefault("memory", {})
-    if not isinstance(memory, dict):
-        raise ValueError("Hermes config.yaml memory must contain an object.")
-    allowlist = allowed_external_user_ids or set()
-    if durable_context_enabled and external_user_id in allowlist:
+    remove_backup_after_write = False
+    new_snapshot = (
+        _sydney_config_snapshot(config)
+        if sydney_active and not backup_path.exists()
+        else None
+    )
+    if sydney_active:
+        if backup_path.exists():
+            _load_config_backup(backup_path)
+        else:
+            assert new_snapshot is not None
+            _atomic_write(
+                backup_path,
+                yaml.safe_dump(new_snapshot, sort_keys=False).encode("utf-8"),
+            )
+        memory = memory_value if isinstance(memory_value, dict) else {}
+        if memory_value is None:
+            config["memory"] = memory
+        config["session_reset"] = {"mode": "none"}
+        agent = config.setdefault("agent", {})
+        agent["max_turns"] = _bounded_int_env(
+            "SYDNEY_CONTEXT_MAX_TURNS", 16, minimum=1, maximum=90
+        )
+        config["compression"] = {
+            "enabled": True,
+            "threshold": 0.08,
+            "threshold_tokens": _bounded_int_env(
+                "SYDNEY_CONTEXT_PROMPT_COMPRESS_TOKENS",
+                96_000,
+                minimum=64_000,
+                maximum=2_000_000,
+            ),
+            "target": 0.02,
+            "protect_last": 20,
+            "abort_on_summary_failure": True,
+        }
+        config["tool_guardrails"] = {
+            "enabled": True,
+            "exact_failure_limit": 5,
+            "same_tool_failure_limit": 8,
+            "no_progress_limit": 5,
+        }
         memory["provider"] = "sydney"
-    elif memory.get("provider") == "sydney":
-        memory.pop("provider", None)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    elif backup_path.exists():
+        _restore_sydney_config(config, _load_config_backup(backup_path))
+        remove_backup_after_write = True
+    elif isinstance(memory_value, dict) and memory_value.get("provider") == "sydney":
+        memory_value.pop("provider", None)
     _atomic_write(
         config_path,
         yaml.safe_dump(config, sort_keys=False).encode("utf-8"),
     )
+    if remove_backup_after_write:
+        backup_path.unlink(missing_ok=True)
+        _fsync_directory(backup_path.parent)
     return True
 
 
@@ -191,18 +353,17 @@ def main() -> None:
     enabled = _enabled(os.getenv("SYDNEY_DURABLE_CONTEXT_ENABLED", ""))
     external_user_id = os.getenv("SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID", "").strip()
     external_chat_id = os.getenv("SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID", "").strip()
-    allowed = _allowlist(
-        os.getenv("SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS", "")
-    )
+    allowed = _allowlist(os.getenv("SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS", ""))
     configure_atlas_backend(
         hermes_home / "config.yaml",
         backend_url=os.getenv("BRANDON_BACKEND_URL", ""),
         token=os.getenv("BRANDON_AGENT_CONTROL_TOKEN", ""),
         durable_context_enabled=enabled,
         external_user_id=external_user_id,
+        external_chat_id=external_chat_id,
         allowed_external_user_ids=allowed,
     )
-    if enabled and external_user_id in allowed:
+    if enabled and external_chat_id and external_user_id in allowed:
         backfill_visible_history(
             hermes_home=hermes_home,
             external_user_id=external_user_id,

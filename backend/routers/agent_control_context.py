@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Annotated, NoReturn
 
@@ -19,6 +20,7 @@ from schemas.sydney_context import (
     ContextRetrieveRequest,
     ContextRunClaimRequest,
     ContextRunClaimResponse,
+    ContextRunLeaseRenewRequest,
     ContextRunStartRequest,
     ContextRunStartResponse,
     ContextRunSummary,
@@ -39,6 +41,7 @@ from services.sydney_context_service import (
     get_context_health,
     ingest_event_batch,
     reconcile_session,
+    renew_run_lease,
     retrieve_context,
     search_history,
     start_run,
@@ -81,7 +84,11 @@ def _require_retry() -> None:
 
 def _configured_secrets() -> Sequence[str]:
     secret_names = (
+        "DATABASE_URL",
+        "GMAIL_HISTORY_DATABASE_URL",
+        "GMAIL_PARTICIPANT_HASH_KEY",
         "AGENT_CONTROL_TOKEN",
+        "BRANDON_AGENT_CONTROL_TOKEN",
         "GEMINI_API_KEY",
         "GOOGLE_CLIENT_SECRET",
         "GOOGLE_CALENDAR_CLIENT_SECRET",
@@ -93,13 +100,19 @@ def _configured_secrets() -> Sequence[str]:
         "GOOGLE_CALENDAR_REFRESH_TOKEN",
         "RENTCAST_API_KEY",
         "R2_SECRET_ACCESS_KEY",
+        "TELEGRAM_BOT_TOKEN",
         "SYDNEY_TELEGRAM_BOT_TOKEN",
+        "SYDNEY_CLARIFICATION_CODE_KEYS_JSON",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
     )
-    return tuple(
-        value
-        for name in secret_names
-        if isinstance((value := getattr(settings, name, "")), str) and value
-    )
+    values: list[str] = []
+    for name in secret_names:
+        for candidate in (getattr(settings, name, ""), os.environ.get(name, "")):
+            if isinstance(candidate, str) and candidate and candidate not in values:
+                values.append(candidate)
+    return tuple(values)
 
 
 async def _audit(
@@ -143,6 +156,7 @@ async def ingest_context_events(
             payload,
             configured_secrets=_configured_secrets(),
             segment_chars=settings.SYDNEY_CONTEXT_SEGMENT_CHARS,
+            batch_limit=settings.SYDNEY_CONTEXT_EVENT_BATCH_LIMIT,
         )
     except _CONTEXT_ERRORS as error:
         _raise_bounded(error)
@@ -203,8 +217,15 @@ async def retrieve_context_packet(
     agent: Agent,
 ) -> ContextPacket:
     _require_retrieval()
+    configured_budget = max(
+        256,
+        min(int(settings.SYDNEY_CONTEXT_RECALL_TOKEN_BUDGET), 16_000),
+    )
+    effective_payload = payload.model_copy(
+        update={"token_budget": min(payload.token_budget, configured_budget)}
+    )
     try:
-        result = await retrieve_context(db, payload)
+        result = await retrieve_context(db, effective_payload)
     except _CONTEXT_ERRORS as error:
         _raise_bounded(error)
     await _audit(
@@ -212,7 +233,7 @@ async def retrieve_context_packet(
         request=request,
         agent=agent,
         action_id="context.retrieve",
-        request_meta={"token_budget": payload.token_budget},
+        request_meta={"token_budget": effective_payload.token_budget},
         response_meta={
             "estimated_tokens": result.estimated_tokens,
             "section_count": len(result.sections),
@@ -332,6 +353,32 @@ async def claim_context_runs(
     return result
 
 
+@router.post("/context/runs/renew", response_model=ContextRunSummary)
+async def renew_context_run_lease(
+    payload: ContextRunLeaseRenewRequest,
+    request: Request,
+    db: Database,
+    agent: Agent,
+) -> ContextRunSummary:
+    _require_retry()
+    try:
+        result = await renew_run_lease(
+            db,
+            payload,
+            lease_seconds=settings.SYDNEY_CONTEXT_RUN_LEASE_SECONDS,
+        )
+    except _CONTEXT_ERRORS as error:
+        _raise_bounded(error)
+    await _audit(
+        db,
+        request=request,
+        agent=agent,
+        action_id="context.runs.renew",
+        response_meta={"run_id": str(result.id), "state": result.state},
+    )
+    return result
+
+
 @router.post("/context/tools/start", response_model=ContextToolInvocationResponse)
 async def start_context_tool(
     payload: ContextToolInvocationRequest,
@@ -390,7 +437,6 @@ async def context_health(
     db: Database,
     agent: Agent,
 ) -> ContextHealthResponse:
-    _require_master()
     flags = {
         "durable_context": settings.SYDNEY_DURABLE_CONTEXT_ENABLED,
         "retrieval": settings.SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED,

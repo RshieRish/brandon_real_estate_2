@@ -5,11 +5,10 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-
-from pydantic import ValidationError
-from sqlalchemy.exc import SQLAlchemyError
+from uuid import uuid4
 
 from models.integration_health import IntegrationHealthState
+from pydantic import ValidationError
 from schemas.sydney_context import SydneyContextProjectionResult
 from services.integration_health_service import (
     ProviderCallTimedOut,
@@ -19,16 +18,23 @@ from services.integration_health_service import (
     record_integration_success,
 )
 from services.sydney_context_projection import (
+    ProjectionCandidate,
     ProjectionModelRequest,
     SydneyContextProjectionError,
     apply_projection_result,
     build_projection_request,
-    select_projection_candidate,
+    claim_projection_candidate,
+    release_projection_claim,
     validate_projection_result,
 )
+from sqlalchemy.exc import SQLAlchemyError
+
 from workers.jobs.gmail_receipts import _gemini_json_response_schema
 
 _PROVIDER = "sydney_context_projection"
+_CLAIM_LEASE_MARGIN_SECONDS = 60
+_MAX_CLAIM_LEASE_SECONDS = 900
+_MAX_PROVIDER_DEADLINE_SECONDS = _MAX_CLAIM_LEASE_SECONDS - _CLAIM_LEASE_MARGIN_SECONDS
 
 
 def build_sydney_projection_model_call(
@@ -94,19 +100,35 @@ class SydneyContextProjectionJob:
         sessionmaker,
         provider_executor,
         model_call: Callable[[ProjectionModelRequest], object],
-        select_candidate=select_projection_candidate,
+        claim_candidate=claim_projection_candidate,
+        release_claim=release_projection_claim,
         apply_result=apply_projection_result,
         clock: Callable[[], datetime] | None = None,
         provider_deadline_seconds: float = 30,
+        lease_owner: str | None = None,
     ) -> None:
+        if (
+            isinstance(provider_deadline_seconds, bool)
+            or not isinstance(provider_deadline_seconds, (int, float))
+            or not math.isfinite(float(provider_deadline_seconds))
+            or not 0
+            < float(provider_deadline_seconds)
+            <= _MAX_PROVIDER_DEADLINE_SECONDS
+        ):
+            raise ValueError("sydney_projection_provider_deadline_invalid")
         self._enabled = enabled
         self._sessionmaker = sessionmaker
         self._executor = provider_executor
         self._model_call = model_call
-        self._select_candidate = select_candidate
+        self._claim_candidate = claim_candidate
+        self._release_claim = release_claim
         self._apply_result = apply_result
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._provider_deadline_seconds = provider_deadline_seconds
+        self._provider_deadline_seconds = float(provider_deadline_seconds)
+        self._claim_lease_seconds = (
+            math.ceil(self._provider_deadline_seconds) + _CLAIM_LEASE_MARGIN_SECONDS
+        )
+        self._lease_owner = lease_owner or f"integration-worker:{uuid4()}"
 
     async def _record_failure(self, *, category: str, checked_at: datetime) -> None:
         async with self._sessionmaker() as db:
@@ -119,6 +141,16 @@ class SydneyContextProjectionJob:
             )
             await db.commit()
 
+    async def _release_candidate(self, candidate: ProjectionCandidate) -> None:
+        try:
+            async with self._sessionmaker() as db:
+                released = await self._release_claim(db, candidate)
+                if released:
+                    await db.commit()
+        except SQLAlchemyError:
+            # A crashed or disconnected worker is recovered by the bounded lease.
+            return
+
     async def run(self) -> None:
         if not self._enabled:
             return
@@ -130,7 +162,14 @@ class SydneyContextProjectionJob:
                 if pause_until is not None and pause_until > now:
                     return
             try:
-                candidate = await self._select_candidate(db)
+                candidate = await self._claim_candidate(
+                    db,
+                    lease_owner=self._lease_owner,
+                    claimed_at=now,
+                    lease_seconds=self._claim_lease_seconds,
+                )
+                if candidate is not None:
+                    await db.commit()
             except (SQLAlchemyError, SydneyContextProjectionError):
                 candidate = None
                 selection_failed = True
@@ -142,8 +181,8 @@ class SydneyContextProjectionJob:
         if candidate is None:
             return
 
-        request = build_projection_request(candidate)
         try:
+            request = build_projection_request(candidate)
             raw_result = await self._executor.run(
                 key=_PROVIDER,
                 function=lambda: self._model_call(request),
@@ -152,18 +191,22 @@ class SydneyContextProjectionJob:
             result = SydneyContextProjectionResult.model_validate(raw_result)
             validate_projection_result(candidate, result)
         except ProviderCallTimedOut:
+            await self._release_candidate(candidate)
             await self._record_failure(category="provider_timeout", checked_at=now)
             return
         except (ProviderExecutorSaturated, ProviderJobStillRunning):
+            await self._release_candidate(candidate)
             await self._record_failure(category="provider_timeout", checked_at=now)
             return
         except (ValidationError, SydneyContextProjectionError, ValueError, TypeError):
+            await self._release_candidate(candidate)
             await self._record_failure(
                 category="invalid_model_output",
                 checked_at=now,
             )
             return
         except Exception:  # noqa: BLE001 - provider errors are categorized, never logged
+            await self._release_candidate(candidate)
             await self._record_failure(category="provider_failed", checked_at=now)
             return
 
@@ -176,7 +219,14 @@ class SydneyContextProjectionJob:
                     checked_at=now,
                 )
                 await db.commit()
-        except (SQLAlchemyError, SydneyContextProjectionError):
+        except (SydneyContextProjectionError, ValueError, TypeError):
+            await self._release_candidate(candidate)
+            await self._record_failure(
+                category="invalid_model_output",
+                checked_at=now,
+            )
+        except SQLAlchemyError:
+            await self._release_candidate(candidate)
             await self._record_failure(category="projection_failed", checked_at=now)
 
 

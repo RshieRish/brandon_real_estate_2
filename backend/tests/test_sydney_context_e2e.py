@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from uuid import UUID, uuid5
 
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_memory_provider import SydneyMemoryProvider
-from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE
-from sydney_spool import SydneySpool
+from sydney_memory_provider import SydneyMemoryProvider  # noqa: E402
+from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE  # noqa: E402
+from sydney_spool import SydneySpool  # noqa: E402
 
 NAMESPACE = UUID("9eaa27c5-e399-4c3b-b329-8ee2d80f87c0")
 
@@ -129,10 +131,21 @@ class InMemorySydneyBackend:
             run["state"] = "running"
             run["attempt_count"] += 1
             run["lease_owner"] = payload["lease_owner"]
+            run["lease_expires_at"] = datetime.now(timezone.utc) + timedelta(
+                seconds=120
+            )
             run["next_attempt_at"] = None
             claimed.append(dict(run))
             break
         return {"runs": claimed}
+
+    def renew_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(("renew", payload))
+        run = self.runs[payload["run_id"]]
+        if run.get("lease_owner") != payload.get("lease_owner"):
+            raise RuntimeError("invalid lease")
+        run["lease_expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=120)
+        return dict(run)
 
     def update_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("run_update", payload))
@@ -189,15 +202,26 @@ def _provider(tmp_path: Path, backend: InMemorySydneyBackend) -> SydneyMemoryPro
         start_drain_thread=False,
         shutdown_deadline_seconds=0.2,
     )
-    provider.initialize(
-        "session-1",
-        hermes_home=str(tmp_path),
-        platform="telegram",
-        user_id="brandon-user",
-        chat_id="brandon-chat",
-        display_label="Brandon",
-        agent_context="primary",
-    )
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon-user",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "brandon-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon-user",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "true",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-1",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon-user",
+            chat_id="brandon-chat",
+            display_label="Brandon",
+            agent_context="primary",
+        )
     return provider
 
 
@@ -298,7 +322,13 @@ def test_retry_wait_survives_restart_and_finishes_exactly_once(tmp_path: Path) -
     spool = SydneySpool(tmp_path / "sydney_spool.db")
     spool.set_meta(
         f"claimed_run:{run_id}",
-        {"lease_owner": "hermes:replacement:42", "attempt_count": 2},
+        {
+            "lease_owner": "hermes:replacement:42",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 2,
+        },
     )
     spool.close()
     second = _provider(tmp_path, backend)
@@ -326,3 +356,37 @@ def test_retry_wait_survives_restart_and_finishes_exactly_once(tmp_path: Path) -
     assert len(succeeded) == 1
     assert backend.runs[run_id]["state"] == "succeeded"
     assert backend.external_writes == []
+
+
+def test_newer_inbound_supersedes_an_interrupted_running_turn(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from sydney_runtime import record_inbound_before_model
+
+    backend = InMemorySydneyBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    record_inbound_before_model(
+        agent,
+        platform_message_id="interrupted-first",
+        content="Start the first request.",
+    )
+    first_run_id = provider.active_run_id
+    assert first_run_id is not None
+
+    record_inbound_before_model(
+        agent,
+        platform_message_id="newer-second",
+        content="Use this newer request instead.",
+    )
+    second_run_id = provider.active_run_id
+
+    assert second_run_id is not None and second_run_id != first_run_id
+    assert backend.runs[first_run_id]["state"] == "terminal_failure"
+    assert backend.runs[first_run_id]["error_code"] == "superseded_by_newer_inbound"
+    assert backend.runs[second_run_id]["state"] == "running"

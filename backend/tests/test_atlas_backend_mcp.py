@@ -187,6 +187,17 @@ class AtlasBackendMcpTests(unittest.TestCase):
             },
         )
         self.assertEqual(history["inputSchema"]["required"], ["identity_id"])
+        self.assertEqual(
+            history["inputSchema"]["anyOf"],
+            [
+                {"required": ["query"]},
+                {"required": ["around_event_id"]},
+                {
+                    "properties": {"recent_conversations": {"const": True}},
+                    "required": ["recent_conversations"],
+                },
+            ],
+        )
         command_search = by_name["command_contacts_search"]
         self.assertEqual(
             command_search["description"],
@@ -196,6 +207,8 @@ class AtlasBackendMcpTests(unittest.TestCase):
             command_search["inputSchema"]["properties"]["page_size"]["maximum"],
             25,
         )
+        self.assertIn("cursor", command_search["inputSchema"]["properties"])
+        self.assertNotIn("page", command_search["inputSchema"]["properties"])
         preview = by_name["command_contact_audience_preview"]
         self.assertNotIn("page", preview["inputSchema"]["properties"])
         self.assertNotIn("page_size", preview["inputSchema"]["properties"])
@@ -564,7 +577,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
             "tag_ids": [7],
             "sources": ["kw_command"],
             "origins": ["recovered"],
-            "page": 2,
+            "cursor": "eyJ2IjoxLCJhIjo0MSwidSI6OTl9",
             "page_size": 25,
         }
         preview = {

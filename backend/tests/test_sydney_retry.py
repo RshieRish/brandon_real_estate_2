@@ -10,7 +10,7 @@ import pytest
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_retry import (
+from sydney_retry import (  # noqa: E402
     AUTOMATIC_CONTINUATION_MESSAGE,
     PromptBudgetGuard,
     RollingInputBudget,
@@ -37,6 +37,10 @@ class ProviderError(Exception):
         self.status_code = status_code
         self.headers = headers or {}
         self.retry_info = retry_info
+
+
+class APIConnectionError(Exception):
+    pass
 
 
 def test_structured_retry_info_wins_over_headers_and_text() -> None:
@@ -97,6 +101,21 @@ def test_text_retry_delay_parsing(message: str, expected: timedelta | None) -> N
 )
 def test_retry_classification(error: Exception, expected: str) -> None:
     assert classify_retry(error) == expected
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError(),
+        TimeoutError("timed out"),
+        ConnectionError("connection failed"),
+        APIConnectionError("Connection error."),
+    ],
+)
+def test_transport_exception_types_are_retryable_without_status_or_magic_text(
+    error: Exception,
+) -> None:
+    assert classify_retry(error) == "retry"
 
 
 def test_provider_delay_is_exact_and_fallback_jitter_is_bounded() -> None:

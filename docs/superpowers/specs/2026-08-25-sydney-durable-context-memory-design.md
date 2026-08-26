@@ -143,7 +143,8 @@ The migration follows the current sole Alembic head and uses PostgreSQL-specific
 
 ### `agent_conversation_events`
 
-- UUID primary key, identity/session foreign keys, and immutable timestamp.
+- UUID primary key, identity/session foreign keys, immutable source timestamp,
+  and a database-assigned immutable ingestion sequence used by projection.
 - Stable `source_event_key`, unique within the source. Hermes rows use the original session ID plus local message ID; Telegram inbound events additionally bind the platform message ID.
 - Event type: `user`, `assistant`, `tool_call`, `tool_result`, `approval`, `error`, `continuation`, or `attachment_reference`.
 - Role, tool name, tool-call ID, provider model, token metadata, redaction status, and content SHA-256.
@@ -165,6 +166,13 @@ The migration follows the current sole Alembic head and uses PostgreSQL-specific
 - Source event IDs and a hash of the covered event range.
 - Checkpoints are immutable; the newest valid checkpoint is selected during retrieval.
 
+### `agent_context_projection_claims`
+
+- One operational lease per identity and logical conversation.
+- Exact source boundary, character offset, deterministic range hash, bounded owner, unique token, and expiry.
+- The worker commits the claim before a Gemini call. Success removes it in the checkpoint transaction; a handled failure releases it; a crash is recovered only after expiry.
+- Apply locks and validates the exact live token/range, so an expired or replaced worker cannot publish a stale projection.
+
 ### `agent_memory_facts`
 
 - Canonical key, kind, value JSON, confidence, status, valid/superseded timestamps, and projection version.
@@ -179,12 +187,16 @@ The migration follows the current sole Alembic head and uses PostgreSQL-specific
 - Attempt count, lease owner/expiry, next attempt, provider category, bounded error code, session lineage, and final response event.
 - A per-identity database lease preserves FIFO processing across gateway restarts.
 - No raw prompt or credential is stored in run metadata; the inbound event is referenced by ID.
+- Run creation accepts only a `user` event from the exact identity, session, and logical conversation. Successful completion accepts only an `assistant` event from that same identity and session, so foreign or role-mismatched evidence cannot create or close a run.
 
 ### `agent_tool_invocations`
 
 - Run, Hermes call ID, tool name, canonical argument hash, side-effect class, caller idempotency key, state, and result event.
 - Unique `(run_id, tool_call_id)`.
 - States distinguish `started`, `succeeded`, `not_delivered`, `delivery_uncertain`, and `failed`.
+- Tool start and update requests carry the exact live run lease owner. The backend locks the run and rejects stale, expired, reassigned, non-running, or terminal-deadline execution before changing the ledger.
+- A stored result must be a `tool_result` event from the same identity, session, tool name, and canonical tool-call ID. Foreign or mismatched event IDs cannot suppress execution or restore content.
+- A regenerated model call ID for the same mutating intent resolves to the existing invocation by tool plus argument hash or hashed caller idempotency key. The backend returns the canonical call ID so a proven `not_delivered` retry updates the original ledger row instead of creating a second side effect.
 - Raw arguments/results remain in redacted event segments. The ledger stores only hashes, IDs, and outcome metadata needed to prevent duplicate execution.
 
 ## Secret Redaction and Content Boundaries
@@ -196,7 +208,7 @@ Redaction occurs before PostgreSQL or the local spool accepts content. The same 
 - signed session, handoff, and approval fragments;
 - password/secret assignment patterns;
 - known configured secret values supplied only at runtime and never persisted;
-- nested URLs and JSON strings containing credential-like query values.
+- direct URLs plus nested percent-encoded or JSON-wrapped redirects containing credential-like query values.
 
 Redacted values become typed markers such as `[REDACTED_BEARER_TOKEN]`; the original secret and a reversible representation are never retained. Email addresses, phone numbers, contact names, property addresses, and ordinary business content are retained under the approved indefinite private-history policy.
 
@@ -210,9 +222,9 @@ Audit logs contain action IDs, counts, event IDs, hashes, timing, and result cla
 4. A successful backend commit marks the local rows acknowledged. Backend unavailability does not discard the message; normal processing may continue from the local transcript while the spool retries replication.
 5. Hermes persists tool-inclusive messages to its existing `state.db` as it does today.
 6. The gateway records each tool invocation in the local spool immediately before execution and records its outcome immediately afterward. Retry safety therefore does not depend on reaching a final assistant response.
-7. After each completed turn, the Sydney memory provider reads the source message IDs that have not been acknowledged and submits bounded batches. Duplicate batches return the already-created event IDs.
+7. After each completed turn, the Sydney memory provider submits only the assistant/tool rows after the current inbound-user boundary. Historical rows already covered by backfill are never assigned a second live-source namespace. Duplicate batches return the already-created event IDs.
 8. On startup and periodically, the provider drains the spool and scans for any `state.db` rows beyond its acknowledged cursor.
-9. Reconciliation compares per-session event counts, role/tool counts, content hashes, and ordered aggregate hashes. It never deletes either copy to make counts match.
+9. Reconciliation compares per-session event counts, role/tool counts, content hashes, and ordered aggregate hashes. Persisted per-session aggregates plus a small dirty-session index bound periodic work to changed sessions without rescanning lifetime evidence; reconciled payloads compact to fixed tombstones, and inbound tombstones retain only the terminal run disposition needed to classify platform redelivery correctly. It never deletes either canonical copy to make counts match.
 
 The backend endpoint accepts at most 100 events per request and a bounded transport payload. Large event bodies are split into ordered segments so the full useful text is retained without an unbounded request.
 
@@ -249,7 +261,7 @@ The result returns actual stored messages/tool events with source IDs and timest
 
 ## Structured Memory Projection
 
-The integration worker claims completed event ranges that do not yet have a checkpoint. It sends a bounded transcript slice to Gemini using structured output with a small, versioned Pydantic schema. The allowed result contains:
+The integration worker claims completed event ranges that do not yet have a checkpoint. It commits an expiring range lease before the external call, skips live leases to claim other eligible conversations, and concurrent replicas cannot project the same conversation range. Projection advances by immutable ingestion sequence rather than source timestamp, so a delayed spool or backfill event remains eligible even when its original timestamp predates the latest checkpoint. It sends a bounded transcript slice to Gemini using structured output with a small, versioned Pydantic schema. The allowed result contains:
 
 - rolling summary;
 - active tasks and commitments;
@@ -300,7 +312,7 @@ The Hermes overlay adds a narrow gateway continuation controller rather than an 
 
 ### Retry classification
 
-- Retryable: `408`, `429`, provider `5xx`, connection reset, and bounded timeout.
+- Retryable: `408`, `429`, provider `5xx`, connection reset, bounded timeout, and recognized timeout/connection exception types even when no status code is attached.
 - Not retryable: authentication/authorization failure, invalid input, safety rejection, missing confirmation, or a deterministic tool-contract error.
 - Context overflow invokes transparent durable continuation, not a repeat of the oversized request.
 
@@ -320,13 +332,14 @@ On a deferred retry Sydney sends one concise message:
 
 > I hit a temporary Google limit. Your request is saved, and I'll continue automatically.
 
-The run remains in FIFO order for Brandon. Later messages are also saved and queued. The gateway continuation controller polls the protected claim endpoint on startup and at a bounded interval, then resumes a leased saved run after `next_attempt_at`, including the durable context and completed tool ledger. It restores the original user event from history and appends only an internal continuation marker, so the user's message is not duplicated. Success sends the final response and closes the job.
+The run remains in FIFO order for Brandon. Later messages are also saved and queued. The gateway continuation controller polls the protected claim endpoint on startup and at a bounded interval, then resumes a leased saved run after `next_attempt_at`, including the durable context and completed tool ledger. It restores the original user event from history and appends only an internal continuation marker, so the user's message is not duplicated. For this exact private retry path, interim/token streaming is disabled. The final response hash is staged durably before Telegram delivery and cleared only after canonical completion succeeds; a surviving ambiguous marker blocks duplicate delivery after restart.
 
 ### Side-effect safety
 
 - Read-only tools may be repeated after a transient failure.
 - A successful mutating tool call is never repeated; its recorded result is restored to the resumed transcript.
 - A mutating call with `delivery_uncertain` blocks automatic replay until its provider-specific reconciliation proves `not_delivered` or `succeeded`.
+- Failed and uncertain visible tool results are still redacted and appended to canonical history; retaining the failure evidence never changes the fail-closed replay decision.
 - Tools without an idempotency contract cannot be automatically replayed after an ambiguous boundary. The request remains saved and Sydney reports that the action outcome is being checked; it still does not ask Brandon to reset context.
 - Gmail send keeps its existing caller UUID and authenticated origin ledger.
 - New automatic-retry coverage for other write tools requires caller request IDs and provider-specific reconciliation before those tools are classified as replay-safe.
@@ -336,6 +349,11 @@ A run does not retry forever. Exact provider reset metadata controls normal quot
 ## Command Contacts Tools
 
 Two explicit read-only tools are added to the existing MCP registry after the current 22 tools. The existing tool names and order remain unchanged.
+
+Hermes prefixes MCP registry names internally. When the Sydney provider is
+active, the model-facing surface removes the prefixed backend history variant
+and exposes exactly one unprefixed `context_history_search`; that provider tool
+injects the authenticated identity rather than asking the model for it.
 
 ### `command_contacts_search`
 
@@ -393,7 +411,7 @@ The backend and worker expose content-free metrics and health metadata:
 - local spool unacknowledged count and oldest age;
 - backend ingest success/failure and idempotent replay counts;
 - canonical event, session, and identity counts;
-- checkpoint lag in events and minutes;
+- checkpoint lag in events and minutes, plus active/expired projection claims;
 - retrieval latency, packet tokens, section counts, and fallback use;
 - total prompt, cached, tool-use, and completion tokens from provider metadata;
 - compression count, continuation count, and summary failure count;

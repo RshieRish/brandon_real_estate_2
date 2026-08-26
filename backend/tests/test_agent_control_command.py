@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from database import get_db
 from services.command_contact_contracts import (
+    ContactDirectoryCursorPage,
     ContactDirectoryFilters,
     ContactDirectoryPage,
     ContactDirectoryRow,
@@ -72,6 +73,22 @@ def _page(
     )
 
 
+def _cursor_page(
+    rows: tuple[ContactDirectoryRow, ...],
+    *,
+    total: int | None = None,
+    next_after_id: int | None = None,
+    upper_bound_id: int = 0,
+) -> ContactDirectoryCursorPage:
+    return ContactDirectoryCursorPage(
+        rows=rows,
+        total=len(rows) if total is None else total,
+        next_after_id=next_after_id,
+        upper_bound_id=upper_bound_id,
+        has_more=next_after_id is not None,
+    )
+
+
 def _app() -> FastAPI:
     from routers import agent_control_command
 
@@ -88,7 +105,7 @@ def _headers() -> dict[str, str]:
     return {"Authorization": "Bearer command-secret"}
 
 
-def test_command_contracts_are_strict_and_limit_agent_pages_to_25() -> None:
+def test_command_contracts_are_strict_and_limit_cursor_pages_to_25() -> None:
     from schemas.agent_control_command import CommandContactsSearchRequest
 
     request = CommandContactsSearchRequest(
@@ -97,7 +114,6 @@ def test_command_contracts_are_strict_and_limit_agent_pages_to_25() -> None:
         tag_ids=[9, 7, 9],
         sources=["kw_command"],
         origins=["recovered"],
-        page=2,
         page_size=25,
     )
     assert request.tag_ids == [7, 9]
@@ -107,10 +123,14 @@ def test_command_contracts_are_strict_and_limit_agent_pages_to_25() -> None:
         CommandContactsSearchRequest.model_validate(
             {"page_size": 10, "send_email": True}
         )
+    with pytest.raises(ValidationError):
+        CommandContactsSearchRequest.model_validate({"page": 2})
 
 
 @pytest.mark.asyncio
-async def test_search_adapts_existing_command_directory_without_google_fallback() -> None:
+async def test_search_adapts_existing_command_directory_without_google_fallback() -> (
+    None
+):
     from schemas.agent_control_command import CommandContactsSearchRequest
     from services.agent_control_command import search_command_contacts
 
@@ -123,8 +143,8 @@ async def test_search_adapts_existing_command_directory_without_google_fallback(
         origins=["recovered"],
         page_size=25,
     )
-    directory = AsyncMock(return_value=_page((_row(41),), page_size=25))
-    with patch("services.agent_control_command.list_contacts", directory):
+    directory = AsyncMock(return_value=_cursor_page((_row(41),), upper_bound_id=41))
+    with patch("services.agent_control_command.list_contacts_cursor", directory):
         result = await search_command_contacts(db, request, now=NOW)
 
     directory.assert_awaited_once_with(
@@ -138,12 +158,65 @@ async def test_search_adapts_existing_command_directory_without_google_fallback(
             page=1,
             page_size=25,
         ),
+        after_id=None,
+        upper_bound_id=None,
         now=NOW,
     )
     assert result.total == 1
     assert result.contacts[0].contact_id == 41
     assert result.contacts[0].primary_email == "brandon@example.com"
     assert result.contacts[0].tag_names == ["VIP"]
+    assert result.next_cursor is None
+    assert result.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_search_cursor_is_stable_and_bound_to_the_original_filters() -> None:
+    from schemas.agent_control_command import CommandContactsSearchRequest
+    from services.agent_control_command import search_command_contacts
+
+    db = SimpleNamespace()
+    directory = AsyncMock(
+        side_effect=(
+            _cursor_page(
+                (_row(41),),
+                total=3,
+                next_after_id=41,
+                upper_bound_id=99,
+            ),
+            _cursor_page((_row(72), _row(99)), total=3, upper_bound_id=99),
+        )
+    )
+    with patch("services.agent_control_command.list_contacts_cursor", directory):
+        first = await search_command_contacts(
+            db,
+            CommandContactsSearchRequest(stage="lead", page_size=1),
+            now=NOW,
+        )
+        assert first.next_cursor is not None
+        second = await search_command_contacts(
+            db,
+            CommandContactsSearchRequest(
+                stage="lead",
+                page_size=2,
+                cursor=first.next_cursor,
+            ),
+            now=NOW,
+        )
+
+    assert [contact.contact_id for contact in second.contacts] == [72, 99]
+    assert directory.await_args_list[1].kwargs["after_id"] == 41
+    assert directory.await_args_list[1].kwargs["upper_bound_id"] == 99
+
+    with pytest.raises(ValueError, match="command_contacts_cursor_invalid"):
+        await search_command_contacts(
+            db,
+            CommandContactsSearchRequest(
+                stage="client",
+                cursor=first.next_cursor,
+            ),
+            now=NOW,
+        )
 
 
 @pytest.mark.asyncio
@@ -155,6 +228,7 @@ async def test_audience_preview_is_exact_stable_masked_and_never_persists() -> N
 
     async def directory(_db, filters, *, now):
         assert now == NOW
+        assert db.execute.await_count >= 1
         start = (filters.page - 1) * filters.page_size
         page_rows = rows[start : start + filters.page_size]
         return _page(
@@ -164,13 +238,23 @@ async def test_audience_preview_is_exact_stable_masked_and_never_persists() -> N
             page_size=filters.page_size,
         )
 
-    db = SimpleNamespace(add=pytest.fail, flush=pytest.fail, commit=pytest.fail)
+    db = SimpleNamespace(
+        execute=AsyncMock(),
+        add=pytest.fail,
+        flush=pytest.fail,
+        commit=pytest.fail,
+    )
     request = CommandContactAudiencePreviewRequest(stage="lead", tag_ids=[7])
     with patch("services.agent_control_command.list_contacts", directory):
         first = await preview_command_contact_audience(db, request, now=NOW)
         second = await preview_command_contact_audience(db, request, now=NOW)
 
     assert first == second
+    assert db.execute.await_count == 2
+    assert all(
+        str(call.args[0]) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+        for call in db.execute.await_args_list
+    )
     assert first.exact_count == 101
     assert len(first.audience_checksum) == 64
     assert len(first.samples) == 5
@@ -211,9 +295,9 @@ def test_protected_routes_are_read_only_and_write_content_free_audits() -> None:
             )
         ],
         total=1,
-        page=1,
         page_size=25,
-        page_count=1,
+        next_cursor=None,
+        has_more=False,
     )
     preview_result = CommandContactAudiencePreviewResponse(
         audience_ref="9ad04f43-adaf-5ef6-a17d-8f6d09df2401",
@@ -229,7 +313,9 @@ def test_protected_routes_are_read_only_and_write_content_free_audits() -> None:
     )
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "command-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "command-secret"
+        ),
         patch(
             "routers.agent_control_command.search_command_contacts",
             AsyncMock(return_value=search_result),
@@ -274,7 +360,9 @@ def test_command_outage_is_sanitized_and_registry_has_only_read_actions() -> Non
     client = TestClient(app)
     with (
         patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
-        patch("middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "command-secret"),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "command-secret"
+        ),
         patch(
             "routers.agent_control_command.search_command_contacts",
             AsyncMock(
@@ -290,3 +378,24 @@ def test_command_outage_is_sanitized_and_registry_has_only_read_actions() -> Non
     assert response.status_code == 503
     assert response.json() == {"detail": "command_contacts_unavailable"}
     assert "sensitive@example.com" not in response.text
+
+
+def test_malformed_search_cursor_is_rejected_without_echoing_it() -> None:
+    app = _app()
+    client = TestClient(app)
+    opaque = "structurally-valid-but-not-a-cursor"
+    with (
+        patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "command-secret"
+        ),
+    ):
+        response = client.post(
+            "/api/v1/agent-control/crm/command-contacts/search",
+            headers=_headers(),
+            json={"cursor": opaque},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "command_contacts_cursor_invalid"}
+    assert opaque not in response.text

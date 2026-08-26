@@ -81,6 +81,7 @@ from services.command_contact_contracts import (
     ContactCreateCommand,
     ContactDetail,
     ContactDirectoryFilters,
+    ContactDirectoryCursorPage,
     ContactDirectoryPage,
     ContactDirectoryRow,
     ContactEvidence,
@@ -162,14 +163,10 @@ class _ArchiveContactIngestResult:
             value = getattr(self, field_name)
             if type(value) is not int or value < 0:
                 raise ValueError("archive contact ingest count is invalid")
-        if not isinstance(
-            self.owner_contact_ids_by_normalized_email, Mapping
-        ):
+        if not isinstance(self.owner_contact_ids_by_normalized_email, Mapping):
             raise TypeError("archive owner map must be a mapping")
         owners: dict[str, int | None] = {}
-        for key, value in sorted(
-            self.owner_contact_ids_by_normalized_email.items()
-        ):
+        for key, value in sorted(self.owner_contact_ids_by_normalized_email.items()):
             if (
                 type(key) is not str
                 or canonical_email(key) != key
@@ -223,9 +220,7 @@ def _contact_audit_fields(contact: CRMContact) -> dict[str, object]:
     }
 
 
-def _compatibility_activity(
-    *, contact_id: int, kind: str, summary: str
-) -> CRMActivity:
+def _compatibility_activity(*, contact_id: int, kind: str, summary: str) -> CRMActivity:
     return CRMActivity(
         contact_id=contact_id,
         kind=kind,
@@ -299,10 +294,14 @@ async def _primary_email_owner_states(
     owners: dict[str, int | None] = {}
     for start in range(0, len(ordered_keys), 500):
         batch = ordered_keys[start : start + 500]
-        owner_rank = func.row_number().over(
-            partition_by=CRMContact.normalized_email,
-            order_by=CRMContact.id,
-        ).label("owner_rank")
+        owner_rank = (
+            func.row_number()
+            .over(
+                partition_by=CRMContact.normalized_email,
+                order_by=CRMContact.id,
+            )
+            .label("owner_rank")
+        )
         ranked = (
             select(
                 CRMContact.normalized_email.label("normalized_email"),
@@ -322,9 +321,7 @@ async def _primary_email_owner_states(
         grouped: dict[str, list[int]] = defaultdict(list)
         for normalized_email, contact_id in owner_rows:
             if normalized_email is None:
-                raise ContactDataIntegrityError(
-                    "contact email ownership is invalid"
-                )
+                raise ContactDataIntegrityError("contact email ownership is invalid")
             grouped[normalized_email].append(contact_id)
         sole_by_key = {
             key: contact_ids[0]
@@ -347,9 +344,7 @@ async def _primary_email_owner_states(
                 )
             ).all()
             if tuple(contact.id for contact in sole_contacts) != sole_ids:
-                raise ContactDataIntegrityError(
-                    "contact email ownership is invalid"
-                )
+                raise ContactDataIntegrityError("contact email ownership is invalid")
         contacts_by_id = {contact.id: contact for contact in sole_contacts}
         for key, contact_id in sole_by_key.items():
             contact = contacts_by_id[contact_id]
@@ -405,9 +400,7 @@ async def _create_import_contacts(
                 payload=_contact_audit_fields(contact),
             )
         except (TypeError, ValueError):
-            raise ContactDataIntegrityError(
-                "contact audit state is invalid"
-            ) from None
+            raise ContactDataIntegrityError("contact audit state is invalid") from None
         db.add_all(
             [
                 _compatibility_activity(
@@ -1055,6 +1048,112 @@ async def list_contacts(
         page_count=page_count,
         sort=filters.sort,
         direction=filters.direction,
+    )
+
+
+async def list_contacts_cursor(
+    db: AsyncSession,
+    filters: ContactDirectoryFilters,
+    *,
+    after_id: int | None,
+    upper_bound_id: int | None,
+    now: datetime,
+) -> ContactDirectoryCursorPage:
+    """Return one insertion-stable Command page ordered by immutable contact ID."""
+    if not isinstance(filters, ContactDirectoryFilters):
+        raise TypeError("filters must be ContactDirectoryFilters")
+    if after_id is not None and (type(after_id) is not int or after_id <= 0):
+        raise ValueError("after_id must be a positive integer")
+    if upper_bound_id is not None and (
+        type(upper_bound_id) is not int or upper_bound_id < 0
+    ):
+        raise ValueError("upper_bound_id must be a nonnegative integer")
+    if (
+        after_id is not None
+        and upper_bound_id is not None
+        and after_id > upper_bound_id
+    ):
+        raise ValueError("after_id exceeds upper_bound_id")
+
+    normalized_now = _normalize_now(now)
+    predicates = _directory_predicates(filters, now=normalized_now)
+    snapshot_upper = upper_bound_id
+    if snapshot_upper is None:
+        snapshot_upper = int(
+            await db.scalar(
+                select(func.max(CRMContact.id))
+                .select_from(CRMContact)
+                .outerjoin(
+                    CRMContactProfile,
+                    CRMContactProfile.contact_id == CRMContact.id,
+                )
+                .where(*predicates)
+            )
+            or 0
+        )
+
+    bounded_predicates: list[ColumnElement[bool]] = [CRMContact.id <= snapshot_upper]
+    if after_id is not None:
+        bounded_predicates.append(CRMContact.id > after_id)
+    total = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(CRMContact)
+            .outerjoin(
+                CRMContactProfile,
+                CRMContactProfile.contact_id == CRMContact.id,
+            )
+            .where(*predicates, CRMContact.id <= snapshot_upper)
+        )
+        or 0
+    )
+    contacts = (
+        await db.scalars(
+            _base_directory_select(filters, now=normalized_now)
+            .where(*bounded_predicates)
+            .order_by(CRMContact.id.asc())
+            .limit(filters.page_size + 1)
+        )
+    ).all()
+    has_more = len(contacts) > filters.page_size
+    contacts = contacts[: filters.page_size]
+    contact_ids = tuple(contact.id for contact in contacts)
+    profiles, methods, ownerships, tags = await _page_associations(db, contact_ids)
+    recovered_ids = set(
+        await db.scalars(
+            select(CRMEntitySource.entity_id)
+            .join(
+                CRMSourceRecord,
+                CRMSourceRecord.id == CRMEntitySource.source_record_id,
+            )
+            .where(
+                CRMEntitySource.entity_type == "contact",
+                CRMEntitySource.entity_id.in_(contact_ids),
+                CRMSourceRecord.source_system == "kw_command",
+                CRMSourceRecord.module == "contacts",
+                CRMSourceRecord.record_kind == "contact_profile",
+            )
+        )
+        if contact_ids
+        else ()
+    )
+    rows = tuple(
+        _directory_row(
+            contact,
+            profile=profiles.get(contact.id),
+            methods=methods.get(contact.id, ()),
+            ownerships=ownerships.get(contact.id, ()),
+            tags=tags.get(contact.id, ()),
+            recovered=contact.id in recovered_ids,
+        )
+        for contact in contacts
+    )
+    return ContactDirectoryCursorPage(
+        rows=rows,
+        total=total,
+        next_after_id=contacts[-1].id if has_more and contacts else None,
+        upper_bound_id=snapshot_upper,
+        has_more=has_more,
     )
 
 
@@ -2839,9 +2938,7 @@ async def _lock_contact(db: AsyncSession, contact_id: int) -> CRMContact:
     return contact
 
 
-def _canonical_audit(
-    *, action: str, phase: str, payload: Mapping[str, object]
-) -> str:
+def _canonical_audit(*, action: str, phase: str, payload: Mapping[str, object]) -> str:
     try:
         return canonical_contact_audit_json(
             action=action,  # type: ignore[arg-type]
@@ -2849,9 +2946,7 @@ def _canonical_audit(
             payload=payload,
         )
     except (TypeError, ValueError):
-        raise ContactDataIntegrityError(
-            "contact audit state is invalid"
-        ) from None
+        raise ContactDataIntegrityError("contact audit state is invalid") from None
 
 
 def _canonical_workspace_saved_search_audit(
@@ -2864,9 +2959,7 @@ def _canonical_workspace_saved_search_audit(
             name=name,
         )
     except (TypeError, ValueError):
-        raise ContactDataIntegrityError(
-            "saved search audit state is invalid"
-        ) from None
+        raise ContactDataIntegrityError("saved search audit state is invalid") from None
 
 
 def _thaw_json_value(value: object) -> object:
@@ -2887,9 +2980,7 @@ def _canonical_criteria(value: Mapping[str, object]) -> str:
             allow_nan=False,
         )
     except (TypeError, ValueError):
-        raise ContactDataIntegrityError(
-            "saved search criteria is invalid"
-        ) from None
+        raise ContactDataIntegrityError("saved search criteria is invalid") from None
 
 
 def _parse_canonical_criteria(value: str) -> Mapping[str, object]:
@@ -2923,9 +3014,7 @@ def _parse_canonical_criteria(value: str) -> Mapping[str, object]:
             raise ValueError("canonical criteria is too large")
         return parsed
     except (TypeError, ValueError, json.JSONDecodeError):
-        raise ContactDataIntegrityError(
-            "saved search criteria is invalid"
-        ) from None
+        raise ContactDataIntegrityError("saved search criteria is invalid") from None
 
 
 async def _remove_materialized_child_link(
@@ -3144,11 +3233,7 @@ async def update_contact(
                     [
                         _compatibility_activity(
                             contact_id=contact.id,
-                            kind=(
-                                "stage_changed"
-                                if stage_only
-                                else "contact_updated"
-                            ),
+                            kind=("stage_changed" if stage_only else "contact_updated"),
                             summary=(
                                 "Contact stage changed"
                                 if stage_only
@@ -3570,9 +3655,7 @@ async def import_contacts(
                 activity_summary="Imported through internal CRM import",
                 audit_action="contact.legacy_import_applied",
             )
-        return ContactImportResult(
-            created=created, skipped_duplicates=skipped
-        )
+        return ContactImportResult(created=created, skipped_duplicates=skipped)
     except ContactDirectoryError:
         raise
     except SQLAlchemyError:
@@ -3625,9 +3708,7 @@ async def ingest_archive_contacts(
                 activity_summary="Imported from permitted archive bundle",
                 audit_action="contact.archive_import_applied",
             )
-            owner_map = {
-                key: owners.get(key) for key in canonical_keys
-            }
+            owner_map = {key: owners.get(key) for key in canonical_keys}
         return _ArchiveContactIngestResult(
             created=created,
             skipped_duplicates=skipped,
@@ -4073,9 +4154,7 @@ async def list_saved_searches(
                     CRMContact.first_name,
                     CRMContact.last_name,
                 )
-                .outerjoin(
-                    CRMContact, CRMContact.id == CRMSavedSearch.contact_id
-                )
+                .outerjoin(CRMContact, CRMContact.id == CRMSavedSearch.contact_id)
                 .order_by(
                     CRMSavedSearch.updated_at.desc(),
                     CRMSavedSearch.id.desc(),
@@ -4142,9 +4221,7 @@ async def delete_saved_search(
                     )
                 ).one_or_none()
                 if search is None:
-                    raise ContactDataIntegrityError(
-                        "saved search ownership changed"
-                    )
+                    raise ContactDataIntegrityError("saved search ownership changed")
                 criteria_json = _canonical_criteria(
                     _parse_canonical_criteria(search.criteria_json)
                 )
@@ -4205,9 +4282,7 @@ async def delete_saved_search(
                 )
             ).one_or_none()
             if search is None:
-                raise ContactDataIntegrityError(
-                    "saved search ownership changed"
-                )
+                raise ContactDataIntegrityError("saved search ownership changed")
             links = (
                 await db.scalars(
                     select(CRMEntitySource).where(
@@ -4270,6 +4345,7 @@ __all__ = [
     "ingest_archive_contacts",
     "list_contact_celebrations",
     "list_contacts",
+    "list_contacts_cursor",
     "list_saved_searches",
     "remove_contact_tag",
     "sync_legacy_leads",

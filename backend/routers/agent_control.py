@@ -311,6 +311,14 @@ AGENT_ACTIONS = [
         description="Lease bounded eligible Sydney continuation runs.",
     ),
     AgentAction(
+        id="context.runs.renew",
+        method="POST",
+        path="/api/v1/agent-control/context/runs/renew",
+        risk_tier="auto_silent",
+        side_effects=True,
+        description="Renew the exact live lease for a running Sydney turn.",
+    ),
+    AgentAction(
         id="context.tools.start",
         method="POST",
         path="/api/v1/agent-control/context/tools/start",

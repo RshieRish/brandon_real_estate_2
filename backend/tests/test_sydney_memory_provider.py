@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+import pytest
 
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_memory_provider import SydneyMemoryProvider
+from sydney_memory_provider import SydneyBackendClient, SydneyMemoryProvider
 
 
 class FakeBackend:
@@ -74,9 +79,23 @@ class FakeBackend:
                     "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                     "state": "running",
                     "lease_owner": payload["lease_owner"],
+                    "lease_expires_at": (
+                        datetime.now(timezone.utc) + timedelta(seconds=120)
+                    ).isoformat(),
                     "attempt_count": 1,
                 }
             ]
+        }
+
+    def renew_run(self, payload: dict) -> dict:
+        self.calls.append(("renew", payload))
+        return {
+            "id": payload["run_id"],
+            "state": "running",
+            "lease_owner": payload["lease_owner"],
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
         }
 
     def retrieve_context(self, payload: dict) -> dict:
@@ -110,11 +129,96 @@ class FakeBackend:
 
     def start_tool(self, payload: dict) -> dict:
         self.calls.append(("tool_before", payload))
-        return {"state": "started", "replay_decision": "execute"}
+        return {
+            "state": "started",
+            "replay_decision": "execute",
+            "canonical_tool_call_id": payload["tool_call_id"],
+        }
 
     def update_tool(self, payload: dict) -> dict:
         self.calls.append(("tool_after", payload))
         return {"state": payload["state"], "replay_decision": "restore_result"}
+
+
+def test_backend_client_splits_aggregate_event_batches_before_transport() -> None:
+    event_template = {
+        "event_type": "assistant",
+        "role": "assistant",
+        "occurred_at": "2026-08-25T17:00:00Z",
+        "content": "x" * 700,
+        "metadata": {},
+    }
+    payload = {
+        "platform": "telegram",
+        "external_user_id": "brandon-user",
+        "external_chat_id": "brandon-chat",
+        "display_label": "Brandon",
+        "hermes_session_id": "session-1",
+        "logical_conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "events": [
+            {
+                **event_template,
+                "source_event_key": f"session-1:message-{index}",
+            }
+            for index in range(3)
+        ],
+    }
+    one_event_size = len(
+        json.dumps(
+            {**payload, "events": payload["events"][:1]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    )
+    max_bytes = one_event_size + 10
+    client = SydneyBackendClient(
+        "https://backend.example.test",
+        "not-a-real-token",
+        max_event_batch_bytes=max_bytes,
+    )
+    transported: list[dict] = []
+
+    def fake_post(path: str, chunk: dict) -> dict:
+        assert path == "/api/v1/agent-control/context/events/batch"
+        assert (
+            len(
+                json.dumps(
+                    chunk,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            )
+            <= max_bytes
+        )
+        transported.append(chunk)
+        receipts = [
+            {
+                "event_id": str(uuid5(NAMESPACE_URL, event["source_event_key"])),
+                "event_type": event["event_type"],
+                "occurred_at": event["occurred_at"],
+                "content_sha256": hashlib.sha256(event["content"].encode()).hexdigest(),
+            }
+            for event in chunk["events"]
+        ]
+        return {
+            "identity_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "session_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "logical_conversation_id": chunk["logical_conversation_id"],
+            "event_ids": [receipt["event_id"] for receipt in receipts],
+            "event_receipts": receipts,
+            "inserted_count": len(receipts),
+            "replayed_count": 0,
+        }
+
+    client._post = fake_post  # type: ignore[method-assign]
+    result = client.ingest_events(payload)
+
+    assert [len(chunk["events"]) for chunk in transported] == [1, 1, 1]
+    assert result["event_ids"] == [
+        str(uuid5(NAMESPACE_URL, event["source_event_key"]))
+        for event in payload["events"]
+    ]
+    assert result["inserted_count"] == 3
 
 
 def _provider(
@@ -125,15 +229,26 @@ def _provider(
         start_drain_thread=False,
         shutdown_deadline_seconds=0.2,
     )
-    provider.initialize(
-        "session-1",
-        hermes_home=str(tmp_path),
-        platform="telegram",
-        user_id="brandon",
-        chat_id="private-chat",
-        display_label="Brandon",
-        agent_context="primary",
-    )
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "true",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-1",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            display_label="Brandon",
+            agent_context="primary",
+        )
     return provider
 
 
@@ -166,12 +281,332 @@ def test_provider_identity_is_stable_and_inbound_is_local_before_backend(
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     )
     assert backend.calls[1][1]["session_id"] == ("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    assert backend.calls[2][1]["run_id"] == provider.active_run_id
+    assert backend.calls[2][1]["limit"] == 1
     assert provider.spool.pending_count == 0
     cursor = provider.spool.get_reconciliation_cursor("session-1")
     assert cursor == {
         "event_count": 1,
         "ordered_hash": backend.calls[-1][1]["expected_ordered_hash"],
     }
+
+
+def test_each_drain_scans_the_post_cutover_state_tail_before_reconciliation(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    (tmp_path / "state.db").touch()
+
+    with patch("sydney_backfill.SydneyBackfill") as backfill_type:
+        backfill_type.return_value.run_live_tail.return_value = 2
+        provider.drain_once()
+
+    backfill_type.assert_called_once_with(
+        state_db=tmp_path / "state.db",
+        spool=provider.spool,
+        platform="telegram",
+        external_user_id="brandon",
+        external_chat_id="private-chat",
+        display_label="Brandon",
+        sessions_index=tmp_path / "sessions" / "sessions.json",
+    )
+    backfill_type.return_value.run_live_tail.assert_called_once_with(
+        page_size=100,
+        max_pages=1,
+    )
+
+
+def test_write_only_shadow_drain_still_scans_the_post_cutover_state_tail(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = SydneyMemoryProvider(
+        backend=backend,
+        start_drain_thread=False,
+        shutdown_deadline_seconds=0.2,
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "false",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-shadow",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            display_label="Brandon",
+            agent_context="primary",
+        )
+    assert provider.retry_enabled is False
+    (tmp_path / "state.db").touch()
+
+    with patch("sydney_backfill.SydneyBackfill") as backfill_type:
+        backfill_type.return_value.run_live_tail.return_value = 1
+        provider.drain_once()
+
+    backfill_type.return_value.run_live_tail.assert_called_once_with(
+        page_size=100,
+        max_pages=1,
+    )
+
+
+def test_write_only_shadow_does_not_claim_durable_delivery_ownership(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model, stage_run_outcome
+
+    backend = FakeBackend()
+    provider = SydneyMemoryProvider(
+        backend=backend,
+        start_drain_thread=False,
+        shutdown_deadline_seconds=0.2,
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "false",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-shadow-delivery",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            display_label="Brandon",
+            agent_context="primary",
+        )
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        ),
+        _sydney_delivery_key=("telegram", "private-chat", "stale-message"),
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="shadow-message",
+        content="Persist this without taking over Telegram delivery.",
+    )
+    assert agent._sydney_delivery_key is None
+    assert any(name == "ingest" for name, _payload in backend.calls)
+    assert not any(name == "run" for name, _payload in backend.calls)
+
+    result = {"final_response": "Keep normal Telegram retries.", "completed": True}
+    assert stage_run_outcome(agent, result) is False
+    assert result["final_response"] == "Keep normal Telegram retries."
+
+
+def test_non_target_provider_does_not_claim_durable_delivery_ownership(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "true",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-other-chat",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="different-chat",
+            display_label="Other chat",
+            agent_context="primary",
+        )
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        ),
+        _sydney_delivery_key=("telegram", "private-chat", "stale-message"),
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="other-chat-message",
+        content="Use the standard Telegram path.",
+    )
+    assert agent._sydney_delivery_key is None
+
+
+def test_active_tool_receipts_remain_until_terminal_reconciliation_then_compact(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("terminal-message", "Complete this safely.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+
+    provider.record_tool_before(
+        run_id=run_id,
+        tool_call_id="call-terminal",
+        tool_name="command_contacts_search",
+        arguments={"query": "Brandon"},
+        side_effect_class="read_only",
+    )
+    provider.drain_once()
+    live_receipt = provider.tool_replay_receipt(f"tool:{run_id}:call-terminal:before")
+    assert live_receipt["tool"]["replay_decision"] == "execute"
+    assert (
+        provider.spool.connection.execute(
+            "SELECT count(*) FROM outbox WHERE state='acknowledged'"
+        ).fetchone()[0]
+        > 0
+    )
+
+    provider.record_tool_after(
+        run_id=run_id,
+        tool_call_id="call-terminal",
+        state="succeeded",
+        result_content='{"total": 1}',
+        tool_name="command_contacts_search",
+    )
+    provider.drain_once()
+    provider.complete_active_run("The safe request is complete.")
+
+    assert provider.active_run_id is None
+    assert (
+        provider.spool.connection.execute(
+            "SELECT count(*) FROM outbox WHERE state='acknowledged'"
+        ).fetchone()[0]
+        == 0
+    )
+    compacted = provider.tool_replay_receipt(f"tool:{run_id}:call-terminal:before")
+    assert compacted == {"compacted": True}
+
+
+def test_master_only_shadow_ingests_without_claiming_or_blocking_tools(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_before
+
+    backend = FakeBackend()
+    provider = SydneyMemoryProvider(backend=backend, start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "shadow-session",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            agent_context="primary",
+        )
+    provider.record_inbound("shadow-message", "Write this in shadow mode")
+    provider.drain_once()
+
+    manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "sydney" else None
+    )
+    agent = SimpleNamespace(_memory_manager=manager)
+    assert provider.retry_enabled is False
+    assert provider.active_run_id is None
+    assert [name for name, _payload in backend.calls] == ["ingest", "reconcile"]
+    assert provider.spool.pending_count == 0
+    assert (
+        tool_before(
+            agent,
+            "call-shadow",
+            "command_contacts_search",
+            {"query": "Brandon"},
+        )
+        is None
+    )
+
+
+def test_retry_replay_restores_the_prior_tool_result_without_execution(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_before
+
+    class RestoreBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            return {
+                "state": "succeeded",
+                "replay_decision": "restore_result",
+                "result_content": '{"message_id":"sent-once"}',
+            }
+
+    backend = RestoreBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("telegram-message-restore", "Send this once")
+    provider.drain_once()
+    manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "sydney" else None
+    )
+    agent = SimpleNamespace(_memory_manager=manager)
+
+    decision = tool_before(
+        agent,
+        "call-restored",
+        "gmail_send",
+        {"request_id": "stable-id"},
+    )
+
+    assert decision is not None
+    assert decision.block_message is None
+    assert decision.restored_result == '{"message_id":"sent-once"}'
+
+
+def test_tool_after_does_not_persist_after_the_run_lease_expires(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_after
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("telegram-message-expired-tool", "Search once")
+    provider.drain_once()
+    provider._active_lease_expires_at = datetime.now(timezone.utc) - timedelta(
+        seconds=1
+    )
+    manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "sydney" else None
+    )
+    agent = SimpleNamespace(_memory_manager=manager)
+
+    tool_after(
+        agent,
+        "call-expired",
+        "command_contacts_search",
+        {"total": 1},
+        failed=False,
+    )
+
+    assert [name for name, _payload in backend.calls if name == "tool_after"] == []
 
 
 def test_run_completion_uses_the_claimed_lease_and_persists_final_event(
@@ -205,7 +640,13 @@ def test_replayed_inbound_restores_a_claimed_run_lease_after_restart(
     first.drain_once()
     first.spool.set_meta(
         "claimed_run:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        {"lease_owner": "hermes:replacement:42", "attempt_count": 2},
+        {
+            "lease_owner": "hermes:replacement:42",
+            "attempt_count": 2,
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+        },
     )
     first.shutdown()
 
@@ -218,6 +659,277 @@ def test_replayed_inbound_restores_a_claimed_run_lease_after_restart(
         payload for name, payload in second_backend.calls if name == "run_update"
     ][-1]
     assert update["lease_owner"] == "hermes:replacement:42"
+
+
+def test_provider_restart_restores_active_run_before_reconciliation_compaction(
+    tmp_path: Path,
+) -> None:
+    first = _provider(tmp_path, FakeBackend())
+    first.record_inbound("restart-active-message", "Continue this saved run")
+    first.drain_once()
+    run_id = first.active_run_id
+    assert run_id is not None
+    assert first.spool.find_inbound("restart-active-message") is not None
+    first.shutdown()
+
+    second = _provider(tmp_path, FakeBackend())
+    try:
+        assert second.active_run_id == run_id
+        assert second.has_active_run_lease() is True
+
+        second.drain_once()
+
+        assert second.spool.find_inbound("restart-active-message") is not None
+        assert second.spool.get_meta("active_run_id") == run_id
+    finally:
+        second.shutdown()
+
+
+def test_completed_duplicate_is_not_reported_as_newly_queued_work(
+    tmp_path: Path,
+) -> None:
+    from sydney_retry import AUTOMATIC_TERMINAL_REPLAY_MESSAGE
+    from sydney_runtime import deferred_inbound_response, record_inbound_before_model
+
+    provider = _provider(tmp_path, FakeBackend())
+    message_id = "completed-duplicate"
+    provider.record_inbound(message_id, "Handle this exactly once.")
+    provider.drain_once()
+    provider.complete_active_run("Completed exactly once.")
+
+    compacted = provider.spool.get_record(f"inbound:telegram:private-chat:{message_id}")
+    assert compacted is not None
+    assert compacted.receipt["run"]["run"]["state"] == "succeeded"
+
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert (
+        record_inbound_before_model(
+            agent,
+            platform_message_id=message_id,
+            content="Handle this exactly once.",
+        )
+        is False
+    )
+    assert deferred_inbound_response(agent) == AUTOMATIC_TERMINAL_REPLAY_MESSAGE
+    assert provider.spool.pending_count == 0
+    assert provider.active_run_id is None
+
+
+def test_idle_reconciliation_does_not_rescan_historical_evidence(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path, FakeBackend())
+    provider.record_inbound("reconcile-once", "Store this once.")
+    provider.drain_once()
+
+    statements: list[str] = []
+    provider.spool.connection.set_trace_callback(statements.append)
+    with patch.object(
+        provider.spool,
+        "reconciliation_expectations",
+        side_effect=AssertionError("historical evidence was rescanned"),
+    ) as historical_scan:
+        assert provider.reconcile_once() == 0
+    provider.spool.connection.set_trace_callback(None)
+
+    historical_scan.assert_not_called()
+    assert not any(
+        "from reconciliation_events" in statement.lower() for statement in statements
+    )
+
+
+def test_model_execution_requires_the_exact_messages_active_lease(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    class FifoBlockedBackend(FakeBackend):
+        def claim_runs(self, payload: dict) -> dict:
+            self.calls.append(("claim", payload))
+            return {"runs": []}
+
+    backend = FifoBlockedBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert (
+        record_inbound_before_model(
+            agent,
+            platform_message_id="fifo-blocked-message",
+            content="Do not run ahead of the older retry.",
+        )
+        is False
+    )
+    assert provider.active_lease_owner is None
+
+
+def test_backend_outage_falls_back_locally_and_reconciles_confirmed_response(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+        tool_before,
+    )
+
+    class BackendOutage(FakeBackend):
+        def ingest_events(self, payload: dict) -> dict:
+            self.calls.append(("ingest", payload))
+            raise TimeoutError("backend unavailable")
+
+    provider = _provider(tmp_path, BackendOutage())
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    delivery_key = ("telegram", "private-chat", "backend-outage-message")
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=delivery_key[2],
+        content="Answer from local context while the backend recovers.",
+    )
+    assert agent._sydney_degraded_delivery_key == delivery_key
+
+    assert (
+        tool_before(
+            agent,
+            "read-during-outage",
+            "command_contacts_search",
+            {"query": "Brandon"},
+        )
+        is None
+    )
+    write_decision = tool_before(
+        agent,
+        "write-during-outage",
+        "gmail_send",
+        {"to": "client@example.test", "subject": "Do not send"},
+    )
+    assert write_decision is not None
+    assert write_decision.block_message is not None
+
+    result = {"final_response": "Local answer delivered once.", "completed": True}
+    stage_run_outcome(agent, result)
+
+    assert result["final_response"] == "Local answer delivered once."
+    staged = provider.spool.get_final_delivery(
+        platform=delivery_key[0],
+        chat_id=delivery_key[1],
+        platform_message_id=delivery_key[2],
+    )
+    assert staged is not None
+    assert staged["degraded"] is True
+    assert "confirmed_at" not in staged
+
+    record_delivery_by_key(delivery_key, delivered=True)
+    confirmed = provider.spool.get_final_delivery(
+        platform=delivery_key[0],
+        chat_id=delivery_key[1],
+        platform_message_id=delivery_key[2],
+    )
+    assert confirmed is not None
+    assert confirmed["confirmed_at"]
+
+    recovered = FakeBackend()
+    provider._backend = recovered
+    provider.drain_once()
+
+    succeeded = [
+        payload
+        for name, payload in recovered.calls
+        if name == "run_update" and payload.get("state") == "succeeded"
+    ]
+    assert len(succeeded) == 1
+    assert provider.spool.pending_count == 0
+    assert (
+        provider.spool.get_final_delivery(
+            platform=delivery_key[0],
+            chat_id=delivery_key[1],
+            platform_message_id=delivery_key[2],
+        )
+        is None
+    )
+
+
+def test_active_run_lease_can_be_renewed_before_it_expires(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("lease-renewal-message", "Keep working safely.")
+    provider.drain_once()
+
+    assert provider.renew_active_lease() is True
+    renewals = [payload for name, payload in backend.calls if name == "renew"]
+    assert len(renewals) == 1
+    assert renewals[0]["run_id"] == provider.active_run_id
+    assert renewals[0]["lease_owner"] == provider.active_lease_owner
+
+
+def test_reclaimed_run_rebinds_pending_tool_records_to_the_new_lease(
+    tmp_path: Path,
+) -> None:
+    class LeaseFencedBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            if payload["lease_owner"] != "hermes:replacement:99":
+                raise RuntimeError("context_run_lease_owner_invalid")
+            return {
+                "state": "started",
+                "replay_decision": "execute",
+                "canonical_tool_call_id": payload["tool_call_id"],
+            }
+
+    backend = LeaseFencedBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("reclaimed-run-message", "Search once after restart")
+    provider.drain_once()
+    run_id = provider.active_run_id or ""
+    provider.record_tool_before(
+        run_id=run_id,
+        tool_call_id="reclaimed-call",
+        tool_name="leads_recent",
+        arguments={},
+        side_effect_class="read_only",
+    )
+    provider.record_tool_after(
+        run_id=run_id,
+        tool_call_id="reclaimed-call",
+        tool_name="leads_recent",
+        state="succeeded",
+        result_content='{"items":[]}',
+    )
+
+    first_drain = provider.drain_once()
+    assert first_drain.failed == 1
+    assert provider.spool.pending_count == 2
+
+    provider.activate_claimed_run(
+        {
+            "id": run_id,
+            "lease_owner": "hermes:replacement:99",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 2,
+        }
+    )
+    pending = provider.spool.pending(limit=10)
+    assert pending[0].payload["tool_start"]["lease_owner"] == ("hermes:replacement:99")
+    assert pending[1].payload["tool_update"]["lease_owner"] == ("hermes:replacement:99")
+
+    second_drain = provider.drain_once()
+    assert second_drain.acknowledged == 2
+    assert provider.spool.pending_count == 0
 
 
 def test_prefetch_uses_fresh_source_linked_context_then_cached_fallback(
@@ -243,10 +955,49 @@ def test_prefetch_uses_fresh_source_linked_context_then_cached_fallback(
     assert cached == fresh
 
 
-def test_sync_turn_queues_only_new_visible_messages_and_tool_records(
+def test_prefetch_uses_the_configured_recall_token_budget(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_RECALL_TOKEN_BUDGET": "4096"},
+        clear=False,
+    ):
+        provider = _provider(tmp_path, backend)
+        provider.record_inbound("message-budget", "Remember this")
+        provider.drain_once()
+        provider.prefetch("Recall this", session_id="session-1")
+
+    retrieve_payload = [
+        payload for name, payload in backend.calls if name == "retrieve"
+    ][-1]
+    assert retrieve_payload["token_budget"] == 4096
+
+
+def test_retry_mode_sync_turn_does_not_duplicate_hook_owned_events(
     tmp_path: Path,
 ) -> None:
-    provider = _provider(tmp_path)
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("user-1", "Visible user text")
+    provider.drain_once()
+    provider.record_tool_before(
+        run_id=provider.active_run_id or "",
+        tool_call_id="call-1",
+        tool_name="command_contacts_search",
+        arguments={"query": "Brandon"},
+        side_effect_class="read_only",
+    )
+    provider.drain_once()
+    provider.record_tool_after(
+        run_id=provider.active_run_id or "",
+        tool_call_id="call-1",
+        tool_name="command_contacts_search",
+        state="succeeded",
+        result_content='{"total":1}',
+    )
+    provider.drain_once()
+    provider.complete_active_run("Visible answer")
+    provider.drain_once()
     messages = [
         {"role": "system", "content": "hidden system"},
         {
@@ -277,13 +1028,7 @@ def test_sync_turn_queues_only_new_visible_messages_and_tool_records(
         },
     ]
 
-    provider.sync_turn(
-        "Visible user text",
-        "Visible answer",
-        session_id="session-1",
-        messages=messages,
-    )
-    first_count = provider.spool.pending_count
+    call_count = len(backend.calls)
     provider.sync_turn(
         "Visible user text",
         "Visible answer",
@@ -291,15 +1036,178 @@ def test_sync_turn_queues_only_new_visible_messages_and_tool_records(
         messages=messages,
     )
 
-    assert first_count == 4
-    assert provider.spool.pending_count == first_count
+    assert len(backend.calls) == call_count
+    assert provider.spool.pending_count == 0
+
+
+def test_shadow_sync_turn_skips_the_gateway_owned_user_event(
+    tmp_path: Path,
+) -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "false",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-1",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            agent_context="primary",
+        )
+    messages = [
+        {"role": "system", "content": "hidden system"},
+        {"role": "user", "id": "user-1", "content": "Visible user text"},
+        {
+            "role": "assistant",
+            "id": "assistant-1",
+            "content": "Visible answer",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "function": {
+                        "name": "command_contacts_search",
+                        "arguments": '{"query":"Brandon"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "command_contacts_search",
+            "content": '{"total":1}',
+        },
+    ]
+
+    provider.sync_turn(
+        "Visible user text",
+        "Visible answer",
+        session_id="session-1",
+        messages=messages,
+    )
+
+    assert provider.spool.pending_count == 3
     payloads = [record.payload for record in provider.spool.pending(limit=10)]
     serialized = json.dumps(payloads)
-    assert "Visible user text" in serialized
+    assert "Visible user text" not in serialized
     assert "Visible answer" in serialized
     assert "command_contacts_search" in serialized
     assert "hidden system" not in serialized
     assert "hidden reasoning" not in serialized
+
+
+def test_shadow_sync_turn_only_persists_messages_after_the_current_user(
+    tmp_path: Path,
+) -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "false",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-1",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            agent_context="primary",
+        )
+
+    provider.sync_turn(
+        "Current question",
+        "Current answer",
+        messages=[
+            {"role": "user", "id": "historical-user", "content": "Old question"},
+            {
+                "role": "assistant",
+                "id": "historical-assistant",
+                "content": "Historical answer already covered by backfill",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "historical-tool",
+                "content": "Historical tool result already covered by backfill",
+            },
+            {"role": "user", "id": "current-user", "content": "Current question"},
+            {
+                "role": "assistant",
+                "id": "current-assistant",
+                "content": "Current answer",
+            },
+        ],
+    )
+
+    serialized = json.dumps(
+        [record.payload for record in provider.spool.pending(limit=10)]
+    )
+    assert "Current answer" in serialized
+    assert "Historical answer already covered by backfill" not in serialized
+    assert "Historical tool result already covered by backfill" not in serialized
+
+
+def test_shadow_sync_turn_keeps_repeated_assistant_text_from_separate_turns(
+    tmp_path: Path,
+) -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "false",
+            "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-1",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            agent_context="primary",
+        )
+
+    first_turn = [
+        {"role": "user", "content": "First request"},
+        {"role": "assistant", "content": "Done."},
+    ]
+    provider.sync_turn("First request", "Done.", messages=first_turn)
+    provider.sync_turn(
+        "Second request",
+        "Done.",
+        messages=[
+            *first_turn,
+            {"role": "user", "content": "Second request"},
+            {"role": "assistant", "content": "Done."},
+        ],
+    )
+
+    assistant_events = [
+        record.payload["events"][0]
+        for record in provider.spool.pending(limit=10)
+        if record.kind == "event_batch"
+        and record.payload["events"][0]["event_type"] == "assistant"
+    ]
+    assert len(assistant_events) == 2
+    assert len({event["source_event_key"] for event in assistant_events}) == 2
 
 
 def test_session_switch_preserves_logical_lineage(tmp_path: Path) -> None:
@@ -317,6 +1225,56 @@ def test_session_switch_preserves_logical_lineage(tmp_path: Path) -> None:
     row = provider.spool.get_session("session-2")
     assert row["parent_session_id"] == "session-1"
     assert row["continuation_reason"] == "compression"
+
+
+def test_active_run_evidence_stays_in_its_leased_session_after_compression(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("compression-mid-run", "Finish this leased turn.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+
+    provider.on_session_switch(
+        "session-2",
+        parent_session_id="session-1",
+        reset=False,
+        reason="compression",
+    )
+    provider.record_tool_before(
+        run_id=run_id,
+        tool_call_id="call-after-compression",
+        tool_name="command_contacts_search",
+        arguments={"query": "Jamie"},
+        side_effect_class="read_only",
+    )
+    provider.drain_once()
+    provider.record_tool_after(
+        run_id=run_id,
+        tool_call_id="call-after-compression",
+        tool_name="command_contacts_search",
+        state="succeeded",
+        result_content='{ "total": 1 }',
+    )
+    provider.drain_once()
+    provider.complete_active_run("Finished after compression.")
+
+    run_event_batches = [
+        payload
+        for name, payload in backend.calls
+        if name == "ingest"
+        and any(
+            str(event.get("source_event_key") or "").startswith(f"run:{run_id}:")
+            for event in payload["events"]
+        )
+    ]
+    assert run_event_batches
+    assert {payload["hermes_session_id"] for payload in run_event_batches} == {
+        "session-1"
+    }
+    assert provider.session_id == "session-2"
 
 
 def test_history_tool_delegates_to_backend_contract(tmp_path: Path) -> None:
@@ -343,17 +1301,48 @@ def test_history_tool_delegates_to_backend_contract(tmp_path: Path) -> None:
     assert payload["query"] == "closing"
 
 
+def test_history_tool_schema_requires_one_backend_valid_search_mode(
+    tmp_path: Path,
+) -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    provider = _provider(tmp_path, FakeBackend())
+    parameters = provider.get_tool_schemas()[0]["parameters"]
+    Draft202012Validator.check_schema(parameters)
+    validator = Draft202012Validator(parameters)
+
+    for valid in (
+        {"query": "closing"},
+        {"around_event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        {"recent_conversations": True},
+        {"query": "closing", "recent_conversations": False},
+    ):
+        validator.validate(valid)
+
+    for invalid in (
+        {},
+        {"started_at": "2026-08-01T00:00:00Z"},
+        {"event_types": ["user"]},
+        {"recent_conversations": False},
+    ):
+        with pytest.raises(ValidationError):
+            validator.validate(invalid)
+
+
 def test_tool_hooks_queue_before_and_after_without_raw_secret(tmp_path: Path) -> None:
     provider = _provider(tmp_path)
+    provider.record_inbound("message-tool-ledger", "Run the safe search")
+    provider.drain_once()
     provider.record_tool_before(
-        run_id="run-1",
+        run_id=provider.active_run_id or "",
         tool_call_id="call-1",
         tool_name="command_contacts_search",
         arguments={"Authorization": "Bearer top-secret", "query": "Brandon"},
         side_effect_class="read_only",
     )
     provider.record_tool_after(
-        run_id="run-1",
+        run_id=provider.active_run_id or "",
         tool_call_id="call-1",
         state="succeeded",
         result_event_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -363,8 +1352,209 @@ def test_tool_hooks_queue_before_and_after_without_raw_secret(tmp_path: Path) ->
     assert "top-secret" not in serialized
     assert "REDACTED" in serialized
     assert [r.kind for r in provider.spool.pending(limit=10)] == [
-        "tool_before",
+        "tool_before_bundle",
         "tool_after",
+    ]
+    tool_call_event = provider.spool.pending(limit=10)[0].payload["event_batch"][
+        "events"
+    ][0]
+    assert tool_call_event["event_type"] == "tool_call"
+    assert tool_call_event["tool_name"] == "command_contacts_search"
+    assert '"query":"Brandon"' in tool_call_event["content"]
+    assert provider.spool.pending(limit=10)[0].payload["tool_start"]["lease_owner"]
+    assert provider.spool.pending(limit=10)[1].payload["lease_owner"]
+
+
+def test_runtime_persists_redacted_failed_tool_result_and_stable_write_intent(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_after, tool_before
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("message-write", "Create the confirmed draft")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    decision = tool_before(
+        agent,
+        "model-call-1",
+        "gmail_send",
+        {"request_id": "stable-request-1", "subject": "Closing"},
+    )
+    assert decision is None
+    started = [payload for name, payload in backend.calls if name == "tool_before"][-1]
+    assert started["lease_owner"] == provider.active_lease_owner
+    expected_intent = hashlib.sha256(
+        b"sydney-tool-intent-v1\0gmail_send\0request_id\0stable-request-1"
+    ).hexdigest()
+    assert started["caller_idempotency_key"] == f"request_id_sha256:{expected_intent}"
+
+    tool_after(
+        agent,
+        "model-call-1",
+        "gmail_send",
+        "Authorization: Bearer failed-secret-value; upstream timed out",
+        failed=True,
+    )
+
+    ingested = [payload for name, payload in backend.calls if name == "ingest"][-1]
+    assert ingested["events"][0]["event_type"] == "tool_result"
+    assert "failed-secret-value" not in ingested["events"][0]["content"]
+    assert "REDACTED" in ingested["events"][0]["content"]
+    updated = [payload for name, payload in backend.calls if name == "tool_after"][-1]
+    assert updated["state"] == "delivery_uncertain"
+    assert updated["lease_owner"] == provider.active_lease_owner
+
+
+def test_exact_tool_call_replay_rechecks_the_backend_without_spool_conflict(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_before
+
+    class ExactReplayBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            replay_count = sum(name == "tool_before" for name, _payload in self.calls)
+            return {
+                "state": "started",
+                "replay_decision": (
+                    "execute" if replay_count == 1 else "block_uncertain"
+                ),
+                "canonical_tool_call_id": payload["tool_call_id"],
+            }
+
+    backend = ExactReplayBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("exact-tool-replay", "Send this at most once.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    arguments = {"request_id": "stable-request", "subject": "Closing"}
+
+    assert tool_before(agent, "same-call", "gmail_send", arguments) is None
+    replay = tool_before(agent, "same-call", "gmail_send", arguments)
+
+    assert replay is not None
+    assert replay.block_message is not None
+    assert "uncertain" in replay.block_message
+    assert sum(name == "tool_before" for name, _payload in backend.calls) == 2
+    assert (
+        provider.spool.connection.execute(
+            "SELECT count(*) FROM outbox WHERE source_key=?",
+            (f"tool:{provider.active_run_id}:same-call:before",),
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_runtime_updates_the_canonical_write_after_a_regenerated_tool_call_id(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_after, tool_before
+
+    class ReplayBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            return {
+                "state": "not_delivered",
+                "replay_decision": "retry_not_delivered",
+                "canonical_tool_call_id": "canonical-call-id",
+            }
+
+    backend = ReplayBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("message-replay", "Retry the saved write")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert (
+        tool_before(
+            agent,
+            "regenerated-call-id",
+            "gmail_send",
+            {"request_id": "stable-request", "subject": "Closing"},
+        )
+        is None
+    )
+    tool_after(
+        agent,
+        "regenerated-call-id",
+        "gmail_send",
+        {"delivered": True},
+        failed=False,
+    )
+
+    updated = [payload for name, payload in backend.calls if name == "tool_after"][-1]
+    assert updated["tool_call_id"] == "canonical-call-id"
+
+
+def test_replayed_tool_outcomes_get_unique_durable_event_keys(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import tool_after, tool_before
+
+    class ReplayBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            return {
+                "state": "not_delivered",
+                "replay_decision": "retry_not_delivered",
+                "canonical_tool_call_id": "canonical-call-id",
+            }
+
+    backend = ReplayBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("message-replay-events", "Retry the confirmed write")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    arguments = {"request_id": "stable-request", "subject": "Closing"}
+
+    assert tool_before(agent, "model-call-1", "gmail_send", arguments) is None
+    tool_after(
+        agent,
+        "model-call-1",
+        "gmail_send",
+        {"delivered": True, "attempt": 1},
+        failed=False,
+    )
+    assert tool_before(agent, "model-call-2", "gmail_send", arguments) is None
+    tool_after(
+        agent,
+        "model-call-2",
+        "gmail_send",
+        {"delivered": True, "attempt": 2},
+        failed=False,
+    )
+
+    tool_result_keys = [
+        event["source_event_key"]
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["event_type"] == "tool_result"
+    ]
+    assert len(tool_result_keys) == 2
+    assert len(set(tool_result_keys)) == 2
+    updates = [payload for name, payload in backend.calls if name == "tool_after"]
+    assert [payload["tool_call_id"] for payload in updates] == [
+        "canonical-call-id",
+        "canonical-call-id",
     ]
 
 
@@ -401,3 +1591,1258 @@ def test_provider_rejects_an_identity_outside_the_runtime_allowlist(
         )
     assert provider.is_available() is False
     assert provider.record_inbound("message-1", "Do not store") is None
+
+
+@pytest.mark.parametrize(
+    ("platform", "user_id", "chat_id"),
+    [
+        ("telegram", "approved-user", "different-chat"),
+        ("discord", "approved-user", "private-chat"),
+    ],
+)
+def test_provider_requires_the_exact_private_telegram_identity_tuple(
+    tmp_path: Path,
+    platform: str,
+    user_id: str,
+    chat_id: str,
+) -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "approved-user",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "session-wrong-scope",
+            hermes_home=str(tmp_path),
+            platform=platform,
+            user_id=user_id,
+            chat_id=chat_id,
+            agent_context="primary",
+        )
+
+    assert provider.is_available() is False
+    assert provider.record_inbound("message-1", "Do not store") is None
+
+
+def test_run_is_completed_only_after_confirmed_final_delivery(tmp_path: Path) -> None:
+    from sydney_runtime import (
+        record_delivery_outcome,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    manager = SimpleNamespace(
+        get_provider=lambda name: provider if name == "sydney" else None
+    )
+    agent = SimpleNamespace(_memory_manager=manager)
+    event = SimpleNamespace(
+        source=SimpleNamespace(
+            platform=SimpleNamespace(value="telegram"),
+            chat_id="private-chat",
+        ),
+        message_id="delivery-gate-1",
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=event.message_id,
+        content="Reply only after delivery succeeds.",
+    )
+    result = {"final_response": "Delivered response", "completed": True}
+    stage_run_outcome(agent, result)
+
+    staged = provider.spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="delivery-gate-1",
+    )
+    assert staged is not None
+    assert staged["run_id"] == provider.active_run_id
+
+    assert not any(
+        name == "run_update" and payload.get("state") == "succeeded"
+        for name, payload in backend.calls
+    )
+
+    record_delivery_outcome(event, delivered=False)
+    uncertain = provider.spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="delivery-gate-1",
+    )
+    assert uncertain is not None
+    assert uncertain["run_id"] == provider.active_run_id
+    assert not any(
+        name == "run_update" and payload.get("state") == "succeeded"
+        for name, payload in backend.calls
+    )
+
+    result["already_sent"] = True
+    stage_run_outcome(agent, result)
+    record_delivery_outcome(event, delivered=True)
+    succeeded = [
+        payload
+        for name, payload in backend.calls
+        if name == "run_update" and payload.get("state") == "succeeded"
+    ]
+    assert len(succeeded) == 1
+    assert (
+        provider.spool.get_final_delivery(
+            platform="telegram",
+            chat_id="private-chat",
+            platform_message_id="delivery-gate-1",
+        )
+        is None
+    )
+
+
+def test_same_inbound_replay_blocks_after_ambiguous_final_delivery(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        deferred_inbound_response,
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    delivery_key = ("telegram", "private-chat", "delivery-ambiguous-replay")
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=delivery_key[2],
+        content="Do this once even if delivery becomes uncertain.",
+    )
+    first = {"final_response": "One potentially delivered response", "completed": True}
+    assert stage_run_outcome(agent, first) is True
+    record_delivery_by_key(delivery_key, delivered=False)
+
+    assert (
+        record_inbound_before_model(
+            agent,
+            platform_message_id=delivery_key[2],
+            content="Do this once even if delivery becomes uncertain.",
+        )
+        is False
+    )
+    assert deferred_inbound_response(agent) == ""
+
+    duplicate = {"final_response": "A duplicate response", "completed": True}
+    assert stage_run_outcome(agent, duplicate) is False
+    assert duplicate["final_response"] == ""
+    blocked = [
+        payload
+        for name, payload in backend.calls
+        if name == "run_update" and payload.get("state") == "blocked_side_effect"
+    ]
+    assert len(blocked) == 1
+    assert blocked[0]["provider_category"] == "delivery_uncertain"
+    assert blocked[0]["error_code"] == "final_delivery_uncertain"
+
+
+def test_provider_initialization_reuses_backfilled_session_lineage(
+    tmp_path: Path,
+) -> None:
+    from sydney_spool import SydneySpool
+
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    spool.rotate_session(
+        session_id="existing-session",
+        logical_conversation_id="2d8d343b-0e9c-4ce9-ac2c-a2c05a249eff",
+        platform="telegram",
+        external_user_id="approved-user",
+        external_chat_id="private-chat",
+        parent_session_id="parent-session",
+        continuation_reason="backfill_continuation",
+    )
+    spool.set_meta(
+        "logical_conversation:"
+        + hashlib.sha256(b"telegram\x1fapproved-user\x1fprivate-chat").hexdigest(),
+        "2d8d343b-0e9c-4ce9-ac2c-a2c05a249eff",
+    )
+    spool.close()
+
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_ENABLED": "true",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "approved-user",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "existing-session",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="approved-user",
+            chat_id="private-chat",
+            parent_session_id=None,
+        )
+
+    assert provider.is_available()
+    assert provider.spool.get_session("existing-session")["continuation_reason"] == (
+        "backfill_continuation"
+    )
+
+
+def test_permanent_model_failure_releases_only_after_visible_delivery(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="permanent-failure",
+        content="This provider request will fail permanently.",
+    )
+
+    stage_run_outcome(
+        agent,
+        {
+            "final_response": "The provider rejected this request.",
+            "completed": False,
+            "failed": True,
+            "error": "invalid_request",
+        },
+    )
+
+    assert not any(
+        name == "run_update" and payload.get("state") == "terminal_failure"
+        for name, payload in backend.calls
+    )
+    record_delivery_by_key(
+        ("telegram", "private-chat", "permanent-failure"),
+        delivered=True,
+    )
+
+    terminal = [
+        payload
+        for name, payload in backend.calls
+        if name == "run_update" and payload.get("state") == "terminal_failure"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["error_code"] == "model_terminal_failure"
+
+
+def test_compression_exhaustion_is_saved_for_automatic_continuation(
+    tmp_path: Path,
+) -> None:
+    from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE
+    from sydney_runtime import defer_compression_exhaustion, record_inbound_before_model
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="compression-exhausted",
+        content="Continue this request after resetting the working context.",
+    )
+
+    message = defer_compression_exhaustion(agent)
+
+    assert message == AUTOMATIC_CONTINUATION_MESSAGE
+    waiting = [
+        payload
+        for name, payload in backend.calls
+        if name == "run_update" and payload.get("state") == "waiting_retry"
+    ]
+    assert len(waiting) == 1
+    assert waiting[0]["provider_category"] == "context_exhausted"
+    assert waiting[0]["error_code"] == "compression_exhausted"
+
+
+def test_retry_wait_source_keys_use_the_backend_attempt_across_restart(
+    tmp_path: Path,
+) -> None:
+    class RateLimit(RuntimeError):
+        status_code = 429
+
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.headers = {"Retry-After": "2"}
+
+    provider = _provider(tmp_path, FakeBackend())
+    provider.record_inbound("durable-retry-key", "Retry this safely.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+
+    assert provider.defer_retry(RateLimit("capacity"), attempt=2)
+    provider.activate_claimed_run(
+        {
+            "id": run_id,
+            "state": "running",
+            "lease_owner": "hermes:replacement:2",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 2,
+        }
+    )
+    assert provider.defer_retry(RateLimit("capacity"), attempt=2)
+
+    waiting = provider.spool.matching_records(
+        state="acknowledged",
+        source_prefix=f"run:{run_id}:waiting:",
+    )
+    assert len(waiting) == 2
+    assert len({record.source_key for record in waiting}) == 2
+    assert any(":1:" in record.source_key for record in waiting)
+    assert any(":2:" in record.source_key for record in waiting)
+
+
+def test_inbound_replay_preserves_the_newer_claimed_attempt_count(
+    tmp_path: Path,
+) -> None:
+    class AttemptAwareBackend(FakeBackend):
+        def start_run(self, payload: dict) -> dict:
+            response = super().start_run(payload)
+            response["run"]["attempt_count"] = 0
+            return response
+
+    provider = _provider(tmp_path, AttemptAwareBackend())
+    provider.record_inbound("attempt-replay", "Retry this safely.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+    provider.spool.set_meta(
+        f"claimed_run:{run_id}",
+        {
+            "lease_owner": "hermes:replacement:4",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 4,
+            "hermes_session_id": "session-1",
+        },
+    )
+
+    provider.record_inbound("attempt-replay", "Retry this safely.")
+
+    assert provider._active_run_attempt_count == 4
+    claimed = provider.spool.get_meta(f"claimed_run:{run_id}")
+    assert claimed["attempt_count"] == 4
+
+
+def test_compression_wait_source_keys_use_the_backend_attempt_across_restart(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path, FakeBackend())
+    provider.record_inbound("durable-compression-key", "Continue this safely.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+
+    assert provider.defer_compression_exhaustion()
+    provider.activate_claimed_run(
+        {
+            "id": run_id,
+            "state": "running",
+            "lease_owner": "hermes:replacement:2",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 2,
+        }
+    )
+    assert provider.defer_compression_exhaustion()
+
+    waiting = provider.spool.matching_records(
+        state="acknowledged",
+        source_prefix=f"run:{run_id}:waiting:",
+    )
+    assert len(waiting) == 2
+    assert len({record.source_key for record in waiting}) == 2
+    assert any(":1:" in record.source_key for record in waiting)
+    assert any(":2:" in record.source_key for record in waiting)
+
+
+def test_new_inbound_does_not_supersede_a_pending_delivered_completion(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    class CompletionOutageBackend(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_completion = True
+            self.current_run_id = ""
+
+        def ingest_events(self, payload: dict) -> dict:
+            response = super().ingest_events(payload)
+            receipts = response.get("event_receipts") or []
+            for event, receipt in zip(payload["events"], receipts, strict=True):
+                event_id = str(uuid5(NAMESPACE_URL, event["source_event_key"]))
+                receipt["event_id"] = event_id
+            response["event_ids"] = [receipt["event_id"] for receipt in receipts]
+            return response
+
+        def start_run(self, payload: dict) -> dict:
+            self.calls.append(("run", payload))
+            self.current_run_id = str(
+                uuid5(NAMESPACE_URL, f"run:{payload['platform_message_id']}")
+            )
+            return {
+                "run": {
+                    "id": self.current_run_id,
+                    "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "state": "queued",
+                }
+            }
+
+        def claim_runs(self, payload: dict) -> dict:
+            self.calls.append(("claim", payload))
+            return {
+                "runs": [
+                    {
+                        "id": self.current_run_id,
+                        "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                        "state": "running",
+                        "lease_owner": payload["lease_owner"],
+                        "lease_expires_at": (
+                            datetime.now(timezone.utc) + timedelta(seconds=120)
+                        ).isoformat(),
+                        "attempt_count": 1,
+                    }
+                ]
+            }
+
+        def update_run(self, payload: dict) -> dict:
+            self.calls.append(("run_update", payload))
+            if payload.get("state") == "succeeded" and self.fail_completion:
+                raise TimeoutError("backend unavailable")
+            return payload
+
+    backend = CompletionOutageBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    first_key = ("telegram", "private-chat", "delivered-before-outage")
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=first_key[2],
+        content="Send the first response.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    assert provider.stage_final_delivery(first_key, "Already delivered.")
+    provider.complete_active_run("Already delivered.", delivery_key=first_key)
+    assert provider.spool.get_record(f"run:{run_id}:completion").state == "pending"
+
+    assert (
+        record_inbound_before_model(
+            agent,
+            platform_message_id="new-message-after-delivery",
+            content="Handle this after confirming the first response.",
+        )
+        is False
+    )
+    assert provider.spool.get_record(f"run:{run_id}:terminal:superseded") is None
+
+    backend.fail_completion = False
+    recovered = provider.drain_once()
+    assert recovered is not None
+    assert recovered.failed == 0
+    assert provider.spool.get_record(f"run:{run_id}:completion").state == (
+        "acknowledged"
+    )
+
+
+def test_runtime_tpm_budget_uses_the_configured_limit(tmp_path: Path) -> None:
+    from sydney_runtime import SydneyBudgetExceeded, reserve_input_budget
+
+    provider = _provider(tmp_path)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET": "10"},
+        clear=False,
+    ):
+        reserve_input_budget(agent, 6)
+        with pytest.raises(SydneyBudgetExceeded):
+            reserve_input_budget(agent, 5)
+
+
+def test_confirmed_stream_delivery_completes_without_a_second_send(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_delivery_outcome,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    event = SimpleNamespace(
+        source=SimpleNamespace(
+            platform=SimpleNamespace(value="telegram"),
+            chat_id="private-chat",
+        ),
+        message_id="delivery-stream-1",
+    )
+    record_inbound_before_model(
+        agent,
+        platform_message_id=event.message_id,
+        content="Stream this response.",
+    )
+    result = {"final_response": "Streamed response", "completed": True}
+    stage_run_outcome(agent, result)
+    result["already_sent"] = True
+
+    record_delivery_outcome(event, delivered=False)
+
+    assert (
+        len(
+            [
+                payload
+                for name, payload in backend.calls
+                if name == "run_update" and payload.get("state") == "succeeded"
+            ]
+        )
+        == 1
+    )
+
+
+def test_delivery_key_override_completes_a_queued_followup(tmp_path: Path) -> None:
+    from sydney_runtime import (
+        record_delivery_outcome,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    record_inbound_before_model(
+        agent,
+        platform_message_id="queued-message",
+        content="This was queued behind another turn.",
+    )
+    stage_run_outcome(
+        agent,
+        {"final_response": "Queued response delivered", "completed": True},
+    )
+    original_event = SimpleNamespace(
+        source=SimpleNamespace(
+            platform=SimpleNamespace(value="telegram"),
+            chat_id="private-chat",
+        ),
+        message_id="original-message",
+        _sydney_delivery_key=("telegram", "private-chat", "queued-message"),
+    )
+
+    record_delivery_outcome(original_event, delivered=True)
+
+    assert (
+        len(
+            [
+                payload
+                for name, payload in backend.calls
+                if name == "run_update" and payload.get("state") == "succeeded"
+            ]
+        )
+        == 1
+    )
+
+
+def test_continuation_watcher_scopes_claims_to_the_configured_private_tuple() -> None:
+    from sydney_gateway import (
+        _configured_private_identity,
+        _identity_meta_key,
+        _matches_private_identity,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "approved-user",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user",
+        },
+        clear=False,
+    ):
+        identity = _configured_private_identity()
+
+    assert identity == ("telegram", "approved-user", "private-chat")
+    assert _matches_private_identity(
+        platform="telegram",
+        external_user_id="approved-user",
+        external_chat_id="private-chat",
+        expected=identity,
+    )
+    assert not _matches_private_identity(
+        platform="telegram",
+        external_user_id="approved-user",
+        external_chat_id="other-chat",
+        expected=identity,
+    )
+    assert _identity_meta_key(*identity).startswith("backend_identity:")
+
+
+@pytest.mark.asyncio
+async def test_continuation_watcher_survives_until_first_spool_is_created(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _identity_meta_key, sydney_continuation_watcher
+    from sydney_spool import SydneySpool
+
+    backend = FakeBackend()
+    gateway = SimpleNamespace(_running=True, adapters={})
+    environment = {
+        "HERMES_HOME": str(tmp_path),
+        "BACKEND_API_URL": "https://backend.example.test",
+        "AGENT_CONTROL_TOKEN": "not-a-real-agent-control-token",
+        "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "true",
+        "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "approved-user",
+        "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+        "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "approved-user",
+    }
+    with (
+        patch.dict(os.environ, environment, clear=False),
+        patch("sydney_gateway.SydneyBackendClient", return_value=backend),
+    ):
+        watcher = asyncio.create_task(
+            sydney_continuation_watcher(gateway, interval=0.01)
+        )
+        await asyncio.sleep(0.01)
+        assert watcher.done() is False
+
+        spool = SydneySpool(tmp_path / "sydney_spool.db")
+        spool.set_meta(
+            _identity_meta_key("telegram", "approved-user", "private-chat"),
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )
+        spool.close()
+        await asyncio.sleep(0.3)
+        gateway._running = False
+        await watcher
+
+    assert any(name == "claim" for name, _payload in backend.calls)
+
+
+def test_restart_watcher_drains_fsynced_inbound_before_any_run_can_be_claimed(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _drain_pending_inbound_bundles, _identity_meta_key
+    from sydney_spool import SydneySpool
+
+    backend = FakeBackend()
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    logical_id = "11111111-1111-4111-8111-111111111111"
+    event_batch = {
+        "platform": "telegram",
+        "external_user_id": "approved-user",
+        "external_chat_id": "private-chat",
+        "display_label": "Brandon",
+        "hermes_session_id": "session-restart",
+        "logical_conversation_id": logical_id,
+        "events": [
+            {
+                "source_event_key": "telegram:restart-message:user",
+                "event_type": "user",
+                "role": "user",
+                "occurred_at": "2026-08-25T12:00:00+00:00",
+                "content": "Resume this after the process restarts.",
+                "metadata": {"platform_message_id": "restart-message"},
+            }
+        ],
+    }
+    spool.enqueue_inbound(
+        event_batch,
+        {
+            "platform_message_id": "restart-message",
+            "terminal_deadline_at": "2026-08-26T12:00:00+00:00",
+        },
+        source_key="inbound:telegram:private-chat:restart-message",
+    )
+
+    drained = _drain_pending_inbound_bundles(
+        backend=backend,
+        spool=spool,
+        expected_identity=("telegram", "approved-user", "private-chat"),
+    )
+
+    assert drained == 1
+    assert spool.pending_count == 0
+    assert [name for name, _payload in backend.calls] == ["ingest", "run"]
+    assert (
+        spool.get_meta(_identity_meta_key("telegram", "approved-user", "private-chat"))
+        == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    )
+    recovered = spool.find_inbound("restart-message")
+    assert recovered is not None
+    assert recovered.receipt["run"]["run"]["id"] == (
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    )
+
+
+@pytest.mark.parametrize("tool_name", ("leads_recent", "bookings_recent"))
+def test_runtime_classifies_recent_query_tools_as_read_only(tool_name: str) -> None:
+    from sydney_runtime import _side_effect_class
+
+    assert _side_effect_class(tool_name) == "read_only"
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "retaindb_forget",
+        "supermemory_forget",
+        "send_read_receipts",
+        "history_reset",
+        "status_update",
+        "get_and_delete",
+        "playlist_add",
+    ),
+)
+def test_runtime_never_classifies_mutating_marker_collisions_as_read_only(
+    tool_name: str,
+) -> None:
+    from sydney_runtime import _side_effect_class
+
+    assert _side_effect_class(tool_name) != "read_only"
+
+
+@pytest.mark.asyncio
+async def test_continuation_watcher_blocks_replay_after_uncertain_final_delivery(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _block_uncertain_final_delivery
+    from sydney_spool import SydneySpool
+
+    backend = FakeBackend()
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    spool.stage_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="message-uncertain",
+        run_id="run-uncertain",
+        lease_owner="old-worker",
+        response_sha256="b" * 64,
+    )
+    claimed = {
+        "id": "run-uncertain",
+        "lease_owner": "restart-worker",
+        "platform_message_id": "message-uncertain",
+    }
+
+    blocked = await _block_uncertain_final_delivery(
+        backend=backend,
+        spool=spool,
+        run=claimed,
+        platform="telegram",
+        chat_id="private-chat",
+    )
+
+    assert blocked is True
+    assert backend.calls[-1] == (
+        "run_update",
+        {
+            "run_id": "run-uncertain",
+            "state": "blocked_side_effect",
+            "lease_owner": "restart-worker",
+            "provider_category": "delivery_uncertain",
+            "error_code": "final_delivery_uncertain",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_watcher_drains_confirmed_completion_before_blocking(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _block_uncertain_final_delivery
+    from sydney_spool import SydneySpool
+
+    backend = FakeBackend()
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    run_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    spool.stage_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="message-confirmed",
+        run_id=run_id,
+        lease_owner="old-worker",
+        response_sha256="c" * 64,
+    )
+    spool.enqueue(
+        kind="run_completion_bundle",
+        source_key=f"run:{run_id}:completion",
+        payload={
+            "event_batch": {
+                "platform": "telegram",
+                "external_user_id": "brandon",
+                "external_chat_id": "private-chat",
+                "display_label": "Brandon",
+                "hermes_session_id": "session-1",
+                "logical_conversation_id": "11111111-1111-4111-8111-111111111111",
+                "events": [
+                    {
+                        "source_event_key": f"run:{run_id}:final_response",
+                        "event_type": "assistant",
+                        "role": "assistant",
+                        "occurred_at": "2026-08-25T12:00:00+00:00",
+                        "content": "Confirmed delivered response",
+                        "metadata": {"run_completion": True},
+                    }
+                ],
+            },
+            "run_update": {
+                "run_id": run_id,
+                "state": "succeeded",
+                "lease_owner": "old-worker",
+            },
+            "delivery_key": ["telegram", "private-chat", "message-confirmed"],
+        },
+    )
+    claimed = {
+        "id": run_id,
+        "lease_owner": "restart-worker",
+        "platform_message_id": "message-confirmed",
+    }
+
+    handled = await _block_uncertain_final_delivery(
+        backend=backend,
+        spool=spool,
+        run=claimed,
+        platform="telegram",
+        chat_id="private-chat",
+    )
+
+    assert handled is True
+    assert spool.get_record(f"run:{run_id}:completion").state == "acknowledged"
+    assert (
+        spool.get_final_delivery(
+            platform="telegram",
+            chat_id="private-chat",
+            platform_message_id="message-confirmed",
+        )
+        is None
+    )
+    run_updates = [payload for name, payload in backend.calls if name == "run_update"]
+    assert run_updates == [
+        {
+            "run_id": run_id,
+            "state": "succeeded",
+            "lease_owner": "restart-worker",
+            "final_response_event_id": str(
+                uuid5(NAMESPACE_URL, f"run:{run_id}:final_response")
+            ),
+        }
+    ]
+
+
+def test_continuation_marker_does_not_repeat_the_original_user_request() -> None:
+    from sydney_gateway import _CONTINUATION_MARKER
+
+    assert "resume this saved request" in _CONTINUATION_MARKER
+    assert "original user request" not in _CONTINUATION_MARKER
+
+
+def test_continuation_context_restores_the_saved_request_separately() -> None:
+    from sydney_gateway import _CONTINUATION_MARKER, _continuation_channel_context
+
+    original = "Prepare the seller follow-up after capacity returns."
+    context = _continuation_channel_context(original)
+
+    assert original in context
+    assert _CONTINUATION_MARKER not in context
+
+
+def test_internal_continuation_reuses_the_claimed_run_without_rewriting_inbound(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    provider = _provider(tmp_path, FakeBackend())
+    message_id = "internal-continuation"
+    original = "Prepare the seller follow-up."
+    provider.record_inbound(message_id, original)
+    provider.drain_once()
+    before = provider.spool.get_record(f"inbound:telegram:private-chat:{message_id}")
+    assert before is not None
+
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content=(
+            "[Recovered durable user request]\n"
+            f"{original}\n\n[New message]\n[System continuation]"
+        ),
+        internal=True,
+    )
+
+    after = provider.spool.get_record(f"inbound:telegram:private-chat:{message_id}")
+    assert after is not None
+    assert after.payload == before.payload
+
+
+def test_internal_continuation_activates_watcher_claim_for_cached_provider(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    provider = _provider(tmp_path, FakeBackend())
+    message_id = "cached-provider-continuation"
+    provider.record_inbound(message_id, "Resume this saved request.")
+    provider.drain_once()
+    run_id = provider.active_run_id
+    assert run_id is not None
+
+    provider._active_lease_owner = None
+    provider._active_lease_expires_at = None
+    provider.spool.set_meta(
+        f"claimed_run:{run_id}",
+        {
+            "lease_owner": "hermes:continuation-watcher:42",
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=120)
+            ).isoformat(),
+            "attempt_count": 2,
+            "hermes_session_id": "session-1",
+        },
+    )
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="[System continuation]",
+        internal=True,
+    )
+    assert provider.active_run_id == run_id
+    assert provider.active_lease_owner == "hermes:continuation-watcher:42"
+
+
+def test_deferred_acknowledgement_is_durable_without_completing_the_run(
+    tmp_path: Path,
+) -> None:
+    from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE
+    from sydney_runtime import (
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    class RateLimit(RuntimeError):
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.status_code = 429
+            self.headers = {"Retry-After": "60"}
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    delivery_key = ("telegram", "private-chat", "deferred-ack")
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=delivery_key[2],
+        content="Continue automatically after the provider wait.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    assert provider.defer_retry(RateLimit("capacity"), attempt=0)
+
+    result = {
+        "final_response": AUTOMATIC_CONTINUATION_MESSAGE,
+        "completed": False,
+        "deferred": True,
+    }
+    stage_run_outcome(agent, result)
+
+    staged = provider.spool.get_final_delivery(
+        platform=delivery_key[0],
+        chat_id=delivery_key[1],
+        platform_message_id=delivery_key[2],
+    )
+    assert staged is not None
+    assert staged["delivery_kind"] == "deferred"
+    assert staged["run_id"] == run_id
+    assert staged["event_batch"]["events"][0]["event_type"] == "assistant"
+    assert staged["event_batch"]["events"][0]["content"] == (
+        AUTOMATIC_CONTINUATION_MESSAGE
+    )
+    assert not any(
+        name == "run_update"
+        and payload.get("state") in {"succeeded", "terminal_failure"}
+        for name, payload in backend.calls
+    )
+
+    record_delivery_by_key(delivery_key, delivered=True)
+
+    assert (
+        provider.spool.get_final_delivery(
+            platform=delivery_key[0],
+            chat_id=delivery_key[1],
+            platform_message_id=delivery_key[2],
+        )
+        is None
+    )
+    delivered_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["source_event_key"] == f"run:{run_id}:deferred_ack"
+    ]
+    assert len(delivered_events) == 1
+    assert delivered_events[0]["content"] == AUTOMATIC_CONTINUATION_MESSAGE
+    assert not any(
+        name == "run_update"
+        and payload.get("state") in {"succeeded", "terminal_failure"}
+        for name, payload in backend.calls
+    )
+
+
+def test_terminal_error_is_committed_with_its_visible_event_after_delivery(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    delivery_key = ("telegram", "private-chat", "terminal-visible-error")
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=delivery_key[2],
+        content="Return a bounded error if this cannot run.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    result = {
+        "final_response": "The request could not be completed.",
+        "completed": False,
+        "failed": True,
+        "error": "invalid_request",
+    }
+
+    stage_run_outcome(agent, result)
+
+    staged = provider.spool.get_final_delivery(
+        platform=delivery_key[0],
+        chat_id=delivery_key[1],
+        platform_message_id=delivery_key[2],
+    )
+    assert staged is not None
+    assert staged["delivery_kind"] == "terminal_error"
+    assert staged["event_batch"]["events"][0]["event_type"] == "error"
+    assert not any(
+        name == "run_update" and payload.get("state") == "terminal_failure"
+        for name, payload in backend.calls
+    )
+
+    record_delivery_by_key(delivery_key, delivered=True)
+
+    terminal = [
+        payload
+        for name, payload in backend.calls
+        if name == "run_update" and payload.get("state") == "terminal_failure"
+    ]
+    assert terminal == [
+        {
+            "run_id": run_id,
+            "state": "terminal_failure",
+            "lease_owner": staged["lease_owner"],
+            "error_code": "model_terminal_failure",
+        }
+    ]
+    error_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["source_event_key"] == f"run:{run_id}:terminal_error"
+    ]
+    assert len(error_events) == 1
+    assert error_events[0]["content"] == "The request could not be completed."
+
+
+def test_terminal_replay_notice_bypasses_active_run_delivery_staging(
+    tmp_path: Path,
+) -> None:
+    from sydney_retry import AUTOMATIC_TERMINAL_REPLAY_MESSAGE
+    from sydney_runtime import (
+        deferred_inbound_response,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    provider = _provider(tmp_path, FakeBackend())
+    message_id = "terminal-replay-visible"
+    provider.record_inbound(message_id, "Complete this once.")
+    provider.drain_once()
+    provider.complete_active_run("Completed once.")
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Complete this once.",
+    )
+    assert deferred_inbound_response(agent) == AUTOMATIC_TERMINAL_REPLAY_MESSAGE
+    result = {
+        "final_response": AUTOMATIC_TERMINAL_REPLAY_MESSAGE,
+        "completed": True,
+    }
+
+    stage_run_outcome(agent, result)
+
+    assert result["final_response"] == AUTOMATIC_TERMINAL_REPLAY_MESSAGE
+    assert result.get("failed") is not True
+    assert (
+        provider.spool.get_final_delivery(
+            platform="telegram",
+            chat_id="private-chat",
+            platform_message_id=message_id,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_deferred_ack_is_not_resent_and_does_not_block_continuation(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _block_uncertain_final_delivery
+    from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE
+    from sydney_runtime import (
+        _PENDING_DELIVERIES,
+        record_inbound_before_model,
+        stage_run_outcome,
+    )
+
+    class RateLimit(RuntimeError):
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.status_code = 429
+            self.headers = {"Retry-After": "60"}
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    delivery_key = ("telegram", "private-chat", "ambiguous-deferred")
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=delivery_key[2],
+        content="Resume without duplicating the saved notice.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    assert provider.defer_retry(RateLimit("capacity"), attempt=0)
+    stage_run_outcome(
+        agent,
+        {
+            "final_response": AUTOMATIC_CONTINUATION_MESSAGE,
+            "completed": False,
+            "deferred": True,
+        },
+    )
+    _PENDING_DELIVERIES.pop(delivery_key, None)
+
+    handled = await _block_uncertain_final_delivery(
+        backend=backend,
+        spool=provider.spool,
+        run={
+            "id": run_id,
+            "lease_owner": "restart-worker",
+            "platform_message_id": delivery_key[2],
+        },
+        platform=delivery_key[0],
+        chat_id=delivery_key[1],
+    )
+
+    assert handled is False
+    assert (
+        provider.spool.get_final_delivery(
+            platform=delivery_key[0],
+            chat_id=delivery_key[1],
+            platform_message_id=delivery_key[2],
+        )
+        is None
+    )
+    assert not any(
+        name == "run_update" and payload.get("state") == "blocked_side_effect"
+        for name, payload in backend.calls
+    )
+    acknowledged = provider.spool.get_record(f"run:{run_id}:control:deferred")
+    assert acknowledged is not None
+    assert acknowledged.state == "acknowledged"

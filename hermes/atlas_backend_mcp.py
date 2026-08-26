@@ -485,40 +485,50 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         ),
         "method": "POST",
         "path": "/api/v1/agent-control/context/history/search",
-        "inputSchema": _object_schema(
-            {
-                "identity_id": {"type": "string", "format": "uuid"},
-                "query": {"type": "string", "minLength": 1, "maxLength": 500},
-                "event_types": {
-                    "type": "array",
-                    "maxItems": 8,
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "user",
-                            "assistant",
-                            "tool_call",
-                            "tool_result",
-                            "approval",
-                            "error",
-                            "continuation",
-                            "attachment_reference",
-                        ],
+        "inputSchema": {
+            **_object_schema(
+                {
+                    "identity_id": {"type": "string", "format": "uuid"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "event_types": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "user",
+                                "assistant",
+                                "tool_call",
+                                "tool_result",
+                                "approval",
+                                "error",
+                                "continuation",
+                                "attachment_reference",
+                            ],
+                        },
+                    },
+                    "started_at": {"type": "string", "format": "date-time"},
+                    "ended_at": {"type": "string", "format": "date-time"},
+                    "around_event_id": {"type": "string", "format": "uuid"},
+                    "recent_conversations": {"type": "boolean"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "window_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
                     },
                 },
-                "started_at": {"type": "string", "format": "date-time"},
-                "ended_at": {"type": "string", "format": "date-time"},
-                "around_event_id": {"type": "string", "format": "uuid"},
-                "recent_conversations": {"type": "boolean"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 25},
-                "window_size": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10,
+                ["identity_id"],
+            ),
+            "anyOf": [
+                {"required": ["query"]},
+                {"required": ["around_event_id"]},
+                {
+                    "properties": {"recent_conversations": {"const": True}},
+                    "required": ["recent_conversations"],
                 },
-            },
-            ["identity_id"],
-        ),
+            ],
+        },
     },
     "command_contacts_search": {
         "name": "command_contacts_search",
@@ -555,7 +565,12 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                         ],
                     },
                 },
-                "page": {"type": "integer", "minimum": 1},
+                "cursor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                },
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 25},
             }
         ),

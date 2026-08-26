@@ -14,7 +14,7 @@
 
 Create:
 
-- `backend/models/sydney_context.py` — the eight canonical durable-context tables.
+- `backend/models/sydney_context.py` — nine durable-context evidence and operational-claim tables.
 - `backend/schemas/sydney_context.py` — strict ingest, retrieval, history, run, tool-ledger, and health wire contracts.
 - `backend/schemas/agent_control_command.py` — bounded Command search and audience-preview contracts.
 - `backend/services/sydney_context_redaction.py` — deterministic irreversible secret redaction and hashes.
@@ -89,9 +89,10 @@ Migration `85e8b7c9d4f1` creates exactly these tables and PostgreSQL invariants:
 |---|---|
 | `agent_conversation_identities` | UUID PK; unique `(platform, external_user_id, external_chat_id)`; `retention_mode='indefinite'`; enabled and timestamps. |
 | `agent_conversation_sessions` | UUID PK; identity FK; unique `hermes_session_id`; stable logical conversation; nullable parent session FK; bounded continuation reason; reconciliation count/hash. |
-| `agent_conversation_events` | UUID PK; identity/session FKs; unique `(identity_id, source_event_key)`; exact event-type check; content hash; JSONB metadata; generated `tsvector` and GIN index; append-only trigger. |
+| `agent_conversation_events` | UUID PK; identity/session FKs; unique source key; immutable database ingestion sequence; exact event-type check; source timestamp; content hash; JSONB metadata; generated `tsvector` and GIN index; append-only trigger. |
 | `agent_conversation_event_segments` | Event FK; nonnegative ordinal; complete redacted text; SHA-256; unique `(event_id, ordinal)`; append-only trigger. |
 | `agent_context_checkpoints` | Immutable identity/logical-conversation boundary; versioned structured JSON; mandatory source event UUID array and covered-range hash. |
+| `agent_context_projection_claims` | One expiring lease per identity/logical conversation; exact source boundary, range hash, owner, and unique token committed before a model call. |
 | `agent_memory_facts` | Versioned canonical key/kind/value/status; nonempty source event UUID array; supersession without raw-event mutation. |
 | `agent_run_jobs` | Unique `(identity_id, platform_message_id)`; exact state check; attempts/lease/next attempt; inbound/final event FKs; FIFO claim index. |
 | `agent_tool_invocations` | Unique `(run_id, tool_call_id)`; canonical argument hash; exact side-effect/state checks; idempotency/result linkage; no raw arguments. |
@@ -153,7 +154,7 @@ PYTHONPATH=. ../backend/.venv/bin/pytest -q \
 
 Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
-- [x] **Step 3: Implement the eight SQLAlchemy 2 models** using typed `Mapped` columns, named checks/uniques/FKs/indexes, PostgreSQL UUID/JSONB/ARRAY/TSVECTOR types, and no cascade that can erase canonical events. Export every class from `models.__init__` so Alembic metadata sees them.
+- [x] **Step 3: Implement the nine SQLAlchemy 2 models** using typed `Mapped` columns, named checks/uniques/FKs/indexes, PostgreSQL UUID/JSONB/ARRAY/TSVECTOR types, and no cascade that can erase canonical events. Export every class from `models.__init__` so Alembic metadata sees them.
 - [x] **Step 4: Implement revision `85e8b7c9d4f1`** with `down_revision='84d7a5f9b2c3'`, `gen_random_uuid()`, exact checks, generated FTS column, GIN index, append-only trigger, FIFO/lease indexes, and a downgrade guard that raises when owned evidence exists.
 - [x] **Step 5: Run model/migration tests plus `alembic heads`.** Expected: all tests pass and output is exactly `85e8b7c9d4f1 (head)`.
 - [x] **Step 6: Commit:** `feat: add Sydney durable context persistence`.
@@ -182,7 +183,7 @@ Expected: FAIL because revision `85e8b7c9d4f1` and models do not exist.
 
 **Files:** Modify `backend/services/sydney_context_service.py`; create `backend/tests/test_sydney_context_runs.py`.
 
-- [x] **Step 1: Write failing tests** for unique platform-message runs, FIFO per identity, `FOR UPDATE SKIP LOCKED`, stale lease recovery, lease-owner validation, allowed state transitions, attempt/deadline bounds, exact `next_attempt_at`, tool invocation uniqueness, canonical argument hashing, and all side-effect replay decisions.
+- [x] **Step 1: Write failing tests** for unique platform-message runs, exact inbound/final event provenance, FIFO per identity, `FOR UPDATE SKIP LOCKED`, stale lease recovery, lease-owner validation, allowed state transitions, attempt/deadline bounds, exact `next_attempt_at`, tool invocation uniqueness, canonical argument hashing, and all side-effect replay decisions.
 - [x] **Step 2: Run the focused tests.** Expected: FAIL because run/tool service methods are absent.
 - [x] **Step 3: Implement start/update/claim and the replay classifier.** Use one database transaction per state transition. The classifier must return `repeat_read`, `restore_result`, `retry_not_delivered`, or `block_uncertain`; it must never return an executable decision for a succeeded or delivery-uncertain mutation.
 - [x] **Step 4: Re-run focused tests, including a two-connection concurrent claim case.** Expected: exactly one claimant receives the oldest eligible run.
@@ -257,7 +258,7 @@ crm.command_contact_audiences.preview
 
 - [x] **Step 1: Write failing tests** for mode-0600 SQLite WAL creation, one-transaction inbound-event/run enqueue, backend acknowledgement, crash/reopen recovery, ordered drain, bounded batches, exact replay, tool-before/tool-after records, cached context fallback, session lineage rotation, and provider prefetch/sync behavior.
 - [x] **Step 2: Run the focused tests.** Expected: FAIL because spool/provider modules are absent.
-- [x] **Step 3: Implement a `SydneySpool` with explicit schema version and transactions.** Store redacted event JSON, run transitions, tool ledger rows, acknowledgement state, attempt timestamps, cached context packet, and reconciliation cursor under `${HERMES_HOME}/sydney_spool.db`. Never store backend bearer tokens or unredacted content. Use `PRAGMA journal_mode=WAL`, `synchronous=FULL`, busy timeout, foreign keys, and an exclusive migration transaction.
+- [x] **Step 3: Implement a `SydneySpool` with explicit schema version and transactions.** Store redacted event JSON, run transitions, tool ledger rows, acknowledgement state, attempt timestamps, cached context packet, persisted per-session reconciliation aggregates, a bounded dirty-session queue, and reconciliation cursor under `${HERMES_HOME}/sydney_spool.db`. Compact terminal inbound rows to content-free tombstones that preserve only the disposition required to classify duplicate delivery. Never store backend bearer tokens or unredacted content. Use `PRAGMA journal_mode=WAL`, `synchronous=FULL`, busy timeout, foreign keys, and an exclusive migration transaction.
 - [x] **Step 4: Implement `SydneyMemoryProvider(MemoryProvider)`.** `initialize` binds stable platform/user/chat/session identity and starts a bounded drain thread; `prefetch` synchronously returns the fresh or cached source-linked packet under 16,000 tokens; `sync_turn` extracts only new visible messages/tool records and queues idempotent batches; `on_session_switch` records continuation lineage; shutdown drains within a fixed deadline. Its history tool delegates to the backend MCP contract rather than querying raw PostgreSQL.
 - [x] **Step 5: Re-run spool/provider tests, interrupt a subprocess after its local commit, reopen it, and prove the queued row drains exactly once.** Expected: all pass.
 - [x] **Step 6: Commit:** `feat: add Sydney local context spool`.
@@ -321,7 +322,7 @@ Only enable the provider when the master environment flag, backend URL/token, an
 
 **Files:** No source changes except review fixes and final evidence updates.
 
-- [ ] **Step 1: Run `git diff --check`, secret scan, task-specific tests, migration sole-head check, exact overlay idempotence, and JSON-RPC `tools/list`. Use `superpowers:verification-before-completion` and request code review before opening the PR.**
+- [x] **Step 1: Run `git diff --check`, secret scan, task-specific tests, migration sole-head check, exact overlay idempotence, and JSON-RPC `tools/list`. Use `superpowers:verification-before-completion` and request code review before opening the PR.** Completed 2026-08-26: the final changed-test matrix passed `757` with `5` expected exact-checkout skips, Atlas passed `16/16`, the exact pinned Hermes/template gate passed `227/227`, PostgreSQL 17/TLS passed the generated-column ORM regression, sole head is `85e8b7c9d4f1`, and the real JSON-RPC verifier returned the exact ordered 25-tool contract. Independent review findings were fixed test-first and the final structured-boundary re-review reported no actionable issue.
 - [ ] **Step 2: Push `codex/sydney-durable-context`, open a PR with design/plan/testing/rollout details, wait for required checks, address review test-first, and merge only with the reviewed head SHA.**
 - [ ] **Step 3: Create a mode-0600 PostgreSQL custom-format backup outside the repository, validate its catalog, record only its path/size/hash, and verify production `alembic current` is `84d7a5f9b2c3` before applying sole head `85e8b7c9d4f1`.**
 - [ ] **Step 4: Deploy backend and worker with all four new flags false.** Verify deployment `SUCCESS`, backend health, worker `/health` and `/ready`, sole migration head, and no active context jobs.

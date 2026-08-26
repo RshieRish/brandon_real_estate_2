@@ -169,7 +169,12 @@ def _positive_id(value: object, field_name: str = "id") -> int:
 
 
 def _freeze_json(value: object) -> JsonValue:
-    if value is None or isinstance(value, str) or type(value) is bool or type(value) is int:
+    if (
+        value is None
+        or isinstance(value, str)
+        or type(value) is bool
+        or type(value) is int
+    ):
         return value
     if type(value) is float:
         if not math.isfinite(value):
@@ -276,9 +281,7 @@ def redact_contact_audit_value(
     return {
         "present": present,
         "length": len(raw_utf8),
-        "sha256": hashlib.sha256(
-            domain.encode("ascii") + b"\0" + raw_utf8
-        ).hexdigest(),
+        "sha256": hashlib.sha256(domain.encode("ascii") + b"\0" + raw_utf8).hexdigest(),
     }
 
 
@@ -315,28 +318,16 @@ def _audit_text(
 def _audit_contact_field(field_name: str, value: object) -> object:
     if field_name == "first_name":
         text = _audit_text(value, field_name, minimum=1, maximum=120)
-        return redact_contact_audit_value(
-            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
-        )
+        return redact_contact_audit_value(text, domain=_TEXT_AUDIT_DOMAINS[field_name])
     if field_name == "last_name":
         text = _audit_text(value, field_name, minimum=0, maximum=120)
-        return redact_contact_audit_value(
-            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
-        )
+        return redact_contact_audit_value(text, domain=_TEXT_AUDIT_DOMAINS[field_name])
     if field_name == "email":
-        text = _audit_text(
-            value, field_name, minimum=0, maximum=255, nullable=True
-        )
-        return redact_contact_audit_value(
-            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
-        )
+        text = _audit_text(value, field_name, minimum=0, maximum=255, nullable=True)
+        return redact_contact_audit_value(text, domain=_TEXT_AUDIT_DOMAINS[field_name])
     if field_name == "phone":
-        text = _audit_text(
-            value, field_name, minimum=0, maximum=50, nullable=True
-        )
-        return redact_contact_audit_value(
-            text, domain=_TEXT_AUDIT_DOMAINS[field_name]
-        )
+        text = _audit_text(value, field_name, minimum=0, maximum=50, nullable=True)
+        return redact_contact_audit_value(text, domain=_TEXT_AUDIT_DOMAINS[field_name])
     if field_name == "stage":
         return _audit_text(value, field_name, minimum=1, maximum=50)
     if field_name in {"birthday", "anniversary"}:
@@ -391,9 +382,7 @@ def _special_contact_audit_payload(
 ) -> dict[str, object]:
     if action == "contact.bulk_stage_set":
         _require_exact_keys(payload, {"stage"})
-        stage = _audit_text(
-            payload["stage"], "stage", minimum=1, maximum=50
-        )
+        stage = _audit_text(payload["stage"], "stage", minimum=1, maximum=50)
         if stage is None or stage != stage.strip():
             raise ValueError("contact audit stage is invalid")
         return {
@@ -421,14 +410,10 @@ def _special_contact_audit_payload(
         }
     if action in {"contact.note_created", "contact.note_deleted"}:
         _require_exact_keys(payload, {"body", "note_id", "present"})
-        body = _audit_text(
-            payload["body"], "body", minimum=1, maximum=20_000
-        )
+        body = _audit_text(payload["body"], "body", minimum=1, maximum=20_000)
         if type(payload["present"]) is not bool:
             raise TypeError("contact audit presence is invalid")
-        expected_presence = (action == "contact.note_created") == (
-            phase == "after"
-        )
+        expected_presence = (action == "contact.note_created") == (phase == "after")
         if payload["present"] is not expected_presence:
             raise ValueError("contact audit presence is invalid")
         return {
@@ -443,20 +428,16 @@ def _special_contact_audit_payload(
         "contact.saved_search_created",
         "contact.saved_search_deleted",
     }:
-        _require_exact_keys(
-            payload, {"criteria", "name", "present", "search_id"}
-        )
+        _require_exact_keys(payload, {"criteria", "name", "present", "search_id"})
         criteria = _audit_text(
             payload["criteria"], "criteria", minimum=1, maximum=65_536
         )
-        name = _audit_text(
-            payload["name"], "name", minimum=1, maximum=255
-        )
+        name = _audit_text(payload["name"], "name", minimum=1, maximum=255)
         if type(payload["present"]) is not bool:
             raise TypeError("contact audit presence is invalid")
-        expected_presence = (
-            action == "contact.saved_search_created"
-        ) == (phase == "after")
+        expected_presence = (action == "contact.saved_search_created") == (
+            phase == "after"
+        )
         if payload["present"] is not expected_presence:
             raise ValueError("contact audit presence is invalid")
         return {
@@ -514,9 +495,7 @@ def canonical_contact_audit_json(
             value = {}
         elif "activity_present" not in payload:
             value = (
-                _contact_snapshot(
-                    action, set(_SYNC_CREATE_AUDIT_FIELDS), payload
-                )
+                _contact_snapshot(action, set(_SYNC_CREATE_AUDIT_FIELDS), payload)
                 if phase == "after"
                 else None
             )
@@ -600,7 +579,10 @@ class TimelineCursorV1:
             return
         if not isinstance(self.occurred_at, datetime):
             raise TypeError("cursor timestamp is required")
-        if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() != UTC.utcoffset(None):
+        if (
+            self.occurred_at.tzinfo is None
+            or self.occurred_at.utcoffset() != UTC.utcoffset(None)
+        ):
             raise ValueError("cursor timestamp must be UTC")
 
 
@@ -631,9 +613,7 @@ def encode_timeline_cursor(cursor: TimelineCursorV1) -> str:
 
 
 _BASE64URL_RE = re.compile(r"[A-Za-z0-9_-]+")
-_CURSOR_TIMESTAMP_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z"
-)
+_CURSOR_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -669,7 +649,9 @@ def decode_timeline_cursor(encoded: str) -> TimelineCursorV1:
         timestamp: datetime | None
         if timestamp_raw is None:
             timestamp = None
-        elif isinstance(timestamp_raw, str) and _CURSOR_TIMESTAMP_RE.fullmatch(timestamp_raw):
+        elif isinstance(timestamp_raw, str) and _CURSOR_TIMESTAMP_RE.fullmatch(
+            timestamp_raw
+        ):
             timestamp = datetime.strptime(
                 timestamp_raw, "%Y-%m-%dT%H:%M:%S.%fZ"
             ).replace(tzinfo=UTC)
@@ -755,24 +737,46 @@ class ContactDirectoryFilters:
             raise ValueError("page_size must not exceed 100")
         object.__setattr__(self, "query", _optional_text(self.query, "query", 200))
         object.__setattr__(self, "stage", _optional_text(self.stage, "stage", 50))
-        object.__setattr__(self, "owner_actor_id", _optional_text(self.owner_actor_id, "owner_actor_id", 255))
-        object.__setattr__(self, "assignee_actor_id", _optional_text(self.assignee_actor_id, "assignee_actor_id", 255))
-        if not isinstance(self.tag_ids, tuple) or any(type(value) is not int or value <= 0 for value in self.tag_ids):
+        object.__setattr__(
+            self,
+            "owner_actor_id",
+            _optional_text(self.owner_actor_id, "owner_actor_id", 255),
+        )
+        object.__setattr__(
+            self,
+            "assignee_actor_id",
+            _optional_text(self.assignee_actor_id, "assignee_actor_id", 255),
+        )
+        if not isinstance(self.tag_ids, tuple) or any(
+            type(value) is not int or value <= 0 for value in self.tag_ids
+        ):
             raise ValueError("tag_ids must contain positive integers")
         object.__setattr__(self, "tag_ids", tuple(sorted(set(self.tag_ids))))
-        object.__setattr__(self, "sources", _enum_tuple(self.sources, ContactSourceFilter, "sources"))
-        object.__setattr__(self, "origins", _enum_tuple(self.origins, ContactOriginFilter, "origins"))
+        object.__setattr__(
+            self, "sources", _enum_tuple(self.sources, ContactSourceFilter, "sources")
+        )
+        object.__setattr__(
+            self, "origins", _enum_tuple(self.origins, ContactOriginFilter, "origins")
+        )
         for field_name in ("health_min", "health_max"):
             value = getattr(self, field_name)
             if value is not None and (type(value) is not int or not 0 <= value <= 100):
                 raise ValueError(f"{field_name} must be between 0 and 100")
-        if self.health_min is not None and self.health_max is not None and self.health_min > self.health_max:
+        if (
+            self.health_min is not None
+            and self.health_max is not None
+            and self.health_min > self.health_max
+        ):
             raise ValueError("health_min must not exceed health_max")
         for field_name in ("birthday_month", "anniversary_month"):
             value = getattr(self, field_name)
             if value is not None and (type(value) is not int or not 1 <= value <= 12):
                 raise ValueError(f"{field_name} must be between 1 and 12")
-        if not isinstance(self.smart_view, ContactSmartView) or not isinstance(self.sort, ContactSortKey) or not isinstance(self.direction, SortDirection):
+        if (
+            not isinstance(self.smart_view, ContactSmartView)
+            or not isinstance(self.sort, ContactSortKey)
+            or not isinstance(self.direction, SortDirection)
+        ):
             raise TypeError("filter enum value is invalid")
 
 
@@ -840,6 +844,25 @@ class ContactDirectoryPage:
     page_count: int
     sort: ContactSortKey
     direction: SortDirection
+
+
+@dataclass(frozen=True, slots=True)
+class ContactDirectoryCursorPage:
+    rows: tuple[ContactDirectoryRow, ...]
+    total: int
+    next_after_id: int | None
+    upper_bound_id: int
+    has_more: bool
+
+    def __post_init__(self) -> None:
+        _exact_int(self.total, "total", minimum=0)
+        _exact_int(self.upper_bound_id, "upper_bound_id", minimum=0)
+        if self.next_after_id is not None:
+            _positive_id(self.next_after_id, "next_after_id")
+            if self.next_after_id > self.upper_bound_id:
+                raise ValueError("next_after_id exceeds upper_bound_id")
+        if self.has_more != (self.next_after_id is not None):
+            raise ValueError("cursor page continuation is inconsistent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -957,7 +980,11 @@ class ContactMaterialized:
     captured_at: datetime | None
     value: ContactOccurrenceValue
     entity_type: Literal[
-        "note", "saved_search", "task", "smart_plan", "opportunity",
+        "note",
+        "saved_search",
+        "task",
+        "smart_plan",
+        "opportunity",
     ]
     entity_id: int
 
@@ -1066,11 +1093,21 @@ class ContactCreateCommand:
     anniversary: date | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "first_name", _bounded_text(self.first_name, "first_name", minimum=1, maximum=120))
-        object.__setattr__(self, "last_name", _bounded_text(self.last_name, "last_name", minimum=0, maximum=120))
+        object.__setattr__(
+            self,
+            "first_name",
+            _bounded_text(self.first_name, "first_name", minimum=1, maximum=120),
+        )
+        object.__setattr__(
+            self,
+            "last_name",
+            _bounded_text(self.last_name, "last_name", minimum=0, maximum=120),
+        )
         object.__setattr__(self, "email", _optional_text(self.email, "email", 255))
         object.__setattr__(self, "phone", _optional_text(self.phone, "phone", 50))
-        object.__setattr__(self, "stage", _bounded_text(self.stage, "stage", minimum=1, maximum=50))
+        object.__setattr__(
+            self, "stage", _bounded_text(self.stage, "stage", minimum=1, maximum=50)
+        )
         object.__setattr__(
             self, "birthday", _optional_exact_date(self.birthday, "birthday")
         )
@@ -1095,17 +1132,25 @@ class ContactUpdateCommand:
         if all(getattr(self, name) is UNSET for name in self.__dataclass_fields__):
             raise ValueError("contact update must change at least one field")
         for field_name, maximum, minimum in (
-            ("first_name", 120, 1), ("last_name", 120, 0), ("stage", 50, 1),
+            ("first_name", 120, 1),
+            ("last_name", 120, 0),
+            ("stage", 50, 1),
         ):
             value = getattr(self, field_name)
             if value is None:
                 raise ValueError(f"{field_name} cannot be null")
             if value is not UNSET:
-                object.__setattr__(self, field_name, _bounded_text(value, field_name, minimum=minimum, maximum=maximum))
+                object.__setattr__(
+                    self,
+                    field_name,
+                    _bounded_text(value, field_name, minimum=minimum, maximum=maximum),
+                )
         for field_name, maximum in (("email", 255), ("phone", 50)):
             value = getattr(self, field_name)
             if value is not UNSET:
-                object.__setattr__(self, field_name, _optional_text(value, field_name, maximum))
+                object.__setattr__(
+                    self, field_name, _optional_text(value, field_name, maximum)
+                )
         for field_name in ("birthday", "anniversary"):
             value = getattr(self, field_name)
             if value is not UNSET:
@@ -1122,7 +1167,9 @@ class ContactBulkSetStage:
     def __post_init__(self) -> None:
         if self.action != "set_stage":
             raise ValueError("bulk action is invalid")
-        object.__setattr__(self, "stage", _bounded_text(self.stage, "stage", minimum=1, maximum=50))
+        object.__setattr__(
+            self, "stage", _bounded_text(self.stage, "stage", minimum=1, maximum=50)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1147,7 +1194,9 @@ class ContactBulkRemoveTag:
         _positive_id(self.tag_id, "tag_id")
 
 
-ContactBulkAction: TypeAlias = ContactBulkSetStage | ContactBulkAddTag | ContactBulkRemoveTag
+ContactBulkAction: TypeAlias = (
+    ContactBulkSetStage | ContactBulkAddTag | ContactBulkRemoveTag
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1156,13 +1205,18 @@ class ContactBulkCommand:
     action: ContactBulkAction
 
     def __post_init__(self) -> None:
-        if not isinstance(self.contact_ids, tuple) or not 1 <= len(self.contact_ids) <= 200:
+        if (
+            not isinstance(self.contact_ids, tuple)
+            or not 1 <= len(self.contact_ids) <= 200
+        ):
             raise ValueError("bulk contact_ids must contain 1 to 200 values")
         if any(type(value) is not int or value <= 0 for value in self.contact_ids):
             raise ValueError("bulk contact_ids must be positive integers")
         if len(set(self.contact_ids)) != len(self.contact_ids):
             raise ValueError("bulk contact_ids must be unique")
-        if not isinstance(self.action, (ContactBulkSetStage, ContactBulkAddTag, ContactBulkRemoveTag)):
+        if not isinstance(
+            self.action, (ContactBulkSetStage, ContactBulkAddTag, ContactBulkRemoveTag)
+        ):
             raise TypeError("bulk action is invalid")
 
 
@@ -1205,7 +1259,9 @@ class ContactNoteCreateCommand:
     body: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "body", _bounded_text(self.body, "body", minimum=1, maximum=20_000))
+        object.__setattr__(
+            self, "body", _bounded_text(self.body, "body", minimum=1, maximum=20_000)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1214,7 +1270,9 @@ class ContactSavedSearchCreateCommand:
     criteria: Mapping[str, JsonValue]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "name", _bounded_text(self.name, "name", minimum=1, maximum=255))
+        object.__setattr__(
+            self, "name", _bounded_text(self.name, "name", minimum=1, maximum=255)
+        )
         frozen = _freeze_json(self.criteria)
         if not isinstance(frozen, Mapping):
             raise TypeError("criteria must be a mapping")
@@ -1235,8 +1293,13 @@ class ContactImportRowCommand:
 
     def __post_init__(self) -> None:
         normalized = ContactCreateCommand(
-            self.first_name, self.last_name, self.email, self.phone, self.stage,
-            self.birthday, self.anniversary,
+            self.first_name,
+            self.last_name,
+            self.email,
+            self.phone,
+            self.stage,
+            self.birthday,
+            self.anniversary,
         )
         for field_name in ("first_name", "last_name", "email", "phone", "stage"):
             object.__setattr__(self, field_name, getattr(normalized, field_name))
@@ -1320,9 +1383,7 @@ class ContactImportResult:
 
     def __post_init__(self) -> None:
         _exact_int(self.created, "created", minimum=0)
-        _exact_int(
-            self.skipped_duplicates, "skipped_duplicates", minimum=0
-        )
+        _exact_int(self.skipped_duplicates, "skipped_duplicates", minimum=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1362,12 +1423,27 @@ class ContactTimelinePage:
     has_more: bool
 
 
-__all__ = [name for name in globals() if name.startswith("Contact") or name in {
-    "UNSET", "UnsetType", "JsonValue", "CelebrationYearQuality",
-    "CaptureQualityValue", "MaterializationStatus", "SortDirection",
-    "TimelineCursorV1", "TimelineOrigin", "CONTACT_TOUCH_ACTIVITY_KINDS",
-    "encode_timeline_cursor", "decode_timeline_cursor",
-    "timeline_position_is_after", "redact_contact_audit_value",
-    "canonical_contact_audit_json",
-    "canonical_workspace_saved_search_activity_json",
-}]
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith("Contact")
+    or name
+    in {
+        "UNSET",
+        "UnsetType",
+        "JsonValue",
+        "CelebrationYearQuality",
+        "CaptureQualityValue",
+        "MaterializationStatus",
+        "SortDirection",
+        "TimelineCursorV1",
+        "TimelineOrigin",
+        "CONTACT_TOUCH_ACTIVITY_KINDS",
+        "encode_timeline_cursor",
+        "decode_timeline_cursor",
+        "timeline_position_is_after",
+        "redact_contact_audit_value",
+        "canonical_contact_audit_json",
+        "canonical_workspace_saved_search_activity_json",
+    }
+]

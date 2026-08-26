@@ -7,9 +7,8 @@ Revises: 84d7a5f9b2c3
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "85e8b7c9d4f1"
 down_revision: str | None = "84d7a5f9b2c3"
@@ -27,6 +26,7 @@ _OWNED_TABLES = (
     "agent_run_jobs",
     "agent_tool_invocations",
 )
+_LOCKED_TABLES = (*_OWNED_TABLES, "agent_context_projection_claims")
 
 
 def _id() -> sa.Column:
@@ -160,6 +160,12 @@ def upgrade() -> None:
     op.create_table(
         "agent_conversation_events",
         _id(),
+        sa.Column(
+            "ingestion_sequence",
+            sa.BigInteger(),
+            sa.Identity(),
+            nullable=False,
+        ),
         sa.Column("identity_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("session_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("source_event_key", sa.String(512), nullable=False),
@@ -188,7 +194,9 @@ def upgrade() -> None:
             "search_vector",
             postgresql.TSVECTOR(),
             sa.Computed(
-                "to_tsvector('simple', coalesce(search_text, ''))",
+                "to_tsvector('simple', "
+                "left(coalesce(search_text, ''), 32768) || ' ' || "
+                "right(coalesce(search_text, ''), 32768))",
                 persisted=True,
             ),
             nullable=False,
@@ -211,6 +219,10 @@ def upgrade() -> None:
             "identity_id",
             "source_event_key",
             name="uq_agent_conversation_events_source",
+        ),
+        sa.UniqueConstraint(
+            "ingestion_sequence",
+            name="uq_agent_conversation_events_ingestion_sequence",
         ),
         sa.CheckConstraint(
             "event_type IN ('user', 'assistant', 'tool_call', 'tool_result', "
@@ -237,6 +249,11 @@ def upgrade() -> None:
         ["session_id", "occurred_at", "id"],
     )
     op.create_index(
+        "ix_agent_conversation_events_projection",
+        "agent_conversation_events",
+        ["identity_id", "ingestion_sequence"],
+    )
+    op.create_index(
         "ix_agent_conversation_events_search",
         "agent_conversation_events",
         ["search_vector"],
@@ -250,6 +267,15 @@ def upgrade() -> None:
         sa.Column("ordinal", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("content_sha256", sa.String(64), nullable=False),
+        sa.Column(
+            "search_vector",
+            postgresql.TSVECTOR(),
+            sa.Computed(
+                "to_tsvector('simple', coalesce(content, ''))",
+                persisted=True,
+            ),
+            nullable=False,
+        ),
         _created_at(),
         sa.PrimaryKeyConstraint("id", name="pk_agent_conversation_event_segments"),
         sa.ForeignKeyConstraint(
@@ -274,6 +300,12 @@ def upgrade() -> None:
         "agent_conversation_event_segments",
         ["event_id", "ordinal"],
     )
+    op.create_index(
+        "ix_agent_conversation_event_segments_search",
+        "agent_conversation_event_segments",
+        ["search_vector"],
+        postgresql_using="gin",
+    )
 
     op.create_table(
         "agent_context_checkpoints",
@@ -282,9 +314,11 @@ def upgrade() -> None:
         sa.Column(
             "logical_conversation_id", postgresql.UUID(as_uuid=True), nullable=False
         ),
+        sa.Column("parent_checkpoint_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "source_boundary_event_id", postgresql.UUID(as_uuid=True), nullable=False
         ),
+        sa.Column("source_boundary_char_offset", sa.Integer(), nullable=False),
         sa.Column("schema_version", sa.String(64), nullable=False),
         sa.Column("rolling_summary", sa.Text(), nullable=False),
         sa.Column("active_state_json", postgresql.JSONB(), nullable=False),
@@ -313,12 +347,23 @@ def upgrade() -> None:
             name="fk_agent_context_checkpoints_boundary",
             ondelete="RESTRICT",
         ),
+        sa.ForeignKeyConstraint(
+            ["parent_checkpoint_id"],
+            ["agent_context_checkpoints.id"],
+            name="fk_agent_context_checkpoints_parent",
+            ondelete="RESTRICT",
+        ),
         sa.UniqueConstraint(
             "identity_id",
             "logical_conversation_id",
             "source_boundary_event_id",
+            "source_boundary_char_offset",
             "schema_version",
             name="uq_agent_context_checkpoints_boundary",
+        ),
+        sa.CheckConstraint(
+            "source_boundary_char_offset >= 0",
+            name="ck_agent_context_checkpoints_boundary_offset",
         ),
         sa.CheckConstraint(
             "cardinality(source_event_ids) > 0",
@@ -333,6 +378,65 @@ def upgrade() -> None:
         "ix_agent_context_checkpoints_latest",
         "agent_context_checkpoints",
         ["identity_id", "logical_conversation_id", "produced_at", "id"],
+    )
+
+    op.create_table(
+        "agent_context_projection_claims",
+        _id(),
+        sa.Column("identity_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "logical_conversation_id", postgresql.UUID(as_uuid=True), nullable=False
+        ),
+        sa.Column(
+            "source_boundary_event_id", postgresql.UUID(as_uuid=True), nullable=False
+        ),
+        sa.Column("source_boundary_char_offset", sa.Integer(), nullable=False),
+        sa.Column("range_hash", sa.String(64), nullable=False),
+        sa.Column("lease_owner", sa.String(255), nullable=False),
+        sa.Column("lease_token", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=False),
+        _created_at(),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_agent_context_projection_claims"),
+        sa.ForeignKeyConstraint(
+            ["identity_id"],
+            ["agent_conversation_identities.id"],
+            name="fk_agent_context_projection_claims_identity",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_boundary_event_id"],
+            ["agent_conversation_events.id"],
+            name="fk_agent_context_projection_claims_boundary",
+            ondelete="RESTRICT",
+        ),
+        sa.UniqueConstraint(
+            "identity_id",
+            "logical_conversation_id",
+            name="uq_agent_context_projection_claims_conversation",
+        ),
+        sa.UniqueConstraint(
+            "lease_token",
+            name="uq_agent_context_projection_claims_token",
+        ),
+        sa.CheckConstraint(
+            "source_boundary_char_offset >= 0",
+            name="ck_agent_context_projection_claims_boundary_offset",
+        ),
+        sa.CheckConstraint(
+            "range_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_agent_context_projection_claims_range_hash",
+        ),
+    )
+    op.create_index(
+        "ix_agent_context_projection_claims_expiry",
+        "agent_context_projection_claims",
+        ["lease_expires_at", "id"],
     )
 
     op.create_table(
@@ -568,7 +672,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(
-        sa.text("LOCK TABLE " + ", ".join(_OWNED_TABLES) + " IN ACCESS EXCLUSIVE MODE")
+        sa.text("LOCK TABLE " + ", ".join(_LOCKED_TABLES) + " IN ACCESS EXCLUSIVE MODE")
     )
     predicates = " OR ".join(
         f"EXISTS (SELECT 1 FROM {table} LIMIT 1)" for table in _OWNED_TABLES
@@ -597,9 +701,18 @@ def downgrade() -> None:
     op.drop_index("ix_agent_memory_facts_active", table_name="agent_memory_facts")
     op.drop_table("agent_memory_facts")
     op.drop_index(
+        "ix_agent_context_projection_claims_expiry",
+        table_name="agent_context_projection_claims",
+    )
+    op.drop_table("agent_context_projection_claims")
+    op.drop_index(
         "ix_agent_context_checkpoints_latest", table_name="agent_context_checkpoints"
     )
     op.drop_table("agent_context_checkpoints")
+    op.drop_index(
+        "ix_agent_conversation_event_segments_search",
+        table_name="agent_conversation_event_segments",
+    )
     op.drop_index(
         "ix_agent_conversation_event_segments_event",
         table_name="agent_conversation_event_segments",
@@ -610,6 +723,10 @@ def downgrade() -> None:
     )
     op.drop_index(
         "ix_agent_conversation_events_session_order",
+        table_name="agent_conversation_events",
+    )
+    op.drop_index(
+        "ix_agent_conversation_events_projection",
         table_name="agent_conversation_events",
     )
     op.drop_index(

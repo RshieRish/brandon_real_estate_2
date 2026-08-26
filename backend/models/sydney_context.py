@@ -8,10 +8,13 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Numeric,
@@ -144,6 +147,10 @@ class AgentConversationEvent(Base):
             "source_event_key",
             name="uq_agent_conversation_events_source",
         ),
+        UniqueConstraint(
+            "ingestion_sequence",
+            name="uq_agent_conversation_events_ingestion_sequence",
+        ),
         CheckConstraint(
             "event_type IN ('user', 'assistant', 'tool_call', 'tool_result', "
             "'approval', 'error', 'continuation', 'attachment_reference')",
@@ -170,6 +177,11 @@ class AgentConversationEvent(Base):
             "id",
         ),
         Index(
+            "ix_agent_conversation_events_projection",
+            "identity_id",
+            "ingestion_sequence",
+        ),
+        Index(
             "ix_agent_conversation_events_search",
             "search_vector",
             postgresql_using="gin",
@@ -177,6 +189,11 @@ class AgentConversationEvent(Base):
     )
 
     id: Mapped[UUID] = _uuid_primary_key()
+    ingestion_sequence: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        nullable=False,
+    )
     identity_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey(
@@ -215,6 +232,7 @@ class AgentConversationEvent(Base):
     search_text: Mapped[str] = mapped_column(Text, nullable=False)
     search_vector: Mapped[object] = mapped_column(
         _TSVECTOR,
+        server_default=FetchedValue(),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -236,6 +254,11 @@ class AgentConversationEventSegment(Base):
             name="ck_agent_conversation_event_segments_hash",
         ).ddl_if(dialect="postgresql"),
         Index("ix_agent_conversation_event_segments_event", "event_id", "ordinal"),
+        Index(
+            "ix_agent_conversation_event_segments_search",
+            "search_vector",
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[UUID] = _uuid_primary_key()
@@ -251,6 +274,11 @@ class AgentConversationEventSegment(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    search_vector: Mapped[object] = mapped_column(
+        _TSVECTOR,
+        server_default=FetchedValue(),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -263,8 +291,13 @@ class AgentContextCheckpoint(Base):
             "identity_id",
             "logical_conversation_id",
             "source_boundary_event_id",
+            "source_boundary_char_offset",
             "schema_version",
             name="uq_agent_context_checkpoints_boundary",
+        ),
+        CheckConstraint(
+            "source_boundary_char_offset >= 0",
+            name="ck_agent_context_checkpoints_boundary_offset",
         ),
         CheckConstraint(
             "cardinality(source_event_ids) > 0",
@@ -292,19 +325,92 @@ class AgentContextCheckpoint(Base):
     logical_conversation_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
+    parent_checkpoint_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "agent_context_checkpoints.id",
+            name="fk_agent_context_checkpoints_parent",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
     source_boundary_event_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("agent_conversation_events.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    source_boundary_char_offset: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
     schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
     rolling_summary: Mapped[str] = mapped_column(Text, nullable=False)
     active_state_json: Mapped[dict[str, object]] = mapped_column(_JSONB, nullable=False)
-    source_event_ids: Mapped[list[UUID]] = mapped_column(
-        _UUID_ARRAY, nullable=False
-    )
+    source_event_ids: Mapped[list[UUID]] = mapped_column(_UUID_ARRAY, nullable=False)
     covered_range_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     produced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentContextProjectionClaim(Base):
+    __tablename__ = "agent_context_projection_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "identity_id",
+            "logical_conversation_id",
+            name="uq_agent_context_projection_claims_conversation",
+        ),
+        CheckConstraint(
+            "source_boundary_char_offset >= 0",
+            name="ck_agent_context_projection_claims_boundary_offset",
+        ),
+        CheckConstraint(
+            "range_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_agent_context_projection_claims_range_hash",
+        ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_agent_context_projection_claims_expiry",
+            "lease_expires_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_primary_key()
+    identity_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "agent_conversation_identities.id",
+            name="fk_agent_context_projection_claims_identity",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    logical_conversation_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
+    source_boundary_event_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey(
+            "agent_conversation_events.id",
+            name="fk_agent_context_projection_claims_boundary",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    source_boundary_char_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    range_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    lease_owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    lease_token: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False, unique=True
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -361,9 +467,7 @@ class AgentMemoryFact(Base):
     valid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     projection_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_event_ids: Mapped[list[UUID]] = mapped_column(
-        _UUID_ARRAY, nullable=False
-    )
+    source_event_ids: Mapped[list[UUID]] = mapped_column(_UUID_ARRAY, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

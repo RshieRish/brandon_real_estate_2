@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Literal
+import json
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 EventType = Literal[
     "user",
@@ -34,6 +43,15 @@ ToolInvocationState = Literal[
     "failed",
 ]
 SideEffectClass = Literal["read_only", "idempotent_write", "non_idempotent_write"]
+CONTEXT_EVENT_BATCH_MAX_BYTES = 8 * 1024 * 1024
+PreservedText = Annotated[str, StringConstraints(strip_whitespace=False)]
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    return value.astimezone(UTC)
+
+
+UTCDateTime = Annotated[AwareDatetime, AfterValidator(_normalize_utc)]
 
 
 class StrictModel(BaseModel):
@@ -44,8 +62,8 @@ class ContextEventInput(StrictModel):
     source_event_key: str = Field(min_length=1, max_length=512)
     event_type: EventType
     role: str | None = Field(default=None, max_length=32)
-    occurred_at: datetime
-    content: str = Field(max_length=1_000_000)
+    occurred_at: UTCDateTime
+    content: PreservedText = Field(max_length=1_000_000)
     tool_name: str | None = Field(default=None, max_length=128)
     tool_call_id: str | None = Field(default=None, max_length=255)
     provider_model: str | None = Field(default=None, max_length=128)
@@ -66,11 +84,25 @@ class ContextEventBatchRequest(StrictModel):
     source_version: str | None = Field(default=None, max_length=128)
     events: list[ContextEventInput] = Field(min_length=1, max_length=100)
 
+    @model_validator(mode="before")
+    @classmethod
+    def bound_aggregate_wire_payload(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            if len(encoded) > CONTEXT_EVENT_BATCH_MAX_BYTES:
+                raise ValueError("context_event_batch_too_large")
+        return value
+
 
 class ContextEventReceipt(StrictModel):
     event_id: UUID
     event_type: EventType
-    occurred_at: datetime
+    occurred_at: UTCDateTime
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -102,9 +134,11 @@ class ContextSessionReconciliationResponse(StrictModel):
 
 class ContextSourceExcerpt(StrictModel):
     event_id: UUID
+    logical_conversation_id: UUID | None = None
     event_type: EventType
-    occurred_at: datetime
-    content: str
+    occurred_at: UTCDateTime
+    content: PreservedText = Field(max_length=2_000)
+    content_truncated: bool = False
     tool_name: str | None = None
     score: float | None = None
 
@@ -117,7 +151,7 @@ class ContextPacketSection(StrictModel):
         "recent_events",
         "relevant_events",
     ]
-    text: str
+    text: PreservedText
     source_event_ids: list[UUID]
     estimated_tokens: int = Field(ge=0)
 
@@ -133,7 +167,7 @@ class ContextRetrieveRequest(StrictModel):
 class ContextPacket(StrictModel):
     identity_id: UUID
     logical_conversation_id: UUID
-    rendered_context: str
+    rendered_context: PreservedText
     estimated_tokens: int = Field(ge=0, le=16_000)
     sections: list[ContextPacketSection]
     degraded: bool = False
@@ -144,8 +178,8 @@ class ContextHistorySearchRequest(StrictModel):
     identity_id: UUID
     query: str | None = Field(default=None, min_length=1, max_length=500)
     event_types: list[EventType] = Field(default_factory=list, max_length=8)
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
+    started_at: UTCDateTime | None = None
+    ended_at: UTCDateTime | None = None
     around_event_id: UUID | None = None
     recent_conversations: bool = False
     limit: int = Field(default=10, ge=1, le=25)
@@ -172,14 +206,14 @@ class ContextRunStartRequest(StrictModel):
     inbound_event_id: UUID
     session_id: UUID
     logical_conversation_id: UUID
-    terminal_deadline_at: datetime
+    terminal_deadline_at: UTCDateTime
 
 
 class ContextRunUpdateRequest(StrictModel):
     run_id: UUID
     state: RunState
     lease_owner: str | None = Field(default=None, max_length=128)
-    next_attempt_at: datetime | None = None
+    next_attempt_at: UTCDateTime | None = None
     provider_category: str | None = Field(default=None, max_length=64)
     error_code: str | None = Field(default=None, max_length=64)
     parsed_retry_delay_seconds: float | None = Field(default=None, ge=0, le=86_400)
@@ -189,7 +223,13 @@ class ContextRunUpdateRequest(StrictModel):
 class ContextRunClaimRequest(StrictModel):
     lease_owner: str = Field(min_length=1, max_length=128)
     identity_id: UUID | None = None
+    run_id: UUID | None = None
     limit: int = Field(default=1, ge=1, le=10)
+
+
+class ContextRunLeaseRenewRequest(StrictModel):
+    run_id: UUID
+    lease_owner: str = Field(min_length=1, max_length=128)
 
 
 class ContextRunSummary(StrictModel):
@@ -202,9 +242,9 @@ class ContextRunSummary(StrictModel):
     state: RunState
     attempt_count: int = Field(ge=0)
     lease_owner: str | None = None
-    lease_expires_at: datetime | None = None
-    next_attempt_at: datetime | None = None
-    terminal_deadline_at: datetime
+    lease_expires_at: UTCDateTime | None = None
+    next_attempt_at: UTCDateTime | None = None
+    terminal_deadline_at: UTCDateTime
     provider_category: str | None = None
     error_code: str | None = None
     final_response_event_id: UUID | None = None
@@ -221,6 +261,7 @@ class ContextRunClaimResponse(StrictModel):
 
 class ContextToolInvocationRequest(StrictModel):
     run_id: UUID
+    lease_owner: str = Field(min_length=1, max_length=128)
     tool_call_id: str = Field(min_length=1, max_length=255)
     tool_name: str = Field(min_length=1, max_length=128)
     arguments: dict[str, Any]
@@ -230,6 +271,7 @@ class ContextToolInvocationRequest(StrictModel):
 
 class ContextToolInvocationUpdateRequest(StrictModel):
     run_id: UUID
+    lease_owner: str = Field(min_length=1, max_length=128)
     tool_call_id: str = Field(min_length=1, max_length=255)
     state: ToolInvocationState
     result_event_id: UUID | None = None
@@ -237,6 +279,7 @@ class ContextToolInvocationUpdateRequest(StrictModel):
 
 class ContextToolInvocationResponse(StrictModel):
     invocation_id: UUID
+    canonical_tool_call_id: str = Field(min_length=1, max_length=255)
     state: ToolInvocationState
     replay_decision: Literal[
         "execute",
@@ -245,6 +288,7 @@ class ContextToolInvocationResponse(StrictModel):
         "retry_not_delivered",
         "block_uncertain",
     ]
+    result_content: PreservedText | None = Field(default=None, max_length=1_000_000)
 
 
 class ContextHealthResponse(StrictModel):
@@ -258,7 +302,7 @@ class ContextHealthResponse(StrictModel):
     oldest_eligible_run_age_seconds: float | None = Field(default=None, ge=0)
     reconciled_session_count: int = Field(default=0, ge=0)
     unreconciled_session_count: int = Field(default=0, ge=0)
-    last_reconciled_at: datetime | None = None
+    last_reconciled_at: UTCDateTime | None = None
     last_reconciled_event_count: int | None = Field(default=None, ge=0)
 
 

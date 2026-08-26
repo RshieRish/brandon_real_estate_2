@@ -47,6 +47,7 @@ omitted and common credentials are irreversibly redacted before local enqueue.
 In addition to the two bridge variables, the Atlas service requires:
 
 - `SYDNEY_DURABLE_CONTEXT_ENABLED`
+- `SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED`
 - `SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED`
 - `SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID`
 - `SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID`
@@ -84,8 +85,13 @@ The JSON report is content-free. Accept it only when `matched=true`,
 `unacknowledged_count=0`, source and acknowledged counts/global hashes agree,
 and every opaque session entry matches. Normal new events invalidate the prior
 backend reconciliation marker and are re-reconciled automatically after their
-authoritative receipts reach the local WAL.
+authoritative receipts reach the local WAL. Periodic reconciliation reads only a
+bounded dirty-session queue backed by persisted per-session aggregates;
+compacted inbound tombstones retain a content-free terminal disposition so
+platform redelivery is never described as newly queued.
 
 Rollout order is master write-only, exact backfill/reconciliation, retrieval,
 projection, then controlled retry. Rollback disables retry/projection/retrieval
 before the master switch and preserves PostgreSQL, `state.db`, and the spool.
+The bootstrap restores Sydney-owned Hermes config from its private sidecar even
+when bridge credentials are missing during rollback.

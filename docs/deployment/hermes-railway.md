@@ -397,8 +397,27 @@ This release keeps PostgreSQL canonical, `/data/.hermes/state.db` as the local
 Hermes transcript, and `/data/.hermes/sydney_spool.db` as a private crash-safe
 WAL outbox and last-good context cache. It does not delete or compact source
 history. Visible user, assistant, tool-call, and tool-result text is redacted
-before enqueue; hidden reasoning, credentials, and raw binary attachments are
-not copied into canonical history.
+before enqueue, including configured secret values, authorization headers, and
+natural-language password/client-secret disclosures. URL redaction recursively
+sanitizes direct, nested percent-encoded, and JSON-wrapped login/callback values
+while retaining benign selectors such as `proposal_id`. Hidden reasoning,
+credentials, and raw binary attachments are not copied into canonical history.
+The event-batch endpoint rejects an aggregate body over 8 MiB before JSON
+decoding. Atlas splits multi-event batches below that cap and fails closed if a
+single event cannot fit.
+
+Tool execution is fenced by the exact live run lease in PostgreSQL. Mutating
+calls are matched across regenerated model call IDs by a canonical argument hash
+or hashed caller idempotency key; a completed result is restored and an
+uncertain result blocks replay. Visible failed tool results are redacted and
+retained as history. Transport timeout/connection exception types are eligible
+for bounded automatic retry even when the provider supplies no status code.
+Inbound and final run references are also provenance checked: only the exact
+conversation's user event can start a run, and only that session's assistant
+event can complete it.
+Hermes hides the prefixed MCP history-search variant from the model and exposes
+only the provider-owned `context_history_search`, which injects the authenticated
+identity server-side.
 
 The four backend switches default to `false` and must be promoted separately:
 
@@ -416,6 +435,21 @@ every non-allowlisted identity. Never put those IDs or any bearer token in a
 deployment message, log, report, or committed file.
 
 ### Pre-deployment gates
+
+Development gate recorded 2026-08-26:
+
+- The final changed-test matrix passed `757` with `5` expected exact-checkout
+  skips; the separate Atlas suite passed `16/16`.
+- Fresh detached template `7224d7c1a4dcffe9304f49bc843f55716f5561b4`
+  and Hermes `77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5` sources passed
+  the exact `227/227` gate.
+- The real JSON-RPC verifier returned exactly 25 ordered unique tools, retained
+  the original 22 unchanged, exposed no forbidden tool, and required caller
+  UUID `gmail_send.request_id`.
+- PostgreSQL 17/TLS regressions, sole Alembic head `85e8b7c9d4f1`, focused
+  Ruff, compileall, `git diff --check`, credential scanning, and independent
+  review passed. This is pre-release evidence only and must not be substituted
+  for the live gates below.
 
 1. Record the reviewed branch SHA and require a clean worktree.
 2. Create a mode-0600 custom-format PostgreSQL backup outside the repository and
@@ -465,8 +499,17 @@ The command exits nonzero unless its content-free JSON report has all of these:
 The backend accepts reconciliation only when the caller's exact event count and
 timestamp/UUID-ordered hash match PostgreSQL. Every later inserted event clears
 the prior reconciliation marker; Atlas restores it automatically only after all
-local receipts for that session are acknowledged. Do not enable retrieval while
-any session or global comparison differs.
+local receipts for that session are acknowledged. The one-second provider loop
+selects at most 25 dirty sessions and reads persisted per-session aggregates
+instead of rebuilding hashes across lifetime history. Compacted inbound
+tombstones retain a content-free terminal run state,
+so a duplicate platform delivery is reported as already finalized rather than
+as newly queued work. Do not enable retrieval while
+any session or global comparison differs. Backfill resolves only the configured
+Telegram chat's sessions and fails closed when history exists without that exact
+chat mapping. Once shadow mode is live, ordinary turn synchronization copies
+only assistant/tool rows after the current inbound user boundary, so rows already
+covered by backfill cannot be inserted again under live source keys.
 
 ### Promotion and acceptance
 
@@ -476,14 +519,25 @@ any session or global comparison differs.
    evidence without `/new`, `/reset`, or `/compact`.
 2. Enable projection on the worker. Require content-free health to show bounded
    checkpoint lag and no projection error; every checkpoint/fact must retain
-   source event IDs.
+   cumulative source event IDs. Oversized source events advance through explicit
+   character offsets, so a checkpoint never claims an unprojected remainder.
+   Immutable ingestion sequence, not the source timestamp, determines projection
+   coverage, so delayed events remain eligible. The worker must commit one
+   expiring range lease before Gemini; concurrent workers must produce one
+   provider call for that range, skip the live lease to process other eligible
+   conversations, and apply must consume the exact live lease token.
 3. Run the controlled synthetic `429` continuation with no mutating external
    tool. Prove one saved run moves through `waiting_retry`, survives a provider
    restart, is leased once when due, sends one final answer, and produces zero
-   Gmail, Calendar, CRM, or other external writes. Then enable retry.
+   Gmail, Calendar, CRM, or other external writes. The exact private Telegram
+   retry path disables token/interim streaming, stages the final response hash
+   in the private spool before Telegram delivery, and clears that marker only
+   after canonical completion succeeds. Restart with a surviving delivery
+   marker must block duplicate delivery for reconciliation. Then enable retry.
 4. Repeat a real session transition/compression canary and a Command-only
    contact read. Confirm the same logical conversation continues, MCP remains
-   exactly 25 tools, and no Google Contacts fallback or write occurs.
+   exactly 25 backend tools, the model sees only one unprefixed
+   `context_history_search`, and no Google Contacts fallback or write occurs.
 5. Record deployment IDs, reviewed SHAs, migration head, content-free counts and
    hashes, canary event/run IDs, and timestamps in `tdtn.md` and `memory.md`.
    Never record transcript text, Telegram IDs, tool arguments, or secrets.
@@ -493,7 +547,10 @@ any session or global comparison differs.
 Disable retry, projection, and retrieval first, then the master switch on Atlas,
 the worker, and the backend. Redeploy/wait for `SUCCESS`, confirm the gateway and
 existing MCP bridge remain healthy, and leave PostgreSQL rows, `state.db`, and
-the spool intact. A code rollback may use the reviewed pre-release image; a
+the spool intact. Atlas keeps a mode-0600 snapshot of only the config fields
+owned by Sydney and restores them when the master switch is disabled, even if
+the backend bridge URL or token is simultaneously unavailable. A code rollback
+may use the reviewed pre-release image; a
 database restore is reserved for independently confirmed migration corruption
 and uses the validated protected backup. Never delete history merely to clear a
 health mismatch.

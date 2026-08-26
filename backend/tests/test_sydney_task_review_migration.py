@@ -112,8 +112,7 @@ def _named_uniques(table: sa.Table) -> dict[str, tuple[str, ...]]:
     return {
         constraint.name: tuple(column.name for column in constraint.columns)
         for constraint in table.constraints
-        if isinstance(constraint, sa.UniqueConstraint)
-        and constraint.name is not None
+        if isinstance(constraint, sa.UniqueConstraint) and constraint.name is not None
     }
 
 
@@ -121,8 +120,7 @@ def _named_checks(table: sa.Table) -> dict[str, str]:
     return {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in table.constraints
-        if isinstance(constraint, sa.CheckConstraint)
-        and constraint.name is not None
+        if isinstance(constraint, sa.CheckConstraint) and constraint.name is not None
     }
 
 
@@ -145,9 +143,7 @@ def _index_contract(table: sa.Table) -> dict[str, tuple[object, ...]]:
             bool(index.unique),
             None
             if index.dialect_options["postgresql"].get("where") is None
-            else " ".join(
-                str(index.dialect_options["postgresql"]["where"]).split()
-            ),
+            else " ".join(str(index.dialect_options["postgresql"]["where"]).split()),
         )
         for index in table.indexes
     }
@@ -536,9 +532,7 @@ def test_models_pin_uniqueness_partial_slot_and_indexed_evidence() -> None:
         "('missing_required_field' = ANY(blocker_codes)) = "
         "(owner_clarification_pending OR task_details_clarification_pending)"
     )
-    assert _named_checks(suggestion)[
-        "ck_crm_task_suggestions_contact_resolution"
-    ] == (
+    assert _named_checks(suggestion)["ck_crm_task_suggestions_contact_resolution"] == (
         "(contact_resolution_state IN ('not_provided', 'explicit_none') AND "
         "contact_id IS NULL AND contact_resolution_hash IS NULL AND NOT "
         "('ambiguous_contact' = ANY(blocker_codes))) OR "
@@ -565,9 +559,7 @@ def test_models_pin_state_round_parent_nonce_and_exact_expiry_constraints() -> N
         "ck_crm_task_clarifications_state": (
             "state IN ('pending', 'answered', 'timed_out', 'superseded')"
         ),
-        "ck_crm_task_clarifications_code_hash_length": (
-            "octet_length(code_hash) = 32"
-        ),
+        "ck_crm_task_clarifications_code_hash_length": ("octet_length(code_hash) = 32"),
         "ck_crm_task_clarifications_key_version": (
             "code_key_version BETWEEN 1 AND 32767"
         ),
@@ -609,8 +601,7 @@ def test_models_pin_state_round_parent_nonce_and_exact_expiry_constraints() -> N
         "attempt_number > 0"
     )
     assert outbox_checks["ck_sydney_question_outbox_template"] == (
-        "template_id IN ('clarification_initial_v1', "
-        "'clarification_reminder_v1')"
+        "template_id IN ('clarification_initial_v1', 'clarification_reminder_v1')"
     )
     assert outbox_checks["ck_sydney_question_outbox_template_kind"] == (
         "(attempt_kind = 'reminder' AND template_id = "
@@ -675,9 +666,7 @@ def test_models_pin_state_round_parent_nonce_and_exact_expiry_constraints() -> N
         "telegram_message_id IS NULL))))"
     )
 
-    nonce_checks = _named_checks(
-        tables["crm_task_suggestion_approval_nonces"]
-    )
+    nonce_checks = _named_checks(tables["crm_task_suggestion_approval_nonces"])
     assert nonce_checks["ck_crm_task_suggestion_approval_nonces_token_hash"] == (
         "octet_length(token_hash) = 32"
     )
@@ -763,9 +752,7 @@ def test_models_pin_foreign_key_provenance_and_no_cascade_deletion() -> None:
             "RESTRICT",
         ),
     }
-    assert _named_foreign_keys(
-        tables["crm_task_suggestion_approval_nonces"]
-    ) == {
+    assert _named_foreign_keys(tables["crm_task_suggestion_approval_nonces"]) == {
         "fk_crm_task_suggestion_approval_nonces_suggestion_id": (
             ("suggestion_id",),
             ("crm_task_suggestions.id",),
@@ -818,9 +805,7 @@ def test_models_are_registered_once_for_application_and_alembic() -> None:
     assert expected.issubset(set(models.__all__))
     for name in expected:
         assert getattr(models, name) is getattr(module, name)
-    env_source = (_backend_root() / "alembic" / "env.py").read_text(
-        encoding="utf-8"
-    )
+    env_source = (_backend_root() / "alembic" / "env.py").read_text(encoding="utf-8")
     assert env_source.count("import models.sydney_tasks") == 1
 
 
@@ -881,7 +866,9 @@ def test_revision_84_ddl_is_append_only_hash_only_and_downgrade_guarded() -> Non
         "LOCK TABLE " + ", ".join(DOWNGRADE_GUARD_TABLES) + " IN ACCESS EXCLUSIVE MODE"
     )
     assert expected_lock in downgrade
-    assert "revision 84 downgrade refused: Sydney task review evidence exists" in downgrade
+    assert (
+        "revision 84 downgrade refused: Sydney task review evidence exists" in downgrade
+    )
     for table in DOWNGRADE_GUARD_TABLES:
         assert f"EXISTS (SELECT 1 FROM {table} LIMIT 1)" in downgrade
     for table in TABLES:
@@ -902,13 +889,17 @@ def test_revision_84_upgrades_real_postgresql_and_enforces_core_constraints() ->
             run_alembic(url, "upgrade", REVISION)
             inspector = sa.inspect(engine)
             assert set(TABLES).issubset(inspector.get_table_names())
-            assert inspector.get_columns("gmail_extracted_obligations")[-1][
-                "name"
-            ] == "owner_ambiguous"
+            assert (
+                inspector.get_columns("gmail_extracted_obligations")[-1]["name"]
+                == "owner_ambiguous"
+            )
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == REVISION
+                )
 
             run_owned_alembic_downgrade(
                 url,
@@ -917,9 +908,7 @@ def test_revision_84_upgrades_real_postgresql_and_enforces_core_constraints() ->
                 run_marker=run_marker,
             )
             with engine.connect() as connection:
-                assert set(TABLES).isdisjoint(
-                    sa.inspect(connection).get_table_names()
-                )
+                assert set(TABLES).isdisjoint(sa.inspect(connection).get_table_names())
     finally:
         engine.dispose()
 
@@ -1052,27 +1041,36 @@ def test_revision_84_safely_backfills_canonical_owner_ambiguity_and_guards_it() 
                 )
             run_alembic(url, "upgrade", REVISION)
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_ambiguous FROM gmail_extracted_obligations "
-                        "WHERE id = :id"
-                    ),
-                    {"id": obligation_id},
-                ) is True
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_clarification_pending "
-                        "FROM crm_task_suggestions WHERE id = :id"
-                    ),
-                    {"id": suggestion_id},
-                ) is True
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT task_details_clarification_pending "
-                        "FROM crm_task_suggestions WHERE id = :id"
-                    ),
-                    {"id": suggestion_id},
-                ) is False
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_ambiguous FROM gmail_extracted_obligations "
+                            "WHERE id = :id"
+                        ),
+                        {"id": obligation_id},
+                    )
+                    is True
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_clarification_pending "
+                            "FROM crm_task_suggestions WHERE id = :id"
+                        ),
+                        {"id": suggestion_id},
+                    )
+                    is True
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT task_details_clarification_pending "
+                            "FROM crm_task_suggestions WHERE id = :id"
+                        ),
+                        {"id": suggestion_id},
+                    )
+                    is False
+                )
                 indexes = {
                     item["name"]
                     for item in sa.inspect(connection).get_indexes(
@@ -1096,23 +1094,32 @@ def test_revision_84_safely_backfills_canonical_owner_ambiguity_and_guards_it() 
                     run_marker=run_marker,
                 )
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_ambiguous FROM gmail_extracted_obligations "
-                        "WHERE id = :id AND reconciled_suggestion_id = :suggestion_id"
-                    ),
-                    {"id": obligation_id, "suggestion_id": suggestion_id},
-                ) is True
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_clarification_pending "
-                        "FROM crm_task_suggestions WHERE id = :id"
-                    ),
-                    {"id": suggestion_id},
-                ) is True
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == REVISION
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_ambiguous FROM gmail_extracted_obligations "
+                            "WHERE id = :id AND reconciled_suggestion_id = :suggestion_id"
+                        ),
+                        {"id": obligation_id, "suggestion_id": suggestion_id},
+                    )
+                    is True
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_clarification_pending "
+                            "FROM crm_task_suggestions WHERE id = :id"
+                        ),
+                        {"id": suggestion_id},
+                    )
+                    is True
+                )
     finally:
         engine.dispose()
 
@@ -1160,13 +1167,16 @@ def test_revision_84_backfills_taxonomy_cause_without_inventing_owner_cause() ->
                     ),
                     {"id": suggestion_id},
                 ).one() == (False, True)
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_ambiguous FROM gmail_extracted_obligations "
-                        "WHERE id = :id"
-                    ),
-                    {"id": obligation_id},
-                ) is False
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_ambiguous FROM gmail_extracted_obligations "
+                            "WHERE id = :id"
+                        ),
+                        {"id": obligation_id},
+                    )
+                    is False
+                )
     finally:
         engine.dispose()
 
@@ -1303,9 +1313,7 @@ def test_revision_84_keeps_revision_83_suggestion_writes_compatible() -> None:
                             "request_id": request_id,
                             "contact_id": contact,
                             "state": (
-                                "needs_clarification"
-                                if blockers
-                                else "pending_review"
+                                "needs_clarification" if blockers else "pending_review"
                             ),
                             "clarification_state": (
                                 "pending" if blockers else "not_required"
@@ -1463,7 +1471,9 @@ def test_revision_83_selected_contact_write_refuses_duplicate_authority() -> Non
         engine.dispose()
 
 
-def test_revision_83_contact_update_refuses_duplicate_authority_and_rolls_back() -> None:
+def test_revision_83_contact_update_refuses_duplicate_authority_and_rolls_back() -> (
+    None
+):
     url = gmail_task_test_url()
     expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
     engine = sa.create_engine(sync_test_url(url))
@@ -1822,9 +1832,12 @@ def test_revision_84_refuses_untrustworthy_selected_contact_backfill(
             ):
                 run_alembic(url, "upgrade", REVISION)
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == DOWN_REVISION
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == DOWN_REVISION
+                )
     finally:
         engine.dispose()
 
@@ -1904,9 +1917,12 @@ def test_revision_84_fails_closed_on_noncanonical_owner_evidence(
             ):
                 run_alembic(url, "upgrade", REVISION)
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == DOWN_REVISION
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == DOWN_REVISION
+                )
                 assert "owner_ambiguous" not in {
                     column["name"]
                     for column in sa.inspect(connection).get_columns(
@@ -1972,14 +1988,19 @@ def test_revision_84_refuses_unexplained_missing_required_field(
             ):
                 run_alembic(url, "upgrade", REVISION)
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == DOWN_REVISION
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == DOWN_REVISION
+                )
     finally:
         engine.dispose()
 
 
-def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_parent() -> None:
+def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_parent() -> (
+    None
+):
     url = gmail_task_test_url()
     expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
     engine = sa.create_engine(sync_test_url(url))
@@ -2032,9 +2053,7 @@ def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_pare
                     {
                         "id": attempt_id,
                         "clarification_id": clarification_id,
-                        "dedupe": (
-                            f"clarification:{clarification_id}:v1:initial:1"
-                        ),
+                        "dedupe": (f"clarification:{clarification_id}:v1:initial:1"),
                         "context": json.dumps(
                             {
                                 "party_label": "Alice",
@@ -2070,9 +2089,13 @@ def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_pare
                 (first_suggestion, "-1001234567891", 2, "contact", 2),
                 (second_suggestion, "-1001234567890", 1, "contact", 2),
             )
-            for suggestion_id, chat_id, code_byte, field_name, round_number in (
-                invalid_slot_cases
-            ):
+            for (
+                suggestion_id,
+                chat_id,
+                code_byte,
+                field_name,
+                round_number,
+            ) in invalid_slot_cases:
                 with pytest.raises(sa.exc.IntegrityError):
                     with engine.begin() as connection:
                         _insert_clarification(
@@ -2245,8 +2268,7 @@ def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_pare
                         ),
                         {
                             "anchor": now + timedelta(minutes=5),
-                            "deadline": now
-                            + timedelta(hours=48, minutes=5),
+                            "deadline": now + timedelta(hours=48, minutes=5),
                             "id": clarification_id,
                         },
                     )
@@ -2265,7 +2287,7 @@ def test_real_postgresql_enforces_slots_immutable_payloads_events_and_nonce_pare
                     },
                 )
             for assignment in (
-                "answer_json = '{\"decision\":\"set_due\",\"kind\":\"due_at\"}'",
+                'answer_json = \'{"decision":"set_due","kind":"due_at"}\'',
                 "answer_json = NULL",
                 "state = 'pending', answer_json = NULL, resolved_at = NULL",
                 "state = 'timed_out', answer_json = NULL",
@@ -2504,9 +2526,7 @@ def test_outbox_parent_state_retry_and_reminder_matrix_on_postgresql() -> None:
                     {
                         "id": initial_id,
                         "clarification_id": clarification_id,
-                        "dedupe": (
-                            f"clarification:{clarification_id}:v1:initial:1"
-                        ),
+                        "dedupe": (f"clarification:{clarification_id}:v1:initial:1"),
                         "context": context,
                         "hash": "1" * 64,
                     },
@@ -2668,9 +2688,7 @@ def test_outbox_parent_state_retry_and_reminder_matrix_on_postgresql() -> None:
                         "id": reminder_id,
                         "clarification_id": clarification_id,
                         "reply_to": retry_id,
-                        "dedupe": (
-                            f"clarification:{clarification_id}:v1:reminder:1"
-                        ),
+                        "dedupe": (f"clarification:{clarification_id}:v1:reminder:1"),
                         "context": context,
                         "hash": "3" * 64,
                     },
@@ -2685,13 +2703,16 @@ def test_outbox_parent_state_retry_and_reminder_matrix_on_postgresql() -> None:
                     {"id": clarification_id},
                 )
                 assert deadline == now + timedelta(hours=48)
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT reply_to_attempt_id FROM sydney_question_outbox "
-                        "WHERE id = :id"
-                    ),
-                    {"id": reminder_id},
-                ) == retry_id
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT reply_to_attempt_id FROM sydney_question_outbox "
+                            "WHERE id = :id"
+                        ),
+                        {"id": reminder_id},
+                    )
+                    == retry_id
+                )
 
             for assignment in (
                 "telegram_chat_id = '-1001234567891'",
@@ -2854,7 +2875,9 @@ def test_pending_outbox_can_expire_only_with_its_clarification_timeout() -> None
         engine.dispose()
 
 
-def test_revision_84_refuses_seeded_task83_and_all_task84_evidence_without_loss() -> None:
+def test_revision_84_refuses_seeded_task83_and_all_task84_evidence_without_loss() -> (
+    None
+):
     url = gmail_task_test_url()
     expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
     engine = sa.create_engine(sync_test_url(url))
@@ -2927,9 +2950,7 @@ def test_revision_84_refuses_seeded_task83_and_all_task84_evidence_without_loss(
                     {
                         "id": outbox_id,
                         "clarification_id": clarification_id,
-                        "dedupe": (
-                            f"clarification:{clarification_id}:v1:initial:1"
-                        ),
+                        "dedupe": (f"clarification:{clarification_id}:v1:initial:1"),
                         "hash": "1" * 64,
                     },
                 )
@@ -2974,29 +2995,41 @@ def test_revision_84_refuses_seeded_task83_and_all_task84_evidence_without_loss(
                     run_marker=run_marker,
                 )
             with engine.connect() as connection:
-                assert connection.scalar(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ) == REVISION
-                assert connection.scalar(
-                    sa.text("SELECT title FROM crm_tasks WHERE id = 8402")
-                ) == "Preserved CRM task"
-                assert connection.scalar(
-                    sa.text(
-                        "SELECT owner_ambiguous FROM gmail_extracted_obligations "
-                        "WHERE id = :id"
-                    ),
-                    {"id": obligation_id},
-                ) is True
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT version_num FROM alembic_version")
+                    )
+                    == REVISION
+                )
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT title FROM crm_tasks WHERE id = 8402")
+                    )
+                    == "Preserved CRM task"
+                )
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT owner_ambiguous FROM gmail_extracted_obligations "
+                            "WHERE id = :id"
+                        ),
+                        {"id": obligation_id},
+                    )
+                    is True
+                )
                 for table, row_id in (
                     ("crm_task_clarifications", clarification_id),
                     ("sydney_question_outbox", outbox_id),
                     ("crm_task_suggestion_approval_nonces", nonce_id),
                     ("crm_task_suggestion_events", event_id),
                 ):
-                    assert connection.scalar(
-                        sa.text(f"SELECT count(*) FROM {table} WHERE id = :id"),
-                        {"id": row_id},
-                    ) == 1
+                    assert (
+                        connection.scalar(
+                            sa.text(f"SELECT count(*) FROM {table} WHERE id = :id"),
+                            {"id": row_id},
+                        )
+                        == 1
+                    )
     finally:
         engine.dispose()
 
@@ -3015,12 +3048,14 @@ def test_nonce_expiry_contract_is_exact_not_merely_bounded() -> None:
     }
     assert handoff["expires_at"] - handoff["issued_at"] == timedelta(minutes=15)
     assert approval["expires_at"] - approval["issued_at"] == timedelta(minutes=5)
-    assert "interval '15 minutes'" in _named_checks(nonce)[
-        "ck_crm_task_suggestion_approval_nonces_shape"
-    ]
-    assert "interval '5 minutes'" in _named_checks(nonce)[
-        "ck_crm_task_suggestion_approval_nonces_shape"
-    ]
+    assert (
+        "interval '15 minutes'"
+        in _named_checks(nonce)["ck_crm_task_suggestion_approval_nonces_shape"]
+    )
+    assert (
+        "interval '5 minutes'"
+        in _named_checks(nonce)["ck_crm_task_suggestion_approval_nonces_shape"]
+    )
 
 
 def test_uuid_columns_remain_native_postgresql_uuid() -> None:

@@ -38,7 +38,12 @@ class CommandContactFilters(StrictCommandModel):
 
 
 class CommandContactsSearchRequest(CommandContactFilters):
-    page: PositiveInt = 1
+    cursor: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
     page_size: Annotated[StrictInt, Field(ge=1, le=25)] = 25
 
 
@@ -56,9 +61,9 @@ class CommandContactResult(StrictCommandModel):
 class CommandContactsSearchResponse(StrictCommandModel):
     contacts: list[CommandContactResult]
     total: Annotated[StrictInt, Field(ge=0)]
-    page: PositiveInt
     page_size: Annotated[StrictInt, Field(ge=1, le=25)]
-    page_count: Annotated[StrictInt, Field(ge=0)]
+    next_cursor: str | None = Field(default=None, max_length=512)
+    has_more: bool
 
 
 class CommandContactAudiencePreviewRequest(CommandContactFilters):

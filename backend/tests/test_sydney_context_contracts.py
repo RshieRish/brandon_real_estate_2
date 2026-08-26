@@ -73,6 +73,76 @@ def test_event_batch_contract_is_strict_and_bounded() -> None:
         )
 
 
+def test_event_content_preserves_boundary_whitespace() -> None:
+    from schemas.sydney_context import ContextEventInput
+
+    content = "  indented evidence\n\n"
+    event = ContextEventInput.model_validate(
+        {
+            **_event_payload(),
+            "content": content,
+        }
+    )
+
+    assert event.content == content
+
+
+def test_request_timestamps_require_timezone_and_normalize_to_utc() -> None:
+    from schemas.sydney_context import (
+        ContextEventInput,
+        ContextHistorySearchRequest,
+        ContextRunStartRequest,
+        ContextRunUpdateRequest,
+    )
+
+    cases = (
+        (
+            ContextEventInput,
+            {**_event_payload(), "occurred_at": "2026-08-25T17:00:00"},
+        ),
+        (
+            ContextHistorySearchRequest,
+            {
+                "identity_id": uuid4(),
+                "query": "audience decision",
+                "started_at": "2026-08-25T17:00:00",
+            },
+        ),
+        (
+            ContextRunStartRequest,
+            {
+                "identity_id": uuid4(),
+                "platform_message_id": "telegram-message-1",
+                "inbound_event_id": uuid4(),
+                "session_id": uuid4(),
+                "logical_conversation_id": uuid4(),
+                "terminal_deadline_at": "2026-08-25T17:00:00",
+            },
+        ),
+        (
+            ContextRunUpdateRequest,
+            {
+                "run_id": uuid4(),
+                "state": "waiting_retry",
+                "next_attempt_at": "2026-08-25T17:00:00",
+            },
+        ),
+    )
+
+    for model, payload in cases:
+        with pytest.raises(ValidationError):
+            model.model_validate(payload)
+
+    event = ContextEventInput.model_validate(
+        {
+            **_event_payload(),
+            "occurred_at": "2026-08-25T17:00:00+05:30",
+        }
+    )
+    assert event.occurred_at == datetime(2026, 8, 25, 11, 30, tzinfo=UTC)
+    assert event.occurred_at.utcoffset() == timedelta(0)
+
+
 def test_retrieval_and_history_contracts_clamp_at_the_boundary() -> None:
     from schemas.sydney_context import (
         ContextHistorySearchRequest,
