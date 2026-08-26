@@ -868,11 +868,51 @@ def test_active_run_lease_can_be_renewed_before_it_expires(tmp_path: Path) -> No
     provider.record_inbound("lease-renewal-message", "Keep working safely.")
     provider.drain_once()
 
+    assert provider.renew_active_lease() is False
+    execution_run_id = provider.begin_active_execution("lease-renewal-message")
+    assert execution_run_id == provider.active_run_id
     assert provider.renew_active_lease() is True
     renewals = [payload for name, payload in backend.calls if name == "renew"]
     assert len(renewals) == 1
     assert renewals[0]["run_id"] == provider.active_run_id
     assert renewals[0]["lease_owner"] == provider.active_lease_owner
+
+    provider.end_active_execution(execution_run_id)
+    assert provider.renew_active_lease() is False
+
+
+def test_runtime_releases_orphaned_execution_renewal_after_handler_exit(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_inbound_before_model,
+        release_active_execution_for_event,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="orphaned-handler-message",
+        content="Keep this retry recoverable if the handler exits.",
+    )
+    assert provider.renew_active_lease() is True
+
+    event = SimpleNamespace(
+        source=SimpleNamespace(
+            platform=SimpleNamespace(value="telegram"),
+            chat_id="private-chat",
+        ),
+        message_id="orphaned-handler-message",
+    )
+    release_active_execution_for_event(event)
+
+    assert provider.renew_active_lease() is False
 
 
 def test_reclaimed_run_rebinds_pending_tool_records_to_the_new_lease(
@@ -2268,6 +2308,147 @@ async def test_continuation_watcher_survives_until_first_spool_is_created(
         await watcher
 
     assert any(name == "claim" for name, _payload in backend.calls)
+    assert all(
+        payload["limit"] == 1 for name, payload in backend.calls if name == "claim"
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_dispatch_renews_lease_after_adapter_returns() -> None:
+    from sydney_gateway import _dispatch_with_run_lease_heartbeat
+
+    class QuickBackgroundAdapter:
+        def __init__(self) -> None:
+            self.handled = 0
+            self._session_tasks: dict[str, asyncio.Task[None]] = {}
+
+        async def handle_message(self, _event: object) -> None:
+            # Production adapters return as soon as background work is spawned.
+            self.handled += 1
+
+            async def background_work() -> None:
+                await asyncio.sleep(0.025)
+
+            self._session_tasks["private-session"] = asyncio.create_task(
+                background_work()
+            )
+
+    class LeaseBackend:
+        def __init__(self) -> None:
+            self.renewals: list[dict[str, str]] = []
+
+        def renew_run(self, payload: dict[str, str]) -> dict[str, str]:
+            self.renewals.append(payload)
+            return {
+                "id": payload["run_id"],
+                "state": "running",
+                "lease_owner": payload["lease_owner"],
+                "lease_expires_at": (
+                    datetime.now(timezone.utc) + timedelta(seconds=120)
+                ).isoformat(),
+            }
+
+    adapter = QuickBackgroundAdapter()
+    backend = LeaseBackend()
+    run = {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "state": "running",
+        "lease_owner": "hermes:restart-worker:42",
+        "lease_expires_at": (
+            datetime.now(timezone.utc) + timedelta(seconds=120)
+        ).isoformat(),
+        "terminal_deadline_at": (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat(),
+    }
+
+    await _dispatch_with_run_lease_heartbeat(
+        adapter=adapter,
+        event=object(),
+        backend=backend,
+        run=run,
+        session_key="private-session",
+        renew_interval=0.01,
+    )
+
+    assert adapter.handled == 1
+    assert 2 <= len(backend.renewals) <= 4
+    assert all(
+        payload
+        == {
+            "run_id": run["id"],
+            "lease_owner": run["lease_owner"],
+        }
+        for payload in backend.renewals
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_dispatch_does_not_queue_behind_unrelated_task() -> None:
+    from sydney_gateway import _dispatch_with_run_lease_heartbeat
+
+    class BusyAdapter:
+        def __init__(self) -> None:
+            self.handled = 0
+            self._session_tasks: dict[str, asyncio.Task[None]] = {}
+
+        async def handle_message(self, _event: object) -> None:
+            self.handled += 1
+
+    class LeaseBackend:
+        def __init__(self) -> None:
+            self.renewals: list[dict[str, str]] = []
+
+        def renew_run(self, payload: dict[str, str]) -> dict[str, str]:
+            self.renewals.append(payload)
+            return {
+                "id": payload["run_id"],
+                "state": "running",
+                "lease_owner": payload["lease_owner"],
+                "lease_expires_at": (
+                    datetime.now(timezone.utc) + timedelta(seconds=120)
+                ).isoformat(),
+            }
+
+    async def unrelated_work() -> None:
+        await asyncio.sleep(0.025)
+
+    adapter = BusyAdapter()
+    unrelated_task = asyncio.create_task(unrelated_work())
+    adapter._session_tasks["private-session"] = unrelated_task
+    backend = LeaseBackend()
+    run = {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "state": "running",
+        "lease_owner": "hermes:restart-worker:42",
+        "lease_expires_at": (
+            datetime.now(timezone.utc) + timedelta(seconds=120)
+        ).isoformat(),
+        "terminal_deadline_at": (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat(),
+    }
+
+    await _dispatch_with_run_lease_heartbeat(
+        adapter=adapter,
+        event=object(),
+        backend=backend,
+        run=run,
+        session_key="private-session",
+        renew_interval=0.01,
+    )
+    await unrelated_task
+
+    assert adapter.handled == 0
+    assert backend.renewals == []
+
+
+def test_continuation_lease_renewal_retries_wrapped_transport_failure() -> None:
+    from sydney_gateway import _lease_renewal_can_retry
+    from sydney_memory_provider import BackendRequestError
+
+    assert _lease_renewal_can_retry(BackendRequestError(0, "backend_unavailable"))
+    assert not _lease_renewal_can_retry(RuntimeError("programming error"))
 
 
 def test_restart_watcher_drains_fsynced_inbound_before_any_run_can_be_claimed(

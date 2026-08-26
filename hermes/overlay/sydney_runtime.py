@@ -42,8 +42,63 @@ class _PendingDelivery:
     delivery_kind: str = "final"
 
 
+@dataclass(frozen=True)
+class _ActiveExecution:
+    provider: Any
+    run_id: str
+
+
 _PENDING_DELIVERIES: dict[tuple[str, str, str], _PendingDelivery] = {}
 _PENDING_DELIVERIES_LOCK = threading.Lock()
+_ACTIVE_EXECUTIONS: dict[tuple[str, str, str], _ActiveExecution] = {}
+_ACTIVE_EXECUTIONS_LOCK = threading.Lock()
+
+
+def _normalized_delivery_key(value: Any) -> tuple[str, str, str] | None:
+    if (
+        isinstance(value, (tuple, list))
+        and len(value) == 3
+        and all(isinstance(item, str) and item for item in value)
+    ):
+        return (value[0], value[1], value[2])
+    return None
+
+
+def _delivery_key_for_event(event: Any) -> tuple[str, str, str] | None:
+    overridden_key = _normalized_delivery_key(
+        getattr(event, "_sydney_delivery_key", None)
+    )
+    if overridden_key is not None:
+        return overridden_key
+    source = getattr(event, "source", None)
+    platform = getattr(source, "platform", "")
+    platform_name = str(getattr(platform, "value", platform) or "")
+    chat_id = str(getattr(source, "chat_id", "") or "")
+    message_id = str(
+        getattr(event, "message_id", "") or getattr(source, "message_id", "") or ""
+    )
+    return _normalized_delivery_key((platform_name, chat_id, message_id))
+
+
+def _release_active_execution_by_key(key: tuple[str, str, str]) -> None:
+    with _ACTIVE_EXECUTIONS_LOCK:
+        active = _ACTIVE_EXECUTIONS.pop(key, None)
+    if active is not None:
+        active.provider.end_active_execution(active.run_id)
+
+
+def _begin_active_execution(provider: Any, key: tuple[str, str, str]) -> bool:
+    run_id = provider.begin_active_execution(key[2])
+    if not run_id:
+        return False
+    with _ACTIVE_EXECUTIONS_LOCK:
+        previous = _ACTIVE_EXECUTIONS.get(key)
+        _ACTIVE_EXECUTIONS[key] = _ActiveExecution(provider=provider, run_id=run_id)
+    if previous is not None and (
+        previous.provider is not provider or previous.run_id != run_id
+    ):
+        previous.provider.end_active_execution(previous.run_id)
+    return True
 
 
 def get_sydney_provider(agent: Any) -> Any | None:
@@ -85,6 +140,9 @@ def record_inbound_before_model(
     )
     prior_finalization_pending = False
     if previous_key and previous_key != delivery_key:
+        normalized_previous_key = _normalized_delivery_key(previous_key)
+        if normalized_previous_key is not None:
+            _release_active_execution_by_key(normalized_previous_key)
         prior_finalization_pending = provider.has_pending_run_finalization(previous_key)
         if prior_finalization_pending:
             provider.drain_once()
@@ -101,7 +159,9 @@ def record_inbound_before_model(
         if terminal_state is not None:
             agent._sydney_terminal_replay_state = terminal_state
             return False
-        return provider.owns_run_lease(platform_message_id)
+        if provider.owns_run_lease(platform_message_id):
+            return _begin_active_execution(provider, delivery_key)
+        return False
     control_replay = provider.resolve_staged_control_delivery(delivery_key)
     if control_replay is not None:
         agent._sydney_control_replay_state = control_replay
@@ -121,7 +181,7 @@ def record_inbound_before_model(
     ):
         return False
     if provider.owns_run_lease(platform_message_id):
-        return True
+        return _begin_active_execution(provider, delivery_key)
     if bool(getattr(provider, "last_drain_backend_unavailable", False)) and bool(
         provider.inbound_is_pending(platform_message_id)
     ):
@@ -331,21 +391,16 @@ def record_delivery_by_key(delivery_key: Any, *, delivered: bool) -> None:
 
 def record_delivery_outcome(event: Any, *, delivered: bool) -> None:
     """Resolve the event's staged run at the platform delivery boundary."""
-    overridden_key = getattr(event, "_sydney_delivery_key", None)
-    if overridden_key is not None:
-        record_delivery_by_key(overridden_key, delivered=delivered)
-        return
-    source = getattr(event, "source", None)
-    platform = getattr(source, "platform", "")
-    platform_name = str(getattr(platform, "value", platform) or "")
-    chat_id = str(getattr(source, "chat_id", "") or "")
-    message_id = str(
-        getattr(event, "message_id", "") or getattr(source, "message_id", "") or ""
-    )
-    record_delivery_by_key(
-        (platform_name, chat_id, message_id),
-        delivered=delivered,
-    )
+    key = _delivery_key_for_event(event)
+    if key is not None:
+        record_delivery_by_key(key, delivered=delivered)
+
+
+def release_active_execution_for_event(event: Any) -> None:
+    """Stop renewals when the adapter's message handler has exited."""
+    key = _delivery_key_for_event(event)
+    if key is not None:
+        _release_active_execution_by_key(key)
 
 
 def _side_effect_class(tool_name: str) -> str:

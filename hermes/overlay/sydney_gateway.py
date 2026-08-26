@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +180,109 @@ def _matches_private_identity(
         )
         == expected
     )
+
+
+def _parsed_timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _lease_renew_delay(run: dict[str, Any]) -> float:
+    expires_at = _parsed_timestamp(run.get("lease_expires_at"))
+    if expires_at is None:
+        return 10.0
+    remaining = (expires_at - datetime.now(timezone.utc)).total_seconds()
+    return max(0.25, min(10.0, remaining / 3))
+
+
+def _lease_renewal_can_retry(error: BaseException) -> bool:
+    if isinstance(error, (TimeoutError, OSError)):
+        return True
+    raw_status_code = getattr(error, "status_code", None)
+    if raw_status_code is None:
+        return False
+    try:
+        status_code = int(raw_status_code)
+    except (TypeError, ValueError):
+        return False
+    return status_code == 0 or status_code in {408, 425, 429} or status_code >= 500
+
+
+async def _dispatch_with_run_lease_heartbeat(
+    *,
+    adapter: Any,
+    event: Any,
+    backend: Any,
+    run: dict[str, Any],
+    session_key: str,
+    renew_interval: float | None = None,
+) -> None:
+    """Keep a watcher claim live while its adapter task is actually running.
+
+    Platform adapters return immediately after spawning model work. The
+    watcher therefore owns a second heartbeat for that exact background task.
+    It stops when the task exits, even if the backend run was left running.
+    """
+    run_id = str(run.get("id") or "")
+    lease_owner = str(run.get("lease_owner") or "")
+    if not run_id or not lease_owner:
+        raise RuntimeError("claimed run lease is incomplete")
+
+    task_map = getattr(adapter, "_session_tasks", None)
+    preexisting_task = task_map.get(session_key) if hasattr(task_map, "get") else None
+    if isinstance(preexisting_task, asyncio.Task) and not preexisting_task.done():
+        # Hermes would merge this continuation into the busy session's pending
+        # slot. That slot is not an execution receipt for this run, so leave
+        # the claim unrenewed and let its bounded lease be reclaimed later.
+        return
+
+    await adapter.handle_message(event)
+    task_map = getattr(adapter, "_session_tasks", None)
+    processing_task = task_map.get(session_key) if hasattr(task_map, "get") else None
+    if (
+        not isinstance(processing_task, asyncio.Task)
+        or processing_task is preexisting_task
+    ):
+        return
+    current = dict(run)
+    terminal_deadline = _parsed_timestamp(run.get("terminal_deadline_at"))
+    while terminal_deadline is None or datetime.now(timezone.utc) < terminal_deadline:
+        if processing_task.done():
+            return
+        try:
+            renewed = await asyncio.to_thread(
+                backend.renew_run,
+                {"run_id": run_id, "lease_owner": lease_owner},
+            )
+        except Exception as error:  # noqa: BLE001 - classify bounded API failures.
+            if not _lease_renewal_can_retry(error):
+                return
+        else:
+            if (
+                not isinstance(renewed, dict)
+                or renewed.get("state") != "running"
+                or str(renewed.get("lease_owner") or "") != lease_owner
+            ):
+                return
+            current.update(renewed)
+        delay = (
+            max(0.01, float(renew_interval))
+            if renew_interval is not None
+            else _lease_renew_delay(current)
+        )
+        if terminal_deadline is not None:
+            remaining = (terminal_deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                return
+            delay = min(delay, remaining)
+        done, _pending = await asyncio.wait({processing_task}, timeout=delay)
+        if done:
+            return
 
 
 def _drain_confirmed_completion(
@@ -460,7 +564,7 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                         {
                             "lease_owner": lease_owner,
                             "identity_id": identity_id,
-                            "limit": 10,
+                            "limit": 1,
                         },
                     )
                 except Exception:  # noqa: BLE001, S112 - retry backend next poll.
@@ -496,7 +600,11 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                         continue
                     try:
                         from gateway.config import Platform
-                        from gateway.platforms.base import MessageEvent, MessageType
+                        from gateway.platforms.base import (
+                            MessageEvent,
+                            MessageType,
+                            build_session_key,
+                        )
                         from gateway.session import SessionSource
 
                         platform = Platform(platform_name)
@@ -513,6 +621,15 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                         adapter = gateway.adapters.get(platform)
                         if adapter is None:
                             continue
+                        session_key = build_session_key(
+                            source,
+                            group_sessions_per_user=adapter.config.extra.get(
+                                "group_sessions_per_user", True
+                            ),
+                            thread_sessions_per_user=adapter.config.extra.get(
+                                "thread_sessions_per_user", False
+                            ),
+                        )
                         spool.set_meta(
                             f"claimed_run:{run['id']}",
                             {
@@ -533,7 +650,13 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                             channel_context=_continuation_channel_context(original),
                             internal=True,
                         )
-                        await adapter.handle_message(event)
+                        await _dispatch_with_run_lease_heartbeat(
+                            adapter=adapter,
+                            event=event,
+                            backend=backend,
+                            run=run,
+                            session_key=session_key,
+                        )
                     except Exception:  # noqa: BLE001, S112 - isolate run dispatch.
                         continue
             await asyncio.sleep(delay)

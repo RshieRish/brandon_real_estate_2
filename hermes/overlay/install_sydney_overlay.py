@@ -838,11 +838,37 @@ def _patch_gateway_base(contents: str) -> str:
                     _sydney_delivery_error,
                 )
             await self._run_processing_hook("""
-    return _replace_exact(
+    contents = _replace_exact(
         contents,
         delivery_anchor,
         delivery_replacement,
         "delivery confirmation",
+    )
+    execution_release_anchor = """\
+        finally:
+            # Fire any one-shot post-delivery callback registered for this
+            # session (e.g. deferred background-review notifications)."""
+    execution_release_replacement = """\
+        finally:
+            # SYDNEY_EXECUTION_LEASE_RELEASE
+            # A persisted active run is not proof that its model task survived.
+            # Release process-local renewal ownership on every handler exit.
+            try:
+                from agent.sydney_runtime import release_active_execution_for_event as _sydney_release_execution
+                _sydney_release_execution(event)
+            except Exception as _sydney_release_error:
+                logger.warning(
+                    "Sydney execution lease release failed: %s",
+                    _sydney_release_error,
+                )
+
+            # Fire any one-shot post-delivery callback registered for this
+            # session (e.g. deferred background-review notifications)."""
+    return _replace_exact(
+        contents,
+        execution_release_anchor,
+        execution_release_replacement,
+        "execution lease release",
     )
 
 
