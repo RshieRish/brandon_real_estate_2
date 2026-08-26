@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import importlib.util
 import json
@@ -713,14 +714,83 @@ class HermesOverlayTests(unittest.TestCase):
                 gateway_run.index("record_inbound_before_model(\n"),
                 gateway_run.index("result = agent.run_conversation"),
             )
+            gateway_tree = ast.parse(gateway_run)
+            run_agent_function = next(
+                node
+                for node in ast.walk(gateway_tree)
+                if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_agent"
+            )
+            run_agent_arguments = {
+                argument.arg
+                for argument in (
+                    run_agent_function.args.posonlyargs
+                    + run_agent_function.args.args
+                    + run_agent_function.args.kwonlyargs
+                )
+            }
+            self.assertIn("_sydney_internal", run_agent_arguments)
+            self.assertIn("_sydney_persisted_message", run_agent_arguments)
+            self.assertFalse(
+                any(
+                    isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == "event"
+                    for node in ast.walk(run_agent_function)
+                ),
+                "_run_agent must not capture the out-of-scope gateway event",
+            )
+            run_agent_calls = [
+                node
+                for node in ast.walk(gateway_tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_run_agent"
+            ]
+            self.assertEqual(len(run_agent_calls), 2)
+            for run_agent_call in run_agent_calls:
+                keyword_names = {
+                    keyword.arg
+                    for keyword in run_agent_call.keywords
+                    if keyword.arg is not None
+                }
+                self.assertIn("_sydney_internal", keyword_names)
+                self.assertIn("_sydney_persisted_message", keyword_names)
+            recursive_run_call = next(
+                run_agent_call
+                for run_agent_call in run_agent_calls
+                if any(
+                    keyword.arg == "_interrupt_depth"
+                    for keyword in run_agent_call.keywords
+                )
+            )
+            recursive_keywords = {
+                keyword.arg: keyword.value
+                for keyword in recursive_run_call.keywords
+                if keyword.arg is not None
+            }
+            self.assertEqual(
+                getattr(recursive_keywords["_sydney_internal"], "id", None),
+                "next_sydney_internal",
+            )
+            self.assertEqual(
+                getattr(recursive_keywords["_sydney_persisted_message"], "id", None),
+                "next_sydney_persisted_message",
+            )
+            self.assertIn('getattr(pending_event, "internal", False)', gateway_run)
+            self.assertIn('getattr(pending_event, "text", "")', gateway_run)
             self.assertIn(
-                'internal=bool(getattr(event, "internal", False))', gateway_run
+                '_sydney_internal=bool(getattr(event, "internal", False))',
+                gateway_run,
+            )
+            self.assertIn(
+                '_sydney_persisted_message=str(getattr(event, "text", "") or "")',
+                gateway_run,
             )
             self.assertIn(
                 '_conversation_kwargs["persist_user_message"] = str(',
                 gateway_run,
             )
-            self.assertIn('getattr(event, "text", "")', gateway_run)
+            self.assertIn('_sydney_persisted_message or ""', gateway_run)
             self.assertNotIn("stage_run_outcome(agent, result)", gateway_run)
             self.assertGreater(
                 gateway_run.index("SYDNEY_FINAL_DELIVERY_STAGE"),

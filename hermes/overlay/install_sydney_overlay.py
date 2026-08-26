@@ -221,6 +221,22 @@ def _patch_gateway_run(contents: str) -> str:
     contents = _replace_exact(
         contents, startup, startup_replacement, "continuation watcher startup"
     )
+    run_signature_anchor = """\
+        event_message_id: Optional[str] = None,
+        channel_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:"""
+    run_signature_replacement = """\
+        event_message_id: Optional[str] = None,
+        channel_prompt: Optional[str] = None,
+        _sydney_internal: bool = False,
+        _sydney_persisted_message: Optional[str] = None,
+    ) -> Dict[str, Any]:"""
+    contents = _replace_exact(
+        contents,
+        run_signature_anchor,
+        run_signature_replacement,
+        "continuation run scope",
+    )
     persistence_anchor = """\
                 _conversation_kwargs = {
                     "conversation_history": agent_history,
@@ -235,11 +251,11 @@ def _patch_gateway_run(contents: str) -> str:
                 }
                 if observed_group_context:
                     _conversation_kwargs["persist_user_message"] = message
-                if getattr(event, "internal", False):
+                if _sydney_internal:
                     # The model receives recovered durable context plus the
                     # continuation marker, but state.db persists only the marker.
                     _conversation_kwargs["persist_user_message"] = str(
-                        getattr(event, "text", "") or ""
+                        _sydney_persisted_message or ""
                     )"""
     contents = _replace_exact(
         contents,
@@ -263,7 +279,7 @@ def _patch_gateway_run(contents: str) -> str:
                     agent,
                     platform_message_id=_sydney_message_id,
                     content=message,
-                    internal=bool(getattr(event, "internal", False)),
+                    internal=_sydney_internal,
                 )
                 if not _sydney_has_run_lease:
                     from agent.sydney_runtime import deferred_inbound_response
@@ -356,6 +372,8 @@ def _patch_gateway_run(contents: str) -> str:
             # Stop persistent typing indicator now that the agent is done"""
     result_replacement = """\
                 channel_prompt=event.channel_prompt,
+                _sydney_internal=bool(getattr(event, "internal", False)),
+                _sydney_persisted_message=str(getattr(event, "text", "") or ""),
             )
 
             # Preserve the innermost queued turn's delivery key for the outer
@@ -450,6 +468,56 @@ def _patch_gateway_run(contents: str) -> str:
         queued_anchor,
         queued_replacement,
         "queued delivery confirmation",
+    )
+    queued_scope_anchor = """\
+                next_message_id = None
+                next_channel_prompt = None
+                if pending_event is not None:"""
+    queued_scope_replacement = """\
+                next_message_id = None
+                next_channel_prompt = None
+                next_sydney_internal = False
+                next_sydney_persisted_message = None
+                if pending_event is not None:"""
+    contents = _replace_exact(
+        contents,
+        queued_scope_anchor,
+        queued_scope_replacement,
+        "queued continuation scope defaults",
+    )
+    queued_event_scope_anchor = """\
+                    next_message_id = self._reply_anchor_for_event(pending_event)
+                    next_channel_prompt = getattr(pending_event, "channel_prompt", None)"""
+    queued_event_scope_replacement = """\
+                    next_message_id = self._reply_anchor_for_event(pending_event)
+                    next_channel_prompt = getattr(pending_event, "channel_prompt", None)
+                    next_sydney_internal = bool(
+                        getattr(pending_event, "internal", False)
+                    )
+                    next_sydney_persisted_message = str(
+                        getattr(pending_event, "text", "") or ""
+                    )"""
+    contents = _replace_exact(
+        contents,
+        queued_event_scope_anchor,
+        queued_event_scope_replacement,
+        "queued continuation event scope",
+    )
+    queued_run_call_anchor = """\
+                    event_message_id=next_message_id,
+                    channel_prompt=next_channel_prompt,
+                )"""
+    queued_run_call_replacement = """\
+                    event_message_id=next_message_id,
+                    channel_prompt=next_channel_prompt,
+                    _sydney_internal=next_sydney_internal,
+                    _sydney_persisted_message=next_sydney_persisted_message,
+                )"""
+    contents = _replace_exact(
+        contents,
+        queued_run_call_anchor,
+        queued_run_call_replacement,
+        "queued continuation run arguments",
     )
     compression_reset_anchor = """\
             if agent_result.get("compression_exhausted") and session_entry and session_key:
