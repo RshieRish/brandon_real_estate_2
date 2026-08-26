@@ -46,6 +46,7 @@ _DEFAULT_TOKEN_BUDGET = 16_000
 _DEFAULT_BATCH_LIMIT = 100
 _DEFAULT_BATCH_MAX_BYTES = 8 * 1024 * 1024
 _DEFAULT_LEASE_SECONDS = 120
+_BACKFILL_LINEAGE_SCHEMA_VERSION = "sydney-backfill-lineage-v1"
 
 
 def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -525,6 +526,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 else "initial"
             ),
         )
+        self._normalize_pending_backfill_lineage()
         self._initialized = True
         if self._primary and self._backend is not None and self._start_drain_thread:
             self._thread = threading.Thread(
@@ -613,6 +615,10 @@ class SydneyMemoryProvider(MemoryProvider):
     ) -> dict[str, Any]:
         session_id = str(hermes_session_id or self._session_id)
         session = self.spool.get_session(session_id) or {}
+        parent_session_id = self._canonical_backfill_parent(
+            session_id,
+            session,
+        )
         return {
             "platform": self._platform,
             "external_user_id": self._external_user_id,
@@ -620,11 +626,57 @@ class SydneyMemoryProvider(MemoryProvider):
             "display_label": self._display_label,
             "hermes_session_id": session_id,
             "logical_conversation_id": self._logical_conversation_id,
-            "parent_hermes_session_id": session.get("parent_session_id"),
+            "parent_hermes_session_id": parent_session_id,
             "continuation_reason": session.get("continuation_reason"),
             "source_version": "hermes-sydney-v1",
             "events": events,
         }
+
+    def _canonical_backfill_parent(
+        self,
+        session_id: str,
+        session: dict[str, Any],
+    ) -> str | None:
+        requested_parent = session.get("parent_session_id")
+        local_parent = str(requested_parent) if requested_parent else None
+        logical_id = str(session.get("logical_conversation_id") or "")
+        if not logical_id:
+            return local_parent
+        lineage_key = (
+            "backfill_lineage:"
+            + hashlib.sha256(f"{logical_id}\x1f{session_id}".encode()).hexdigest()
+        )
+        stored = self.spool.get_meta(lineage_key)
+        if (
+            not isinstance(stored, dict)
+            or stored.get("schema_version") != _BACKFILL_LINEAGE_SCHEMA_VERSION
+            or "parent_session_id" not in stored
+        ):
+            return local_parent
+        canonical_parent = stored.get("parent_session_id")
+        if canonical_parent is None:
+            return None
+        exact_parent = str(canonical_parent)
+        return exact_parent or local_parent
+
+    def _normalize_pending_backfill_lineage(self) -> None:
+        for session in self.spool.list_sessions():
+            if (
+                str(session.get("logical_conversation_id") or "")
+                != self._logical_conversation_id
+                or str(session.get("platform") or "") != self._platform
+                or str(session.get("external_user_id") or "") != self._external_user_id
+                or str(session.get("external_chat_id") or "") != self._external_chat_id
+            ):
+                continue
+            session_id = str(session.get("session_id") or "")
+            if not session_id:
+                continue
+            canonical_parent = self._canonical_backfill_parent(session_id, session)
+            self.spool.rebind_pending_session_parent(
+                session_id,
+                canonical_parent,
+            )
 
     def _remember_backend_identity(
         self,

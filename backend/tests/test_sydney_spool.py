@@ -391,6 +391,230 @@ def test_rebind_pending_run_lease_changes_only_exact_pending_records(
     }
 
 
+def test_rebind_pending_session_parent_changes_only_exact_pending_batches(
+    tmp_path: Path,
+) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    exact_batch, exact_run = _bundle("exact-pending")
+    exact_batch["parent_hermes_session_id"] = "missing-parent"
+    exact_pending = spool.enqueue_inbound(
+        exact_batch,
+        exact_run,
+        source_key="inbound:exact-pending",
+    )
+
+    acknowledged_batch, acknowledged_run = _bundle("exact-acknowledged")
+    acknowledged_batch["parent_hermes_session_id"] = "missing-parent"
+    exact_acknowledged = spool.enqueue_inbound(
+        acknowledged_batch,
+        acknowledged_run,
+        source_key="inbound:exact-acknowledged",
+    )
+    spool.acknowledge(exact_acknowledged, {"accepted": True})
+
+    other_batch, other_run = _bundle("other-pending")
+    other_batch["hermes_session_id"] = "session-2"
+    other_batch["parent_hermes_session_id"] = "other-parent"
+    other_pending = spool.enqueue_inbound(
+        other_batch,
+        other_run,
+        source_key="inbound:other-pending",
+    )
+
+    assert spool.rebind_pending_session_parent("session-1", None) == 1
+
+    canonical = spool.get_record("inbound:exact-pending")
+    assert canonical is not None
+    assert canonical.payload["event_batch"]["parent_hermes_session_id"] is None
+    assert (
+        spool.get_record("inbound:exact-acknowledged").payload["event_batch"][
+            "parent_hermes_session_id"
+        ]
+        == "missing-parent"
+    )
+    assert (
+        spool.get_record("inbound:other-pending").payload["event_batch"][
+            "parent_hermes_session_id"
+        ]
+        == "other-parent"
+    )
+    replay_batch = {**exact_batch, "parent_hermes_session_id": None}
+    assert (
+        spool.enqueue_inbound(
+            replay_batch,
+            exact_run,
+            source_key="inbound:exact-pending",
+        )
+        == exact_pending
+    )
+    assert {record.id for record in spool.pending(limit=10)} == {
+        exact_pending,
+        other_pending,
+    }
+
+
+def test_rebind_pending_session_parent_normalizes_staged_control_delivery(
+    tmp_path: Path,
+) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    event_batch, _run_start = _bundle("staged-control")
+    event_batch["parent_hermes_session_id"] = "missing-parent"
+    response_sha256 = hashlib.sha256(b"wait").hexdigest()
+
+    assert (
+        spool.stage_control_delivery(
+            platform="telegram",
+            chat_id="private-chat",
+            platform_message_id="staged-control",
+            run_id="run-staged-control",
+            lease_owner="worker-staged-control",
+            response_sha256=response_sha256,
+            delivery_kind="deferred",
+            event_batch=event_batch,
+            run_update=None,
+        )
+        == "staged"
+    )
+
+    assert spool.rebind_pending_session_parent("session-1", None) == 0
+
+    staged = spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="staged-control",
+    )
+    assert staged is not None
+    assert staged["event_batch"]["parent_hermes_session_id"] is None
+    local_id = spool.confirm_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="staged-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+    )
+    confirmed = spool.get_record("run:run-staged-control:control:deferred")
+    assert confirmed is not None
+    assert confirmed.id == local_id
+    assert confirmed.payload["event_batch"]["parent_hermes_session_id"] is None
+
+
+def test_rebind_pending_session_parent_keeps_confirmed_control_replay_exact(
+    tmp_path: Path,
+) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    event_batch, _run_start = _bundle("confirmed-control")
+    event_batch["parent_hermes_session_id"] = "missing-parent"
+    response_sha256 = hashlib.sha256(b"wait").hexdigest()
+    spool.stage_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="confirmed-control",
+        run_id="run-confirmed-control",
+        lease_owner="worker-confirmed-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+        event_batch=event_batch,
+        run_update=None,
+    )
+    first_id = spool.confirm_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="confirmed-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+    )
+
+    assert spool.rebind_pending_session_parent("session-1", None) == 1
+
+    replay_id = spool.confirm_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="confirmed-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+    )
+    assert replay_id == first_id
+    staged = spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="confirmed-control",
+    )
+    confirmed = spool.get_record("run:run-confirmed-control:control:deferred")
+    assert staged is not None
+    assert confirmed is not None
+    assert staged["event_batch"]["parent_hermes_session_id"] is None
+    assert confirmed.payload["event_batch"]["parent_hermes_session_id"] is None
+
+
+def test_rebind_pending_session_parent_rolls_back_outbox_and_staged_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sydney_spool as spool_module
+
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    event_batch, _run_start = _bundle("rollback-control")
+    event_batch["parent_hermes_session_id"] = "missing-parent"
+    response_sha256 = hashlib.sha256(b"wait").hexdigest()
+    spool.stage_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="rollback-control",
+        run_id="run-rollback-control",
+        lease_owner="worker-rollback-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+        event_batch=event_batch,
+        run_update=None,
+    )
+    first_id = spool.confirm_control_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="rollback-control",
+        response_sha256=response_sha256,
+        delivery_kind="deferred",
+    )
+    original_canonical_json = spool_module._canonical_json
+    canonical_count = 0
+
+    def fail_between_outbox_and_metadata(value):
+        nonlocal canonical_count
+        canonical_count += 1
+        if canonical_count == 2:
+            raise RuntimeError("fault between canonical lineage copies")
+        return original_canonical_json(value)
+
+    monkeypatch.setattr(
+        spool_module, "_canonical_json", fail_between_outbox_and_metadata
+    )
+    with pytest.raises(RuntimeError, match="^fault between canonical lineage copies$"):
+        spool.rebind_pending_session_parent("session-1", None)
+    monkeypatch.setattr(spool_module, "_canonical_json", original_canonical_json)
+
+    staged = spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id="rollback-control",
+    )
+    confirmed = spool.get_record("run:run-rollback-control:control:deferred")
+    assert staged is not None
+    assert confirmed is not None
+    assert staged["event_batch"]["parent_hermes_session_id"] == "missing-parent"
+    assert (
+        confirmed.payload["event_batch"]["parent_hermes_session_id"] == "missing-parent"
+    )
+    assert (
+        spool.confirm_control_delivery(
+            platform="telegram",
+            chat_id="private-chat",
+            platform_message_id="rollback-control",
+            response_sha256=response_sha256,
+            delivery_kind="deferred",
+        )
+        == first_id
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "secret"),
     [
