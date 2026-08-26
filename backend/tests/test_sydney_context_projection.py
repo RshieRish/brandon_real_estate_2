@@ -565,6 +565,9 @@ def test_projection_model_call_uses_strict_schema_and_low_output_limit(
     assert config.temperature == 0
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema["additionalProperties"] is False
+    schema_version = config.response_json_schema["properties"]["schema_version"]
+    assert schema_version["enum"] == ["sydney-context-v1"]
+    assert "const" not in schema_version
     assert result["schema_version"] == "sydney-context-v1"
 
 

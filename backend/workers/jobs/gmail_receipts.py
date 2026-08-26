@@ -46,11 +46,14 @@ _UNSUPPORTED_GEMINI_JSON_SCHEMA_KEYS = frozenset(
 def _gemini_json_response_schema(response_model: Any) -> dict[str, Any]:
     def normalize(value: Any) -> Any:
         if isinstance(value, dict):
-            return {
+            normalized = {
                 key: normalize(nested)
                 for key, nested in value.items()
-                if key not in _UNSUPPORTED_GEMINI_JSON_SCHEMA_KEYS
+                if key not in _UNSUPPORTED_GEMINI_JSON_SCHEMA_KEYS and key != "const"
             }
+            if "const" in value and "enum" not in normalized:
+                normalized["enum"] = [normalize(value["const"])]
+            return normalized
         if isinstance(value, list):
             return [normalize(nested) for nested in value]
         return value
