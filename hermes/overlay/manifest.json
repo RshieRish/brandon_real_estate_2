@@ -10,6 +10,7 @@
         "source_sha256": {
             "agent/credential_pool.py": "c4b78ca292ebb7072d56c17f3c7b7307cac3a33532cb1bb55f640373c55382e5",
             "agent/agent_init.py": "2fdea13cbce18a3d8eb0d0fae432d6ebb64efb221721ca9a179bcfe76956dfd3",
+            "agent/gemini_schema.py": "a34dcdea0e3e017402ba6424fadd62505cb6e10960aef52e8ec8be1ea0163a82",
             "gateway/run.py": "9e3a780cfa36ac8931ad42481a56d4c55d9643efc1f7ec9b595fa886967d0a3f",
             "gateway/platforms/base.py": "de4b50de9920534ad17abbb22e5bffdd72149c2425eea73462e36c992960a078",
             "gateway/platforms/telegram.py": "c8054b03463e50e1eda06d5cafa355896e1cd981fe4f8d8ebabc4568de07fee7",
