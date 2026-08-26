@@ -385,6 +385,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
     )
     assert task12_job is not None
     assert '"pytest-asyncio==1.3.0"' in task12_job.group("body")
+    assert '"jsonschema==4.26.0"' in task12_job.group("body")
 
     assert 'if [[ "$GMAIL_TASK_TEST_DATABASE_NAME" != *_test ]]' in workflow
     assert 'if [[ "$url_database" != "$GMAIL_TASK_TEST_DATABASE_NAME" ]]' in workflow
