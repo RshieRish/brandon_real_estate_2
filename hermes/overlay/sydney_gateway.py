@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from plugins.memory.sydney import SydneyBackendClient
-    from plugins.memory.sydney.sydney_memory_provider import (
+    from plugins.memory.sydney import (
+        SydneyBackendClient,
         deliver_control_delivery_record,
     )
     from plugins.memory.sydney.sydney_spool import (

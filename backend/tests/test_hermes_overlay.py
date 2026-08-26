@@ -117,6 +117,7 @@ class HermesOverlayTests(unittest.TestCase):
         overlay = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
         installer = (overlay / "install_sydney_overlay.py").read_text()
         backfill = (overlay / "sydney_backfill.py").read_text()
+        gateway = (overlay / "sydney_gateway.py").read_text()
 
         self.assertIn(
             '"plugins/memory/sydney/__init__.py": "sydney_memory_provider.py"',
@@ -125,6 +126,16 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertIn("from . import SydneyBackendClient", backfill)
         self.assertNotIn(
             "from .sydney_memory_provider import SydneyBackendClient", backfill
+        )
+        self.assertIn(
+            "from plugins.memory.sydney import (\n"
+            "        SydneyBackendClient,\n"
+            "        deliver_control_delivery_record,\n"
+            "    )",
+            gateway,
+        )
+        self.assertNotIn(
+            "from plugins.memory.sydney.sydney_memory_provider import", gateway
         )
 
     def test_manifest_pins_the_approved_upstream_commit_and_exact_tool_registry(self):
