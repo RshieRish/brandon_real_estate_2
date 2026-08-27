@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -250,6 +251,46 @@ def _provider(
             agent_context="primary",
         )
     return provider
+
+
+def test_drain_once_delivers_pending_outbox_when_live_tail_sqlite_scan_fails(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path)
+    (tmp_path / "state.db").touch()
+    provider.record_inbound("sqlite-tail-lock", "Keep this request durable.")
+
+    with patch(
+        "sydney_backfill.SydneyBackfill.run_live_tail",
+        side_effect=sqlite3.OperationalError("database is locked"),
+    ):
+        result = provider.drain_once()
+
+    assert result is not None
+    assert result.acknowledged == 1
+    assert result.failed == 0
+    assert provider.spool.pending_count == 0
+
+
+def test_drain_loop_retries_after_one_unexpected_iteration_failure(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path)
+    provider._drain_interval = 0.01
+    calls = 0
+
+    def flaky_drain() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient drain failure")
+        provider._stop.set()
+
+    provider.drain_once = flaky_drain  # type: ignore[method-assign]
+
+    provider._drain_loop()
+
+    assert calls == 2
 
 
 def _review_only_provider(
