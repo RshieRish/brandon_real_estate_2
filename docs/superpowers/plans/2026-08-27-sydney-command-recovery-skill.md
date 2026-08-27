@@ -644,11 +644,11 @@ git commit -m "docs: add Sydney recovery runbook"
 - No new source files unless production evidence reveals a tested defect.
 - Update: `tdtn.md`, `memory.md`, and the implementation plan checkboxes with final evidence.
 
-- [ ] **Step 1: Re-run final verification immediately before PR**
+- [x] **Step 1: Re-run final verification immediately before PR**
 
 Run the exact Task 4 static, focused-test, overlay-idempotence, and 25-tool commands again from the clean candidate commit. Confirm no uncommitted changes other than final evidence notes.
 
-- [ ] **Step 2: Push the branch and open a focused PR**
+- [x] **Step 2: Push the branch and open a focused PR**
 
 ```bash
 git push origin codex/sydney-durable-context
@@ -661,15 +661,15 @@ gh pr create \
 
 The PR body must summarize the stale-skill root cause, managed installation, exact recovery admission, review-only enforcement, test evidence, and zero-send boundary without including Brandon's prompt or credentials.
 
-- [ ] **Step 3: Wait for required checks and merge SHA-safely**
+- [x] **Step 3: Wait for required checks and merge SHA-safely**
 
 Confirm all required checks pass, re-read the PR head SHA, then merge with head matching. Do not merge a stale or changed head.
 
-- [ ] **Step 4: Verify the Atlas deployment and live skill**
+- [x] **Step 4: Verify the Atlas deployment and live skill**
 
 Wait for the `atlas-agent` Railway deployment from merged `main` to report success. Verify public health and run live in-container JSON-RPC `tools/list`; require the unchanged exact 25-tool contract. Hash the deployed skill and compare it with the manifest; inspect only the required/forbidden phrases, not private user data.
 
-- [ ] **Step 5: Run the exact production recovery dry-run**
+- [x] **Step 5: Run the exact production recovery dry-run**
 
 Resolve Brandon's original unfinished state row by content hash and existing evidence without printing its text. Run:
 

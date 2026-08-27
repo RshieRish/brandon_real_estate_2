@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import socket
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -48,6 +50,8 @@ _DEFAULT_BATCH_MAX_BYTES = 8 * 1024 * 1024
 _DEFAULT_LEASE_SECONDS = 120
 _BACKFILL_LINEAGE_SCHEMA_VERSION = "sydney-backfill-lineage-v1"
 _REVIEW_ONLY_RECOVERY_POLICY = "review_only"
+
+logger = logging.getLogger(__name__)
 
 
 def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -1054,7 +1058,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 display_label=self._display_label,
                 sessions_index=self._hermes_home / "sessions" / "sessions.json",
             ).run_live_tail(page_size=self._batch_limit, max_pages=1)
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
             return 0
 
     def reconcile_once(self) -> int:
@@ -1117,10 +1121,16 @@ class SydneyMemoryProvider(MemoryProvider):
     def _drain_loop(self) -> None:
         next_renewal = time.monotonic() + self._lease_renew_interval
         while not self._stop.is_set():
-            self.drain_once()
-            if time.monotonic() >= next_renewal:
-                self.renew_active_lease()
-                next_renewal = time.monotonic() + self._lease_renew_interval
+            try:
+                self.drain_once()
+                if time.monotonic() >= next_renewal:
+                    self.renew_active_lease()
+                    next_renewal = time.monotonic() + self._lease_renew_interval
+            except Exception as exc:  # noqa: BLE001 - durable worker must self-heal.
+                logger.warning(
+                    "Sydney durable-context drain iteration failed; retrying (%s)",
+                    type(exc).__name__,
+                )
             self._stop.wait(self._drain_interval)
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
