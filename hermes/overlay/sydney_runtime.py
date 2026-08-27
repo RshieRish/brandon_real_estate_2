@@ -53,6 +53,12 @@ _PENDING_DELIVERIES_LOCK = threading.Lock()
 _ACTIVE_EXECUTIONS: dict[tuple[str, str, str], _ActiveExecution] = {}
 _ACTIVE_EXECUTIONS_LOCK = threading.Lock()
 
+REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE = (
+    "This recovered request is review-only. The mutating tool was not executed. "
+    "Return the review packet, state that nothing was sent, and wait for fresh "
+    "Brandon approval."
+)
+
 
 def _normalized_delivery_key(value: Any) -> tuple[str, str, str] | None:
     if (
@@ -520,6 +526,25 @@ def tool_before(
         )
     source_key = f"tool:{run_id}:{tool_call_id}:before"
     side_effect_class = _side_effect_class(tool_name)
+    if (
+        provider.active_recovery_policy() == "review_only"
+        and side_effect_class != "read_only"
+    ):
+        provider.record_policy_denial(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            side_effect_class=side_effect_class,
+            caller_idempotency_key=_caller_idempotency_key(
+                tool_name,
+                arguments,
+                side_effect_class,
+            ),
+        )
+        return SydneyToolBeforeDecision(
+            block_message=REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE
+        )
     existing_receipt = provider.tool_replay_receipt(source_key)
     provider.record_tool_before(
         run_id=run_id,

@@ -47,6 +47,7 @@ _DEFAULT_BATCH_LIMIT = 100
 _DEFAULT_BATCH_MAX_BYTES = 8 * 1024 * 1024
 _DEFAULT_LEASE_SECONDS = 120
 _BACKFILL_LINEAGE_SCHEMA_VERSION = "sydney-backfill-lineage-v1"
+_REVIEW_ONLY_RECOVERY_POLICY = "review_only"
 
 
 def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -759,8 +760,16 @@ class SydneyMemoryProvider(MemoryProvider):
                     )
                     for claimed in claim_response.get("runs") or []:
                         if str(claimed.get("id") or "") == self._active_run_id:
+                            local_metadata = payload.get("local_metadata")
+                            exact_claim = dict(claimed)
+                            if local_metadata == {
+                                "recovery_policy": _REVIEW_ONLY_RECOVERY_POLICY
+                            }:
+                                exact_claim["recovery_policy"] = (
+                                    _REVIEW_ONLY_RECOVERY_POLICY
+                                )
                             self.activate_claimed_run(
-                                claimed,
+                                exact_claim,
                                 hermes_session_id=inbound_session_id,
                             )
                             break
@@ -1477,6 +1486,67 @@ class SydneyMemoryProvider(MemoryProvider):
             result_event_id=result_event_id,
         )
 
+    def active_recovery_policy(self) -> str | None:
+        """Return the exact local-only policy attached to the active inbound."""
+        run_id = self._active_run_id
+        if not run_id:
+            return None
+        claimed = self.spool.get_meta(f"claimed_run:{run_id}", {})
+        if (
+            isinstance(claimed, dict)
+            and claimed.get("recovery_policy") == _REVIEW_ONLY_RECOVERY_POLICY
+        ):
+            return _REVIEW_ONLY_RECOVERY_POLICY
+        inbound = self.spool.find_inbound_for_run(run_id)
+        if inbound is not None and inbound.payload.get("local_metadata") == {
+            "recovery_policy": _REVIEW_ONLY_RECOVERY_POLICY
+        }:
+            return _REVIEW_ONLY_RECOVERY_POLICY
+        return None
+
+    def record_policy_denial(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        side_effect_class: str,
+        caller_idempotency_key: str | None = None,
+    ) -> None:
+        """Persist a deterministic, non-executed tool outcome for policy blocks."""
+        self.record_tool_before(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            side_effect_class=side_effect_class,
+            caller_idempotency_key=caller_idempotency_key,
+        )
+        attempt_key = f"review_only:{tool_call_id}"
+        attempt_digest = hashlib.sha256(attempt_key.encode()).hexdigest()
+        denial_source_key = (
+            f"tool:{run_id}:{tool_call_id}:after:not_delivered:{attempt_digest}"
+        )
+        if self.spool.get_record(denial_source_key) is None:
+            self.record_tool_after(
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+                state="not_delivered",
+                result_content=json.dumps(
+                    {
+                        "error": "review_only_recovery_blocked",
+                        "executed": False,
+                        "policy": _REVIEW_ONLY_RECOVERY_POLICY,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                tool_name=tool_name,
+                attempt_key=attempt_key,
+            )
+        self.drain_once()
+
     def activate_claimed_run(
         self,
         run: dict[str, Any],
@@ -1508,6 +1578,19 @@ class SydneyMemoryProvider(MemoryProvider):
                 if type(value) is int and value >= 0
             ]
             self._active_run_attempt_count = max(attempt_counts, default=0)
+            recovery_policy = next(
+                (
+                    value
+                    for value in (
+                        run.get("recovery_policy"),
+                        claimed.get("recovery_policy")
+                        if isinstance(claimed, dict)
+                        else None,
+                    )
+                    if value == _REVIEW_ONLY_RECOVERY_POLICY
+                ),
+                None,
+            )
             lease_owner = run.get("lease_owner") or (
                 claimed.get("lease_owner") if isinstance(claimed, dict) else None
             )
@@ -1529,14 +1612,17 @@ class SydneyMemoryProvider(MemoryProvider):
                     self._active_run_id,
                     self._active_lease_owner,
                 )
+                claimed_metadata = {
+                    "lease_owner": self._active_lease_owner,
+                    "lease_expires_at": lease_expires_at.isoformat(),
+                    "attempt_count": self._active_run_attempt_count,
+                    "hermes_session_id": exact_session_id,
+                }
+                if recovery_policy is not None:
+                    claimed_metadata["recovery_policy"] = recovery_policy
                 self.spool.set_meta(
                     f"claimed_run:{self._active_run_id}",
-                    {
-                        "lease_owner": self._active_lease_owner,
-                        "lease_expires_at": lease_expires_at.isoformat(),
-                        "attempt_count": self._active_run_attempt_count,
-                        "hermes_session_id": exact_session_id,
-                    },
+                    claimed_metadata,
                 )
 
     def has_active_run_lease(self) -> bool:
