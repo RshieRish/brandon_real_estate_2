@@ -215,6 +215,109 @@ def test_projection_validation_rejects_foreign_missing_and_duplicate_sources() -
         validate_projection_result(candidate, duplicate_facts)
 
 
+def test_projection_binds_one_interior_echo_omission_to_server_claimed_range() -> None:
+    from services.sydney_context_projection import bind_projection_source_range
+
+    candidate = _candidate()
+    observed = [candidate.source_event_ids[0], candidate.source_event_ids[-1]]
+    result = _result(
+        candidate,
+        source_ids=observed,
+        operations=[
+            {
+                "operation": "upsert",
+                "canonical_key": "preference.folder",
+                "kind": "preference",
+                "value": {"name": "gold"},
+                "confidence": 0.9,
+                "source_event_ids": [observed[0]],
+            }
+        ],
+    )
+
+    bound = bind_projection_source_range(candidate, result)
+
+    assert bound.source_event_ids == list(candidate.source_event_ids)
+    assert bound.fact_operations == result.fact_operations
+
+
+@pytest.mark.parametrize(
+    "source_indexes",
+    (
+        (1, 2),
+        (0, 1),
+        (2, 0),
+    ),
+)
+def test_projection_binding_rejects_endpoint_or_order_provenance_changes(
+    source_indexes: tuple[int, ...],
+) -> None:
+    from services.sydney_context_projection import (
+        SydneyContextProjectionError,
+        bind_projection_source_range,
+    )
+
+    candidate = _candidate()
+    result = _result(
+        candidate,
+        source_ids=[candidate.source_event_ids[index] for index in source_indexes],
+    )
+
+    with pytest.raises(
+        SydneyContextProjectionError,
+        match="^sydney_projection_source_range_invalid$",
+    ):
+        bind_projection_source_range(candidate, result)
+
+
+def test_projection_binding_rejects_multiple_omissions_and_inconsistent_fact_source() -> (
+    None
+):
+    from services.sydney_context_projection import (
+        ProjectionCandidate,
+        SydneyContextProjectionError,
+        bind_projection_source_range,
+    )
+
+    base = _candidate()
+    candidate = ProjectionCandidate(
+        identity_id=base.identity_id,
+        logical_conversation_id=base.logical_conversation_id,
+        events=(*base.events, replace(base.events[-1], event_id=uuid4())),
+        previous_summary=base.previous_summary,
+        previous_active_state=base.previous_active_state,
+    )
+    observed = [candidate.source_event_ids[0], candidate.source_event_ids[-1]]
+    with pytest.raises(
+        SydneyContextProjectionError,
+        match="^sydney_projection_source_range_invalid$",
+    ):
+        bind_projection_source_range(
+            candidate,
+            _result(candidate, source_ids=observed),
+        )
+
+    inconsistent = _result(
+        base,
+        source_ids=[base.source_event_ids[0], base.source_event_ids[-1]],
+        operations=[
+            {
+                "operation": "upsert",
+                "canonical_key": "preference.folder",
+                "kind": "preference",
+                "value": {"name": "gold"},
+                "confidence": 0.9,
+                "source_event_ids": [base.source_event_ids[1]],
+            }
+        ],
+    )
+    with pytest.raises(
+        SydneyContextProjectionError,
+        match="^sydney_projection_source_range_invalid$",
+    ):
+        bind_projection_source_range(base, inconsistent)
+
+
 def test_projection_fact_plan_supersedes_once_and_is_deterministic() -> None:
     from services.sydney_context_projection import (
         SydneyContextProjectionError,
@@ -482,6 +585,60 @@ async def test_projection_job_commits_range_claim_before_provider_call(
     await job.run()
 
     assert order == ["claim", "commit", "provider", "apply", "commit"]
+
+
+@pytest.mark.asyncio
+async def test_projection_job_binds_safe_interior_echo_omission_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from workers.jobs import sydney_context_projection as projection_job
+
+    monkeypatch.setattr(projection_job, "record_integration_success", AsyncMock())
+    candidate = replace(
+        _candidate(),
+        projection_claim_id=uuid4(),
+        projection_claim_token=uuid4(),
+        projection_claim_range_hash="c" * 64,
+        projection_claim_expires_at=NOW + timedelta(seconds=90),
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=None), commit=AsyncMock())
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *_args):
+            return False
+
+    observed = [candidate.source_event_ids[0], candidate.source_event_ids[-1]]
+    apply_result = AsyncMock()
+    release_claim = AsyncMock(return_value=True)
+    job = projection_job.SydneyContextProjectionJob(
+        enabled=True,
+        sessionmaker=lambda: _SessionContext(),
+        provider_executor=SimpleNamespace(
+            run=AsyncMock(
+                return_value=_result(candidate, source_ids=observed).model_dump(
+                    mode="json"
+                )
+            )
+        ),
+        model_call=lambda _request: None,
+        claim_candidate=AsyncMock(return_value=candidate),
+        release_claim=release_claim,
+        apply_result=apply_result,
+        clock=lambda: NOW,
+        lease_owner="projection-test",
+    )
+    failure = AsyncMock()
+    job._record_failure = failure
+
+    await job.run()
+
+    applied = apply_result.await_args.args[2]
+    assert applied.source_event_ids == list(candidate.source_event_ids)
+    release_claim.assert_not_awaited()
+    failure.assert_not_awaited()
 
 
 @pytest.mark.asyncio

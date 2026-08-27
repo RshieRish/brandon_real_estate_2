@@ -7,8 +7,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from models.integration_health import IntegrationHealthState
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
+
+from models.integration_health import IntegrationHealthState
 from schemas.sydney_context import SydneyContextProjectionResult
 from services.integration_health_service import (
     ProviderCallTimedOut,
@@ -22,13 +24,12 @@ from services.sydney_context_projection import (
     ProjectionModelRequest,
     SydneyContextProjectionError,
     apply_projection_result,
+    bind_projection_source_range,
     build_projection_request,
     claim_projection_candidate,
     release_projection_claim,
     validate_projection_result,
 )
-from sqlalchemy.exc import SQLAlchemyError
-
 from workers.jobs.gmail_receipts import _gemini_json_response_schema
 
 _PROVIDER = "sydney_context_projection"
@@ -189,6 +190,7 @@ class SydneyContextProjectionJob:
                 deadline_seconds=self._provider_deadline_seconds,
             )
             result = SydneyContextProjectionResult.model_validate(raw_result)
+            result = bind_projection_source_range(candidate, result)
             validate_projection_result(candidate, result)
         except ProviderCallTimedOut:
             await self._release_candidate(candidate)

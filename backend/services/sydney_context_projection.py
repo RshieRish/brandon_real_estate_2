@@ -8,6 +8,11 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+
 from models.sydney_context import (
     AgentContextCheckpoint,
     AgentContextProjectionClaim,
@@ -18,11 +23,6 @@ from models.sydney_context import (
 from schemas.sydney_context import (
     SydneyContextProjectionResult,
 )
-from sqlalchemy import and_, delete, func, or_, select
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
-
 from services.sydney_context_service import canonical_json, canonical_json_hash
 
 PROJECTION_SCHEMA_VERSION = "sydney-context-v1"
@@ -219,6 +219,47 @@ def validate_projection_result(
             or not set(sources).issubset(allowed)
         ):
             raise SydneyContextProjectionError("sydney_projection_fact_source_invalid")
+
+
+def bind_projection_source_range(
+    candidate: ProjectionCandidate,
+    result: SydneyContextProjectionResult,
+) -> SydneyContextProjectionResult:
+    """Bind one safe interior echo omission to the server-owned claim range.
+
+    Gemini sometimes omits one interior UUID while otherwise returning a valid,
+    ordered projection for a large bounded prompt. The range itself is owned by
+    the committed database claim, not by the model. Keep the repair deliberately
+    narrow: the model must retain both endpoints, preserve order, add no foreign
+    or duplicate IDs, omit exactly one ID, and cite facts only from IDs it echoed.
+    """
+
+    expected = tuple(candidate.source_event_ids)
+    observed = tuple(result.source_event_ids)
+    if observed == expected:
+        return result
+
+    expected_positions = {event_id: index for index, event_id in enumerate(expected)}
+    observed_positions = [expected_positions.get(event_id, -1) for event_id in observed]
+    observed_set = set(observed)
+    fact_sources = {
+        source_id
+        for operation in result.fact_operations
+        for source_id in operation.source_event_ids
+    }
+    safe_single_interior_omission = bool(
+        len(expected) >= 3
+        and len(observed) == len(expected) - 1
+        and len(observed_set) == len(observed)
+        and observed[0] == expected[0]
+        and observed[-1] == expected[-1]
+        and all(position >= 0 for position in observed_positions)
+        and observed_positions == sorted(observed_positions)
+        and fact_sources.issubset(observed_set)
+    )
+    if not safe_single_interior_omission:
+        raise SydneyContextProjectionError("sydney_projection_source_range_invalid")
+    return result.model_copy(update={"source_event_ids": list(expected)})
 
 
 def plan_fact_operations(
