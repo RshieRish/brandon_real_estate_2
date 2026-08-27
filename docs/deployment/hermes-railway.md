@@ -17,10 +17,12 @@ Telegram recovery, rollback, and Task 9 production evidence, see
 - Hermes URL: `https://atlas-agent-production-99dc.up.railway.app`
 - Environment: `production`
 
-Two Railway authentication paths are supported. The gitignored
-`.env.railway-sweeney.local` contains an account/workspace token that was verified
-with Member access to `enchanting-perception` on 2026-08-26. Use the repository
-wrapper so the value is loaded without printing it:
+Task 14 production used an account/workspace token verified with Member access
+to `enchanting-perception` on 2026-08-26. That verified credential was supplied
+outside Git and must not be inferred from the contents of the gitignored
+`.env.railway-sweeney.local`; the file may still hold an older credential. Use
+the repository wrapper only after its live access checks pass, so the value is
+loaded without printing it:
 
 ```bash
 scripts/railway-sweeney whoami
@@ -34,9 +36,11 @@ environment variables so they cannot override that interactive session:
 env -u RAILWAY_API_TOKEN -u RAILWAY_TOKEN railway whoami
 ```
 
-Before any production operation, require `whoami`, project status, Member-level
-SSH, and the intended project/environment/service to succeed through the same
-authentication path. Never print, commit, or copy the token into command output.
+Before any production operation, require `whoami`, `railway list --json` to
+include `enchanting-perception`, project status, Member-level SSH, and the intended
+project/environment/service to succeed through the same authentication path. A
+successful login to some other workspace is not sufficient. Never print, commit,
+or copy the token into command output.
 
 ## Backend Bridge Variables
 
@@ -93,10 +97,11 @@ Current status as of 2026-08-26:
 - The public dashboard URL is `https://atlas-agent-production-99dc.up.railway.app`.
 - The health check returns `{"status":"ok","gateway":"running"}` after Gemini provider setup.
 - Admin credentials are stored only in local ignored `.env.hermes-admin.local` and Railway variables.
-- The account/workspace token in the ignored `.env.railway-sweeney.local` was
-  verified with Member-level SSH and deployment access. Use
-  `scripts/railway-sweeney` without displaying the credential; the directly
-  authenticated CLI remains a supported alternative.
+- The Task 14 account/workspace token was verified with Member-level SSH and
+  deployment access, but it was not persisted over the older credential in the
+  ignored `.env.railway-sweeney.local`. The wrapper or directly authenticated CLI
+  is acceptable only when that exact authentication path can list and access
+  `enchanting-perception` without displaying a credential.
 - The deployed fallback path was: create an empty `atlas-agent` service, attach `/data`, set admin vars, then upload the checked-out template with `railway up --path-as-root`.
 - The Railway template URL checked on 2026-06-01 is `https://railway.com/deploy/hermes-agent-nous-research`; it requires `ADMIN_USERNAME` and `ADMIN_PASSWORD`, persists config under `/data`, and stores LLM/channel keys through the Hermes dashboard.
 - Template commit deployed: `7224d7c1a4dcffe9304f49bc843f55716f5561b4`.
