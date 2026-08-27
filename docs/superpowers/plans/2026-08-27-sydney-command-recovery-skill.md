@@ -684,7 +684,7 @@ python -m plugins.memory.sydney.sydney_recovery \
 
 Expected content-free result: `eligible=true`, `enqueued=false`, `recovery_policy=review_only`, and no spool mutation.
 
-- [ ] **Step 6: Deploy the reply-anchor fix and deliver the preserved response once**
+- [x] **Step 6: Deploy the reply-anchor fix and deliver the preserved response once**
 
 The selector was already enqueued exactly once and must never be enqueued again.
 Preserve the existing `blocked_side_effect` run and its one final assistant event.
@@ -706,13 +706,64 @@ attempt, and record its authoritative outcome. If that attempt is uncertain, sto
 without a retry. Complete this step from delivery-receipt evidence; do not require
 or change the preserved backend run state.
 
-- [ ] **Step 7: Prove Command usage and zero mutation**
+Evidence (2026-08-27): PR `#31` reviewed head
+`1ff4a0e4f59fc281972d3ef9ee37d29061f6d45a` merged as
+`2ab4096b9a95e3077af9fea2adeb791729afb91c`. Atlas deployment
+`c76a78ba-36d5-4d67-8f6b-efc46a49cfd5` reached `SUCCESS`; live base and
+`GatewayRunner` markers enforce positive ASCII decimal reply anchors, the
+managed skill remains hash-pinned, and live JSON-RPC remains the exact ordered
+25-tool contract. Live installer, provider, runtime, and managed-skill SHA-256
+values are `2c9b6186da334805ea9c254607d51d3977119923fbf4d69dbfde07ef52cec1ba`,
+`9f1e1c1b1f17f7a907786ade18ae8135cdfacabe1030199634352d2f705630f4`,
+`82e36c14aaa9687f1821c75ad4d40407e2ca8a9f891ca61d27baf3bf0ef39592`,
+and `7a8711fab72c32792f0140d2e8c63a243d0d95f67ad2f49519c5ecd4af5b321b`.
+An independently reviewed at-most-once repair, SHA-256
+`48d8e158559f4a7a9298f82f73638dcfb94dca03dd43e68bd6ef701c26fcb7ba`,
+passed a final content-free preflight and made one provider attempt for the exact
+preserved response hash
+`77d7f6ed9cd77688fc1615b14ba8e890282c7e614514db4624a97127512c05b8`.
+Telegram returned an exact HTTP `200` receipt; the durable record is confirmed
+with attempt count `1`, only hashed provider identity, and the uncertainty marker
+cleared atomically. Immediate replay reported `provider_attempted=false`. The
+selector was not re-enqueued, the model was not rerun, and the backend run/final
+event remain unchanged as `blocked_side_effect`.
 
-Verify the recovered run used `command_contact_audience_preview` and, if needed, `command_contacts_search`; verify the audience count/checksum/reference are current; verify no `contacts_search`, Drive roster read, admin-UI fetch, Gmail draft/send, Docs/Sheets write, calendar mutation, or CRM mutation occurred. Confirm context health is `ready`, reconciliation lag is zero, and Atlas remains healthy.
+- [x] **Step 7: Prove Command usage and zero mutation**
+
+Verify the recovered run used `command_contact_audience_preview` and, if needed, `command_contacts_search`; verify the audience count/checksum/reference are current; verify no `contacts_search`, Drive roster read, admin-UI fetch, Gmail draft/send, Docs/Sheets write, calendar mutation, or CRM mutation occurred. Confirm reconciliation lag is zero and Atlas remains healthy; evaluate the content-free context status under the preserved-run rule below.
+
+The final health clause must not conflict with Step 6's evidence-preservation
+boundary. The service deliberately reports `degraded` whenever any
+`blocked_side_effect` run exists. Do not rewrite this run merely to manufacture
+`ready`; instead require zero reconciliation lag, all sessions reconciled,
+healthy projection state with no current projection error, no other actionable
+failure, and healthy backend/worker/Atlas services.
+
+Evidence (2026-08-27): the recovered run retains exactly two acknowledged tool
+starts and matching successful results, for only the Command audience preview
+and Command contacts search. A fresh read-only audience preview matched the
+stored count `362`, checksum
+`299a069fad83fed13e7ae3259867ac6256366208be33f848b5fb7461da7c46db`,
+and reference `6c935c78-e842-542d-b335-2a6dea81324e`. There are no other tool
+lifecycle rows and no mutation tool. Backend health, worker health/readiness, and
+Atlas gateway health pass; context lag is zero with `14/14` reconciled sessions.
+Direct content-free database evidence shows projection `healthy`, zero projection
+failures/error category, zero recent actionable terminal failures, and this exact
+run as the only blocked run. Therefore the current `degraded` status is the
+intentional preserved-delivery signal, not an unhealthy projection or backlog.
 
 - [ ] **Step 8: Record exact production evidence and complete the work**
 
 Update `tdtn.md`, `memory.md`, and this plan with merge commit, deployment ID, live skill hash, tools/list result, recovery run state, Command tool evidence, and zero-mutation evidence. Commit and merge that evidence-only documentation follow-up if needed. Preserve all durable history and spool evidence; remove only temporary local proof files.
+
+Pending closeout (2026-08-27): `tdtn.md`, `memory.md`, and this plan now contain the exact
+reviewed/runtime SHAs, deployment IDs, live file and skill hashes, 25-tool proof,
+one-attempt receipt and replay proof, preserved run state, current Command
+audience evidence, zero-mutation proof, and truthful health explanation. Durable
+PostgreSQL, Hermes state, spool, and receipt evidence remain intact. Only local
+release/proof staging files are eligible for cleanup after this evidence-only
+follow-up is committed and SHA-safely merged. Check this step only in a later
+closeout commit that records the already-merged evidence PR and its exact head.
 
 ---
 
