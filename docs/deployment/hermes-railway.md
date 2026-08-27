@@ -17,17 +17,26 @@ Telegram recovery, rollback, and Task 9 production evidence, see
 - Hermes URL: `https://atlas-agent-production-99dc.up.railway.app`
 - Environment: `production`
 
-Use the directly authenticated Railway CLI. Unset token environment variables so
-an old saved token cannot override the active Member session:
+Two Railway authentication paths are supported. The gitignored
+`.env.railway-sweeney.local` contains an account/workspace token that was verified
+with Member access to `enchanting-perception` on 2026-08-26. Use the repository
+wrapper so the value is loaded without printing it:
+
+```bash
+scripts/railway-sweeney whoami
+scripts/railway-sweeney status --json
+```
+
+Alternatively, use a directly authenticated Railway CLI session. Unset token
+environment variables so they cannot override that interactive session:
 
 ```bash
 env -u RAILWAY_API_TOKEN -u RAILWAY_TOKEN railway whoami
 ```
 
-The token currently stored in `.env.railway-sweeney.local` is stale or unauthorized
-for this project and must not be used as production evidence. The direct CLI session
-was verified against project `enchanting-perception` with Member-level SSH access on
-2026-08-23.
+Before any production operation, require `whoami`, project status, Member-level
+SSH, and the intended project/environment/service to succeed through the same
+authentication path. Never print, commit, or copy the token into command output.
 
 ## Backend Bridge Variables
 
@@ -75,7 +84,7 @@ Never commit the token.
 
 ## Hermes Service
 
-Current status as of 2026-08-23:
+Current status as of 2026-08-26:
 
 - The FastAPI bridge is live and verified.
 - `atlas-agent` is live in the same Railway project.
@@ -84,9 +93,10 @@ Current status as of 2026-08-23:
 - The public dashboard URL is `https://atlas-agent-production-99dc.up.railway.app`.
 - The health check returns `{"status":"ok","gateway":"running"}` after Gemini provider setup.
 - Admin credentials are stored only in local ignored `.env.hermes-admin.local` and Railway variables.
-- The saved token in `.env.railway-sweeney.local` is not authorized for current
-  project operations. Production verification uses the direct Member-authenticated
-  CLI session with both Railway token environment variables unset.
+- The account/workspace token in the ignored `.env.railway-sweeney.local` was
+  verified with Member-level SSH and deployment access. Use
+  `scripts/railway-sweeney` without displaying the credential; the directly
+  authenticated CLI remains a supported alternative.
 - The deployed fallback path was: create an empty `atlas-agent` service, attach `/data`, set admin vars, then upload the checked-out template with `railway up --path-as-root`.
 - The Railway template URL checked on 2026-06-01 is `https://railway.com/deploy/hermes-agent-nous-research`; it requires `ADMIN_USERNAME` and `ADMIN_PASSWORD`, persists config under `/data`, and stores LLM/channel keys through the Hermes dashboard.
 - Template commit deployed: `7224d7c1a4dcffe9304f49bc843f55716f5561b4`.
@@ -525,7 +535,12 @@ covered by backfill cannot be inserted again under live source keys.
    coverage, so delayed events remain eligible. The worker must commit one
    expiring range lease before Gemini; concurrent workers must produce one
    provider call for that range, skip the live lease to process other eligible
-   conversations, and apply must consume the exact live lease token.
+   conversations, and apply must consume the exact live lease token. A model echo
+   may be bound to that server-owned committed range only when it retains both
+   endpoints, preserves order, contains no duplicate or foreign ID, omits exactly
+   one interior ID, and cites facts only from echoed IDs. Endpoint or multiple
+   omissions, reordering, duplicates, foreign IDs, and inconsistent fact citations
+   remain invalid and fail closed.
 3. Run the controlled synthetic `429` continuation with no mutating external
    tool. Prove one saved run moves through `waiting_retry`, survives a provider
    restart, is leased once when due, sends one final answer, and produces zero
@@ -541,6 +556,49 @@ covered by backfill cannot be inserted again under live source keys.
 5. Record deployment IDs, reviewed SHAs, migration head, content-free counts and
    hashes, canary event/run IDs, and timestamps in `tdtn.md` and `memory.md`.
    Never record transcript text, Telegram IDs, tool arguments, or secrets.
+
+### Task 14 production evidence
+
+Completed 2026-08-26:
+
+- Feature PR `#14` and test-first rollout corrections through PR `#23` passed
+  their required checks and were merged with reviewed-head pinning. Final source
+  on `main` is `28a5764214da02efaf6e0613717b33dc1726f85c`.
+- The protected pre-migration custom-format backup is
+  `/Users/rishabnandi/brandon-real-estate-production-backups/sydney-task14-pre-migration-20260826T180513Z.dump`,
+  mode `0600`, `516102115` bytes, SHA-256
+  `8a200bba3ca51af9eba43e028a838b90eaaf4ef51553a33e77c8c7b7a2252847`.
+  PostgreSQL 17 read its `732`-entry restore catalog. Production `alembic current`
+  and `alembic heads` both report sole head `85e8b7c9d4f1`.
+- Final backend `aa4a1ae3-36a5-4524-9e96-5d0d91223836`, worker
+  `957d12c3-dfbe-4470-877d-d2e26e5b929c`, and Atlas
+  `34932fbf-e916-4032-97fa-50b9d477a815` deployments reached `SUCCESS`.
+  Backend/worker health, worker readiness, Atlas health, and the single gateway
+  process pass. Live JSON-RPC returns exactly 25 ordered unique tools, preserves
+  the original 22, and exposes no forbidden write tool.
+- Backfill reconciliation matched `8` sessions, `918` messages, `947` events,
+  roles `assistant=442`, `tool=455`, `user=21`, `455/455` tool calls/results,
+  zero unacknowledged rows, and ordered hash
+  `9c7c960a59b959e13faa317fda987193d60b8416367212da249c4281a73be689`.
+  After live continuation, all `14` canonical sessions are reconciled.
+- Retrieval remained automatically source-linked under `16000` estimated tokens;
+  bounded history search retained event IDs. Command-only contact search and
+  audience preview returned masked samples plus a valid server checksum/reference.
+  No Google Contacts fallback, UI scraping, email, calendar, CRM mutation, or
+  write tool occurred.
+- The controlled retry proof saved one `45`-second wait and acknowledgement,
+  survived an Atlas restart, and completed once on attempt `2`, with one final
+  canonical assistant event/reference, zero tool invocations, no unresolved run,
+  and a clean spool. Synthetic markers and temporary production probe files were
+  removed.
+- The first corrected projection cycle advanced checkpoints `16 -> 17` and facts
+  `14 -> 15`, reset `23` accumulated failures to zero, released the range claim,
+  and returned protected context health to `ready`. Raw source-linked retrieval
+  remains available while the bounded backlog advances.
+- Feature gates are fully promoted only in their owning processes: backend has
+  master/retrieval/projection/retry enabled; worker has master/projection enabled;
+  Atlas has master/retrieval/retry enabled. The validated backup and canonical
+  evidence remain preserved for evidence-safe rollback.
 
 ### Rollback
 
