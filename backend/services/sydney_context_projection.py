@@ -26,7 +26,9 @@ from schemas.sydney_context import (
 from services.sydney_context_service import canonical_json, canonical_json_hash
 
 PROJECTION_SCHEMA_VERSION = "sydney-context-v1"
-DEFAULT_EVENT_LIMIT = 100
+# Keep the source-ID echo plus bounded summary below the 4,096-token response
+# ceiling. Larger histories advance through multiple immutable checkpoints.
+DEFAULT_EVENT_LIMIT = 50
 DEFAULT_TRANSCRIPT_CHARS = 48_000
 DEFAULT_PROMPT_CHARS = 64_000
 DEFAULT_OUTPUT_TOKENS = 4_096
