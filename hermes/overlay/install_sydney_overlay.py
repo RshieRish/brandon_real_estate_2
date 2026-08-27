@@ -276,6 +276,33 @@ def _patch_agent_init(contents: str) -> str:
 
 
 def _patch_gateway_run(contents: str) -> str:
+    reply_helper_import_anchor = """\
+    _reply_anchor_for_event,
+    merge_pending_message_event,"""
+    reply_helper_import_replacement = """\
+    _reply_anchor_for_event,
+    _sydney_telegram_numeric_reply_anchor,
+    merge_pending_message_event,"""
+    contents = _replace_exact(
+        contents,
+        reply_helper_import_anchor,
+        reply_helper_import_replacement,
+        "GatewayRunner Telegram numeric reply helper import",
+    )
+    thread_anchor = (
+        '            anchor = reply_to_message_id or getattr(source, "message_id", None)'
+    )
+    thread_replacement = """\
+            # SYDNEY_GATEWAY_RUN_TELEGRAM_NUMERIC_REPLY_ANCHOR
+            anchor = _sydney_telegram_numeric_reply_anchor(
+                reply_to_message_id or getattr(source, "message_id", None)
+            )"""
+    contents = _replace_exact(
+        contents,
+        thread_anchor,
+        thread_replacement,
+        "GatewayRunner Telegram numeric reply anchor",
+    )
     startup = "        self._schedule_resume_pending_sessions()"
     startup_replacement = """\
         self._schedule_resume_pending_sessions()
@@ -674,6 +701,94 @@ def _patch_gateway_run(contents: str) -> str:
 
 
 def _patch_gateway_base(contents: str) -> str:
+    reply_helper_anchor = "def _thread_metadata_for_source("
+    reply_helper_replacement = """\
+def _sydney_telegram_numeric_reply_anchor(value) -> str | None:
+    # SYDNEY_TELEGRAM_NUMERIC_REPLY_ANCHOR
+    # Telegram reply_to_message_id accepts only a positive integer. Durable
+    # continuation IDs are local ledger keys, never Telegram message IDs.
+    raw = str(value or "").strip()
+    if not raw.isascii() or not raw.isdigit() or int(raw) < 1:
+        return None
+    return raw
+
+
+def _thread_metadata_for_source("""
+    contents = _replace_exact(
+        contents,
+        reply_helper_anchor,
+        reply_helper_replacement,
+        "Telegram numeric reply helper",
+    )
+    thread_anchor = '        anchor = reply_to_message_id or getattr(source, "message_id", None)'
+    thread_replacement = """\
+        anchor = _sydney_telegram_numeric_reply_anchor(
+            reply_to_message_id or getattr(source, "message_id", None)
+        )"""
+    contents = _replace_exact(
+        contents,
+        thread_anchor,
+        thread_replacement,
+        "Telegram thread metadata reply anchor",
+    )
+    reply_anchor = """\
+def _reply_anchor_for_event(event) -> str | None:
+    \"\"\"Return reply_to id for platforms that need reply semantics.
+
+    Telegram forum/supergroup topics should be routed by topic metadata, not by
+    replying to the triggering message. Hermes-created Telegram private-chat
+    topic lanes prefer replying to the triggering user message so the answer
+    stays attached to the active lane; synthetic/resumed sends fall back to
+    ``direct_messages_topic_id`` metadata when no message id is available.
+    \"\"\"
+    source = getattr(event, \"source\", None)
+    platform = _platform_name(getattr(source, \"platform\", None))
+    thread_id = getattr(source, \"thread_id\", None)
+    if platform == \"telegram\" and thread_id and getattr(source, \"chat_type\", None) == \"dm\":
+        # Reply to the triggering user message. Replying to Telegram's earlier
+        # topic seed/anchor can render the bot response outside the active lane.
+        return getattr(event, \"message_id\", None) or getattr(event, \"reply_to_message_id\", None)
+    if platform == \"telegram\" and thread_id:
+        return None
+    if platform == \"feishu\" and thread_id and getattr(event, \"reply_to_message_id\", None):
+        return getattr(event, \"reply_to_message_id\", None)
+    return getattr(event, \"message_id\", None)
+"""
+    reply_replacement = """\
+def _reply_anchor_for_event(event) -> str | None:
+    \"\"\"Return reply_to id for platforms that need reply semantics.
+
+    Telegram forum/supergroup topics should be routed by topic metadata, not by
+    replying to the triggering message. Hermes-created Telegram private-chat
+    topic lanes prefer replying to the triggering user message so the answer
+    stays attached to the active lane; synthetic/resumed sends fall back to
+    ``direct_messages_topic_id`` metadata when no message id is available.
+    \"\"\"
+    source = getattr(event, \"source\", None)
+    platform = _platform_name(getattr(source, \"platform\", None))
+    thread_id = getattr(source, \"thread_id\", None)
+    if platform == \"telegram\" and thread_id and getattr(source, \"chat_type\", None) == \"dm\":
+        # Reply to the triggering user message. Replying to Telegram's earlier
+        # topic seed/anchor can render the bot response outside the active lane.
+        return _sydney_telegram_numeric_reply_anchor(
+            getattr(event, \"message_id\", None)
+            or getattr(event, \"reply_to_message_id\", None)
+        )
+    if platform == \"telegram\" and thread_id:
+        return None
+    if platform == \"feishu\" and thread_id and getattr(event, \"reply_to_message_id\", None):
+        return getattr(event, \"reply_to_message_id\", None)
+    anchor = getattr(event, \"message_id\", None)
+    if platform == \"telegram\":
+        return _sydney_telegram_numeric_reply_anchor(anchor)
+    return anchor
+"""
+    contents = _replace_exact(
+        contents,
+        reply_anchor,
+        reply_replacement,
+        "Telegram event reply anchor",
+    )
     durable_metadata_anchor = """\
         _thread_metadata = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
         _keep_typing_kwargs = {"metadata": _thread_metadata}"""
