@@ -752,18 +752,19 @@ failures/error category, zero recent actionable terminal failures, and this exac
 run as the only blocked run. Therefore the current `degraded` status is the
 intentional preserved-delivery signal, not an unhealthy projection or backlog.
 
-- [ ] **Step 8: Record exact production evidence and complete the work**
+- [x] **Step 8: Record exact production evidence and complete the work**
 
 Update `tdtn.md`, `memory.md`, and this plan with merge commit, deployment ID, live skill hash, tools/list result, recovery run state, Command tool evidence, and zero-mutation evidence. Commit and merge that evidence-only documentation follow-up if needed. Preserve all durable history and spool evidence; remove only temporary local proof files.
 
-Pending closeout (2026-08-27): `tdtn.md`, `memory.md`, and this plan now contain the exact
-reviewed/runtime SHAs, deployment IDs, live file and skill hashes, 25-tool proof,
-one-attempt receipt and replay proof, preserved run state, current Command
-audience evidence, zero-mutation proof, and truthful health explanation. Durable
+Closeout evidence (2026-08-27): evidence-only PR `#32` passed its applicable
+checks at exact head `94b107dbd744ab817c0407735a3699cc6ba12eda` and merged
+SHA-safely as `813e6fc2f902152ed590a7cec8d15ff9c7551d5a`. `tdtn.md`,
+`memory.md`, and this plan therefore contain the exact reviewed/runtime SHAs,
+deployment IDs, live file and skill hashes, 25-tool proof, one-attempt receipt
+and replay proof, preserved run state, current Command audience evidence,
+zero-mutation proof, and truthful health explanation on `main`. Durable
 PostgreSQL, Hermes state, spool, and receipt evidence remain intact. Only local
-release/proof staging files are eligible for cleanup after this evidence-only
-follow-up is committed and SHA-safely merged. Check this step only in a later
-closeout commit that records the already-merged evidence PR and its exact head.
+release/proof staging files are eligible for cleanup.
 
 ---
 
