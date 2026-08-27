@@ -566,17 +566,17 @@ covered by backfill cannot be inserted again under live source keys.
 
 Completed 2026-08-26:
 
-- Feature PR `#14` and test-first rollout corrections through PR `#23` passed
+- Feature PR `#14` and test-first rollout corrections through PR `#26` passed
   their required checks and were merged with reviewed-head pinning. Final source
-  on `main` is `28a5764214da02efaf6e0613717b33dc1726f85c`.
+  on `main` is `de986f5e9c3808fd1253c2532670bfd9f7ce9e65`.
 - The protected pre-migration custom-format backup is
   `/Users/rishabnandi/brandon-real-estate-production-backups/sydney-task14-pre-migration-20260826T180513Z.dump`,
   mode `0600`, `516102115` bytes, SHA-256
   `8a200bba3ca51af9eba43e028a838b90eaaf4ef51553a33e77c8c7b7a2252847`.
   PostgreSQL 17 read its `732`-entry restore catalog. Production `alembic current`
   and `alembic heads` both report sole head `85e8b7c9d4f1`.
-- Final backend `aa4a1ae3-36a5-4524-9e96-5d0d91223836`, worker
-  `957d12c3-dfbe-4470-877d-d2e26e5b929c`, and Atlas
+- Final backend `4a761b35-04b6-4ab2-8774-7ef20c5f072f`, worker
+  `0b3bf3b5-ca82-4d26-b585-0502965fd7df`, and Atlas
   `34932fbf-e916-4032-97fa-50b9d477a815` deployments reached `SUCCESS`.
   Backend/worker health, worker readiness, Atlas health, and the single gateway
   process pass. Live JSON-RPC returns exactly 25 ordered unique tools, preserves
@@ -600,6 +600,15 @@ Completed 2026-08-26:
   `14 -> 15`, reset `23` accumulated failures to zero, released the range claim,
   and returned protected context health to `ready`. Raw source-linked retrieval
   remains available while the bounded backlog advances.
+- A later 100-event range exposed a separate bounded-output failure: Gemini used
+  `18911` prompt tokens, reached the strict `4096`-token response ceiling at
+  `4081` output tokens, and returned no parsed object. The same server-owned range
+  bounded to 50 events stopped normally at `3205` output tokens, echoed all source
+  IDs, and passed strict provenance validation. PR `#26` changes only the default
+  per-cycle event range from `100` to `50`; larger histories advance through more
+  immutable checkpoints. Two consecutive deployed cycles advanced
+  checkpoints/facts `41/35 -> 43/36`, reduced lag `155 -> 55`, reset failures
+  `7 -> 0`, released every claim, and kept protected status `ready`.
 - Feature gates are fully promoted only in their owning processes: backend has
   master/retrieval/projection/retry enabled; worker has master/projection enabled;
   Atlas has master/retrieval/retry enabled. The validated backup and canonical
