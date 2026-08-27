@@ -62,6 +62,50 @@ compression/loop limits to the reviewed values, and persists longer provider
 waits for automatic continuation. Brandon never needs to issue `/new`, `/reset`,
 or `/compact` for recovery.
 
+## Managed Atlas Skill and Guarded Recovery
+
+The authoritative operations skill lives at
+`hermes/skills/atlas-backend-operations/SKILL.md`. The overlay copies it into the
+image and the bootstrap verifies the SHA-256 pinned in `overlay/manifest.json`
+before atomically installing it at
+`${HERMES_HOME}/skills/productivity/atlas-backend-operations/SKILL.md`. A second
+install is a no-op, unrelated skills are preserved, and a source or installed
+hash mismatch stops startup. The skill routes Command contacts only through
+`command_contacts_search` and `command_contact_audience_preview`; a Command URL
+is a navigation locator, Google Contacts is a different source, and the old KW
+roster is historical unless Brandon explicitly requests it.
+
+Legacy recovery is explicit and dry-run-first. Resolve the three selectors at
+action time without printing or storing the prompt text, then run inside Atlas:
+
+```bash
+cd /opt/hermes-agent
+python -m plugins.memory.sydney.sydney_recovery \
+  --state-db /data/.hermes/state.db \
+  --spool /data/.hermes/sydney_spool.db \
+  --session-id "$RECOVERY_SESSION_ID" \
+  --message-id "$RECOVERY_MESSAGE_ID" \
+  --expected-content-sha256 "$RECOVERY_CONTENT_SHA256"
+```
+
+Accept only content-free output with `eligible=true`, `enqueued=false`, and
+`recovery_policy=review_only`. After independently checking those selectors,
+repeat the exact command with `--enqueue` once. Replaying the same command is
+idempotent; different content or lineage is rejected.
+
+A recovered run may use current read-only context and Command tools. It must
+return the audience count, checksum/reference, masked sample, and proposed
+subject/body, state that nothing was sent, and stop for fresh Brandon approval.
+The runtime blocks and records every draft, send, Docs, Sheets, Calendar, CRM,
+Command, or other mutating tool before execution, including after restart.
+Historical wording such as “send this” is not fresh approval. Do not create a
+new session or ask Brandon to use a slash command.
+
+There is no background recovery scanner. Rollback means do not invoke admission
+again; if a run is already queued, disable Sydney retry and preserve its original
+event, spool record, claimed-run evidence, and canonical history. Never delete a
+recovery record merely to stop it.
+
 ## Backfill and Reconciliation
 
 Run the installed backfill inside Atlas against the persistent transcript and
