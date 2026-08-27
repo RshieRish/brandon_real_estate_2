@@ -174,6 +174,62 @@ def test_inbound_event_and_run_are_committed_as_one_exactly_replayable_unit(
         )
 
 
+def test_inbound_local_metadata_is_durable_and_idempotent(tmp_path: Path) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    try:
+        event_batch, run_start = _bundle()
+        first = spool.enqueue_inbound(
+            event_batch,
+            run_start,
+            source_key="inbound:recovery:stable",
+            local_metadata={"recovery_policy": "review_only"},
+        )
+        second = spool.enqueue_inbound(
+            event_batch,
+            run_start,
+            source_key="inbound:recovery:stable",
+            local_metadata={"recovery_policy": "review_only"},
+        )
+
+        record = spool.get_record("inbound:recovery:stable")
+        assert first == second
+        assert record is not None
+        assert record.payload["local_metadata"] == {"recovery_policy": "review_only"}
+    finally:
+        spool.close()
+
+
+def test_inbound_local_metadata_replay_conflict_and_unknown_policy_fail_closed(
+    tmp_path: Path,
+) -> None:
+    spool = SydneySpool(tmp_path / "sydney_spool.db")
+    try:
+        event_batch, run_start = _bundle()
+        spool.enqueue_inbound(
+            event_batch,
+            run_start,
+            source_key="inbound:recovery:stable",
+            local_metadata={"recovery_policy": "review_only"},
+        )
+
+        with pytest.raises(SpoolConflict):
+            spool.enqueue_inbound(
+                event_batch,
+                run_start,
+                source_key="inbound:recovery:stable",
+                local_metadata=None,
+            )
+        with pytest.raises(ValueError, match="local metadata"):
+            spool.enqueue_inbound(
+                event_batch,
+                run_start,
+                source_key="inbound:recovery:other",
+                local_metadata={"recovery_policy": "send_allowed"},
+            )
+    finally:
+        spool.close()
+
+
 def test_secret_material_is_redacted_before_sqlite_persistence(tmp_path: Path) -> None:
     spool = SydneySpool(tmp_path / "sydney_spool.db")
     event_batch, run_start = _bundle()

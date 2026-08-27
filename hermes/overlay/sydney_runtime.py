@@ -53,6 +53,34 @@ _PENDING_DELIVERIES_LOCK = threading.Lock()
 _ACTIVE_EXECUTIONS: dict[tuple[str, str, str], _ActiveExecution] = {}
 _ACTIVE_EXECUTIONS_LOCK = threading.Lock()
 
+REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE = (
+    "This recovered request is review-only. The mutating tool was not executed. "
+    "Return the review packet, state that nothing was sent, and wait for fresh "
+    "Brandon approval."
+)
+
+_REVIEW_ONLY_READ_TOOLS = frozenset(
+    {
+        "actions_list",
+        "bookings_recent",
+        "calendar_events_read",
+        "command_contact_audience_preview",
+        "command_contacts_search",
+        "contacts_search",
+        "context_history_search",
+        "crm_task_suggestions_read",
+        "crm_tasks_read",
+        "drive_file_read",
+        "drive_search",
+        "gmail_search",
+        "gmail_thread_read",
+        "leads_recent",
+        "status_read",
+        "workspace_status",
+    }
+)
+_ATLAS_MCP_TOOL_PREFIX = "mcp_atlas_backend_"
+
 
 def _normalized_delivery_key(value: Any) -> tuple[str, str, str] | None:
     if (
@@ -459,6 +487,14 @@ def _side_effect_class(tool_name: str) -> str:
     return "non_idempotent_write"
 
 
+def _review_only_tool_is_allowed(tool_name: str) -> bool:
+    """Allow only the reviewed read-tool registry during legacy recovery."""
+    normalized = tool_name.casefold()
+    if normalized.startswith(_ATLAS_MCP_TOOL_PREFIX):
+        normalized = normalized.removeprefix(_ATLAS_MCP_TOOL_PREFIX)
+    return normalized in _REVIEW_ONLY_READ_TOOLS
+
+
 def _caller_idempotency_key(
     tool_name: str,
     arguments: dict[str, Any],
@@ -520,6 +556,19 @@ def tool_before(
         )
     source_key = f"tool:{run_id}:{tool_call_id}:before"
     side_effect_class = _side_effect_class(tool_name)
+    if (
+        provider.active_recovery_policy() == "review_only"
+        and not _review_only_tool_is_allowed(tool_name)
+    ):
+        provider.record_policy_denial(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        return SydneyToolBeforeDecision(
+            block_message=REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE
+        )
     existing_receipt = provider.tool_replay_receipt(source_key)
     provider.record_tool_before(
         run_id=run_id,

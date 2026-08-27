@@ -252,6 +252,42 @@ def _provider(
     return provider
 
 
+def _review_only_provider(
+    tmp_path: Path,
+    backend: FakeBackend | None = None,
+    *,
+    message_id: str = "review-only-recovery",
+) -> SydneyMemoryProvider:
+    provider = _provider(tmp_path, backend)
+    occurred_at = "2026-08-25T12:00:00+00:00"
+    event_batch = provider._event_batch(
+        [
+            {
+                "source_event_key": f"telegram:{message_id}:user",
+                "event_type": "user",
+                "role": "user",
+                "occurred_at": occurred_at,
+                "content": "Prepare the review packet without sending anything.",
+                "metadata": {"platform_message_id": message_id},
+            }
+        ]
+    )
+    provider.spool.enqueue_inbound(
+        event_batch,
+        {
+            "platform_message_id": message_id,
+            "terminal_deadline_at": (
+                datetime.now(timezone.utc) + timedelta(hours=24)
+            ).isoformat(),
+        },
+        source_key=f"inbound:telegram:private-chat:{message_id}",
+        local_metadata={"recovery_policy": "review_only"},
+    )
+    provider.drain_once()
+    assert provider.active_run_id is not None
+    return provider
+
+
 def test_provider_identity_is_stable_and_inbound_is_local_before_backend(
     tmp_path: Path,
 ) -> None:
@@ -1451,6 +1487,145 @@ def test_runtime_persists_redacted_failed_tool_result_and_stable_write_intent(
     assert updated["lease_owner"] == provider.active_lease_owner
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "gmail_draft_create",
+        "gmail_send",
+        "docs_create",
+        "sheets_append",
+        "calendar_event_create",
+        "crm_task_drafts_create",
+        "crm_lead_update",
+        "command_task_suggestions_approve",
+        "email_mark_read",
+        "todo",
+    ),
+)
+def test_review_only_recovery_blocks_every_mutating_tool_before_execution(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE, tool_before
+
+    backend = FakeBackend()
+    provider = _review_only_provider(tmp_path, backend)
+    run_id = provider.active_run_id
+    assert run_id is not None
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    first = tool_before(
+        agent,
+        "review-only-call",
+        tool_name,
+        {"request_id": "must-not-execute"},
+    )
+    replay = tool_before(
+        agent,
+        "review-only-call",
+        tool_name,
+        {"request_id": "must-not-execute"},
+    )
+
+    assert first is not None
+    assert first.block_message == REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE
+    assert replay == first
+    before_calls = [payload for name, payload in backend.calls if name == "tool_before"]
+    after_calls = [payload for name, payload in backend.calls if name == "tool_after"]
+    assert len(before_calls) == 1
+    assert before_calls[0]["tool_name"] == tool_name
+    assert before_calls[0]["side_effect_class"] == "non_idempotent_write"
+    assert len(after_calls) == 1
+    assert after_calls[0]["state"] == "not_delivered"
+    denial_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["event_type"] == "tool_result"
+    ]
+    assert len(denial_events) == 1
+    assert json.loads(denial_events[0]["content"]) == {
+        "error": "review_only_recovery_blocked",
+        "executed": False,
+        "policy": "review_only",
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "context_history_search",
+        "command_contacts_search",
+        "command_contact_audience_preview",
+        "mcp_atlas_backend_command_contacts_search",
+        "mcp_atlas_backend_command_contact_audience_preview",
+        "leads_recent",
+    ),
+)
+def test_review_only_recovery_allows_read_tools(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import tool_before
+
+    backend = FakeBackend()
+    provider = _review_only_provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert (
+        tool_before(agent, "review-read-call", tool_name, {"query": "seller"}) is None
+    )
+    assert not [payload for name, payload in backend.calls if name == "tool_after"]
+
+
+def test_review_only_policy_survives_provider_restart_and_still_blocks_writes(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE, tool_before
+
+    first = _review_only_provider(tmp_path, FakeBackend())
+    run_id = first.active_run_id
+    assert run_id is not None
+    claimed = first.spool.get_meta(f"claimed_run:{run_id}")
+    assert claimed["recovery_policy"] == "review_only"
+    first.shutdown()
+
+    backend = FakeBackend()
+    second = _provider(tmp_path, backend)
+    try:
+        assert second.active_run_id == run_id
+        assert second.active_recovery_policy() == "review_only"
+        agent = SimpleNamespace(
+            _memory_manager=SimpleNamespace(
+                get_provider=lambda name: second if name == "sydney" else None
+            )
+        )
+
+        decision = tool_before(
+            agent,
+            "restart-write-call",
+            "gmail_send",
+            {"request_id": "still-must-not-execute"},
+        )
+
+        assert decision is not None
+        assert decision.block_message == REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE
+        assert [
+            payload["state"] for name, payload in backend.calls if name == "tool_after"
+        ] == ["not_delivered"]
+    finally:
+        second.shutdown()
+
+
 def test_exact_tool_call_replay_rechecks_the_backend_without_spool_conflict(
     tmp_path: Path,
 ) -> None:
@@ -2578,6 +2753,7 @@ def test_restart_watcher_drains_fsynced_inbound_before_any_run_can_be_claimed(
             "terminal_deadline_at": "2026-08-26T12:00:00+00:00",
         },
         source_key="inbound:telegram:private-chat:restart-message",
+        local_metadata={"recovery_policy": "review_only"},
     )
 
     drained = _drain_pending_inbound_bundles(
@@ -2589,6 +2765,9 @@ def test_restart_watcher_drains_fsynced_inbound_before_any_run_can_be_claimed(
     assert drained == 1
     assert spool.pending_count == 0
     assert [name for name, _payload in backend.calls] == ["ingest", "run"]
+    run_payload = backend.calls[1][1]
+    assert "local_metadata" not in run_payload
+    assert "recovery_policy" not in json.dumps(run_payload)
     assert (
         spool.get_meta(_identity_meta_key("telegram", "approved-user", "private-chat"))
         == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -2771,6 +2950,29 @@ def test_continuation_context_restores_the_saved_request_separately() -> None:
 
     assert original in context
     assert _CONTINUATION_MARKER not in context
+
+
+def test_review_only_continuation_context_requires_a_review_packet_and_fresh_approval() -> (
+    None
+):
+    from sydney_gateway import _CONTINUATION_MARKER, _continuation_channel_context
+
+    original = "Prepare the seller follow-up for review."
+    context = _continuation_channel_context(
+        original,
+        recovery_policy="review_only",
+    )
+
+    assert original in context
+    assert _CONTINUATION_MARKER not in context
+    assert "REVIEW ONLY" in context
+    assert "Command" in context
+    assert "audience count" in context
+    assert "checksum" in context
+    assert "proposed subject and body" in context
+    assert "Nothing was sent" in context
+    assert "fresh Brandon approval" in context
+    assert "Do not mutate" in context
 
 
 def test_internal_continuation_reuses_the_claimed_run_without_rewriting_inbound(

@@ -41,9 +41,23 @@ _CONTINUATION_MARKER = (
 )
 
 
-def _continuation_channel_context(original: str) -> str:
+def _continuation_channel_context(
+    original: str,
+    *,
+    recovery_policy: str | None = None,
+) -> str:
     """Restore the durable user turn as context, separate from the new marker."""
-    return "[Recovered durable user request]\n" + original
+    context = "[Recovered durable user request]\n" + original
+    if recovery_policy != "review_only":
+        return context
+    return (
+        context + "\n\n[Recovery policy: REVIEW ONLY]\n"
+        "Use the current Command read tools to prepare a review packet with the "
+        "audience count, checksum, representative sample, and proposed subject and "
+        "body. Nothing was sent. Do not mutate Gmail, Docs, Sheets, Calendar, CRM, "
+        "Command, or any other system. Stop and wait for fresh Brandon approval "
+        "before any mutating action."
+    )
 
 
 def _enabled() -> bool:
@@ -576,6 +590,12 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                     if inbound is None:
                         continue
                     event_batch = inbound.payload.get("event_batch") or {}
+                    local_metadata = inbound.payload.get("local_metadata")
+                    recovery_policy = (
+                        "review_only"
+                        if local_metadata == {"recovery_policy": "review_only"}
+                        else None
+                    )
                     user_id = str(event_batch.get("external_user_id") or "")
                     platform_name = str(event_batch.get("platform") or "")
                     chat_id = str(event_batch.get("external_chat_id") or "")
@@ -630,24 +650,25 @@ async def sydney_continuation_watcher(gateway: Any, interval: float = 2.0) -> No
                                 "thread_sessions_per_user", False
                             ),
                         )
-                        spool.set_meta(
-                            f"claimed_run:{run['id']}",
-                            {
-                                "lease_owner": lease_owner,
-                                "lease_expires_at": run.get("lease_expires_at"),
-                                "attempt_count": run.get("attempt_count", 0),
-                                "hermes_session_id": event_batch.get(
-                                    "hermes_session_id"
-                                ),
-                            },
-                        )
+                        claimed_metadata = {
+                            "lease_owner": lease_owner,
+                            "lease_expires_at": run.get("lease_expires_at"),
+                            "attempt_count": run.get("attempt_count", 0),
+                            "hermes_session_id": event_batch.get("hermes_session_id"),
+                        }
+                        if recovery_policy is not None:
+                            claimed_metadata["recovery_policy"] = recovery_policy
+                        spool.set_meta(f"claimed_run:{run['id']}", claimed_metadata)
                         event = MessageEvent(
                             text=_CONTINUATION_MARKER,
                             message_type=MessageType.TEXT,
                             source=source,
                             message_id=str(run.get("platform_message_id") or "")
                             or None,
-                            channel_context=_continuation_channel_context(original),
+                            channel_context=_continuation_channel_context(
+                                original,
+                                recovery_policy=recovery_policy,
+                            ),
                             internal=True,
                         )
                         await _dispatch_with_run_lease_heartbeat(

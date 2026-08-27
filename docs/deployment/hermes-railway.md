@@ -217,6 +217,21 @@ original 22 byte-for-byte and in order, and append only the three read tools
 shown above. The deployed `gmail_send` schema still requires a caller-supplied
 UUID `request_id`.
 
+### Managed operations skill
+
+`hermes/skills/atlas-backend-operations/SKILL.md` is the repository-owned source
+for Atlas routing. `hermes/overlay/manifest.json` pins its source, image asset,
+destination, and exact SHA-256. At boot, Atlas verifies the image asset, writes
+it atomically to
+`${HERMES_HOME}/skills/productivity/atlas-backend-operations/SKILL.md`, verifies
+the installed bytes, and emits only a content-free name/hash/changed proof. A
+second boot is a no-op and unrelated skills remain untouched; any hash or path
+violation fails startup.
+
+The managed skill makes current Command tools authoritative for Command
+contacts. It forbids substituting Google Contacts, a historical Drive roster,
+or private admin-page HTML. A Command admin URL is only a navigation locator.
+
 ### Deployed Task 8 overlay
 
 `hermes/overlay/manifest.json` pins the Hermes template source to commit
@@ -630,3 +645,39 @@ may use the reviewed pre-release image; a
 database restore is reserved for independently confirmed migration corruption
 and uses the validated protected backup. Never delete history merely to clear a
 health mismatch.
+
+### Exact legacy recovery runbook
+
+Legacy admission is an operator-only CLI, not a background scanner. Resolve the
+exact reconciled session ID, integer message ID, and content SHA-256 without
+printing the selected message. Dry-run first inside the deployed Atlas image:
+
+```bash
+cd /opt/hermes-agent
+python -m plugins.memory.sydney.sydney_recovery \
+  --state-db /data/.hermes/state.db \
+  --spool /data/.hermes/sydney_spool.db \
+  --session-id "$RECOVERY_SESSION_ID" \
+  --message-id "$RECOVERY_MESSAGE_ID" \
+  --expected-content-sha256 "$RECOVERY_CONTENT_SHA256"
+```
+
+Require content-free `eligible=true`, `enqueued=false`, and
+`recovery_policy=review_only`. Re-run the identical command with `--enqueue`
+only after those selectors and the current deployment are verified. The same
+selector replay returns the same local record; selector, content, lineage,
+visibility, final-response, or terminal-run mismatches fail closed.
+
+The local recovery policy never enters the backend run-start contract. It is
+retained in the private spool and claimed-run metadata so restarts cannot loosen
+it. Read-only history and current Command audience tools remain available.
+Every draft/send, Docs/Sheets, Calendar, CRM, Command, or unknown mutation is
+blocked before execution and receives a canonical `not_delivered` denial. The
+result must be a review packet containing current audience count,
+checksum/reference, masked sample, and proposed subject/body, followed by a stop
+for fresh Brandon approval. Historical “send” wording is not approval, nothing
+is sent, and Brandon never needs `/new` or another technical command.
+
+If recovery must stop, do not invoke the CLI again and disable Sydney retry.
+Preserve `state.db`, `sydney_spool.db`, the original event, claimed-run metadata,
+and canonical ledger evidence. Never delete them as rollback.

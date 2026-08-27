@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import stat
@@ -20,10 +21,18 @@ MANIFEST_PATH = (
 )
 _CONFIG_BACKUP_NAME = ".sydney-durable-context-config-backup.yaml"
 _CONFIG_BACKUP_VERSION = 1
+_AUTHORITATIVE_SKILL_NAME = "atlas-backend-operations"
 
 
-def _tool_include() -> list[str]:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+def load_manifest() -> dict[str, Any]:
+    loaded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError("Atlas overlay manifest must contain an object.")
+    return loaded
+
+
+def _tool_include(manifest: dict[str, Any] | None = None) -> list[str]:
+    manifest = manifest if manifest is not None else load_manifest()
     return list(manifest["tools"]["include"])
 
 
@@ -78,6 +87,69 @@ def _atomic_write(path: Path, contents: bytes) -> bool:
         return True
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _managed_skill_destination(home_root: Path, raw: object, *, name: str) -> Path:
+    relative = Path(str(raw or ""))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"managed skill destination escapes Hermes home: {name}")
+    destination = home_root / relative
+    current = home_root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"managed skill destination contains a symlink: {name}")
+    return destination
+
+
+def install_managed_skills(
+    hermes_home: Path,
+    manifest: dict[str, Any],
+    *,
+    asset_root: Path = Path("/app"),
+) -> list[dict[str, object]]:
+    """Verify and atomically install only the skills pinned by the image manifest."""
+    managed = manifest.get("managed_skills")
+    if managed is None:
+        raise ValueError("authoritative Atlas operations skill is missing")
+    if not isinstance(managed, dict):
+        raise ValueError("managed skill manifest must contain an object")
+    if not isinstance(managed.get(_AUTHORITATIVE_SKILL_NAME), dict):
+        raise ValueError("authoritative Atlas operations skill is missing")
+    home_root = hermes_home.resolve()
+    asset_root = asset_root.resolve()
+    proofs: list[dict[str, object]] = []
+    for name, raw in sorted(managed.items()):
+        if not isinstance(raw, dict):
+            raise ValueError("managed skill manifest entry is invalid")
+        expected = str(raw.get("sha256") or "")
+        source = (asset_root / str(raw.get("deployed_source") or "")).resolve()
+        try:
+            source.relative_to(asset_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"managed skill source escapes asset root: {name}"
+            ) from exc
+        destination = _managed_skill_destination(
+            home_root,
+            raw.get("destination"),
+            name=name,
+        )
+        contents = source.read_bytes()
+        actual = hashlib.sha256(contents).hexdigest()
+        if actual != expected:
+            raise ValueError(f"managed skill hash mismatch: {name}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination = _managed_skill_destination(
+            home_root,
+            raw.get("destination"),
+            name=name,
+        )
+        changed = _atomic_write(destination, contents)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+            raise ValueError(f"managed skill install verification failed: {name}")
+        proofs.append({"name": name, "sha256": expected, "changed": changed})
+    return proofs
 
 
 def _setting_snapshot(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -186,6 +258,7 @@ def configure_atlas_backend(
     external_user_id: str = "",
     external_chat_id: str = "",
     allowed_external_user_ids: set[str] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> bool:
     """Preserve unrelated config while adding the local-only, pinned bridge entry."""
     import yaml
@@ -239,7 +312,7 @@ def configure_atlas_backend(
         "connect_timeout": 30,
         "supports_parallel_tool_calls": False,
         "tools": {
-            "include": _tool_include(),
+            "include": _tool_include(manifest),
             "resources": False,
             "prompts": False,
         },
@@ -350,6 +423,9 @@ def backfill_visible_history(
 
 def main() -> None:
     hermes_home = Path(os.getenv("HERMES_HOME", "/data/.hermes"))
+    manifest = load_manifest()
+    skill_proofs = install_managed_skills(hermes_home, manifest)
+    print(json.dumps({"managed_skills": skill_proofs}, sort_keys=True))
     enabled = _enabled(os.getenv("SYDNEY_DURABLE_CONTEXT_ENABLED", ""))
     external_user_id = os.getenv("SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID", "").strip()
     external_chat_id = os.getenv("SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID", "").strip()
@@ -362,6 +438,7 @@ def main() -> None:
         external_user_id=external_user_id,
         external_chat_id=external_chat_id,
         allowed_external_user_ids=allowed,
+        manifest=manifest,
     )
     if enabled and external_chat_id and external_user_id in allowed:
         backfill_visible_history(

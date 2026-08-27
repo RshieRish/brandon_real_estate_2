@@ -1,7 +1,14 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-26
+Last Updated: 2026-08-27
+
+### 2026-08-27 - Sydney Command Recovery Development Through Task 4
+- Replaced the mutable production-only Atlas operations instructions with a repository-owned `atlas-backend-operations` skill. The image and bootstrap now verify the manifest-pinned SHA-256, install it atomically before Hermes starts, preserve unrelated skills, no-op on identical bytes, and fail closed on path/hash mismatch. The skill makes the current Command search and audience-preview tools authoritative, treats admin URLs as navigation only, separates Google Contacts, and limits the former KW roster to explicit historical requests.
+- Added an explicit, dry-run-first legacy recovery utility. It selects one exact visible pre-cutover user event by session ID, integer message ID, and content hash; requires reconciled identity/session/backfill lineage; rejects hidden, assistant/tool/system, canary/control, superseded, terminal, or mismatched evidence; and stages one deterministic inbound with local `review_only` metadata. Replays are idempotent and CLI output is content-free.
+- Enforced `review_only` at the runtime tool boundary and across restart. Current read-only history/Command tools remain available, while drafts, sends, Docs, Sheets, Calendar, CRM, Command, and unknown mutations are blocked before execution and recorded once as `not_delivered`. The continuation asks for a current audience count/checksum/sample plus proposed subject/body, says nothing was sent, and stops for fresh Brandon approval; historical wording cannot authorize a send and Brandon never needs `/new`.
+- Independent review gaps were closed test-first: synthetic continuation rows no longer hide a later final assistant response; recovery tools use an explicit read-only allowlist; startup requires the authoritative skill; managed-skill destinations reject symlinked files and parent directories; and policy denials are stored as non-retryable mutations.
+- The full Sydney/spool/recovery/overlay regression matrix passed `248` with `5` exact-checkout environment skips and `3` subtests. Focused Ruff, compileall, `git diff --check`, and the generic credential scan pass. Applying the overlay twice to pristine pinned template `7224d7c1a4dcffe9304f49bc843f55716f5561b4` was byte-stable with relative-tree SHA-256 `7c8cab8cdedd3362f5cc0a24fee05ee3fb2302ad1ad90e49eae5a7414d49674b`; local JSON-RPC verification returned the exact ordered `25` unique tools with no forbidden tools. This is development evidence only: no push, PR, merge, deployment, production recovery, Gmail/Workspace/CRM mutation, or message send has occurred from this work yet.
 
 ### 2026-08-26 - Sydney Durable Context Task 14 Production Completion
 - Completed Task 14 in production. The feature release and every test-first rollout correction merged through PRs `#14`-`#26`; the final production source is merge `de986f5e9c3808fd1253c2532670bfd9f7ce9e65`. PR `#26` passed the exact Hermes/25-tool, Command frontend, Vercel, and real PostgreSQL 16/TLS persistence/concurrency/E2E gates before the SHA-pinned merge.
