@@ -21,6 +21,7 @@ MANIFEST_PATH = (
 )
 _CONFIG_BACKUP_NAME = ".sydney-durable-context-config-backup.yaml"
 _CONFIG_BACKUP_VERSION = 1
+_AUTHORITATIVE_SKILL_NAME = "atlas-backend-operations"
 
 
 def load_manifest() -> dict[str, Any]:
@@ -88,6 +89,19 @@ def _atomic_write(path: Path, contents: bytes) -> bool:
         temporary_path.unlink(missing_ok=True)
 
 
+def _managed_skill_destination(home_root: Path, raw: object, *, name: str) -> Path:
+    relative = Path(str(raw or ""))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"managed skill destination escapes Hermes home: {name}")
+    destination = home_root / relative
+    current = home_root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"managed skill destination contains a symlink: {name}")
+    return destination
+
+
 def install_managed_skills(
     hermes_home: Path,
     manifest: dict[str, Any],
@@ -95,9 +109,13 @@ def install_managed_skills(
     asset_root: Path = Path("/app"),
 ) -> list[dict[str, object]]:
     """Verify and atomically install only the skills pinned by the image manifest."""
-    managed = manifest.get("managed_skills") or {}
+    managed = manifest.get("managed_skills")
+    if managed is None:
+        raise ValueError("authoritative Atlas operations skill is missing")
     if not isinstance(managed, dict):
         raise ValueError("managed skill manifest must contain an object")
+    if not isinstance(managed.get(_AUTHORITATIVE_SKILL_NAME), dict):
+        raise ValueError("authoritative Atlas operations skill is missing")
     home_root = hermes_home.resolve()
     asset_root = asset_root.resolve()
     proofs: list[dict[str, object]] = []
@@ -112,18 +130,21 @@ def install_managed_skills(
             raise ValueError(
                 f"managed skill source escapes asset root: {name}"
             ) from exc
-        destination = (home_root / str(raw.get("destination") or "")).resolve()
-        try:
-            destination.relative_to(home_root)
-        except ValueError as exc:
-            raise ValueError(
-                f"managed skill destination escapes Hermes home: {name}"
-            ) from exc
+        destination = _managed_skill_destination(
+            home_root,
+            raw.get("destination"),
+            name=name,
+        )
         contents = source.read_bytes()
         actual = hashlib.sha256(contents).hexdigest()
         if actual != expected:
             raise ValueError(f"managed skill hash mismatch: {name}")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        destination = _managed_skill_destination(
+            home_root,
+            raw.get("destination"),
+            name=name,
+        )
         changed = _atomic_write(destination, contents)
         if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
             raise ValueError(f"managed skill install verification failed: {name}")

@@ -1511,8 +1511,6 @@ class SydneyMemoryProvider(MemoryProvider):
         tool_call_id: str,
         tool_name: str,
         arguments: dict[str, Any],
-        side_effect_class: str,
-        caller_idempotency_key: str | None = None,
     ) -> None:
         """Persist a deterministic, non-executed tool outcome for policy blocks."""
         self.record_tool_before(
@@ -1520,8 +1518,8 @@ class SydneyMemoryProvider(MemoryProvider):
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             arguments=arguments,
-            side_effect_class=side_effect_class,
-            caller_idempotency_key=caller_idempotency_key,
+            side_effect_class="non_idempotent_write",
+            caller_idempotency_key=None,
         )
         attempt_key = f"review_only:{tool_call_id}"
         attempt_digest = hashlib.sha256(attempt_key.encode()).hexdigest()

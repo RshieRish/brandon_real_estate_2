@@ -280,6 +280,28 @@ class HermesOverlayTests(unittest.TestCase):
 
             self.assertEqual(destination.read_text(), "known good\n")
 
+    def test_bootstrap_requires_the_authoritative_managed_skill_entry(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for manifest in (
+                {},
+                {"managed_skills": {}},
+                {"managed_skills": {"unrelated": {}}},
+            ):
+                with (
+                    self.subTest(manifest=manifest),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        "authoritative Atlas operations skill",
+                    ),
+                ):
+                    bootstrap.install_managed_skills(
+                        root / "home",
+                        manifest,
+                        asset_root=root,
+                    )
+
     def test_bootstrap_rejects_managed_skill_destination_outside_home(self):
         bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -301,6 +323,63 @@ class HermesOverlayTests(unittest.TestCase):
                 bootstrap.install_managed_skills(home, manifest, asset_root=root)
 
             self.assertFalse((root / "escaped/SKILL.md").exists())
+
+    def test_bootstrap_rejects_symlinked_managed_skill_destination(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            asset = root / "atlas_backend_operations_skill.md"
+            asset.write_text("managed skill\n")
+            unrelated = home / "skills/productivity/other/SKILL.md"
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text("keep\n")
+            destination = home / "skills/productivity/atlas-backend-operations/SKILL.md"
+            destination.parent.mkdir(parents=True)
+            destination.symlink_to(unrelated)
+            manifest = {
+                "managed_skills": {
+                    "atlas-backend-operations": {
+                        "deployed_source": asset.name,
+                        "destination": str(destination.relative_to(home)),
+                        "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    }
+                }
+            }
+
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                bootstrap.install_managed_skills(home, manifest, asset_root=root)
+
+            self.assertEqual(unrelated.read_text(), "keep\n")
+
+    def test_bootstrap_rejects_symlinked_managed_skill_parent(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            asset = root / "atlas_backend_operations_skill.md"
+            asset.write_text("managed skill\n")
+            unrelated = root / "unrelated"
+            unrelated.mkdir()
+            productivity = home / "skills/productivity"
+            productivity.parent.mkdir(parents=True)
+            productivity.symlink_to(unrelated, target_is_directory=True)
+            manifest = {
+                "managed_skills": {
+                    "atlas-backend-operations": {
+                        "deployed_source": asset.name,
+                        "destination": (
+                            "skills/productivity/atlas-backend-operations/SKILL.md"
+                        ),
+                        "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    }
+                }
+            }
+
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                bootstrap.install_managed_skills(home, manifest, asset_root=root)
+
+            self.assertEqual(list(unrelated.iterdir()), [])
 
     def test_apply_overlay_is_idempotent_for_the_pinned_checkout_contract(self):
         overlay = _load_overlay_module("apply_overlay.py")

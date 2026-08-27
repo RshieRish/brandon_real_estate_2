@@ -1498,6 +1498,8 @@ def test_runtime_persists_redacted_failed_tool_result_and_stable_write_intent(
         "crm_task_drafts_create",
         "crm_lead_update",
         "command_task_suggestions_approve",
+        "email_mark_read",
+        "todo",
     ),
 )
 def test_review_only_recovery_blocks_every_mutating_tool_before_execution(
@@ -1536,6 +1538,7 @@ def test_review_only_recovery_blocks_every_mutating_tool_before_execution(
     after_calls = [payload for name, payload in backend.calls if name == "tool_after"]
     assert len(before_calls) == 1
     assert before_calls[0]["tool_name"] == tool_name
+    assert before_calls[0]["side_effect_class"] == "non_idempotent_write"
     assert len(after_calls) == 1
     assert after_calls[0]["state"] == "not_delivered"
     denial_events = [
@@ -1559,6 +1562,8 @@ def test_review_only_recovery_blocks_every_mutating_tool_before_execution(
         "context_history_search",
         "command_contacts_search",
         "command_contact_audience_preview",
+        "mcp_atlas_backend_command_contacts_search",
+        "mcp_atlas_backend_command_contact_audience_preview",
         "leads_recent",
     ),
 )

@@ -140,6 +140,8 @@ class SydneyLegacyRecovery:
                 continue
             role = str(row.get("role") or "")
             if role == "user":
+                if _is_control_content(str(row.get("content") or "")):
+                    continue
                 return False
             if role != "assistant" or self._has_tool_calls(row):
                 continue

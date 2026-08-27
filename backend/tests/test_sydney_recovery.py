@@ -396,6 +396,34 @@ def test_recovery_rejects_later_final_assistant_before_next_user(
         )
 
 
+def test_recovery_skips_synthetic_user_continuation_before_later_final_assistant(
+    recovery_fixture: RecoveryFixture,
+) -> None:
+    fixture = recovery_fixture
+    connection = sqlite3.connect(fixture.state_db)
+    connection.execute(
+        """
+        INSERT INTO messages(
+            session_id, role, content, timestamp, observed
+        ) VALUES(?, 'user', ?, ?, 0)
+        """,
+        (fixture.session_id, AUTOMATIC_CONTINUATION_MESSAGE, 1787664002),
+    )
+    connection.commit()
+    connection.close()
+    _insert_later_assistant(
+        fixture,
+        content="Here is the completed answer after automatic continuation.",
+    )
+
+    with pytest.raises(RecoveryRejected, match="final assistant"):
+        fixture.recovery.admit(
+            session_id=fixture.session_id,
+            message_id=fixture.message_id,
+            expected_content_sha256=fixture.selected_sha256,
+        )
+
+
 def test_recovery_treats_an_empty_stored_tool_call_list_as_a_final_response(
     recovery_fixture: RecoveryFixture,
 ) -> None:
