@@ -21,6 +21,7 @@ OVERLAY_TARGETS = {
     "atlas_backend_mcp.py",
     "atlas_backend_bootstrap.py",
     "atlas_backend_overlay_manifest.json",
+    "atlas_backend_operations_skill.md",
     "install_sydney_overlay.py",
     "sydney_spool.py",
     "sydney_memory_provider.py",
@@ -118,6 +119,11 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
         "COPY start.sh /app/start.sh",
         "COPY atlas_backend_overlay_manifest.json /app/atlas_backend_overlay_manifest.json",
     )
+    dockerfile = _insert_once(
+        dockerfile,
+        "COPY start.sh /app/start.sh",
+        "COPY atlas_backend_operations_skill.md /app/atlas_backend_operations_skill.md",
+    )
     pre_clone_copies = "\n".join(
         [
             "COPY install_sydney_overlay.py /app/install_sydney_overlay.py",
@@ -155,6 +161,9 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
             OVERLAY_DIRECTORY / "atlas_backend_bootstrap.py"
         ).read_bytes(),
         source / "atlas_backend_overlay_manifest.json": MANIFEST_PATH.read_bytes(),
+        source / "atlas_backend_operations_skill.md": (
+            HERMES_DIRECTORY / "skills/atlas-backend-operations/SKILL.md"
+        ).read_bytes(),
         source / "install_sydney_overlay.py": (
             OVERLAY_DIRECTORY / "install_sydney_overlay.py"
         ).read_bytes(),

@@ -160,6 +160,141 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertEqual(len(manifest["tools"]["include"]), 25)
         self.assertEqual(len(set(manifest["tools"]["include"])), 25)
 
+    def test_managed_atlas_skill_routes_command_without_stale_fallback(self):
+        root = Path(__file__).resolve().parents[2]
+        skill = root / "hermes/skills/atlas-backend-operations/SKILL.md"
+        text = skill.read_text()
+        lowered = text.lower()
+
+        self.assertIn("command_contacts_search", text)
+        self.assertIn("command_contact_audience_preview", text)
+        self.assertIn("navigation locator", lowered)
+        self.assertIn("google contacts only", lowered)
+        self.assertIn("review-only", lowered)
+        self.assertIn("nothing was sent", lowered)
+        self.assertNotIn("always pull and parse this sheet first", lowered)
+        self.assertNotIn("/proc/{ppid}/environ", text)
+        self.assertNotIn("admin_password", lowered)
+
+    def test_manifest_pins_managed_skill_hash(self):
+        root = Path(__file__).resolve().parents[2]
+        skill = root / "hermes/skills/atlas-backend-operations/SKILL.md"
+        manifest = json.loads((root / "hermes/overlay/manifest.json").read_text())
+        managed = manifest["managed_skills"]["atlas-backend-operations"]
+
+        self.assertEqual(
+            managed,
+            {
+                "source": "skills/atlas-backend-operations/SKILL.md",
+                "deployed_source": "atlas_backend_operations_skill.md",
+                "destination": (
+                    "skills/productivity/atlas-backend-operations/SKILL.md"
+                ),
+                "sha256": hashlib.sha256(skill.read_bytes()).hexdigest(),
+            },
+        )
+
+    def test_bootstrap_installs_managed_skill_once_and_preserves_other_skills(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            asset = root / "atlas_backend_operations_skill.md"
+            asset.write_text("managed skill\n")
+            other = home / "skills/productivity/other/SKILL.md"
+            other.parent.mkdir(parents=True)
+            other.write_text("keep\n")
+            digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+            manifest = {
+                "managed_skills": {
+                    "atlas-backend-operations": {
+                        "source": "skills/atlas-backend-operations/SKILL.md",
+                        "deployed_source": asset.name,
+                        "destination": (
+                            "skills/productivity/atlas-backend-operations/SKILL.md"
+                        ),
+                        "sha256": digest,
+                    }
+                }
+            }
+
+            first = bootstrap.install_managed_skills(home, manifest, asset_root=root)
+            second = bootstrap.install_managed_skills(home, manifest, asset_root=root)
+            installed = (
+                home
+                / manifest["managed_skills"]["atlas-backend-operations"]["destination"]
+            )
+
+            self.assertEqual(
+                first,
+                [
+                    {
+                        "name": "atlas-backend-operations",
+                        "sha256": digest,
+                        "changed": True,
+                    }
+                ],
+            )
+            self.assertEqual(
+                second,
+                [
+                    {
+                        "name": "atlas-backend-operations",
+                        "sha256": digest,
+                        "changed": False,
+                    }
+                ],
+            )
+            self.assertEqual(installed.read_bytes(), asset.read_bytes())
+            self.assertEqual(other.read_text(), "keep\n")
+
+    def test_bootstrap_rejects_managed_skill_hash_mismatch_without_mutation(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            destination = home / "skills/productivity/atlas-backend-operations/SKILL.md"
+            destination.parent.mkdir(parents=True)
+            destination.write_text("known good\n")
+            asset = root / "atlas_backend_operations_skill.md"
+            asset.write_text("tampered\n")
+            manifest = {
+                "managed_skills": {
+                    "atlas-backend-operations": {
+                        "deployed_source": asset.name,
+                        "destination": str(destination.relative_to(home)),
+                        "sha256": hashlib.sha256(b"expected\n").hexdigest(),
+                    }
+                }
+            }
+
+            with self.assertRaisesRegex(ValueError, "managed skill hash mismatch"):
+                bootstrap.install_managed_skills(home, manifest, asset_root=root)
+
+            self.assertEqual(destination.read_text(), "known good\n")
+
+    def test_bootstrap_rejects_managed_skill_destination_outside_home(self):
+        bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            asset = root / "atlas_backend_operations_skill.md"
+            asset.write_text("managed skill\n")
+            manifest = {
+                "managed_skills": {
+                    "atlas-backend-operations": {
+                        "deployed_source": asset.name,
+                        "destination": "../escaped/SKILL.md",
+                        "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    }
+                }
+            }
+
+            with self.assertRaisesRegex(ValueError, "destination escapes"):
+                bootstrap.install_managed_skills(home, manifest, asset_root=root)
+
+            self.assertFalse((root / "escaped/SKILL.md").exists())
+
     def test_apply_overlay_is_idempotent_for_the_pinned_checkout_contract(self):
         overlay = _load_overlay_module("apply_overlay.py")
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -181,6 +316,7 @@ class HermesOverlayTests(unittest.TestCase):
                 "atlas_backend_mcp.py",
                 "atlas_backend_bootstrap.py",
                 "atlas_backend_overlay_manifest.json",
+                "atlas_backend_operations_skill.md",
                 "install_sydney_overlay.py",
                 "sydney_spool.py",
                 "sydney_memory_provider.py",
@@ -210,6 +346,10 @@ class HermesOverlayTests(unittest.TestCase):
                 "COPY atlas_backend_overlay_manifest.json /app/atlas_backend_overlay_manifest.json",
                 first_dockerfile,
             )
+            self.assertIn(
+                "COPY atlas_backend_operations_skill.md /app/atlas_backend_operations_skill.md",
+                first_dockerfile,
+            )
             self.assertIn("python /app/atlas_backend_bootstrap.py", first_start)
             self.assertLess(
                 first_start.index("python /app/atlas_backend_bootstrap.py"),
@@ -218,6 +358,13 @@ class HermesOverlayTests(unittest.TestCase):
             self.assertTrue((source / "atlas_backend_mcp.py").is_file())
             self.assertTrue((source / "atlas_backend_bootstrap.py").is_file())
             self.assertTrue((source / "atlas_backend_overlay_manifest.json").is_file())
+            self.assertEqual(
+                (source / "atlas_backend_operations_skill.md").read_bytes(),
+                (
+                    Path(__file__).resolve().parents[2]
+                    / "hermes/skills/atlas-backend-operations/SKILL.md"
+                ).read_bytes(),
+            )
             for name in (
                 "install_sydney_overlay.py",
                 "sydney_spool.py",

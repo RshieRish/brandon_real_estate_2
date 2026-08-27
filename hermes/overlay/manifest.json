@@ -18,6 +18,14 @@
             "agent/tool_executor.py": "4c9f59aa5063520a2d20baec1acbb9640b92a64c7e6dedc92817670158b0ad01"
         }
     },
+    "managed_skills": {
+        "atlas-backend-operations": {
+            "source": "skills/atlas-backend-operations/SKILL.md",
+            "deployed_source": "atlas_backend_operations_skill.md",
+            "destination": "skills/productivity/atlas-backend-operations/SKILL.md",
+            "sha256": "7a8711fab72c32792f0140d2e8c63a243d0d95f67ad2f49519c5ecd4af5b321b"
+        }
+    },
     "tools": {
         "include": [
             "status_read",
