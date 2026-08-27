@@ -567,20 +567,24 @@ covered by backfill cannot be inserted again under live source keys.
 Completed 2026-08-26:
 
 - Feature PR `#14` and test-first rollout corrections through PR `#26` passed
-  their required checks and were merged with reviewed-head pinning. Final source
-  on `main` is `de986f5e9c3808fd1253c2532670bfd9f7ce9e65`.
+  their required checks and were merged with reviewed-head pinning. The final
+  application-code merge on `main` is
+  `de986f5e9c3808fd1253c2532670bfd9f7ce9e65`; later evidence-only commits do not
+  change the runtime behavior.
 - The protected pre-migration custom-format backup is
   `/Users/rishabnandi/brandon-real-estate-production-backups/sydney-task14-pre-migration-20260826T180513Z.dump`,
   mode `0600`, `516102115` bytes, SHA-256
   `8a200bba3ca51af9eba43e028a838b90eaaf4ef51553a33e77c8c7b7a2252847`.
   PostgreSQL 17 read its `732`-entry restore catalog. Production `alembic current`
   and `alembic heads` both report sole head `85e8b7c9d4f1`.
-- Final backend `4a761b35-04b6-4ab2-8774-7ef20c5f072f`, worker
+- Application-code rollout backend `4a761b35-04b6-4ab2-8774-7ef20c5f072f`, worker
   `0b3bf3b5-ca82-4d26-b585-0502965fd7df`, and Atlas
   `34932fbf-e916-4032-97fa-50b9d477a815` deployments reached `SUCCESS`.
   Backend/worker health, worker readiness, Atlas health, and the single gateway
   process pass. Live JSON-RPC returns exactly 25 ordered unique tools, preserves
-  the original 22, and exposes no forbidden write tool.
+  the original 22, and exposes no forbidden write tool. Treat these deployment
+  IDs as code-rollout evidence; evidence-only merges may trigger later
+  byte-equivalent backend/worker deployments.
 - Backfill reconciliation matched `8` sessions, `918` messages, `947` events,
   roles `assistant=442`, `tool=455`, `user=21`, `455/455` tool calls/results,
   zero unacknowledged rows, and ordered hash
