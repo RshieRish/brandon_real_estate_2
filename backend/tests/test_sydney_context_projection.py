@@ -151,6 +151,30 @@ def test_projection_prompt_never_silently_truncates_a_selected_event_chunk() -> 
         build_projection_request(oversized, max_prompt_chars=2_000)
 
 
+@pytest.mark.asyncio
+async def test_projection_claim_defaults_to_output_safe_fifty_event_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.sydney_context_projection as projection
+
+    select_candidate = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        projection,
+        "select_projection_candidate",
+        select_candidate,
+    )
+
+    candidate = await projection.claim_projection_candidate(
+        SimpleNamespace(),
+        lease_owner="output-safe-range-test",
+        claimed_at=NOW,
+    )
+
+    assert candidate is None
+    select_candidate.assert_awaited_once()
+    assert select_candidate.await_args.kwargs["event_limit"] == 50
+
+
 def test_projection_validation_rejects_foreign_missing_and_duplicate_sources() -> None:
     from services.sydney_context_projection import (
         SydneyContextProjectionError,
