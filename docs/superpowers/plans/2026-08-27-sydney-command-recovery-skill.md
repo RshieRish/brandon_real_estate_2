@@ -684,9 +684,27 @@ python -m plugins.memory.sydney.sydney_recovery \
 
 Expected content-free result: `eligible=true`, `enqueued=false`, `recovery_policy=review_only`, and no spool mutation.
 
-- [ ] **Step 6: Enqueue once and wait for terminal completion**
+- [ ] **Step 6: Deploy the reply-anchor fix and deliver the preserved response once**
 
-Repeat the exact command with `--enqueue`. Poll durable run state without resending. Require one run, one final assistant event, and a successful terminal state. If a tool policy denial occurs, verify it is recorded and that Sydney still returns the review packet.
+The selector was already enqueued exactly once and must never be enqueued again.
+Preserve the existing `blocked_side_effect` run and its one final assistant event.
+Do not invoke the recovery CLI with `--enqueue`, rerun the model, reclaim or reopen
+the run, or rewrite its terminal state.
+
+The completed model turn used only `command_contact_audience_preview` and
+`command_contacts_search`; both read-only calls succeeded, all spool rows drained,
+and no mutation ran. Telegram delivery failed locally before any Bot API request
+because the synthetic durable recovery ID reached numeric reply conversion. PR
+`#30` remains valid drain-worker hardening but was not this incident's root cause.
+
+First merge and deploy the permanent positive-numeric Telegram reply-anchor fix.
+Then use only the receipt-guarded repair path to deliver the already-generated
+response. Preserve the existing uncertainty marker, and require authoritative
+evidence that no provider network request started and no prior repair delivery
+receipt exists. Reuse the stable delivery identity, make at most one provider
+attempt, and record its authoritative outcome. If that attempt is uncertain, stop
+without a retry. Complete this step from delivery-receipt evidence; do not require
+or change the preserved backend run state.
 
 - [ ] **Step 7: Prove Command usage and zero mutation**
 

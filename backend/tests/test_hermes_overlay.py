@@ -888,6 +888,7 @@ class HermesOverlayTests(unittest.TestCase):
             self.assertIn("sydney_continuation_watcher", gateway_run)
             self.assertIn("SYDNEY_DURABLE_STREAMING_DISABLED", gateway_run)
             self.assertIn("SYDNEY_DELIVERY_CONFIRMATION", gateway_base)
+            self.assertIn("SYDNEY_TELEGRAM_NUMERIC_REPLY_ANCHOR", gateway_base)
             self.assertIn("SYDNEY_AMBIGUOUS_DELIVERY_SINGLE_ATTEMPT", telegram)
             self.assertIn('metadata.get("sydney_durable_delivery")', gateway_base)
             self.assertIn("SYDNEY_RETRY_AND_USAGE_GUARD", conversation_loop)
@@ -1150,6 +1151,104 @@ class HermesOverlayTests(unittest.TestCase):
             process_environment["PYTHONPATH"] = str(source)
             process_environment["HERMES_HOME"] = str(
                 Path(temporary_directory) / "hermes-home"
+            )
+            reply_anchor_probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "\n".join(  # noqa: FLY002 - explicit subprocess probe lines
+                        (
+                            "import json",
+                            "from gateway.config import Platform",
+                            "from gateway.platforms.base import MessageEvent, _reply_anchor_for_event, _thread_metadata_for_source",
+                            "from gateway.run import GatewayRunner",
+                            "from gateway.session import SessionSource",
+                            "def ordinary_anchor(message_id):",
+                            "    source = SessionSource(platform=Platform.TELEGRAM, chat_id='chat', chat_type='dm')",
+                            "    event = MessageEvent(text='resume', source=source, message_id=message_id)",
+                            "    return _reply_anchor_for_event(event)",
+                            "def topic_routing(message_id):",
+                            "    source = SessionSource(platform=Platform.TELEGRAM, chat_id='chat', chat_type='dm', thread_id='67890', message_id=message_id)",
+                            "    event = MessageEvent(text='resume', source=source, message_id=message_id)",
+                            "    anchor = _reply_anchor_for_event(event)",
+                            "    return {'anchor': anchor, 'metadata': _thread_metadata_for_source(source, anchor)}",
+                            "def runner_routing(platform, message_id, *, thread_id, reply_to_message_id=None):",
+                            "    source = SessionSource(platform=platform, chat_id='chat', chat_type='dm', thread_id=thread_id, message_id=message_id)",
+                            "    event = MessageEvent(text='resume', source=source, message_id=message_id, reply_to_message_id=reply_to_message_id)",
+                            "    anchor = GatewayRunner._reply_anchor_for_event(event)",
+                            "    return {'anchor': anchor, 'metadata': GatewayRunner._thread_metadata_for_source(None, source, anchor)}",
+                            "synthetic = 'legacy-recovery:' + 'a' * 64",
+                            "print(json.dumps({'ordinary': [ordinary_anchor('12345'), ordinary_anchor(synthetic)], 'topic': {'numeric': topic_routing('12345'), 'synthetic': topic_routing(synthetic), 'nonnumeric': topic_routing('not-a-message-id')}, 'runner_topic': {'numeric': runner_routing(Platform.TELEGRAM, '12345', thread_id='67890'), 'synthetic': runner_routing(Platform.TELEGRAM, synthetic, thread_id='67890')}, 'non_telegram': {'discord': runner_routing(Platform.DISCORD, 'discord-message', thread_id='discord-thread'), 'feishu': runner_routing(Platform.FEISHU, 'feishu-message', thread_id='feishu-thread', reply_to_message_id='feishu-reply')}}))",
+                        )
+                    ),
+                ],
+                cwd=source,
+                env=process_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                json.loads(reply_anchor_probe.stdout),
+                {
+                    "ordinary": ["12345", None],
+                    "topic": {
+                        "numeric": {
+                            "anchor": "12345",
+                            "metadata": {
+                                "thread_id": "67890",
+                                "telegram_dm_topic_reply_fallback": True,
+                                "direct_messages_topic_id": "67890",
+                                "telegram_reply_to_message_id": "12345",
+                            },
+                        },
+                        "synthetic": {
+                            "anchor": None,
+                            "metadata": {
+                                "thread_id": "67890",
+                                "telegram_dm_topic_reply_fallback": True,
+                                "direct_messages_topic_id": "67890",
+                            },
+                        },
+                        "nonnumeric": {
+                            "anchor": None,
+                            "metadata": {
+                                "thread_id": "67890",
+                                "telegram_dm_topic_reply_fallback": True,
+                                "direct_messages_topic_id": "67890",
+                            },
+                        },
+                    },
+                    "runner_topic": {
+                        "numeric": {
+                            "anchor": "12345",
+                            "metadata": {
+                                "thread_id": "67890",
+                                "telegram_dm_topic_reply_fallback": True,
+                                "direct_messages_topic_id": "67890",
+                                "telegram_reply_to_message_id": "12345",
+                            },
+                        },
+                        "synthetic": {
+                            "anchor": None,
+                            "metadata": {
+                                "thread_id": "67890",
+                                "telegram_dm_topic_reply_fallback": True,
+                                "direct_messages_topic_id": "67890",
+                            },
+                        },
+                    },
+                    "non_telegram": {
+                        "discord": {
+                            "anchor": "discord-message",
+                            "metadata": {"thread_id": "discord-thread"},
+                        },
+                        "feishu": {
+                            "anchor": "feishu-reply",
+                            "metadata": {"thread_id": "feishu-thread"},
+                        },
+                    },
+                },
             )
             init_probe = subprocess.run(
                 [
