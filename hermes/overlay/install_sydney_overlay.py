@@ -1285,6 +1285,7 @@ def _desired(source: Path, source_hashes: dict[str, str]) -> dict[str, bytes]:
         "plugins/memory/sydney/sydney_spool.py": "sydney_spool.py",
         "plugins/memory/sydney/sydney_retry.py": "sydney_retry.py",
         "plugins/memory/sydney/sydney_backfill.py": "sydney_backfill.py",
+        "plugins/memory/sydney/sydney_recovery.py": "sydney_recovery.py",
         "agent/sydney_runtime.py": "sydney_runtime.py",
         "gateway/sydney_gateway.py": "sydney_gateway.py",
     }

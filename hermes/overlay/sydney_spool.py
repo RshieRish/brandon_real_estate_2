@@ -959,11 +959,17 @@ class SydneySpool:
         run_start: dict[str, Any],
         *,
         source_key: str,
+        local_metadata: dict[str, Any] | None = None,
     ) -> int:
+        payload = {"event_batch": event_batch, "run_start": run_start}
+        if local_metadata is not None:
+            if local_metadata != {"recovery_policy": "review_only"}:
+                raise ValueError("inbound local metadata is invalid")
+            payload["local_metadata"] = local_metadata
         return self.enqueue(
             kind="inbound_bundle",
             source_key=source_key,
-            payload={"event_batch": event_batch, "run_start": run_start},
+            payload=payload,
         )
 
     def enqueue_degraded_completion(

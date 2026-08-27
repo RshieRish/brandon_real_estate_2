@@ -119,6 +119,7 @@ class HermesOverlayTests(unittest.TestCase):
         overlay = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
         installer = (overlay / "install_sydney_overlay.py").read_text()
         backfill = (overlay / "sydney_backfill.py").read_text()
+        recovery = (overlay / "sydney_recovery.py").read_text()
         gateway = (overlay / "sydney_gateway.py").read_text()
 
         self.assertIn(
@@ -129,6 +130,12 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertNotIn(
             "from .sydney_memory_provider import SydneyBackendClient", backfill
         )
+        self.assertIn(
+            '"plugins/memory/sydney/sydney_recovery.py": "sydney_recovery.py"',
+            installer,
+        )
+        self.assertIn("from .sydney_backfill import SydneyBackfill", recovery)
+        self.assertIn("from .sydney_spool import", recovery)
         self.assertIn(
             "from plugins.memory.sydney import (\n"
             "        SydneyBackendClient,\n"
@@ -322,6 +329,7 @@ class HermesOverlayTests(unittest.TestCase):
                 "sydney_memory_provider.py",
                 "sydney_retry.py",
                 "sydney_backfill.py",
+                "sydney_recovery.py",
                 "sydney_runtime.py",
                 "sydney_gateway.py",
             }
@@ -350,6 +358,9 @@ class HermesOverlayTests(unittest.TestCase):
                 "COPY atlas_backend_operations_skill.md /app/atlas_backend_operations_skill.md",
                 first_dockerfile,
             )
+            self.assertIn(
+                "COPY sydney_recovery.py /app/sydney_recovery.py", first_dockerfile
+            )
             self.assertIn("python /app/atlas_backend_bootstrap.py", first_start)
             self.assertLess(
                 first_start.index("python /app/atlas_backend_bootstrap.py"),
@@ -371,6 +382,7 @@ class HermesOverlayTests(unittest.TestCase):
                 "sydney_memory_provider.py",
                 "sydney_retry.py",
                 "sydney_backfill.py",
+                "sydney_recovery.py",
                 "sydney_runtime.py",
                 "sydney_gateway.py",
             ):
@@ -775,6 +787,7 @@ class HermesOverlayTests(unittest.TestCase):
             }
             self.assertEqual(second, first)
             self.assertIn("plugins/memory/sydney/__init__.py", first)
+            self.assertIn("plugins/memory/sydney/sydney_recovery.py", first)
             self.assertIn("agent/sydney_runtime.py", first)
             self.assertIn("gateway/sydney_gateway.py", first)
 

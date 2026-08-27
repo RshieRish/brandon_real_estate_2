@@ -27,6 +27,7 @@ OVERLAY_TARGETS = {
     "sydney_memory_provider.py",
     "sydney_retry.py",
     "sydney_backfill.py",
+    "sydney_recovery.py",
     "sydney_runtime.py",
     "sydney_gateway.py",
 }
@@ -131,6 +132,7 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
             "COPY sydney_memory_provider.py /app/sydney_memory_provider.py",
             "COPY sydney_retry.py /app/sydney_retry.py",
             "COPY sydney_backfill.py /app/sydney_backfill.py",
+            "COPY sydney_recovery.py /app/sydney_recovery.py",
             "COPY sydney_runtime.py /app/sydney_runtime.py",
             "COPY sydney_gateway.py /app/sydney_gateway.py",
             "COPY atlas_backend_overlay_manifest.json /app/sydney_overlay_manifest.json",
@@ -178,6 +180,9 @@ def _desired_contents(source: Path) -> dict[Path, bytes]:
         ).read_bytes(),
         source / "sydney_backfill.py": (
             OVERLAY_DIRECTORY / "sydney_backfill.py"
+        ).read_bytes(),
+        source / "sydney_recovery.py": (
+            OVERLAY_DIRECTORY / "sydney_recovery.py"
         ).read_bytes(),
         source / "sydney_runtime.py": (
             OVERLAY_DIRECTORY / "sydney_runtime.py"
