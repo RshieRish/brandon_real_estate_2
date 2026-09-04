@@ -13,7 +13,13 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from database import Base
-from models.command import CRMArchiveArtifact, CRMContact, CRMNote, CRMSavedSearch
+from models.command import (
+    CRMActivity,
+    CRMArchiveArtifact,
+    CRMContact,
+    CRMNote,
+    CRMSavedSearch,
+)
 from models.command_contacts import (
     CONTACT_SECTIONS,
     CRMContactAddress,
@@ -43,6 +49,10 @@ from services.command_contact_identity import (
     ContactIdentityCandidate,
     resolve_identity_clusters,
 )
+from services.command_contact_materializer import (
+    ContactMaterializationError,
+    _stage_legacy_capture_profiles,
+)
 from services.command_contact_overlap_manifest import (
     ContactOverlapManifest,
     ContactOverlapManifestRow,
@@ -65,6 +75,7 @@ CAPTURED_AT = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 CONTACT_TABLES = (
     Lead.__table__,
     CRMContact.__table__,
+    CRMActivity.__table__,
     CRMNote.__table__,
     CRMSavedSearch.__table__,
     CRMArchiveArtifact.__table__,
@@ -337,7 +348,6 @@ async def _seed_artifact(db: AsyncSession) -> None:
 
 async def _seed_repair_boundary(
     db: AsyncSession,
-    identity_hashes: dict[str, str],
 ) -> tuple[CRMContact, CRMContact]:
     db.add_all(
         Lead(id=index, name=f"Legacy Lead {index}") for index in range(1, 52)
@@ -353,13 +363,15 @@ async def _seed_repair_boundary(
         )
         db.add(contact)
         db.add(
-            CRMContactProfile(
-                id=index,
+            CRMActivity(
                 contact_id=index,
-                recovered_identity_hash=identity_hashes[_source_id(index)],
-                legal_name=f"Recovered Person {index}",
-                birth_year_quality="unknown",
-                anniversary_year_quality="unknown",
+                kind="archive_timeline_capture",
+                summary="Preserved technical capture marker",
+                metadata_json=(
+                    '{"ordinal":"'
+                    f"{index:07d}"
+                    '","source":"authorized-command-archive"}'
+                ),
             )
         )
     for index in (312, 313):
@@ -375,13 +387,15 @@ async def _seed_repair_boundary(
             )
         )
         db.add(
-            CRMContactProfile(
-                id=index,
+            CRMActivity(
                 contact_id=index,
-                recovered_identity_hash=identity_hashes[_source_id(index)],
-                legal_name=f"Recovered Person {index}",
-                birth_year_quality="unknown",
-                anniversary_year_quality="unknown",
+                kind="archive_timeline_capture",
+                summary="Preserved technical capture marker",
+                metadata_json=(
+                    '{"ordinal":"'
+                    f"{index:07d}"
+                    '","source":"authorized-command-archive"}'
+                ),
             )
         )
     for offset, contact_id in enumerate(range(314, 363), start=3):
@@ -606,7 +620,7 @@ async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
     records = _drafts(317)
     identity_hashes = _identity_hashes(317)
     await _seed_artifact(contact_db)
-    targets = await _seed_repair_boundary(contact_db, identity_hashes)
+    targets = await _seed_repair_boundary(contact_db)
     before_rows = (
         await contact_db.scalars(select(CRMContact).order_by(CRMContact.id))
     ).all()
@@ -649,6 +663,7 @@ async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
         "validation_state": "validated",
     }
     assert await contact_db.scalar(select(func.count()).select_from(CRMSourceRecord)) == 0
+    assert await contact_db.scalar(select(func.count()).select_from(CRMContactProfile)) == 0
 
     first = await execute_reconciliation(
         contact_db,
@@ -670,11 +685,16 @@ async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
     assert result.details["strong_verified_overlaps"] == 2
     assert result.details["legacy_only_contacts"] == 49
     assert result.details["legacy_lead_ids_preserved"] == 51
+    assert result.details["legacy_capture_profiles_staged"] == 313
     assert result.details["reviewed_overlap_links_staged"] == 2
     assert result.details["source_entity_links_created_by_materializer"] == 315
     assert result.details["source_entity_links_final"] == 317
     assert result.details["expected_combined_contact_total"] == 366
     assert await contact_db.scalar(select(func.count()).select_from(CRMContact)) == 366
+    assert (
+        await contact_db.scalar(select(func.count()).select_from(CRMContactProfile))
+        == 317
+    )
     assert (
         await contact_db.scalar(
             select(func.count())
@@ -742,6 +762,7 @@ async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
     second_result = second.results[0]
     assert second_result.normalized_count == 317
     assert second_result.details["recovered_contacts_created"] == 0
+    assert second_result.details["legacy_capture_profiles_staged"] == 0
     assert second_result.details["reviewed_overlap_links_staged"] == 0
     assert second_result.details["source_entity_links_created_by_materializer"] == 0
     assert second_result.details["source_entity_links_final"] == 317
@@ -751,6 +772,58 @@ async def test_full_repair_materializes_317_and_preserves_all_362_base_rows(
             select(func.count()).select_from(CRMContactAuditEvent)
         )
         == 2
+    )
+
+
+async def test_legacy_capture_profile_bridge_rejects_identifier_drift(
+    contact_db: AsyncSession,
+):
+    contact = CRMContact(
+        id=1,
+        first_name="Preserved",
+        last_name="Contact",
+        email="changed@example.test",
+        stage="preserved",
+    )
+    contact_db.add(contact)
+    contact_db.add(
+        CRMActivity(
+            contact_id=1,
+            kind="archive_timeline_capture",
+            summary="Preserved technical capture marker",
+            metadata_json=(
+                '{"ordinal":"0000001",'
+                '"source":"authorized-command-archive"}'
+            ),
+        )
+    )
+    await contact_db.commit()
+    profile_draft = next(
+        record for record in _drafts(1) if record.record_kind == "contact_profile"
+    )
+    clusters = resolve_identity_clusters(
+        (
+            ContactIdentityCandidate(
+                source_contact_id=_source_id(1),
+                primary_email=_email(1),
+                e164_phone=None,
+                legal_name="Recovered Person 1",
+                preferred_name=None,
+            ),
+        )
+    )
+
+    with pytest.raises(ContactMaterializationError, match="email evidence changed"):
+        await _stage_legacy_capture_profiles(
+            contact_db,
+            {_source_id(1): profile_draft},
+            clusters,
+            {1: contact},
+        )
+
+    assert (
+        await contact_db.scalar(select(func.count()).select_from(CRMContactProfile))
+        == 0
     )
 
 
@@ -853,7 +926,7 @@ async def test_contacts_apply_verifies_materialized_database_truth_before_commit
     records = _drafts(317)
     identity_hashes = _identity_hashes(317)
     await _seed_artifact(contact_db)
-    targets = await _seed_repair_boundary(contact_db, identity_hashes)
+    targets = await _seed_repair_boundary(contact_db)
     artifact = _artifact()
     fingerprint = hashlib.sha256(
         f"{artifact.source_path}\0{artifact.sha256}\0{artifact.size_bytes}\n".encode()
