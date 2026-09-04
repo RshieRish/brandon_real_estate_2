@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     AGENT_CONTROL_RECENT_LIMIT: int = 10
     COMMAND_PUBLIC_BASE_URL: str = "https://www.soldwithsweeney.com"
     CRM_TASK_ARCHIVE_ENABLED: bool = False
+    # Physical-card delivery remains disabled until a contracted provider API
+    # has been reviewed and implemented. Secrets never live in campaign rows.
+    CARD_PROVIDER_MODE: str = "disabled"
+    SEND_OUT_CARDS_API_BASE_URL: str = ""
+    SEND_OUT_CARDS_API_TOKEN: str = ""
+    SEND_OUT_CARDS_ACCOUNT_ID: str = ""
     # Dedicated integration-worker rollout gates. They remain disabled until
     # each provider-specific migration and live verification gate is complete.
     GMAIL_TASK_INTAKE_ENABLED: bool = False

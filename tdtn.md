@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Approval-Gated Card Campaign Core Completed
+- Added serial migration `87a0d9b1e3f2` and typed campaign, recipient, provider-connection, delivery-attempt, and provider-receipt contracts. Draft creation is request-idempotent, snapshots only explicit reconciled Command celebration/address data, exposes missing-address exclusions, and invalidates approval after every editable change through optimistic versions.
+- Approval requires Brandon's explicit recipient-count and cost confirmation. The service commits one immutable intent per recipient before any provider I/O, classifies confirmed, rejected, mixed, and ambiguous outcomes truthfully, and never automatically retries a campaign after an attempt. PostgreSQL rejects updates or deletes to attempt and receipt evidence.
+- Production remains fail-closed: even populated Send Out Cards environment values report `contract_adapter_pending` until an official contracted API adapter is implemented. The provider-neutral deterministic adapter is test-injected only; no browser automation, scrape, provider call, external send, migration, or deployment occurred.
+- Verification passed `25` focused real PostgreSQL 17/TLS migration, append-only, model, service, provider, migration-head, and worker-contract tests; scoped Ruff format/check, sole-head, and diff checks pass.
+
 ### 2026-09-04 - Authoritative Command Celebration Preview Completed
 - Added the read-only `command_contact_celebrations_preview` Agent Control and Atlas tool. It accepts one strict month and birthday/home-anniversary selection, reads only explicit Command dates in one repeatable-read snapshot, and never substitutes Google Contacts, Drive, a former-office roster, or an admin-page scrape.
 - The result provides exact birthday, home-anniversary, and deduplicated contact counts; structured-address ready/missing counts; a stable checksum and opaque audience reference; up to five masked examples; and the latest contacts-apply reconciliation state. Full names, addresses, dates of birth years, and the audience checksum are excluded from the content-free audit record.

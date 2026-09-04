@@ -1,5 +1,12 @@
 from models.admin_user import AdminUser
 from models.agent_action_audit import AgentActionAudit
+from models.card_campaign import (
+    CardCampaign,
+    CardCampaignRecipient,
+    CardDeliveryAttempt,
+    CardProviderConnection,
+    CardProviderReceipt,
+)
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
     CRMContactAddress,
@@ -79,6 +86,11 @@ __all__ = [
     "AgentRunJob",
     "AgentRunRequestReceipt",
     "AgentToolInvocation",
+    "CardCampaign",
+    "CardCampaignRecipient",
+    "CardDeliveryAttempt",
+    "CardProviderConnection",
+    "CardProviderReceipt",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",

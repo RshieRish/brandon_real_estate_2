@@ -24,7 +24,7 @@ from tests.gmail_task_postgres import (
 
 REVISION = "85e8b7c9d4f1"
 DOWN_REVISION = "84d7a5f9b2c3"
-HEAD_REVISION = "86f9c8a0d2e1"
+HEAD_REVISION = "87a0d9b1e3f2"
 
 
 def _backend_root() -> Path:
@@ -94,14 +94,15 @@ def test_revision_85_serially_follows_revision_84_and_86_is_the_only_head() -> N
     assert revision.depends_on is None
     assert scripts.get_heads() == [HEAD_REVISION]
     assert scripts.get_revision(REVISION).down_revision == DOWN_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert scripts.get_revision("86f9c8a0d2e1").down_revision == REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == "86f9c8a0d2e1"
 
 
 def test_revision_86_adds_content_free_request_dedupe_and_receipts() -> None:
     revision = _load_dedupe_revision()
     sql = _render("upgrade", revision=revision)
 
-    assert revision.revision == HEAD_REVISION
+    assert revision.revision == "86f9c8a0d2e1"
     assert revision.down_revision == REVISION
     assert "ADD COLUMN request_fingerprint_sha256 VARCHAR(64)" in sql
     assert "CREATE TABLE agent_run_request_receipts" in sql
