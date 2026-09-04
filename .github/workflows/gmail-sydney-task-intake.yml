@@ -332,7 +332,7 @@ jobs:
       - name: Verify Sydney is the sole migration head
         working-directory: backend
         run: |
-          test "$(alembic heads | tr -d '\r')" = "85e8b7c9d4f1 (head)"
+          test "$(alembic heads | tr -d '\r')" = "86f9c8a0d2e1 (head)"
 
       - name: Remove the exact disposable fixtures
         if: always()

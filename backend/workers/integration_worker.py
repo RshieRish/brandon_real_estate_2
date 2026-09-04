@@ -38,7 +38,7 @@ from workers.jobs.integration_alerts import IntegrationAlertsJob
 from workers.jobs.sydney_questions import SydneyQuestionsJob
 
 
-EXPECTED_MIGRATION = "85e8b7c9d4f1"
+EXPECTED_MIGRATION = "86f9c8a0d2e1"
 gmail_history_job_runner = run_gmail_history_job
 _FORBIDDEN_REGISTRY_NAME_PARTS = (
     "secret",

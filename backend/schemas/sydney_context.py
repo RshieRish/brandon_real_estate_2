@@ -253,6 +253,7 @@ class ContextRunSummary(StrictModel):
 class ContextRunStartResponse(StrictModel):
     run: ContextRunSummary
     replayed: bool
+    coalesced: bool
 
 
 class ContextRunClaimResponse(StrictModel):

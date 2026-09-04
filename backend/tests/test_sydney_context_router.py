@@ -6,13 +6,12 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from database import get_db
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
-
-from database import get_db
 from middleware.agent_control import require_agent_control
+from pydantic import ValidationError
 
 NEW_ACTIONS = {
     "context.events.ingest",
@@ -596,7 +595,7 @@ def test_all_context_operations_return_strict_models_and_content_free_audits() -
                 "logical_conversation_id": str(logical_id),
                 "terminal_deadline_at": deadline.isoformat(),
             },
-            ContextRunStartResponse(run=run, replayed=False),
+            ContextRunStartResponse(run=run, replayed=False, coalesced=False),
             "context.runs.start",
         ),
         (

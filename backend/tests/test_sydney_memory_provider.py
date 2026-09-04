@@ -3287,6 +3287,80 @@ def test_internal_continuation_activates_watcher_claim_for_cached_provider(
     assert provider.active_lease_owner == "hermes:continuation-watcher:42"
 
 
+def test_equivalent_message_after_reset_reuses_active_run_without_superseding(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    class CoalescingBackend(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = 0
+
+        def start_run(self, payload: dict) -> dict:
+            self.calls.append(("run", payload))
+            self.started += 1
+            return {
+                "run": {
+                    "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "state": "running" if self.started > 1 else "queued",
+                },
+                "replayed": False,
+                "coalesced": self.started > 1,
+            }
+
+    backend = CoalescingBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="before-reset",
+        content="Source all September birthdays and home anniversaries.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    assert stage_inbound_acknowledgement(agent)
+
+    provider.spool.rotate_session(
+        session_id="session-after-reset",
+        logical_conversation_id=provider.logical_conversation_id,
+        platform="telegram",
+        external_user_id="brandon",
+        external_chat_id="private-chat",
+        parent_session_id="session-1",
+        continuation_reason="manual_reset",
+    )
+    provider._session_id = "session-after-reset"
+
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id="after-reset",
+        content="  source ALL september birthdays\n and home anniversaries.  ",
+    )
+
+    assert provider.active_run_id == run_id
+    assert agent._sydney_inbound_coalesced is True
+    assert stage_inbound_acknowledgement(agent) == (
+        "This request is already in progress. Sydney will continue it "
+        "automatically; you do not need to reset or resend it."
+    )
+    assert len([call for call in backend.calls if call[0] == "claim"]) == 1
+    assert not any(
+        name == "run_update"
+        and payload.get("error_code") == "superseded_by_newer_inbound"
+        for name, payload in backend.calls
+    )
+
+
 def test_deferred_acknowledgement_is_durable_without_completing_the_run(
     tmp_path: Path,
 ) -> None:
@@ -3368,6 +3442,178 @@ def test_deferred_acknowledgement_is_durable_without_completing_the_run(
         name == "run_update"
         and payload.get("state") in {"succeeded", "terminal_failure"}
         for name, payload in backend.calls
+    )
+
+
+def test_accepted_acknowledgement_is_staged_before_send_and_replayed_once(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        confirm_inbound_acknowledgement,
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-before-model"
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Source September birthdays.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+
+    assert acknowledgement == (
+        "Got it — Sydney saved this request and is working on it now. "
+        "You do not need to reset or resend it."
+    )
+    staged = provider.spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id=message_id,
+    )
+    assert staged is not None
+    assert staged["delivery_kind"] == "accepted"
+    assert staged["event_batch"]["events"][0]["content"] == acknowledgement
+    assert not any(
+        event["content"] == acknowledgement
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+    )
+
+    confirm_inbound_acknowledgement(agent, acknowledgement, ambiguous=False)
+
+    accepted_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["content"] == acknowledgement
+    ]
+    assert len(accepted_events) == 1
+    assert accepted_events[0]["metadata"]["delivery_kind"] == "accepted"
+    assert not any(name == "run_update" for name, _payload in backend.calls)
+
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Source September birthdays.",
+    )
+    assert stage_inbound_acknowledgement(agent) is None
+
+
+def test_ambiguous_accepted_acknowledgement_is_never_resent(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        confirm_inbound_acknowledgement,
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-ambiguous"
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September campaign.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+    assert acknowledgement
+
+    confirm_inbound_acknowledgement(agent, acknowledgement, ambiguous=True)
+
+    accepted_records = [
+        record
+        for record in provider.spool.matching_records(
+            state="acknowledged", source_prefix="run:"
+        )
+        if record.kind == "control_delivery_bundle"
+        and record.payload.get("delivery_kind") == "accepted"
+    ]
+    assert len(accepted_records) == 1
+    assert accepted_records[0].payload["delivery_ambiguous"] is True
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September campaign.",
+    )
+    assert stage_inbound_acknowledgement(agent) is None
+
+
+@pytest.mark.asyncio
+async def test_restart_drains_ambiguous_accepted_ack_without_blocking_run(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _block_uncertain_final_delivery
+    from sydney_runtime import (
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-restart-ambiguity"
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September audience.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+    assert acknowledgement
+    run_id = provider.active_run_id
+    lease_owner = provider.active_lease_owner
+    assert run_id and lease_owner
+
+    blocked = await _block_uncertain_final_delivery(
+        backend=backend,
+        spool=provider.spool,
+        run={
+            "id": run_id,
+            "lease_owner": lease_owner,
+            "platform_message_id": message_id,
+        },
+        platform="telegram",
+        chat_id="private-chat",
+    )
+
+    assert blocked is False
+    assert not any(
+        name == "run_update"
+        and payload.get("state")
+        in {"blocked_side_effect", "terminal_failure", "succeeded"}
+        for name, payload in backend.calls
+    )
+    assert (
+        len(
+            [
+                event
+                for name, payload in backend.calls
+                if name == "ingest"
+                for event in payload["events"]
+                if event.get("content") == acknowledgement
+            ]
+        )
+        == 1
     )
 
 

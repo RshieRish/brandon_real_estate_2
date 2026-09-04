@@ -8,6 +8,31 @@ from uuid import uuid4
 import pytest
 
 
+def test_request_fingerprint_normalizes_equivalent_text_without_storing_content() -> (
+    None
+):
+    from services.sydney_context_service import request_fingerprint_sha256
+
+    first = request_fingerprint_sha256(
+        "  Source ALL September birthdays\n and home anniversaries  "
+    )
+    second = request_fingerprint_sha256(
+        "source all september birthdays and home anniversaries"
+    )
+
+    assert first == second
+    assert len(first) == 64
+    assert "september" not in first
+
+
+def test_request_fingerprint_keeps_semantically_distinct_text_distinct() -> None:
+    from services.sydney_context_service import request_fingerprint_sha256
+
+    assert request_fingerprint_sha256("September birthdays") != (
+        request_fingerprint_sha256("October birthdays")
+    )
+
+
 def test_tool_limit_receipt_is_strict_and_has_no_synthetic_invocation() -> None:
     from schemas.sydney_context import ContextToolInvocationResponse
 

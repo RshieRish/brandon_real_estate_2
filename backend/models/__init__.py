@@ -56,6 +56,7 @@ from models.sydney_context import (
     AgentConversationSession,
     AgentMemoryFact,
     AgentRunJob,
+    AgentRunRequestReceipt,
     AgentToolInvocation,
 )
 from models.sydney_tasks import (
@@ -66,6 +67,7 @@ from models.sydney_tasks import (
 )
 
 __all__ = [
+    "AdminUser",
     "AgentActionAudit",
     "AgentContextCheckpoint",
     "AgentContextProjectionClaim",
@@ -75,8 +77,8 @@ __all__ = [
     "AgentConversationSession",
     "AgentMemoryFact",
     "AgentRunJob",
+    "AgentRunRequestReceipt",
     "AgentToolInvocation",
-    "AdminUser",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",
@@ -106,8 +108,6 @@ __all__ = [
     "CRMTaskSuggestionSuppression",
     "CaptureQuality",
     "EvidenceLevel",
-    "IntegrationHealthState",
-    "IntegrationWorkerHeartbeat",
     "GmailBackfillRequest",
     "GmailExtractedObligation",
     "GmailExtractionAttempt",
@@ -117,6 +117,8 @@ __all__ = [
     "GmailSyncAccount",
     "GmailSyncPageCheckpoint",
     "GmailSyncRun",
+    "IntegrationHealthState",
+    "IntegrationWorkerHeartbeat",
     "SydneyQuestionOutbox",
     "TaskSuggestionApprovalNonce",
 ]

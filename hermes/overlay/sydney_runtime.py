@@ -90,6 +90,14 @@ TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE = (
     "Sydney reached this request's server-enforced tool limit. The tool was not "
     "executed; stop now and use the results already gathered."
 )
+ACCEPTED_ACKNOWLEDGEMENT = (
+    "Got it — Sydney saved this request and is working on it now. "
+    "You do not need to reset or resend it."
+)
+COALESCED_ACKNOWLEDGEMENT = (
+    "This request is already in progress. Sydney will continue it "
+    "automatically; you do not need to reset or resend it."
+)
 
 _REVIEW_ONLY_READ_TOOLS = frozenset(
     {
@@ -212,6 +220,8 @@ def record_inbound_before_model(
     agent._sydney_degraded_delivery_key = None
     agent._sydney_terminal_replay_state = None
     agent._sydney_control_replay_state = None
+    agent._sydney_inbound_coalesced = False
+    agent._sydney_acknowledgement_eligible = False
     agent._sydney_terminal_tool_policy_response = None
     provider = get_sydney_provider(agent)
     if provider is None:
@@ -228,19 +238,6 @@ def record_inbound_before_model(
         str(getattr(provider, "_external_chat_id", "")),
         str(platform_message_id),
     )
-    prior_finalization_pending = False
-    if previous_key and previous_key != delivery_key:
-        normalized_previous_key = _normalized_delivery_key(previous_key)
-        if normalized_previous_key is not None:
-            _release_active_execution_by_key(normalized_previous_key)
-        prior_finalization_pending = provider.has_pending_run_finalization(previous_key)
-        if prior_finalization_pending:
-            provider.drain_once()
-            prior_finalization_pending = provider.has_pending_run_finalization(
-                previous_key
-            )
-        if not prior_finalization_pending:
-            provider.supersede_active_run()
     agent._sydney_delivery_key = delivery_key
     if internal:
         provider.activate_claimed_inbound(platform_message_id)
@@ -260,16 +257,47 @@ def record_inbound_before_model(
     if final_replay is not None:
         agent._sydney_control_replay_state = final_replay
         return False
+    if previous_key and previous_key != delivery_key:
+        prior_finalization_pending = provider.has_pending_run_finalization(previous_key)
+        if prior_finalization_pending:
+            provider.drain_once()
+            prior_finalization_pending = provider.has_pending_run_finalization(
+                previous_key
+            )
+        if prior_finalization_pending:
+            provider.record_inbound(platform_message_id, content)
+            return False
     provider.record_inbound(platform_message_id, content)
     provider.drain_once()
     terminal_state = provider.inbound_terminal_state(platform_message_id)
     if terminal_state is not None:
         agent._sydney_terminal_replay_state = terminal_state
         return False
-    if prior_finalization_pending and provider.has_pending_run_finalization(
-        previous_key
-    ):
+    if provider.inbound_was_coalesced(platform_message_id):
+        agent._sydney_inbound_coalesced = True
+        agent._sydney_acknowledgement_eligible = True
         return False
+    incoming_run_id = provider.inbound_run_id(platform_message_id)
+    active_run_id = str(getattr(provider, "active_run_id", "") or "")
+    replacing_active_run = bool(
+        incoming_run_id and active_run_id and incoming_run_id != active_run_id
+    )
+    if replacing_active_run:
+        normalized_previous_key = _normalized_delivery_key(previous_key)
+        if normalized_previous_key is not None:
+            _release_active_execution_by_key(normalized_previous_key)
+        prior_finalization_pending = provider.has_pending_run_finalization(previous_key)
+        if prior_finalization_pending:
+            provider.drain_once()
+            prior_finalization_pending = provider.has_pending_run_finalization(
+                previous_key
+            )
+        if prior_finalization_pending:
+            agent._sydney_acknowledgement_eligible = True
+            return False
+        provider.supersede_active_run()
+        provider.claim_inbound(platform_message_id)
+    agent._sydney_acknowledgement_eligible = bool(incoming_run_id)
     if provider.owns_run_lease(platform_message_id):
         return _begin_active_execution(provider, delivery_key)
     if bool(getattr(provider, "last_drain_backend_unavailable", False)) and bool(
@@ -278,6 +306,63 @@ def record_inbound_before_model(
         agent._sydney_degraded_delivery_key = delivery_key
         return True
     return False
+
+
+def stage_inbound_acknowledgement(agent: Any) -> str | None:
+    """Stage one visible acceptance receipt before the first model call."""
+    if not getattr(agent, "_sydney_acknowledgement_eligible", False):
+        return None
+    agent._sydney_acknowledgement_eligible = False
+    provider = get_sydney_provider(agent)
+    key = _normalized_delivery_key(getattr(agent, "_sydney_delivery_key", None))
+    if provider is None or key is None:
+        return None
+    response = (
+        COALESCED_ACKNOWLEDGEMENT
+        if getattr(agent, "_sydney_inbound_coalesced", False)
+        else ACCEPTED_ACKNOWLEDGEMENT
+    )
+    try:
+        status = provider.stage_control_delivery(
+            key,
+            response,
+            delivery_kind="accepted",
+        )
+    except Exception:  # noqa: BLE001 - optional provider boundary fails closed.
+        return None
+    return response if status == "staged" else None
+
+
+def confirm_inbound_acknowledgement(
+    agent: Any,
+    response: str,
+    *,
+    ambiguous: bool,
+) -> None:
+    """Commit the staged acceptance after success or an ambiguous send."""
+    provider = get_sydney_provider(agent)
+    key = _normalized_delivery_key(getattr(agent, "_sydney_delivery_key", None))
+    if provider is None or key is None or not response:
+        return
+    provider.confirm_control_delivery(
+        key,
+        response,
+        delivery_kind="accepted",
+        ambiguous=ambiguous,
+    )
+
+
+def cancel_inbound_acknowledgement(agent: Any, response: str) -> None:
+    """Clear a staged acceptance only when the adapter proves it was rejected."""
+    provider = get_sydney_provider(agent)
+    key = _normalized_delivery_key(getattr(agent, "_sydney_delivery_key", None))
+    if provider is None or key is None or not response:
+        return
+    provider.cancel_control_delivery(
+        key,
+        response,
+        delivery_kind="accepted",
+    )
 
 
 def deferred_inbound_response(agent: Any) -> str:
@@ -298,6 +383,8 @@ def deferred_inbound_response(agent: Any) -> str:
                 AUTOMATIC_TERMINAL_REPLAY_MESSAGE,
             )
     if getattr(agent, "_sydney_control_replay_state", None):
+        return ""
+    if getattr(agent, "_sydney_inbound_coalesced", False):
         return ""
     if getattr(agent, "_sydney_terminal_replay_state", None):
         return AUTOMATIC_TERMINAL_REPLAY_MESSAGE

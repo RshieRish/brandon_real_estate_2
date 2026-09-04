@@ -408,12 +408,19 @@ def _drain_control_delivery(
 ) -> tuple[bool, bool]:
     """Resolve a staged control send and report whether model replay is blocked."""
     delivery_kind = str(attempt.get("delivery_kind") or "")
-    if delivery_kind not in {"deferred", "terminal_error"}:
+    if delivery_kind not in {"accepted", "deferred", "terminal_error"}:
         return False, False
     if str(attempt.get("run_id") or "") != run_id:
         return True, True
     source_key = str(
-        attempt.get("source_key") or control_delivery_source_key(run_id, delivery_kind)
+        attempt.get("source_key")
+        or control_delivery_source_key(
+            run_id,
+            delivery_kind,
+            platform_message_id=(
+                platform_message_id if delivery_kind == "accepted" else None
+            ),
+        )
     )
     record = spool.get_record(source_key)
     try:
@@ -457,7 +464,7 @@ def _drain_control_delivery(
                 chat_id=str(delivery_key[1]),
                 platform_message_id=str(delivery_key[2]),
             )
-        return True, delivery_kind != "deferred"
+        return True, delivery_kind == "terminal_error"
     except Exception:  # noqa: BLE001 - preserve the staged marker for retry.
         if record is not None and record.state == "pending":
             spool.record_failure(record.id)

@@ -6,17 +6,13 @@ import hashlib
 import html
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
-
-from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from models.integration_health import IntegrationHealthState
 from models.sydney_context import (
@@ -27,6 +23,7 @@ from models.sydney_context import (
     AgentConversationSession,
     AgentMemoryFact,
     AgentRunJob,
+    AgentRunRequestReceipt,
     AgentToolInvocation,
 )
 from schemas.sydney_context import (
@@ -53,6 +50,11 @@ from schemas.sydney_context import (
     ContextToolInvocationResponse,
     ContextToolInvocationUpdateRequest,
 )
+from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+
 from services.sydney_context_redaction import redact_content, split_utf8_text
 
 
@@ -177,6 +179,22 @@ def canonical_json(value: object) -> str:
 
 def canonical_json_hash(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def request_fingerprint_sha256(content: str) -> str:
+    """Return a content-free digest for equivalent active user requests."""
+    normalized = " ".join(
+        unicodedata.normalize("NFKC", str(content)).strip().split()
+    ).lower()
+    return hashlib.sha256(f"sydney-request-v1\0{normalized}".encode()).hexdigest()
+
+
+def _advisory_lock_key(material: str) -> int:
+    return int.from_bytes(
+        hashlib.sha256(material.encode("utf-8")).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
 
 
 def _normalized_metadata_key(value: str) -> str:
@@ -1046,50 +1064,103 @@ async def start_run(
     db: AsyncSession,
     request: ContextRunStartRequest,
 ) -> ContextRunStartResponse:
-    await _validated_run_inbound_event(db, request)
-    candidate_id = uuid4()
-    inserted_id = (
+    event = await _validated_run_inbound_event(db, request)
+    request_fingerprint = request_fingerprint_sha256(event.search_text or "")
+
+    # Serialize both the immutable platform receipt and the active semantic
+    # request. The locks contain IDs and a digest only; raw request text never
+    # enters a lock key, uniqueness key, response, or log.
+    lock_materials = {
+        f"message:{request.identity_id}:{request.platform_message_id}",
+        (
+            f"request:{request.identity_id}:{request.logical_conversation_id}:"
+            f"{request_fingerprint}"
+        ),
+    }
+    for material in sorted(lock_materials):
         await db.execute(
-            insert(AgentRunJob)
-            .values(
-                id=candidate_id,
-                identity_id=request.identity_id,
-                platform_message_id=request.platform_message_id,
-                inbound_event_id=request.inbound_event_id,
-                session_id=request.session_id,
-                logical_conversation_id=request.logical_conversation_id,
-                state="queued",
-                attempt_count=0,
-                terminal_deadline_at=request.terminal_deadline_at,
-            )
-            .on_conflict_do_nothing(
-                index_elements=[
-                    AgentRunJob.identity_id,
-                    AgentRunJob.platform_message_id,
-                ]
-            )
-            .returning(AgentRunJob.id)
+            select(func.pg_advisory_xact_lock(_advisory_lock_key(material)))
         )
-    ).scalar_one_or_none()
-    replayed = inserted_id is None
-    run_filter = (
-        AgentRunJob.id == inserted_id
-        if inserted_id is not None
-        else and_(
-            AgentRunJob.identity_id == request.identity_id,
-            AgentRunJob.platform_message_id == request.platform_message_id,
+
+    existing_row = (
+        await db.execute(
+            select(AgentRunRequestReceipt, AgentRunJob)
+            .join(AgentRunJob, AgentRunJob.id == AgentRunRequestReceipt.run_id)
+            .where(
+                AgentRunRequestReceipt.identity_id == request.identity_id,
+                AgentRunRequestReceipt.platform_message_id
+                == request.platform_message_id,
+            )
+            .with_for_update(of=AgentRunRequestReceipt)
+        )
+    ).one_or_none()
+    if existing_row is not None:
+        receipt, run = existing_row
+        if (
+            receipt.inbound_event_id != request.inbound_event_id
+            or receipt.session_id != request.session_id
+            or receipt.logical_conversation_id != request.logical_conversation_id
+            or receipt.terminal_deadline_at != request.terminal_deadline_at
+            or receipt.request_fingerprint_sha256 != request_fingerprint
+        ):
+            raise ContextRunConflict("context_run_replay_conflict")
+        return ContextRunStartResponse(
+            run=_run_summary(run),
+            replayed=True,
+            coalesced=receipt.disposition == "coalesced",
+        )
+
+    active_run = (
+        await db.scalars(
+            select(AgentRunJob)
+            .where(
+                AgentRunJob.identity_id == request.identity_id,
+                AgentRunJob.logical_conversation_id == request.logical_conversation_id,
+                AgentRunJob.request_fingerprint_sha256 == request_fingerprint,
+                AgentRunJob.state.in_(("queued", "running", "waiting_retry")),
+            )
+            .order_by(AgentRunJob.created_at, AgentRunJob.id)
+            .with_for_update()
+        )
+    ).one_or_none()
+    coalesced = active_run is not None
+    run = active_run
+    if run is None:
+        run = AgentRunJob(
+            id=uuid4(),
+            identity_id=request.identity_id,
+            platform_message_id=request.platform_message_id,
+            inbound_event_id=request.inbound_event_id,
+            session_id=request.session_id,
+            logical_conversation_id=request.logical_conversation_id,
+            request_fingerprint_sha256=request_fingerprint,
+            state="queued",
+            attempt_count=0,
+            terminal_deadline_at=request.terminal_deadline_at,
+        )
+        db.add(run)
+        await db.flush()
+
+    db.add(
+        AgentRunRequestReceipt(
+            id=uuid4(),
+            run_id=run.id,
+            identity_id=request.identity_id,
+            platform_message_id=request.platform_message_id,
+            inbound_event_id=request.inbound_event_id,
+            session_id=request.session_id,
+            logical_conversation_id=request.logical_conversation_id,
+            request_fingerprint_sha256=request_fingerprint,
+            disposition="coalesced" if coalesced else "primary",
+            terminal_deadline_at=request.terminal_deadline_at,
         )
     )
-    run = (await db.scalars(select(AgentRunJob).where(run_filter))).one()
-    if replayed and (
-        run.inbound_event_id != request.inbound_event_id
-        or run.session_id != request.session_id
-        or run.logical_conversation_id != request.logical_conversation_id
-        or run.terminal_deadline_at != request.terminal_deadline_at
-    ):
-        raise ContextRunConflict("context_run_replay_conflict")
     await db.flush()
-    return ContextRunStartResponse(run=_run_summary(run), replayed=replayed)
+    return ContextRunStartResponse(
+        run=_run_summary(run),
+        replayed=False,
+        coalesced=coalesced,
+    )
 
 
 async def update_run_state(

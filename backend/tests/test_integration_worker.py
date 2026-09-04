@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
 
-REVISION = "85e8b7c9d4f1"
+REVISION = "86f9c8a0d2e1"
 UTC = timezone.utc
 
 

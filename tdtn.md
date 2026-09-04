@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Sydney Immediate Receipt and Reset-Proof Request Coalescing Completed
+- Every accepted private Sydney prompt now receives a short receipt-guarded Telegram acknowledgement before the first model call. The acknowledgement has its own staged delivery record, so a lost or ambiguous platform receipt is never retried blindly and does not complete or block the underlying run.
+- Normalized request text is hashed only on the backend and bound to active work. Equivalent messages in queued, running, or waiting-retry state now share one executable run while retaining one immutable request receipt per Telegram message; raw prompt content is absent from indexes, locks, receipts, and logs. A terminal request remains repeatable from a later message.
+- A manual Hermes session reset retains the stable logical conversation and an equivalent resend coalesces into the existing run. It no longer supersedes or duplicates that work, and the user-facing response explicitly says that no reset or resend is needed.
+- Added serial migration 86f9c8a0d2e1, active-run concurrency enforcement, request-receipt provenance, accepted-delivery recovery, and the exact pinned Hermes gateway seam. Verification passed 313 non-PostgreSQL Sydney/overlay tests plus 3 subtests (1 expected optional skip), 38 PostgreSQL 17/TLS migration and concurrency tests, a twice-applied exact Hermes installation, scoped Ruff/format checks, compile checks, and diff checks. No production migration, deployment, or external message was performed.
+
 ### 2026-09-04 - Sydney Business-Tool Lane and Durable Run Ceiling Completed
 - Normal private Sydney runs now allow only `skill_view` and the manifest-pinned Atlas business tools. Native shell, code execution, process, filesystem, browser-adjacent session search, and local-memory attempts are blocked before execution, durably recorded as not delivered, and end the turn with a fixed plain-language result. Review-only recovery behavior remains unchanged.
 - Tool starts now return a server-authoritative aggregate count with a configurable default limit of `12`. The database run row serializes admission; retries restore prior receipts without consuming another slot, while every new call after the ceiling receives `block_limit`. A new Hermes session or continuation cannot reset that database count.

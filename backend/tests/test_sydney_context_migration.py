@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 from io import StringIO
@@ -23,6 +24,7 @@ from tests.gmail_task_postgres import (
 
 REVISION = "85e8b7c9d4f1"
 DOWN_REVISION = "84d7a5f9b2c3"
+HEAD_REVISION = "86f9c8a0d2e1"
 
 
 def _backend_root() -> Path:
@@ -48,14 +50,29 @@ def _load_revision():
     return module
 
 
+def _load_dedupe_revision():
+    path = (
+        _backend_root()
+        / "alembic"
+        / "versions"
+        / "86f9c8a0d2e1_add_sydney_request_dedupe.py"
+    )
+    assert path.is_file()
+    spec = importlib.util.spec_from_file_location("sydney_context_revision_86", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _scripts() -> ScriptDirectory:
     config = Config(str(_backend_root() / "alembic.ini"))
     config.set_main_option("script_location", str(_backend_root() / "alembic"))
     return ScriptDirectory.from_config(config)
 
 
-def _render(function_name: str) -> str:
-    revision = _load_revision()
+def _render(function_name: str, *, revision=None) -> str:
+    revision = revision or _load_revision()
     output = StringIO()
     revision.op = Operations(
         MigrationContext.configure(
@@ -67,7 +84,7 @@ def _render(function_name: str) -> str:
     return " ".join(output.getvalue().split())
 
 
-def test_revision_85_is_the_only_head_and_serially_follows_revision_84() -> None:
+def test_revision_85_serially_follows_revision_84_and_86_is_the_only_head() -> None:
     revision = _load_revision()
     scripts = _scripts()
 
@@ -75,8 +92,183 @@ def test_revision_85_is_the_only_head_and_serially_follows_revision_84() -> None
     assert revision.down_revision == DOWN_REVISION
     assert revision.branch_labels is None
     assert revision.depends_on is None
-    assert scripts.get_heads() == [REVISION]
+    assert scripts.get_heads() == [HEAD_REVISION]
     assert scripts.get_revision(REVISION).down_revision == DOWN_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == REVISION
+
+
+def test_revision_86_adds_content_free_request_dedupe_and_receipts() -> None:
+    revision = _load_dedupe_revision()
+    sql = _render("upgrade", revision=revision)
+
+    assert revision.revision == HEAD_REVISION
+    assert revision.down_revision == REVISION
+    assert "ADD COLUMN request_fingerprint_sha256 VARCHAR(64)" in sql
+    assert "CREATE TABLE agent_run_request_receipts" in sql
+    assert "uq_agent_run_jobs_active_request" in sql
+    assert "WHERE state IN ('queued', 'running', 'waiting_retry')" in sql
+    assert "normalize" in sql.lower()
+    assert "search_text" in sql
+    assert "request_text" not in sql
+
+
+def test_revision_86_upgrades_real_postgresql_with_one_serial_head() -> None:
+    with migrated_test_database(HEAD_REVISION) as (_url, engine):
+        inspector = sa.inspect(engine)
+        columns = {
+            column["name"]: column for column in inspector.get_columns("agent_run_jobs")
+        }
+        assert columns["request_fingerprint_sha256"]["nullable"] is False
+        assert "agent_run_request_receipts" in inspector.get_table_names()
+        indexes = {
+            index["name"]: index for index in inspector.get_indexes("agent_run_jobs")
+        }
+        active = indexes["uq_agent_run_jobs_active_request"]
+        assert active["unique"] is True
+        assert active["column_names"] == [
+            "identity_id",
+            "logical_conversation_id",
+            "request_fingerprint_sha256",
+        ]
+
+
+def test_revision_86_coalesces_duplicate_active_history_to_the_live_canonical_run() -> (
+    None
+):
+    from services.sydney_context_service import request_fingerprint_sha256
+
+    url = gmail_task_test_url()
+    expected_database = os.environ["GMAIL_TASK_TEST_DATABASE_NAME"]
+    engine = sa.create_engine(sync_test_url(url))
+    identity_id = uuid4()
+    session_id = uuid4()
+    logical_id = uuid4()
+    terminal_run_id = uuid4()
+    canonical_run_id = uuid4()
+    duplicate_run_id = uuid4()
+    event_ids = [uuid4(), uuid4(), uuid4()]
+    contents = [
+        "source all september birthdays and home anniversaries",
+        "  Source ALL September birthdays\nand home anniversaries  ",
+        "source all september birthdays and home anniversaries",
+    ]
+    try:
+        with owned_empty_test_schema(
+            engine,
+            expected_database=expected_database,
+        ):
+            run_alembic(url, "upgrade", REVISION)
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO agent_conversation_identities "
+                        "(id, platform, external_user_id, external_chat_id, "
+                        "display_label) VALUES (:id, 'telegram', 'user-1', "
+                        "'chat-1', 'Brandon')"
+                    ),
+                    {"id": identity_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO agent_conversation_sessions "
+                        "(id, identity_id, hermes_session_id, "
+                        "logical_conversation_id, platform) VALUES "
+                        "(:id, :identity, 'session-1', :logical, 'telegram')"
+                    ),
+                    {
+                        "id": session_id,
+                        "identity": identity_id,
+                        "logical": logical_id,
+                    },
+                )
+                for index, (event_id, content) in enumerate(
+                    zip(event_ids, contents, strict=True),
+                    start=1,
+                ):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO agent_conversation_events "
+                            "(id, identity_id, session_id, source_event_key, "
+                            "event_type, role, occurred_at, content_sha256, "
+                            "redaction_status, search_text) VALUES "
+                            "(:id, :identity, :session, :source, 'user', 'user', "
+                            ":occurred, :digest, 'unchanged', :content)"
+                        ),
+                        {
+                            "id": event_id,
+                            "identity": identity_id,
+                            "session": session_id,
+                            "source": f"session-1:{index}",
+                            "occurred": f"2026-09-04T12:0{index}:00+00:00",
+                            "digest": hashlib.sha256(content.encode()).hexdigest(),
+                            "content": content,
+                        },
+                    )
+                for index, (run_id, event_id, state) in enumerate(
+                    (
+                        (terminal_run_id, event_ids[0], "terminal_failure"),
+                        (canonical_run_id, event_ids[1], "queued"),
+                        (duplicate_run_id, event_ids[2], "running"),
+                    ),
+                    start=1,
+                ):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO agent_run_jobs "
+                            "(id, identity_id, platform_message_id, "
+                            "inbound_event_id, session_id, logical_conversation_id, "
+                            "state, attempt_count, terminal_deadline_at, created_at) "
+                            "VALUES (:id, :identity, :message, :event, :session, "
+                            ":logical, :state, 0, "
+                            "'2026-09-05T12:00:00+00:00', :created)"
+                        ),
+                        {
+                            "id": run_id,
+                            "identity": identity_id,
+                            "message": f"telegram-{index}",
+                            "event": event_id,
+                            "session": session_id,
+                            "logical": logical_id,
+                            "state": state,
+                            "created": f"2026-09-04T12:1{index}:00+00:00",
+                        },
+                    )
+            run_alembic(url, "upgrade", HEAD_REVISION)
+
+            with engine.begin() as connection:
+                runs = connection.execute(
+                    sa.text(
+                        "SELECT id, state, request_fingerprint_sha256 "
+                        "FROM agent_run_jobs ORDER BY created_at"
+                    )
+                ).all()
+                receipts = connection.execute(
+                    sa.text(
+                        "SELECT platform_message_id, run_id, disposition "
+                        "FROM agent_run_request_receipts "
+                        "ORDER BY platform_message_id"
+                    )
+                ).all()
+
+            expected_fingerprint = request_fingerprint_sha256(contents[0])
+            assert {row.request_fingerprint_sha256 for row in runs} == {
+                expected_fingerprint
+            }
+            assert [(row.id, row.state) for row in runs] == [
+                (terminal_run_id, "terminal_failure"),
+                (canonical_run_id, "queued"),
+                (duplicate_run_id, "terminal_failure"),
+            ]
+            assert [
+                (row.platform_message_id, row.run_id, row.disposition)
+                for row in receipts
+            ] == [
+                ("telegram-1", terminal_run_id, "primary"),
+                ("telegram-2", canonical_run_id, "primary"),
+                ("telegram-3", canonical_run_id, "coalesced"),
+            ]
+    finally:
+        engine.dispose()
 
 
 def test_upgrade_creates_exact_context_tables_search_and_append_only_guards() -> None:

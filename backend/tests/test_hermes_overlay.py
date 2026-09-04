@@ -1002,6 +1002,14 @@ class HermesOverlayTests(unittest.TestCase):
                 gateway_run.index("record_inbound_before_model(\n"),
                 gateway_run.index("result = agent.run_conversation"),
             )
+            self.assertLess(
+                gateway_run.index("SYDNEY_ACCEPTED_ACK_BEFORE_MODEL"),
+                gateway_run.index("result = agent.run_conversation"),
+            )
+            self.assertIn("stage_inbound_acknowledgement", gateway_run)
+            self.assertIn("confirm_inbound_acknowledgement", gateway_run)
+            self.assertIn("cancel_inbound_acknowledgement", gateway_run)
+            self.assertIn("_sydney_ack_future.result(timeout=20)", gateway_run)
             gateway_tree = ast.parse(gateway_run)
             run_agent_function = next(
                 node
