@@ -1,7 +1,15 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-08-27
+Last Updated: 2026-09-04
+
+### 2026-09-04 - Sydney, Command Contacts, and Card Repair Design Approved
+- Diagnosed the current production incident without replaying the failed request or mutating production. Sydney's exact crash is nullable provider input-token metadata being coerced with `int(None)`; equivalent Telegram messages then created separate durable runs that wandered through native shell/filesystem tools and unrelated Google/Drive sources.
+- Confirmed the manual reset did not repair the work: it opened a new Hermes session while the original durable run continued. The approved repair adds a receipt-guarded immediate acknowledgement, equivalent in-flight request coalescing, transparent continuation, an enforced business-tool boundary, and aggregate run budgets so Brandon does not need `/reset`, `/new`, or `/compact`.
+- Confirmed production has the immutable `12,580`-artifact archive but zero reconciliation runs, recovered contact profiles, capture positions, or section captures. The approved data repair follows the protected verify/dry-run/apply contract and preserves archive and lead-backed evidence.
+- Approved a contact-detail repair that filters technical archive activities from the normal timeline, preserves them under Source Evidence, fixes header/tab containment, and distinguishes recovered, internal, verified-empty, partial, and unreconciled states.
+- Approved an approval-gated physical-card campaign workflow. Sydney may prepare a draft but cannot approve or send. Send Out Cards calls stay disabled until contracted API credentials exist; its web app will not be scraped or macro-automated.
+- Design contract: `docs/superpowers/specs/2026-09-04-sydney-command-card-repair-design.md`. No code, schema, reconciliation, provider call, deployment, or external send occurred in this design task.
 
 ### 2026-08-27 - Sydney Command Recovery Completed
 - Replaced the mutable production-only Atlas operations instructions with a repository-owned `atlas-backend-operations` skill. The image and bootstrap now verify the manifest-pinned SHA-256, install it atomically before Hermes starts, preserve unrelated skills, no-op on identical bytes, and fail closed on path/hash mismatch. The skill makes the current Command search and audience-preview tools authoritative, treats admin URLs as navigation only, separates Google Contacts, and limits the former KW roster to explicit historical requests.
