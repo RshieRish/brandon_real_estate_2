@@ -10,22 +10,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Mapping, Sequence
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import models.lead  # noqa: F401  # Register the crm_contacts.lead_id FK target.
 from database import AsyncSessionLocal
 from models.command import CRMArchiveArtifact
-from services.command_parsers import ModuleMetrics, default_parser_registry
 from services.command_contact_overlap_manifest import (
     ContactOverlapManifest,
     load_contact_overlap_manifest,
 )
 from services.command_materializers import default_materializer_registry
+from services.command_parsers import ModuleMetrics, default_parser_registry
 from services.command_provenance import ArchiveArtifactInput, bundle_fingerprint
 from services.command_reconciliation import (
     ReconciliationSummary,

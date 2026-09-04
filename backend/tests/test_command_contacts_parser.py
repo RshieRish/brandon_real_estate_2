@@ -500,6 +500,40 @@ def test_parser_extracts_timeline_rows_from_accessibility_capture(bundle):
     assert "Fixture note" in events[0].payload["values"]["raw_lines"]
 
 
+def test_parser_bounds_long_timeline_label_without_losing_source_payload(bundle):
+    full_timeline_text = "Recovered timeline detail " * 30
+
+    def accessibility_timeline(payload):
+        payload.pop("rows")
+        payload["visible_text"] = None
+        payload["accessibility_snapshot"] = (
+            '- button "All Time": All Time\n'
+            '- heading "Apr 2, 2026" [level=5]\n'
+            '- generic: Note\n'
+            "- generic: 8:20 PM\n- generic: Created\n"
+            "- generic: By Fixture Owner\n- separator\n"
+            f"- generic: {full_timeline_text}\n"
+            '- heading "Notifications" [level=2]'
+        )
+
+    changed = replace_json_artifact(
+        bundle,
+        "kw_command_repaired/contacts/sections/0000002/timeline.json",
+        accessibility_timeline,
+    )
+    result = ContactsParser().parse(changed, "contacts-v1")
+    event = next(
+        record
+        for record in result.records
+        if record.record_kind == "contact_timeline_event"
+        and record.payload["capture_ordinal"] == "0000002"
+    )
+
+    assert len(event.display_label) == 500
+    assert event.display_label.endswith("…")
+    assert full_timeline_text.strip() in event.payload["values"]["raw_lines"]
+
+
 @pytest.mark.parametrize(
     ("path", "empty_text", "source_key"),
     [

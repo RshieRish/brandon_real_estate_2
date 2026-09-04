@@ -245,6 +245,12 @@ def test_source_draft_rejects_every_blank_identity_field(field, blank):
         source_draft(**{field: blank})
 
 
+@pytest.mark.parametrize("display_label", [None, "x" * 501])
+def test_source_draft_rejects_unpersistable_display_labels(display_label):
+    with pytest.raises(SourceDraftValidationError, match="display_label"):
+        source_draft(display_label=display_label)
+
+
 def test_source_draft_normalizes_supported_evidence_and_capture_values():
     draft = source_draft(
         evidence_level=EvidenceLevel.RENDERED_OCCURRENCE.value,

@@ -36,6 +36,7 @@ from services.command_provenance import (
 
 
 _CONTACT_ROOT = "kw_command_repaired/contacts"
+_MAX_DISPLAY_LABEL_LENGTH = 500
 _ORDINAL_PATTERN = re.compile(
     rf"^{_CONTACT_ROOT}/sections/(\d{{7}})/(?:"
     + "|".join(re.escape(path) for path in SECTION_RELATIVE_PATHS.values())
@@ -342,7 +343,7 @@ def _occurrence_drafts(
                 record_kind=record_kind,
                 source_key=source_key,
                 evidence_level=evidence,
-                display_label=occurrence.display_label,
+                display_label=_bounded_display_label(occurrence.display_label),
                 payload={
                     "capture_ordinal": profile.capture_ordinal,
                     "source_contact_id": profile.source_contact_id,
@@ -363,6 +364,12 @@ def _occurrence_drafts(
             )
         )
     return tuple(values)
+
+
+def _bounded_display_label(value: str) -> str:
+    if len(value) <= _MAX_DISPLAY_LABEL_LENGTH:
+        return value
+    return value[: _MAX_DISPLAY_LABEL_LENGTH - 1] + "…"
 
 
 def _occurrence_identity(

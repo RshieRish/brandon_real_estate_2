@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.command import CRMContact, CRMNote, CRMSavedSearch
+from models.command import CRMActivity, CRMContact, CRMNote, CRMSavedSearch
 from models.command_contacts import (
     CONTACT_SECTIONS,
     CRMContactAddress,
@@ -29,6 +29,7 @@ from models.command_contacts import (
 from models.command_provenance import CRMEntitySource, CRMSourceRecord
 from services.command_contact_identity import (
     ContactIdentityCandidate,
+    ContactIdentityCluster,
     canonical_email,
     canonical_phone,
     resolve_identity_clusters,
@@ -112,6 +113,13 @@ class ContactMaterializer:
 
         contacts = (await db.scalars(select(CRMContact))).all()
         contacts_by_id = {contact.id: contact for contact in contacts}
+        legacy_profiles_staged = await _stage_legacy_capture_profiles(
+            db,
+            profiles_by_source,
+            clusters,
+            contacts_by_id,
+        )
+        await db.flush()
         contact_profiles = (await db.scalars(select(CRMContactProfile))).all()
         preexisting_contact_rows = len(contacts)
         lead_backed_contacts = sum(
@@ -321,6 +329,7 @@ class ContactMaterializer:
                     lead_backed_contacts - len(reviewed_lead_backed_contact_ids)
                 ),
                 "legacy_lead_ids_preserved": legacy_lead_ids_preserved,
+                "legacy_capture_profiles_staged": legacy_profiles_staged,
                 "source_entity_links_final": final_mapping_count,
                 "total_contacts": total_contacts,
             },
@@ -381,6 +390,155 @@ def _candidate(draft: SourceRecordDraft) -> ContactIdentityCandidate:
         raise ContactMaterializationError(
             "recovered contact identity evidence is invalid"
         ) from exc
+
+
+async def _stage_legacy_capture_profiles(
+    db: AsyncSession,
+    profiles_by_source: Mapping[str, SourceRecordDraft],
+    clusters: Sequence[ContactIdentityCluster],
+    contacts_by_id: Mapping[int, CRMContact],
+) -> int:
+    """Bind the preserved legacy capture markers to recovered identities.
+
+    The first Command import retained one technical timeline marker per
+    source-normalized contact, including its canonical seven-digit capture
+    ordinal, but it predates ``crm_contact_profiles``.  Contacts reconciliation
+    needs that explicit historical edge in order to repair the existing rows
+    instead of duplicating them.  This bridge is additive, idempotent, and
+    refuses identifier drift.
+    """
+    markers = (
+        await db.scalars(
+            select(CRMActivity)
+            .where(CRMActivity.kind == "archive_timeline_capture")
+            .order_by(CRMActivity.id)
+        )
+    ).all()
+    if not markers:
+        return 0
+
+    drafts_by_ordinal: dict[str, SourceRecordDraft] = {}
+    for draft in profiles_by_source.values():
+        ordinal = draft.payload.get("capture_ordinal")
+        if not isinstance(ordinal, str) or re.fullmatch(r"[0-9]{7}", ordinal) is None:
+            raise ContactMaterializationError(
+                "recovered contact capture ordinal is invalid"
+            )
+        if ordinal in drafts_by_ordinal:
+            raise ContactMaterializationError(
+                "recovered contact capture ordinal is ambiguous"
+            )
+        drafts_by_ordinal[ordinal] = draft
+
+    identity_by_source: dict[str, str] = {}
+    for cluster in clusters:
+        source_ids = cluster.source_contact_ids
+        if len(source_ids) != 1:
+            raise ContactMaterializationError(
+                "legacy contact capture identity is ambiguous"
+            )
+        identity_by_source[source_ids[0]] = cluster.identity_hash
+
+    existing_profiles = (await db.scalars(select(CRMContactProfile))).all()
+    profiles_by_contact = {profile.contact_id: profile for profile in existing_profiles}
+    profile_owner_by_hash = {
+        profile.recovered_identity_hash: profile.contact_id
+        for profile in existing_profiles
+        if profile.recovered_identity_hash is not None
+    }
+    seen_contacts: set[int] = set()
+    seen_ordinals: set[str] = set()
+    marker_sources: set[str] = set()
+    staged = 0
+    for marker in markers:
+        if marker.contact_id is None or marker.contact_id in seen_contacts:
+            raise ContactMaterializationError(
+                "legacy contact capture marker ownership is ambiguous"
+            )
+        try:
+            metadata = json.loads(marker.metadata_json or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ContactMaterializationError(
+                "legacy contact capture marker is invalid"
+            ) from exc
+        if not isinstance(metadata, dict) or set(metadata) != {"ordinal", "source"}:
+            raise ContactMaterializationError(
+                "legacy contact capture marker is invalid"
+            )
+        ordinal = metadata.get("ordinal")
+        marker_source = metadata.get("source")
+        if (
+            not isinstance(ordinal, str)
+            or re.fullmatch(r"[0-9]{7}", ordinal) is None
+            or ordinal in seen_ordinals
+            or not isinstance(marker_source, str)
+            or not marker_source.strip()
+        ):
+            raise ContactMaterializationError(
+                "legacy contact capture marker is invalid"
+            )
+        draft = drafts_by_ordinal.get(ordinal)
+        contact = contacts_by_id.get(marker.contact_id)
+        if draft is None or contact is None:
+            raise ContactMaterializationError(
+                "legacy contact capture marker is unresolved"
+            )
+        candidate = _candidate(draft)
+        source_email = canonical_email(candidate.primary_email)
+        target_email = canonical_email(contact.email)
+        if source_email != target_email:
+            raise ContactMaterializationError(
+                "legacy contact capture email evidence changed"
+            )
+        source_phone = canonical_phone(candidate.e164_phone)
+        target_phone = canonical_phone(contact.phone)
+        if (
+            source_phone is not None
+            and target_phone is not None
+            and source_phone != target_phone
+        ):
+            raise ContactMaterializationError(
+                "legacy contact capture phone evidence changed"
+            )
+        identity_hash = identity_by_source.get(candidate.source_contact_id)
+        if identity_hash is None:
+            raise ContactMaterializationError(
+                "legacy contact capture identity is unresolved"
+            )
+        current_owner = profile_owner_by_hash.get(identity_hash)
+        if current_owner is not None and current_owner != contact.id:
+            raise ContactMaterializationError(
+                "legacy contact capture identity has conflicting ownership"
+            )
+        profile = profiles_by_contact.get(contact.id)
+        if profile is None:
+            profile = CRMContactProfile(
+                contact_id=contact.id,
+                recovered_identity_hash=identity_hash,
+                birth_year_quality="unknown",
+                anniversary_year_quality="unknown",
+            )
+            db.add(profile)
+            profiles_by_contact[contact.id] = profile
+            profile_owner_by_hash[identity_hash] = contact.id
+            staged += 1
+        elif profile.recovered_identity_hash is None:
+            profile.recovered_identity_hash = identity_hash
+            profile_owner_by_hash[identity_hash] = contact.id
+            staged += 1
+        elif profile.recovered_identity_hash != identity_hash:
+            raise ContactMaterializationError(
+                "legacy contact capture profile identity changed"
+            )
+        seen_contacts.add(contact.id)
+        seen_ordinals.add(ordinal)
+        marker_sources.add(marker_source.strip())
+
+    if len(marker_sources) != 1:
+        raise ContactMaterializationError(
+            "legacy contact capture source is ambiguous"
+        )
+    return staged
 
 
 def _new_contact(draft: SourceRecordDraft) -> CRMContact:
