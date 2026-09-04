@@ -87,6 +87,10 @@ class SourceRecordDraft:
     captured_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.display_label, str) or len(self.display_label) > 500:
+            raise SourceDraftValidationError(
+                "display_label must be a string within the storage limit"
+            )
         for field_name in (
             "source_system",
             "module",

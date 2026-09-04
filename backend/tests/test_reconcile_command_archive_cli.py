@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from command_db import archive_artifact_row
+from command_db import command_db as command_db_session
 from sqlalchemy import func, select
 
-from command_db import archive_artifact_row, command_db as command_db_session
 from models.command_provenance import (
     CRMReconciliationResult,
     CRMReconciliationRun,
@@ -19,9 +23,36 @@ from services.command_parsers import ModuleMetrics
 from services.command_provenance import bundle_fingerprint
 from services.command_reconciliation import ReconciliationSummary
 
-
 command_db = pytest.fixture(name="command_db")(command_db_session)
 CONTACT_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "command_contacts"
+
+
+def test_cli_registers_every_foreign_key_target_in_a_fresh_process():
+    backend_root = Path(__file__).parents[1]
+    env = os.environ | {
+        "DATABASE_URL": "postgresql+asyncpg://test:test@localhost/test",
+        "JWT_SECRET": "test-only",
+        "PYTHONPATH": str(backend_root),
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import scripts.reconcile_command_archive; "
+                "from database import Base; "
+                "assert 'leads' in Base.metadata.tables"
+            ),
+        ],
+        cwd=backend_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_cli_requires_exactly_one_mode():
