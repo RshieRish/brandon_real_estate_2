@@ -1299,7 +1299,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     routes = _main_command_routes()
     inventory = _mounted_inventory(routes)
 
-    assert len(inventory) == 97
+    assert len(inventory) == 102
     assert inventory[:24] == FULL_ROUTE_INVENTORY
     assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
     assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (

@@ -1,7 +1,7 @@
 ---
 name: atlas-backend-operations
 description: Use when Sydney needs Sold With Sweeney backend, Command CRM, Google Workspace, booking, lead, or task-suggestion data through Atlas.
-version: 2.0.0
+version: 2.2.0
 ---
 
 # Atlas Backend Operations
@@ -15,6 +15,8 @@ history, memory, or a web page.
 
 | Request | Use |
 | --- | --- |
+| Command birthdays, home anniversaries, or monthly celebrations | `command_contact_celebrations_preview` only |
+| Physical birthday or home-anniversary cards | `command_card_campaign_draft_create` after the celebration preview |
 | Command contacts or an `/admin/command` contact audience | `command_contacts_search` or `command_contact_audience_preview` |
 | Google Contacts | `contacts_search` |
 | Drive files, including native Sheets | `drive_search`, then `drive_file_read` |
@@ -29,6 +31,9 @@ history, memory, or a web page.
 - `command_contacts_search` is authoritative for current Command contact lookup.
 - `command_contact_audience_preview` is authoritative for a complete filtered
   count, checksum, opaque reference, and masked sample.
+- `command_contact_celebrations_preview` is the only authoritative source for
+  birthday and home-anniversary audiences. Treat "my contacts" as Command when
+  Brandon asks for those celebrations; do not search Google Contacts or Drive.
 - A Command admin URL is a navigation locator, never a data endpoint. Never
   fetch or parse its HTML, React payload, or `__NEXT_DATA__`.
 - `contacts_search` searches Google Contacts only; never substitute it for
@@ -46,6 +51,21 @@ history, memory, or a web page.
 3. Report returned count, checksum, reference, filters, and masked sample.
 4. Propose outreach subject and body in chat. Preview never sends or drafts.
 5. Stop for fresh Brandon approval before any external action.
+
+For a celebration request, call the celebration preview once for the requested
+month and kinds. Use its union count, address readiness, checksum, reference,
+and masked examples. Do not reconstruct dates from notes, files, historical
+rosters, or general contact searches.
+
+## Physical cards
+
+- Sydney may create or retrieve an internal card-campaign draft only through
+  `command_card_campaign_draft_create`.
+- Sydney cannot approve, send, or simulate provider delivery. Return the
+  authenticated Command review URL and stop for Brandon's explicit review.
+- Send Out Cards is unsupported until the backend reports a contracted API
+  connection. Never scrape its website, run a browser macro, use local shell or
+  files to imitate an integration, or substitute another provider silently.
 
 ## Google Workspace
 
@@ -76,5 +96,9 @@ history, memory, or a web page.
 
 - Use only protected Atlas tools. Never inspect process environments, retrieve
   admin passwords, bypass authentication, or scrape private CRM pages.
+- Native shell, code execution, process, filesystem, browser, session-search,
+  and local-memory tools are outside Sydney's business-tool lane. Do not invoke
+  them; use `skill_view` for these instructions and registered Atlas tools for
+  work.
 - If the authoritative tool is unavailable, name the gap and stop; never replace
   it silently.

@@ -1,5 +1,9 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures/command';
+import {
+  BROKEN_ARCHIVE_TIMELINE_VALUE,
+  LONG_REAL_TIMELINE_VALUE,
+} from './fixtures/command-contacts';
 
 const defaultDirectory = '/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=50';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -311,6 +315,46 @@ test('detail renders celebrations, all eight top-level panels, three task panels
   await expect(commandPage.getByRole('region', { name: 'Captured source SmartPlans' }).getByText('Source evidence only')).toBeVisible();
   await topTabs.getByRole('tab', { name: 'Saved Searches' }).click();
   await expect(commandPage.getByRole('region', { name: 'Captured source saved searches' }).getByText('Partial capture', { exact: true }).first()).toBeVisible();
+});
+
+test('contact detail hides the captured accessibility dump, bounds long history, and clears the fixed header', async ({ commandPage }) => {
+  await commandPage.goto('/admin/command/contacts/1');
+  await expect(commandPage.getByRole('heading', { name: 'Avery Lake' })).toBeVisible();
+
+  const fixtureTimeline = await api(commandPage, '/contacts/1/timeline?page_size=50');
+  expect(fixtureTimeline.status).toBe(200);
+  expect(JSON.stringify(fixtureTimeline.body)).toContain(BROKEN_ARCHIVE_TIMELINE_VALUE);
+  expect(JSON.stringify(fixtureTimeline.body)).toContain(LONG_REAL_TIMELINE_VALUE);
+  await expect(commandPage.getByText(BROKEN_ARCHIVE_TIMELINE_VALUE, { exact: true })).toHaveCount(0);
+  await expect(commandPage.getByText('Imported from recovered Command archive', { exact: true })).toHaveCount(0);
+  await expect(commandPage.getByText(LONG_REAL_TIMELINE_VALUE, { exact: true })).toHaveCount(0);
+
+  const expand = commandPage.getByRole('button', { name: 'Show full activity' });
+  await expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await expand.click();
+  await expect(commandPage.getByRole('heading', { name: LONG_REAL_TIMELINE_VALUE.trim() })).toBeVisible();
+  await expect(commandPage.getByRole('button', { name: 'Collapse activity' })).toHaveAttribute('aria-expanded', 'true');
+
+  const topTabs = commandPage.getByRole('tablist', { name: 'Contact detail views' });
+  await expect(topTabs.getByRole('tab', { name: 'Timeline' })).toContainText('2 events');
+  await expect(topTabs.getByRole('tab', { name: 'Notes' })).toContainText('1 captured · 1 SWS');
+  await expect(topTabs.getByRole('tab', { name: 'Source Evidence' })).toContainText('1 capture');
+
+  const clearance = await commandPage.evaluate(() => {
+    const utility = document.querySelector('.command-utility-header')?.getBoundingClientRect();
+    const moduleHeader = document.querySelector('.command-contact-detail-workspace > .command-module-header')?.getBoundingClientRect();
+    return utility && moduleHeader
+      ? { utilityBottom: utility.bottom, moduleTop: moduleHeader.top }
+      : null;
+  });
+  expect(clearance).not.toBeNull();
+  expect(clearance!.moduleTop).toBeGreaterThanOrEqual(clearance!.utilityBottom - 1);
+
+  const dimensions = await commandPage.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport + 1);
 });
 
 test('failed note mutation refreshes authoritative state, preserves its editor, and retries exactly once', async ({ commandPage, failCommandEndpointOnce }) => {

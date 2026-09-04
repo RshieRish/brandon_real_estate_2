@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandDecodeError, CommandHttpError } from './http';
 import {
   contactsApi,
+  contactPresentationText,
+  contactSectionCoverage,
   decodeContactBulkInput,
   decodeContactBulkResult,
   decodeContactCelebrations,
@@ -22,6 +24,7 @@ import {
   decodeContactWorkspaceSummary,
   decodeLegacyContact,
   serializeDirectoryRequest,
+  type ContactEvidence,
 } from './contacts';
 
 const COMMAND_BASE_URL = 'http://localhost:8000/api/v1/command';
@@ -160,10 +163,10 @@ const timelinePage = {
   has_more: false,
 };
 
-const evidenceSections = [
+const evidenceSections: ContactEvidence['section_matrix'] = ([
   'timeline', 'opportunities', 'smart_plans', 'notes', 'saved_searches',
   'tasks_to_do', 'tasks_completed', 'tasks_archived',
-].map((section) => ({
+] as const satisfies readonly ContactEvidence['section_matrix'][number]['section'][]).map((section) => ({
   capture_position_id: 4,
   section,
   source_record_id: 31,
@@ -173,7 +176,7 @@ const evidenceSections = [
   limitation_codes: [],
 }));
 
-const evidence = {
+const evidence: ContactEvidence = {
   contact_id: 7,
   provider_contact_rows: 1,
   resolved_provider_identities: 1,
@@ -648,6 +651,67 @@ describe('Command contacts wire decoders', () => {
 
   it('preserves nullable recovered timeline timestamps', () => {
     expect(decodeContactTimelinePage(timelinePage)).toEqual(timelinePage);
+  });
+
+  it('bounds contact presentation text by Unicode characters and preserves an explicit expansion value', () => {
+    const longValue = `${'A'.repeat(219)}🌟source evidence`;
+
+    expect(contactPresentationText('Short value', 220)).toEqual({
+      preview: 'Short value',
+      full: 'Short value',
+      truncated: false,
+    });
+    expect(contactPresentationText(longValue, 220)).toEqual({
+      preview: `${'A'.repeat(219)}🌟…`,
+      full: longValue,
+      truncated: true,
+    });
+    expect(() => contactPresentationText(longValue, 0)).toThrow(RangeError);
+  });
+
+  it('classifies captured contact sections without treating global archive totals as contact coverage', () => {
+    const noPositions = {
+      ...evidence,
+      capture_positions: [],
+      section_matrix: [],
+    };
+    expect(contactSectionCoverage({
+      ...noPositions,
+      provider_contact_rows: 0,
+      resolved_provider_identities: 0,
+    }, 'notes')).toMatchObject({ state: 'unreconciled', recovered_count: 0 });
+    expect(contactSectionCoverage(noPositions, 'notes')).toMatchObject({
+      state: 'not_linked',
+      recovered_count: 0,
+    });
+    expect(contactSectionCoverage(evidence, 'notes')).toMatchObject({
+      state: 'verified_empty',
+      recovered_count: 0,
+      capture_positions: 1,
+    });
+
+    const partialSections = evidenceSections.map((cell) => cell.section === 'notes'
+      ? { ...cell, capture_quality: 'partial' as const, limitation_codes: ['partial_capture'] }
+      : cell);
+    expect(contactSectionCoverage({
+      ...evidence,
+      capture_positions: [{ ...evidence.capture_positions[0], sections: partialSections }],
+      section_matrix: partialSections,
+    }, 'notes')).toMatchObject({ state: 'partial', recovered_count: 0 });
+
+    const capturedSections = evidenceSections.map((cell) => cell.section === 'notes'
+      ? { ...cell, row_count: 2, is_empty: false }
+      : cell);
+    expect(contactSectionCoverage({
+      ...evidence,
+      capture_positions: [{ ...evidence.capture_positions[0], sections: capturedSections }],
+      section_matrix: capturedSections,
+    }, 'notes')).toEqual({
+      state: 'captured',
+      recovered_count: 2,
+      capture_positions: 1,
+      complete_positions: 1,
+    });
   });
 
   it('enforces aggregate evidence constants, quality domains, and derived content links', () => {

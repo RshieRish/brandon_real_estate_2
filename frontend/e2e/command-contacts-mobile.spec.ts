@@ -1,4 +1,8 @@
 import { expect, test } from './fixtures/command';
+import {
+  BROKEN_ARCHIVE_TIMELINE_VALUE,
+  LONG_REAL_TIMELINE_VALUE,
+} from './fixtures/command-contacts';
 
 test('Contacts detail mobile profile disclosure opens, closes, and restores focus', async ({ commandPage }) => {
   await commandPage.goto('/admin/command/contacts/1');
@@ -119,13 +123,35 @@ test('mobile directory and detail contain overflow in named strips only', async 
     const dimensions = await commandPage.evaluate(() => ({
       viewport: document.documentElement.clientWidth,
       document: document.documentElement.scrollWidth,
+      offenders: Array.from(document.body.querySelectorAll<HTMLElement>('*')).map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName,
+          className: element.className,
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+        };
+      }).filter((item) => item.left < -1 || item.right > document.documentElement.clientWidth + 1).slice(0, 12),
     }));
-    expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport + 1);
+    expect(dimensions.document, JSON.stringify(dimensions.offenders, null, 2)).toBeLessThanOrEqual(dimensions.viewport + 1);
   }
+  await expect(commandPage.getByText(BROKEN_ARCHIVE_TIMELINE_VALUE, { exact: true })).toHaveCount(0);
+  const expand = commandPage.getByRole('button', { name: 'Show full activity' });
+  await expand.tap();
+  await expect(commandPage.getByRole('heading', { name: LONG_REAL_TIMELINE_VALUE.trim() })).toBeVisible();
+  const expandedDimensions = await commandPage.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+  }));
+  expect(expandedDimensions.document).toBeLessThanOrEqual(expandedDimensions.viewport + 1);
   const tabs = commandPage.getByRole('tablist', { name: 'Contact detail views' });
   const tabDimensions = await tabs.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth, overflow: getComputedStyle(element).overflowX }));
   expect(tabDimensions.scroll).toBeGreaterThan(tabDimensions.client);
   expect(tabDimensions.overflow).toMatch(/auto|scroll/);
+  const summary = commandPage.getByRole('complementary', { name: 'Contact workspace counts' });
+  const summaryDimensions = await summary.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth, overflow: getComputedStyle(element).overflowX }));
+  expect(summaryDimensions.scroll).toBeGreaterThan(summaryDimensions.client);
+  expect(summaryDimensions.overflow).toMatch(/auto|scroll/);
 });
 
 test('every visible Contacts directory and detail target is at least 44 CSS pixels', async ({ commandPage }) => {

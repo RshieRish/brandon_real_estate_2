@@ -73,3 +73,28 @@ final result: passed
 - Remaining difference: exact source/current pixel and geometry comparison was explicitly waived for this release because no operator-provided access-controlled manifest was available outside all repository/worktree/build/artifact roots. Synthetic cross-platform baselines pass and were inspected; operator source parity remains **not run** and is not represented as passed.
 
 Contacts synthetic baseline result: passed. Contacts private source comparison result: not run by explicit release waiver.
+
+## Contact-detail repair addendum — 2026-09-04
+
+- The reported raw contact-detail failure was reproduced with a deterministic
+  accessibility-tree archive fixture. The supplied private screenshot was used
+  only as an inspection reference and was not copied into the repository.
+- Timeline now suppresses technical archive-capture/import activities from the
+  ordinary activity feed without deleting their database evidence. Source
+  Evidence keeps those records visible as recovered provenance.
+- Every tab now reports its own count and truthful state: loading, unavailable,
+  unreconciled, not linked, verified empty, partial, recovered, or current SWS
+  internal. Global archive totals never stand in for contact-specific evidence.
+- Desktop keeps fixed-header clearance, a readable profile/detail split, and a
+  sticky named tab strip. Mobile uses a compact horizontally contained count
+  strip and tab strip at `390x844`; neither produces document-level horizontal
+  overflow. Long recovered values are bounded and expand only on request.
+- All seven Contacts baselines were inspected on Darwin and Linux. Local Darwin
+  and pinned-container runs remain pixel-identical. GitHub's Ubuntu image
+  reproducibly rasterized 13 pixels differently on desktop and intermittently
+  15 pixels differently at the mobile directory sort caret, with no geometry or
+  content change. The cross-runner assertions therefore allow at most 20 changed
+  pixels per full-page image while retaining the existing per-pixel threshold;
+  this is no more than 0.005% of the smallest baseline.
+
+Contact-detail repair synthetic baseline result: passed.

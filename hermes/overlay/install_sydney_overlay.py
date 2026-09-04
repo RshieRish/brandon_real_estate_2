@@ -289,9 +289,7 @@ def _patch_gateway_run(contents: str) -> str:
         reply_helper_import_replacement,
         "GatewayRunner Telegram numeric reply helper import",
     )
-    thread_anchor = (
-        '            anchor = reply_to_message_id or getattr(source, "message_id", None)'
-    )
+    thread_anchor = '            anchor = reply_to_message_id or getattr(source, "message_id", None)'
     thread_replacement = """\
             # SYDNEY_GATEWAY_RUN_TELEGRAM_NUMERIC_REPLY_ANCHOR
             anchor = _sydney_telegram_numeric_reply_anchor(
@@ -378,6 +376,59 @@ def _patch_gateway_run(contents: str) -> str:
                     content=message,
                     internal=_sydney_internal,
                 )
+                # SYDNEY_ACCEPTED_ACK_BEFORE_MODEL
+                from agent.sydney_runtime import (
+                    cancel_inbound_acknowledgement,
+                    confirm_inbound_acknowledgement,
+                    stage_inbound_acknowledgement,
+                )
+                _sydney_ack = stage_inbound_acknowledgement(agent)
+                if _sydney_ack:
+                    if _status_adapter and _run_still_current():
+                        _sydney_ack_future = safe_schedule_threadsafe(
+                            _status_adapter.send(
+                                _status_chat_id,
+                                _sydney_ack,
+                                metadata=_status_thread_metadata,
+                            ),
+                            _loop_for_step,
+                            logger=logger,
+                            log_message="Sydney accepted acknowledgement send error",
+                        )
+                        if _sydney_ack_future is None:
+                            cancel_inbound_acknowledgement(agent, _sydney_ack)
+                        else:
+                            try:
+                                _sydney_ack_result = _sydney_ack_future.result(timeout=20)
+                            except Exception:
+                                # The provider may have accepted the send even when
+                                # its receipt was lost. Commit an ambiguous marker
+                                # so a restart never sends the acknowledgement twice.
+                                try:
+                                    confirm_inbound_acknowledgement(
+                                        agent,
+                                        _sydney_ack,
+                                        ambiguous=True,
+                                    )
+                                except Exception:
+                                    pass
+                            else:
+                                if getattr(_sydney_ack_result, "success", False):
+                                    try:
+                                        confirm_inbound_acknowledgement(
+                                            agent,
+                                            _sydney_ack,
+                                            ambiguous=False,
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    cancel_inbound_acknowledgement(
+                                        agent,
+                                        _sydney_ack,
+                                    )
+                    else:
+                        cancel_inbound_acknowledgement(agent, _sydney_ack)
                 if not _sydney_has_run_lease:
                     from agent.sydney_runtime import deferred_inbound_response
                     _sydney_saved_message = deferred_inbound_response(agent)
@@ -720,7 +771,9 @@ def _thread_metadata_for_source("""
         reply_helper_replacement,
         "Telegram numeric reply helper",
     )
-    thread_anchor = '        anchor = reply_to_message_id or getattr(source, "message_id", None)'
+    thread_anchor = (
+        '        anchor = reply_to_message_id or getattr(source, "message_id", None)'
+    )
     thread_replacement = """\
         anchor = _sydney_telegram_numeric_reply_anchor(
             reply_to_message_id or getattr(source, "message_id", None)
@@ -1202,6 +1255,21 @@ def _patch_conversation_loop(contents: str) -> str:
                     prompt_tokens = canonical_usage.prompt_tokens"""
     contents = _replace_exact(
         contents, usage_anchor, usage_replacement, "usage metadata accounting"
+    )
+    terminal_policy_anchor = """\
+                    final_response = agent._toolguard_controlled_halt_response(decision)"""
+    terminal_policy_replacement = """\
+                    # SYDNEY_TERMINAL_TOOL_POLICY_RESPONSE
+                    from agent.sydney_runtime import terminal_tool_policy_response
+                    final_response = (
+                        terminal_tool_policy_response(agent)
+                        or agent._toolguard_controlled_halt_response(decision)
+                    )"""
+    contents = _replace_exact(
+        contents,
+        terminal_policy_anchor,
+        terminal_policy_replacement,
+        "terminal Sydney tool policy response",
     )
     retry_anchor = """\
                 retry_count += 1

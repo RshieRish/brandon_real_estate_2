@@ -255,6 +255,17 @@ AGENT_ACTIONS = [
         description="Record a non-authoritative dismissal proposal for Brandon review.",
     ),
     AgentAction(
+        id="crm.card_campaign_drafts.create",
+        method="POST",
+        path="/api/v1/agent-control/crm/card-campaign-drafts",
+        risk_tier="operator_review",
+        side_effects=True,
+        description=(
+            "Create or retrieve a physical-card campaign draft for Brandon's "
+            "authenticated Command review without approving or sending it."
+        ),
+    ),
+    AgentAction(
         id="context.events.ingest",
         method="POST",
         path="/api/v1/agent-control/context/events/batch",
@@ -357,6 +368,17 @@ AGENT_ACTIONS = [
         risk_tier="auto_silent",
         side_effects=False,
         description="Preview a masked, checksum-bound Command contact audience without sending.",
+    ),
+    AgentAction(
+        id="crm.command_contact_celebrations.preview",
+        method="POST",
+        path="/api/v1/agent-control/crm/command-contact-celebrations/preview",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description=(
+            "Preview exact Command birthdays and home anniversaries with masked "
+            "examples and mailing-address readiness; never send cards."
+        ),
     ),
 ]
 

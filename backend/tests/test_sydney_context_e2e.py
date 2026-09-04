@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -12,9 +14,9 @@ from uuid import UUID, uuid5
 OVERLAY = Path(__file__).resolve().parents[2] / "hermes" / "overlay"
 sys.path.insert(0, str(OVERLAY))
 
-from sydney_memory_provider import SydneyMemoryProvider  # noqa: E402
-from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE  # noqa: E402
-from sydney_spool import SydneySpool  # noqa: E402
+from sydney_memory_provider import SydneyMemoryProvider
+from sydney_retry import AUTOMATIC_CONTINUATION_MESSAGE
+from sydney_spool import SydneySpool
 
 NAMESPACE = UUID("9eaa27c5-e399-4c3b-b329-8ee2d80f87c0")
 
@@ -31,6 +33,7 @@ class InMemorySydneyBackend:
         self.clock = datetime(2026, 8, 25, 18, 0, tzinfo=timezone.utc)
         self.events: dict[str, dict[str, Any]] = {}
         self.runs: dict[str, dict[str, Any]] = {}
+        self.run_receipts: dict[str, dict[str, Any]] = {}
         self.tools: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.command_reads: list[dict[str, Any]] = []
@@ -101,20 +104,69 @@ class InMemorySydneyBackend:
 
     def start_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("run", payload))
-        run_id = self._id(f"run:{payload['platform_message_id']}")
-        replayed = run_id in self.runs
-        if not replayed:
-            self.runs[run_id] = {
-                "id": run_id,
-                "identity_id": payload["identity_id"],
-                "platform_message_id": payload["platform_message_id"],
-                "state": "queued",
-                "attempt_count": 0,
-                "lease_owner": None,
-                "terminal_deadline_at": payload["terminal_deadline_at"],
-                "next_attempt_at": None,
+        existing_receipt = self.run_receipts.get(payload["platform_message_id"])
+        if existing_receipt is not None:
+            return {
+                "run": dict(self.runs[existing_receipt["run_id"]]),
+                "replayed": True,
+                "coalesced": existing_receipt["coalesced"],
             }
-        return {"run": dict(self.runs[run_id]), "replayed": replayed}
+        event = next(
+            event
+            for event in self.events.values()
+            if event["id"] == payload["inbound_event_id"]
+        )
+        normalized = " ".join(
+            unicodedata.normalize("NFKC", str(event.get("content") or ""))
+            .strip()
+            .split()
+        ).lower()
+        fingerprint = hashlib.sha256(
+            f"sydney-request-v1\0{normalized}".encode()
+        ).hexdigest()
+        active_run = next(
+            (
+                run
+                for run in self.runs.values()
+                if run["identity_id"] == payload["identity_id"]
+                and run["logical_conversation_id"] == payload["logical_conversation_id"]
+                and run["request_fingerprint_sha256"] == fingerprint
+                and run["state"] in {"queued", "running", "waiting_retry"}
+            ),
+            None,
+        )
+        if active_run is not None:
+            self.run_receipts[payload["platform_message_id"]] = {
+                "run_id": active_run["id"],
+                "coalesced": True,
+            }
+            return {
+                "run": dict(active_run),
+                "replayed": False,
+                "coalesced": True,
+            }
+        run_id = self._id(f"run:{payload['platform_message_id']}")
+        self.runs[run_id] = {
+            "id": run_id,
+            "identity_id": payload["identity_id"],
+            "logical_conversation_id": payload["logical_conversation_id"],
+            "request_fingerprint_sha256": fingerprint,
+            "platform_message_id": payload["platform_message_id"],
+            "state": "queued",
+            "attempt_count": 0,
+            "lease_owner": None,
+            "terminal_deadline_at": payload["terminal_deadline_at"],
+            "next_attempt_at": None,
+        }
+        self.run_receipts[payload["platform_message_id"]] = {
+            "run_id": run_id,
+            "coalesced": False,
+        }
+        return {
+            "run": dict(self.runs[run_id]),
+            "replayed": False,
+            "coalesced": False,
+        }
 
     def claim_runs(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("claim", payload))
@@ -390,3 +442,55 @@ def test_newer_inbound_supersedes_an_interrupted_running_turn(tmp_path: Path) ->
     assert backend.runs[first_run_id]["state"] == "terminal_failure"
     assert backend.runs[first_run_id]["error_code"] == "superseded_by_newer_inbound"
     assert backend.runs[second_run_id]["state"] == "running"
+
+
+def test_manual_reset_equivalent_prompt_coalesces_without_second_execution(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from sydney_runtime import (
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = InMemorySydneyBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    original = "Source all September birthdays and home anniversaries."
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="before-manual-reset",
+        content=original,
+    )
+    first_run_id = provider.active_run_id
+    assert first_run_id is not None
+    provider.on_session_switch(
+        "session-after-manual-reset",
+        parent_session_id="session-1",
+        reason="manual_reset",
+    )
+
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id="after-manual-reset",
+        content="  source ALL september birthdays\nand home anniversaries.  ",
+    )
+
+    assert provider.active_run_id == first_run_id
+    assert len(backend.runs) == 1
+    assert backend.runs[first_run_id]["state"] == "running"
+    assert not any(
+        payload.get("error_code") == "superseded_by_newer_inbound"
+        for name, payload in backend.calls
+        if name == "run_update"
+    )
+    assert stage_inbound_acknowledgement(agent) == (
+        "This request is already in progress. Sydney will continue it "
+        "automatically; you do not need to reset or resend it."
+    )

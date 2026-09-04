@@ -5636,7 +5636,7 @@ def test_task2_is_included_once_before_task5_in_the_dedicated_workflow() -> None
     )
 
 
-def test_task7_frontend_contract_is_pinned_in_the_dedicated_workflow() -> None:
+def test_command_frontend_contract_is_pinned_in_the_dedicated_workflow() -> None:
     workflow = (
         _backend_root().parent
         / ".github"
@@ -5649,20 +5649,33 @@ def test_task7_frontend_contract_is_pinned_in_the_dedicated_workflow() -> None:
     assert "working-directory: frontend" in job
     assert "npm ci" in job
     assert "npm run typecheck" in job
-    assert job.count("src/lib/command/task-suggestions.test.ts") == 2
-    assert job.count("src/components/command/TaskSuggestionsWorkspace.test.tsx") == 2
-    assert job.count("src/components/command/shell/commandNavigation.test.ts") == 2
-    assert job.count("src/components/command/shell/CommandShell.test.tsx") == 2
-    lint_step = job.split("name: Lint only the Task 7 frontend scope", 1)[1]
+    component_step = job.split(
+        "name: Run the complete frontend component suite", 1
+    )[1].split("- name:", 1)[0]
+    assert "run: npm test -- --run" in component_step
+    lint_step = job.split(
+        "name: Lint the Sydney, cards, and contact repair scope", 1
+    )[1].split("- name:", 1)[0]
     for path in (
+        "playwright.config.ts",
+        "e2e/command-contacts.spec.ts",
+        "e2e/command-contacts-mobile.spec.ts",
+        "e2e/command-contacts-accessibility.spec.ts",
+        "e2e/command-contacts-visual.spec.ts",
         "src/instrumentation-client.ts",
         "src/proxy.ts",
         "src/app/admin/layout.tsx",
+        "src/app/admin/command/cards/page.tsx",
+        "src/app/admin/command/cards/\\[campaignId\\]/page.tsx",
         "src/app/admin/command/task-suggestions/page.tsx",
         "src/app/admin/login/page.tsx",
+        "src/lib/command/cards.test.ts",
+        "src/lib/command/contacts.test.ts",
         "src/lib/command/task-suggestion-handoff.ts",
         "src/lib/command/task-suggestions.ts",
         "src/lib/command/task-suggestions.test.ts",
+        "src/components/command/cards/CardCampaignsWorkspace.test.tsx",
+        "src/components/command/contacts/ContactDetailWorkspace.test.tsx",
         "src/components/command/TaskSuggestionsWorkspace.tsx",
         "src/components/command/TaskSuggestionsWorkspace.test.tsx",
         "src/components/command/shell/commandNavigation.ts",
@@ -5670,3 +5683,19 @@ def test_task7_frontend_contract_is_pinned_in_the_dedicated_workflow() -> None:
         "src/components/command/shell/CommandShell.test.tsx",
     ):
         assert lint_step.count(path) == 1
+
+    browser_step = job.split(
+        "name: Run Sydney Command contact browser gates", 1
+    )[1].split("- name:", 1)[0]
+    for value in (
+        "--project=command-desktop",
+        "--project=command-mobile",
+        "--project=command-a11y",
+        "--project=command-visual",
+        "e2e/command-contacts.spec.ts",
+        "e2e/command-contacts-mobile.spec.ts",
+        "e2e/command-contacts-accessibility.spec.ts",
+        "e2e/command-contacts-visual.spec.ts",
+        "e2e/command-visual.spec.ts",
+    ):
+        assert browser_step.count(value) == 1

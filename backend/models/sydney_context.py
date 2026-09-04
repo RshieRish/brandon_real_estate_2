@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
+from database import Base
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -28,7 +29,6 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from database import Base
 from models.gmail_task_intake import _uuid_primary_key
 
 _JSONB = JSONB().with_variant(JSON(), "sqlite")
@@ -500,6 +500,18 @@ class AgentRunJob(Base):
             "id",
         ),
         Index("ix_agent_run_jobs_lease", "state", "lease_expires_at", "id"),
+        Index(
+            "uq_agent_run_jobs_active_request",
+            "identity_id",
+            "logical_conversation_id",
+            "request_fingerprint_sha256",
+            unique=True,
+            postgresql_where=text("state IN ('queued', 'running', 'waiting_retry')"),
+        ),
+        CheckConstraint(
+            "request_fingerprint_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_agent_run_jobs_request_fingerprint",
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[UUID] = _uuid_primary_key()
@@ -522,6 +534,7 @@ class AgentRunJob(Base):
     logical_conversation_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
+    request_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(
         String(32), default="queued", server_default="queued", nullable=False
     )
@@ -545,6 +558,69 @@ class AgentRunJob(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentRunRequestReceipt(Base):
+    __tablename__ = "agent_run_request_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "identity_id",
+            "platform_message_id",
+            name="uq_agent_run_request_receipts_platform_message",
+        ),
+        UniqueConstraint(
+            "inbound_event_id",
+            name="uq_agent_run_request_receipts_inbound_event",
+        ),
+        CheckConstraint(
+            "request_fingerprint_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_agent_run_request_receipts_fingerprint",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "disposition IN ('primary', 'coalesced')",
+            name="ck_agent_run_request_receipts_disposition",
+        ),
+        Index(
+            "ix_agent_run_request_receipts_run",
+            "run_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_primary_key()
+    run_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("agent_run_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    identity_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("agent_conversation_identities.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    platform_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    inbound_event_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("agent_conversation_events.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("agent_conversation_sessions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    logical_conversation_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
+    request_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    disposition: Mapped[str] = mapped_column(String(16), nullable=False)
+    terminal_deadline_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

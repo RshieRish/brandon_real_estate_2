@@ -206,16 +206,21 @@ mcp_servers:
         - context_history_search
         - command_contacts_search
         - command_contact_audience_preview
+        - command_contact_celebrations_preview
+        - command_card_campaign_draft_create
       resources: false
       prompts: false
 ```
 
 The production bridge was verified from inside `atlas-agent` on 2026-08-23 with
-the prior 22-tool contract. The Sydney release gate supersedes that count: raw
-JSON-RPC `tools/list` must return exactly 25 ordered unique names, preserve the
-original 22 byte-for-byte and in order, and append only the three read tools
-shown above. The deployed `gmail_send` schema still requires a caller-supplied
-UUID `request_id`.
+the prior 22-tool contract. The durable-context release later appended three
+read tools for an exact 25-tool registry. The 2026-09-04 Sydney/Command/card
+release supersedes that live count: raw JSON-RPC `tools/list` must return exactly
+27 ordered unique names, preserve the original 22 byte-for-byte and in order,
+preserve the next three read tools, and append only
+`command_contact_celebrations_preview` and
+`command_card_campaign_draft_create`. The deployed `gmail_send` and card-draft
+schemas must each require a caller-supplied UUID request ID.
 
 ### Managed operations skill
 
@@ -231,6 +236,11 @@ violation fails startup.
 The managed skill makes current Command tools authoritative for Command
 contacts. It forbids substituting Google Contacts, a historical Drive roster,
 or private admin-page HTML. A Command admin URL is only a navigation locator.
+Birthday and home-anniversary work must route first through
+`command_contact_celebrations_preview`. Physical-card work may then create only
+an internal review draft with `command_card_campaign_draft_create`; Sydney may
+not approve or send a campaign, and the returned authenticated Command page is
+the only approval surface.
 
 ### Deployed Task 8 overlay
 
@@ -355,11 +365,15 @@ unset task8_probe_b64
 `initialize`, `notifications/initialized`, and `tools/list`, prints one JSON
 proof object, and exits nonzero unless it confirms:
 
-- exactly 25 ordered and unique names;
+- exactly 27 ordered and unique names;
 - the first 22 names exactly match the prior production registry;
-- the three Sydney/Command read tools are appended once;
+- the three durable-context/Command read tools remain next and unchanged;
+- the celebration-preview and card-draft tools are appended once;
 - the five actual approve/dismiss/create-confirmed/archive/restore tools are absent;
-- `gmail_send.inputSchema.required` contains `request_id` and its format is `uuid`.
+- `gmail_send.inputSchema.required` contains `request_id` with format `uuid`;
+- `command_card_campaign_draft_create.inputSchema.required` contains
+  `request_id` with format `uuid`; and
+- no physical-card approve or send tool is exposed to Hermes.
 
 Source inspection or a local registry test does not replace this live gate.
 
@@ -423,6 +437,46 @@ requires `confirmed_by_brandon=true`.
 
 ## Sydney Durable Context Controlled Rollout
 
+### 2026-09-04 Sydney/Command/card release gate
+
+This coordinated release moves the sole Alembic head from
+`85e8b7c9d4f1` through `86f9c8a0d2e1` to `87a0d9b1e3f2`. Backend,
+integration worker, Atlas, and frontend must all be built from the same reviewed
+merge SHA. Take and validate a protected production backup before either
+migration. After migration, both `alembic heads` and `alembic current` must name
+only `87a0d9b1e3f2`.
+
+Keep `CARD_PROVIDER_MODE=disabled` in production. Do not configure provider
+credentials and do not automate, scrape, or macro the Send Out Cards website.
+The provider adapter remains fail-closed until an official contracted API and
+credentials are reviewed and implemented. Keep
+`SYDNEY_CONTEXT_MAX_TOOL_INVOCATIONS=12` so a continuation, session rotation,
+or Hermes restart cannot reset the server-counted business-tool ceiling.
+
+Before acceptance, require all of the following:
+
+1. backend, worker, Atlas, and frontend report the reviewed merge SHA and healthy
+   deployments;
+2. live in-container JSON-RPC `tools/list` proves the exact ordered 27-tool
+   contract described above;
+3. authenticated browser/API checks pass for the Command contact directory,
+   contact detail tabs, Client cards list, and campaign review route;
+4. ordinary contact timelines do not render the technical
+   `archive_timeline_capture` or `archive_contact_imported` activities, while
+   Source Evidence still reports their preserved database evidence; and
+5. the benign Brandon canary asks for September birthdays and home anniversaries
+   from Command and a prepared Send Out Cards campaign. It must receive an
+   immediate acknowledgement, use only the celebration preview followed by the
+   card-draft tool, return an absolute
+   `/admin/command/cards/{campaign_id}` review URL, require no `/reset`, and
+   perform no provider send.
+
+The private Contacts archive apply remains a separate guarded operation. Follow
+`docs/command-reconciliation-runbook.md`: fresh verify-only fingerprint,
+private exact-two overlap manifest, accepted manifest-aware dry run, protected
+backup, bounded apply, and idempotency proof. A green application deployment is
+not authority to skip any of those gates.
+
 This release keeps PostgreSQL canonical, `/data/.hermes/state.db` as the local
 Hermes transcript, and `/data/.hermes/sydney_spool.db` as a private crash-safe
 WAL outbox and last-good context cache. It does not delete or compact source
@@ -464,7 +518,7 @@ user in `SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS`. The provider fails closed for
 every non-allowlisted identity. Never put those IDs or any bearer token in a
 deployment message, log, report, or committed file.
 
-### Pre-deployment gates
+### Historical Task 14 pre-deployment gates
 
 Development gate recorded 2026-08-26:
 
@@ -497,7 +551,7 @@ Development gate recorded 2026-08-26:
    `/data` volume. Backend, worker, and Atlas deployments must each reach
    `SUCCESS`, and their health checks must pass before enablement.
 
-### Shadow ingest, backfill, and reconciliation
+### Historical Task 14 shadow ingest, backfill, and reconciliation
 
 Enable only the master switch on the backend, worker, and Atlas. Keep retrieval,
 projection, and retry disabled. Run the backfill inside the Atlas container so
@@ -541,7 +595,7 @@ chat mapping. Once shadow mode is live, ordinary turn synchronization copies
 only assistant/tool rows after the current inbound user boundary, so rows already
 covered by backfill cannot be inserted again under live source keys.
 
-### Promotion and acceptance
+### Historical Task 14 promotion and acceptance
 
 1. Enable retrieval for Brandon only. Verify a fresh turn automatically recalls
    a known source-linked fact from an earlier Hermes session within the 16,000

@@ -5,6 +5,7 @@ import { useId, useRef, useState } from 'react';
 export type CommandTab<Value extends string = string> = Readonly<{
   value: Value;
   label: string;
+  meta?: string;
   disabled?: boolean;
 }>;
 
@@ -87,6 +88,7 @@ export function CommandTabs<Value extends string>({
             id={`${base}-tab-${safeId(tab.value)}`}
             type="button"
             role="tab"
+            aria-label={tab.label}
             aria-selected={selected}
             aria-controls={`${base}-panel-${safeId(tab.value)}`}
             disabled={tab.disabled}
@@ -96,7 +98,12 @@ export function CommandTabs<Value extends string>({
             onKeyDown={(event) => handleKeyDown(event, tab.value)}
             onClick={() => onValueChange(tab.value)}
           >
-            {tab.label}
+            {tab.meta ? (
+              <>
+                <span className="command-tab-label">{tab.label}</span>
+                <span className="command-tab-meta" aria-hidden="true">{tab.meta}</span>
+              </>
+            ) : tab.label}
           </button>
         );
       })}

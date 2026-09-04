@@ -55,6 +55,8 @@ NEW_READ_TOOLS = [
     "context_history_search",
     "command_contacts_search",
     "command_contact_audience_preview",
+    "command_contact_celebrations_preview",
+    "command_card_campaign_draft_create",
 ]
 
 TEMPLATE_DOCKERFILE = """\
@@ -164,8 +166,8 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertEqual(manifest["tools"]["include"][:16], EXISTING_TOOLS)
         self.assertEqual(manifest["tools"]["include"][16:22], CRM_TOOLS)
         self.assertEqual(manifest["tools"]["include"][22:], NEW_READ_TOOLS)
-        self.assertEqual(len(manifest["tools"]["include"]), 25)
-        self.assertEqual(len(set(manifest["tools"]["include"])), 25)
+        self.assertEqual(len(manifest["tools"]["include"]), 27)
+        self.assertEqual(len(set(manifest["tools"]["include"])), 27)
 
     def test_managed_atlas_skill_routes_command_without_stale_fallback(self):
         root = Path(__file__).resolve().parents[2]
@@ -175,8 +177,13 @@ class HermesOverlayTests(unittest.TestCase):
 
         self.assertIn("command_contacts_search", text)
         self.assertIn("command_contact_audience_preview", text)
+        self.assertIn("command_contact_celebrations_preview", text)
+        self.assertIn("command_card_campaign_draft_create", text)
         self.assertIn("navigation locator", lowered)
         self.assertIn("google contacts only", lowered)
+        self.assertIn('treat "my contacts" as command', lowered)
+        self.assertIn("native shell", lowered)
+        self.assertIn("never scrape its website", lowered)
         self.assertIn("review-only", lowered)
         self.assertIn("nothing was sent", lowered)
         self.assertNotIn("always pull and parse this sheet first", lowered)
@@ -543,7 +550,7 @@ class HermesOverlayTests(unittest.TestCase):
             )
             self.assertEqual(list(source.glob(".atlas-overlay-*")), [])
 
-    def test_bootstrap_preserves_existing_config_and_writes_exact_25_tool_contract(
+    def test_bootstrap_preserves_existing_config_and_writes_exact_27_tool_contract(
         self,
     ):
         bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")
@@ -892,6 +899,7 @@ class HermesOverlayTests(unittest.TestCase):
             self.assertIn("SYDNEY_AMBIGUOUS_DELIVERY_SINGLE_ATTEMPT", telegram)
             self.assertIn('metadata.get("sydney_durable_delivery")', gateway_base)
             self.assertIn("SYDNEY_RETRY_AND_USAGE_GUARD", conversation_loop)
+            self.assertIn("SYDNEY_TERMINAL_TOOL_POLICY_RESPONSE", conversation_loop)
             self.assertIn("SYDNEY_TOOL_BEFORE", tool_executor)
             self.assertIn("SYDNEY_TOOL_AFTER", tool_executor)
             self.assertIn("SYDNEY_GEMINI_CONDITIONAL_UNION_FALLBACK", gemini_schema)
@@ -997,6 +1005,14 @@ class HermesOverlayTests(unittest.TestCase):
                 gateway_run.index("record_inbound_before_model(\n"),
                 gateway_run.index("result = agent.run_conversation"),
             )
+            self.assertLess(
+                gateway_run.index("SYDNEY_ACCEPTED_ACK_BEFORE_MODEL"),
+                gateway_run.index("result = agent.run_conversation"),
+            )
+            self.assertIn("stage_inbound_acknowledgement", gateway_run)
+            self.assertIn("confirm_inbound_acknowledgement", gateway_run)
+            self.assertIn("cancel_inbound_acknowledgement", gateway_run)
+            self.assertIn("_sydney_ack_future.result(timeout=20)", gateway_run)
             gateway_tree = ast.parse(gateway_run)
             run_agent_function = next(
                 node

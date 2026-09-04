@@ -14,6 +14,7 @@ TABLES = (
     "agent_context_projection_claims",
     "agent_memory_facts",
     "agent_run_jobs",
+    "agent_run_request_receipts",
     "agent_tool_invocations",
 )
 
@@ -29,6 +30,7 @@ def _tables() -> dict[str, sa.Table]:
         module.AgentContextProjectionClaim,
         module.AgentMemoryFact,
         module.AgentRunJob,
+        module.AgentRunRequestReceipt,
         module.AgentToolInvocation,
     )
     return {model.__table__.name: model.__table__ for model in models}
@@ -120,6 +122,7 @@ def test_checkpoint_fact_run_and_tool_models_pin_provenance_and_replay_state() -
     claim = tables["agent_context_projection_claims"]
     fact = tables["agent_memory_facts"]
     run = tables["agent_run_jobs"]
+    request_receipt = tables["agent_run_request_receipts"]
     tool = tables["agent_tool_invocations"]
 
     assert isinstance(checkpoint.c.source_event_ids.type, postgresql.ARRAY)
@@ -164,8 +167,37 @@ def test_checkpoint_fact_run_and_tool_models_pin_provenance_and_replay_state() -
         for constraint in run.constraints
     )
     assert run.c.attempt_count.nullable is False
+    assert run.c.request_fingerprint_sha256.nullable is False
+    assert run.c.request_fingerprint_sha256.type.length == 64
     assert run.c.lease_expires_at.nullable is True
     assert any(index.name == "ix_agent_run_jobs_fifo_claim" for index in run.indexes)
+    active_request_index = next(
+        index
+        for index in run.indexes
+        if index.name == "uq_agent_run_jobs_active_request"
+    )
+    assert active_request_index.unique is True
+    assert tuple(column.name for column in active_request_index.columns) == (
+        "identity_id",
+        "logical_conversation_id",
+        "request_fingerprint_sha256",
+    )
+    assert set(request_receipt.columns.keys()).isdisjoint(
+        {"content", "raw_content", "request_text"}
+    )
+    assert request_receipt.c.request_fingerprint_sha256.type.length == 64
+    assert request_receipt.c.disposition.type.length == 16
+    assert any(
+        isinstance(constraint, sa.UniqueConstraint)
+        and tuple(column.name for column in constraint.columns)
+        == ("identity_id", "platform_message_id")
+        for constraint in request_receipt.constraints
+    )
+    assert any(
+        isinstance(constraint, sa.UniqueConstraint)
+        and tuple(column.name for column in constraint.columns) == ("inbound_event_id",)
+        for constraint in request_receipt.constraints
+    )
     assert any(
         isinstance(constraint, sa.UniqueConstraint)
         and tuple(column.name for column in constraint.columns)

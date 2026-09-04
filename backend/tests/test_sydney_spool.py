@@ -17,10 +17,27 @@ sys.path.insert(0, str(OVERLAY))
 from sydney_spool import (
     SpoolConflict,
     SydneySpool,
+    control_delivery_source_key,
     ordered_reconciliation_hash,
     redact_payload,
     redact_text,
 )
+
+
+def test_accepted_control_delivery_key_is_unique_per_inbound_message() -> None:
+    first = control_delivery_source_key(
+        "run-1", "accepted", platform_message_id="telegram-11"
+    )
+    second = control_delivery_source_key(
+        "run-1", "accepted", platform_message_id="telegram-12"
+    )
+
+    assert first != second
+    assert first.startswith("run:run-1:control:accepted:")
+    assert "telegram-11" not in first
+    assert control_delivery_source_key("run-1", "deferred") == (
+        "run:run-1:control:deferred"
+    )
 
 
 @pytest.mark.parametrize(

@@ -101,9 +101,11 @@ def deliver_control_delivery_record(
         raise RuntimeError("control delivery record kind is invalid")
     payload = record.payload
     delivery_kind = str(payload.get("delivery_kind") or "")
-    if delivery_kind not in {"deferred", "terminal_error"} or not payload.get(
-        "delivery_confirmed"
-    ):
+    if delivery_kind not in {
+        "accepted",
+        "deferred",
+        "terminal_error",
+    } or not payload.get("delivery_confirmed"):
         raise RuntimeError("control delivery confirmation is invalid")
     delivery_key = payload.get("delivery_key")
     if (
@@ -136,7 +138,7 @@ def deliver_control_delivery_record(
             if spool.get_meta("active_run_id") == run_id:
                 spool.delete_meta("active_run_id")
     elif run_update is not None:
-        raise RuntimeError("deferred control delivery cannot update the run")
+        raise RuntimeError(f"{delivery_kind} control delivery cannot update the run")
     return response
 
 
@@ -564,7 +566,8 @@ class SydneyMemoryProvider(MemoryProvider):
         source_key = f"inbound:{self._platform}:{self._external_chat_id}:{message_key}"
         existing = self.spool.get_record(source_key)
         if existing is not None:
-            run_receipt = (existing.receipt or {}).get("run", {}).get("run", {})
+            run_response = (existing.receipt or {}).get("run", {})
+            run_receipt = run_response.get("run", {})
             run_id = str(run_receipt.get("id") or "")
             terminal_state = (
                 self.spool.run_terminal_state(run_id) if run_id else None
@@ -574,7 +577,12 @@ class SydneyMemoryProvider(MemoryProvider):
                 in {"succeeded", "blocked_side_effect", "terminal_failure"}
                 else None
             )
-            if self._retry_enabled and run_id and terminal_state is None:
+            if (
+                self._retry_enabled
+                and run_id
+                and terminal_state is None
+                and run_response.get("coalesced") is not True
+            ):
                 self.activate_claimed_run(
                     run_receipt,
                     hermes_session_id=str(
@@ -743,7 +751,11 @@ class SydneyMemoryProvider(MemoryProvider):
                     "terminal_failure",
                 }:
                     self.spool.mark_run_terminal(run_id, state=str(run["state"]))
-                else:
+                elif run_response.get("coalesced") is not True and not (
+                    self._active_run_id
+                    and self._active_run_id != run_id
+                    and self.has_active_run_lease()
+                ):
                     self._active_run_id = run_id
                     self._active_run_hermes_session_id = inbound_session_id
                     self._active_run_attempt_count = 0
@@ -1521,17 +1533,28 @@ class SydneyMemoryProvider(MemoryProvider):
         tool_call_id: str,
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> None:
+        policy: str = _REVIEW_ONLY_RECOVERY_POLICY,
+        error_code: str = "review_only_recovery_blocked",
+        side_effect_class: str = "non_idempotent_write",
+    ) -> dict[str, Any] | None:
         """Persist a deterministic, non-executed tool outcome for policy blocks."""
         self.record_tool_before(
             run_id=run_id,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             arguments=arguments,
-            side_effect_class="non_idempotent_write",
+            side_effect_class=side_effect_class,
             caller_idempotency_key=None,
         )
-        attempt_key = f"review_only:{tool_call_id}"
+        self.drain_once()
+        source_key = f"tool:{run_id}:{tool_call_id}:before"
+        receipt = self.tool_replay_receipt(source_key) or {}
+        tool_receipt = receipt.get("tool", receipt)
+        if not isinstance(tool_receipt, dict):
+            return None
+        if tool_receipt.get("replay_decision") == "block_limit":
+            return tool_receipt
+        attempt_key = f"{policy}:{tool_call_id}"
         attempt_digest = hashlib.sha256(attempt_key.encode()).hexdigest()
         denial_source_key = (
             f"tool:{run_id}:{tool_call_id}:after:not_delivered:{attempt_digest}"
@@ -1543,9 +1566,9 @@ class SydneyMemoryProvider(MemoryProvider):
                 state="not_delivered",
                 result_content=json.dumps(
                     {
-                        "error": "review_only_recovery_blocked",
+                        "error": error_code,
                         "executed": False,
-                        "policy": _REVIEW_ONLY_RECOVERY_POLICY,
+                        "policy": policy,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -1554,6 +1577,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 attempt_key=attempt_key,
             )
         self.drain_once()
+        return tool_receipt
 
     def activate_claimed_run(
         self,
@@ -1689,6 +1713,54 @@ class SydneyMemoryProvider(MemoryProvider):
         )
         return self.owns_run_lease(platform_message_id)
 
+    def inbound_was_coalesced(self, platform_message_id: str) -> bool:
+        inbound = self.spool.find_inbound(str(platform_message_id))
+        run_response = (inbound.receipt or {}).get("run", {}) if inbound else {}
+        return isinstance(run_response, dict) and run_response.get("coalesced") is True
+
+    def inbound_run_id(self, platform_message_id: str) -> str | None:
+        inbound = self.spool.find_inbound(str(platform_message_id))
+        run_response = (inbound.receipt or {}).get("run", {}) if inbound else {}
+        run = run_response.get("run", {}) if isinstance(run_response, dict) else {}
+        run_id = str(run.get("id") or "")
+        return run_id or None
+
+    def claim_inbound(self, platform_message_id: str) -> bool:
+        """Claim a newly admitted run after the prior run is safely released."""
+        if not self.is_available() or not self._retry_enabled or self._backend is None:
+            return False
+        inbound = self.spool.find_inbound(str(platform_message_id))
+        if inbound is None:
+            return False
+        receipt = inbound.receipt or {}
+        run_response = receipt.get("run", {})
+        run = run_response.get("run", {}) if isinstance(run_response, dict) else {}
+        ingest = receipt.get("ingest", {})
+        run_id = str(run.get("id") or "")
+        identity_id = str(ingest.get("identity_id") or "")
+        if not run_id or not identity_id or run_response.get("coalesced") is True:
+            return False
+        claim_response = self._backend.claim_runs(
+            {
+                "lease_owner": self._lease_owner,
+                "identity_id": identity_id,
+                "run_id": run_id,
+                "limit": 1,
+            }
+        )
+        hermes_session_id = str(
+            (inbound.payload.get("event_batch") or {}).get("hermes_session_id") or ""
+        )
+        for claimed in claim_response.get("runs") or []:
+            if str(claimed.get("id") or "") != run_id:
+                continue
+            self.activate_claimed_run(
+                claimed,
+                hermes_session_id=hermes_session_id or None,
+            )
+            return self.owns_run_lease(platform_message_id)
+        return False
+
     def inbound_terminal_state(self, platform_message_id: str) -> str | None:
         source_key = (
             f"inbound:{self._platform}:{self._external_chat_id}:{platform_message_id!s}"
@@ -1728,7 +1800,11 @@ class SydneyMemoryProvider(MemoryProvider):
             chat_id=delivery_key[1],
             platform_message_id=delivery_key[2],
         )
-        return isinstance(attempt, dict) and str(attempt.get("run_id") or "") == run_id
+        return (
+            isinstance(attempt, dict)
+            and attempt.get("delivery_kind") not in {"accepted", "deferred"}
+            and str(attempt.get("run_id") or "") == run_id
+        )
 
     def renew_active_lease(self) -> bool:
         if (
@@ -1901,11 +1977,14 @@ class SydneyMemoryProvider(MemoryProvider):
             chat_id=delivery_key[1],
             platform_message_id=delivery_key[2],
         )
-        if isinstance(attempt, dict) and attempt.get("delivery_kind") in {
-            "deferred",
-            "terminal_error",
-        }:
-            return str(attempt["delivery_kind"])
+        if isinstance(attempt, dict):
+            if attempt.get("delivery_kind") in {
+                "accepted",
+                "deferred",
+                "terminal_error",
+            }:
+                return str(attempt["delivery_kind"])
+            return None
         inbound = self.spool.find_inbound(delivery_key[2])
         run_id = (
             str(
@@ -1917,9 +1996,15 @@ class SydneyMemoryProvider(MemoryProvider):
         )
         if not run_id:
             return None
-        for delivery_kind in ("deferred", "terminal_error"):
+        for delivery_kind in ("accepted", "deferred", "terminal_error"):
             record = self.spool.get_record(
-                control_delivery_source_key(run_id, delivery_kind)
+                control_delivery_source_key(
+                    run_id,
+                    delivery_kind,
+                    platform_message_id=(
+                        delivery_key[2] if delivery_kind == "accepted" else None
+                    ),
+                )
             )
             if record is not None:
                 return delivery_kind
@@ -1963,6 +2048,7 @@ class SydneyMemoryProvider(MemoryProvider):
             platform_message_id=delivery_key[2],
         )
         if not isinstance(attempt, dict) or attempt.get("delivery_kind") in {
+            "accepted",
             "deferred",
             "terminal_error",
         }:
@@ -2012,25 +2098,48 @@ class SydneyMemoryProvider(MemoryProvider):
         delivery_kind: str,
         error_code: str = "model_terminal_failure",
     ) -> str:
-        """Stage a deferred acknowledgement or visible terminal error."""
+        """Stage one accepted, deferred, or terminal control message."""
         if (
             not self.is_available()
             or len(delivery_key) != 3
             or delivery_key[0] != self._platform
             or delivery_key[1] != self._external_chat_id
             or not response
-            or not self._active_run_id
         ):
             return "unavailable"
-        if delivery_kind not in {"deferred", "terminal_error"}:
+        if delivery_kind not in {"accepted", "deferred", "terminal_error"}:
             return "unavailable"
         if delivery_kind == "terminal_error" and not self.has_active_run_lease():
             return "unavailable"
-        run_id = self._active_run_id
-        lease_owner = self._active_lease_owner
-        event_type = "assistant" if delivery_kind == "deferred" else "error"
-        source_suffix = (
-            "deferred_ack" if delivery_kind == "deferred" else "terminal_error"
+        inbound = self.spool.find_inbound(delivery_key[2])
+        run_response = (inbound.receipt or {}).get("run", {}) if inbound else {}
+        inbound_run = (
+            run_response.get("run", {}) if isinstance(run_response, dict) else {}
+        )
+        run_id = (
+            str(inbound_run.get("id") or "")
+            if delivery_kind == "accepted"
+            else str(self._active_run_id or "")
+        )
+        if not run_id:
+            return "unavailable"
+        lease_owner = (
+            self._active_lease_owner if run_id == self._active_run_id else None
+        )
+        event_type = "error" if delivery_kind == "terminal_error" else "assistant"
+        message_digest = hashlib.sha256(delivery_key[2].encode("utf-8")).hexdigest()
+        source_suffix = {
+            "accepted": f"accepted_ack:{message_digest}",
+            "deferred": "deferred_ack",
+            "terminal_error": "terminal_error",
+        }[delivery_kind]
+        inbound_session_id = (
+            str(
+                (inbound.payload.get("event_batch") or {}).get("hermes_session_id")
+                or ""
+            )
+            if inbound is not None
+            else ""
         )
         event_batch = self._event_batch(
             [
@@ -2046,7 +2155,11 @@ class SydneyMemoryProvider(MemoryProvider):
                     },
                 }
             ],
-            hermes_session_id=self._active_run_hermes_session_id,
+            hermes_session_id=(
+                inbound_session_id
+                if delivery_kind == "accepted" and inbound_session_id
+                else self._active_run_hermes_session_id
+            ),
         )
         run_update = (
             {
@@ -2076,6 +2189,7 @@ class SydneyMemoryProvider(MemoryProvider):
         response: str,
         *,
         delivery_kind: str,
+        ambiguous: bool = False,
     ) -> None:
         if len(delivery_key) != 3 or not response:
             return
@@ -2085,8 +2199,38 @@ class SydneyMemoryProvider(MemoryProvider):
             platform_message_id=delivery_key[2],
             response_sha256=hashlib.sha256(response.encode("utf-8")).hexdigest(),
             delivery_kind=delivery_kind,
+            ambiguous=ambiguous,
         )
         self.drain_once()
+
+    def cancel_control_delivery(
+        self,
+        delivery_key: tuple[str, str, str],
+        response: str,
+        *,
+        delivery_kind: str,
+    ) -> None:
+        """Discard a staged control send only after a definite rejection."""
+        if len(delivery_key) != 3 or not response:
+            return
+        attempt = self.spool.get_final_delivery(
+            platform=delivery_key[0],
+            chat_id=delivery_key[1],
+            platform_message_id=delivery_key[2],
+        )
+        if not isinstance(attempt, dict):
+            return
+        if (
+            attempt.get("delivery_kind") == delivery_kind
+            and attempt.get("response_sha256")
+            == hashlib.sha256(response.encode("utf-8")).hexdigest()
+            and not attempt.get("confirmed_at")
+        ):
+            self.spool.clear_final_delivery(
+                platform=delivery_key[0],
+                chat_id=delivery_key[1],
+                platform_message_id=delivery_key[2],
+            )
 
     def stage_final_delivery(
         self,

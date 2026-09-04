@@ -1628,6 +1628,149 @@ def test_review_only_recovery_allows_read_tools(
     assert not [payload for name, payload in backend.calls if name == "tool_after"]
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "terminal",
+        "execute_code",
+        "read_file",
+        "write_file",
+        "search_files",
+        "process",
+        "session_search",
+        "memory",
+    ),
+)
+def test_normal_sydney_run_blocks_non_business_tools_before_execution(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE, tool_before
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("normal-business-policy", "Use Command contacts.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    decision = tool_before(
+        agent,
+        f"blocked-{tool_name}",
+        tool_name,
+        {"query": "must-not-execute"},
+    )
+
+    assert decision is not None
+    assert decision.block_message == NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE
+    assert agent._sydney_terminal_tool_policy_response == (
+        "I stopped this request because Sydney attempted a tool outside the approved "
+        "business-tool lane. Nothing outside Atlas was executed."
+    )
+    denials = [payload for name, payload in backend.calls if name == "tool_after"]
+    assert len(denials) == 1
+    assert denials[0]["state"] == "not_delivered"
+    denial_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["event_type"] == "tool_result"
+    ]
+    assert json.loads(denial_events[-1]["content"]) == {
+        "error": "normal_business_tool_blocked",
+        "executed": False,
+        "policy": "atlas_business_tools_only",
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "skill_view",
+        "status_read",
+        "command_contacts_search",
+        "mcp_atlas_backend_command_contact_audience_preview",
+        "mcp_atlas_backend_command_contact_celebrations_preview",
+        "command_card_campaign_draft_create",
+    ),
+)
+def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import tool_before
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound(f"normal-allowed-{tool_name}", "Use the approved source.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert tool_before(agent, f"allowed-{tool_name}", tool_name, {}) is None
+    assert not hasattr(agent, "_sydney_terminal_tool_policy_response")
+
+
+def test_normal_sydney_business_tool_policy_matches_the_pinned_registry() -> None:
+    from sydney_runtime import _ATLAS_BUSINESS_TOOLS
+
+    manifest = json.loads((OVERLAY / "manifest.json").read_text())
+
+    assert _ATLAS_BUSINESS_TOOLS == frozenset(manifest["tools"]["include"])
+
+
+def test_server_tool_ceiling_sets_a_fixed_terminal_result(tmp_path: Path) -> None:
+    from sydney_runtime import (
+        TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE,
+        terminal_tool_policy_response,
+        tool_before,
+    )
+
+    class LimitBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            return {
+                "state": "not_delivered",
+                "replay_decision": "block_limit",
+                "invocation_count": 12,
+                "invocation_limit": 12,
+                "limit_reached": True,
+            }
+
+    backend = LimitBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("tool-ceiling", "Finish within the safe limit.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    decision = tool_before(
+        agent,
+        "over-limit-call",
+        "command_contacts_search",
+        {"query": "one call too many"},
+    )
+
+    assert decision is not None
+    assert decision.block_message == TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE
+    assert terminal_tool_policy_response(agent) == (
+        "I stopped this request at Sydney's 12-tool safety limit. I will use the "
+        "results already gathered and will not keep retrying or ask you to reset."
+    )
+    assert agent._tool_guardrail_halt_decision.code == "sydney_run_tool_limit"
+    assert not [payload for name, payload in backend.calls if name == "tool_after"]
+
+
 def test_review_only_policy_survives_provider_restart_and_still_blocks_writes(
     tmp_path: Path,
 ) -> None:
@@ -2452,6 +2595,56 @@ def test_runtime_tpm_budget_uses_the_configured_limit(tmp_path: Path) -> None:
             reserve_input_budget(agent, 5)
 
 
+@pytest.mark.parametrize("reported_tokens", [None, True, -1, "12", object()])
+def test_runtime_usage_reconciliation_ignores_missing_or_invalid_counts(
+    tmp_path: Path,
+    reported_tokens: object,
+) -> None:
+    from sydney_runtime import reconcile_input_usage, reserve_input_budget
+
+    provider = _provider(tmp_path)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET": "10"},
+        clear=False,
+    ):
+        reserve_input_budget(agent, 6)
+        reconcile_input_usage(agent, reported_tokens)
+
+    assert agent._sydney_current_reserved_input_tokens == 6
+    assert not hasattr(agent, "_sydney_last_actual_input_tokens")
+    assert agent._sydney_input_budget.used(at=datetime.now(timezone.utc)) == 6
+
+
+def test_runtime_usage_reconciliation_accounts_for_a_real_nonnegative_count(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import reconcile_input_usage, reserve_input_budget
+
+    provider = _provider(tmp_path)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET": "10"},
+        clear=False,
+    ):
+        reserve_input_budget(agent, 6)
+        reconcile_input_usage(agent, 8)
+
+    assert agent._sydney_current_reserved_input_tokens == 6
+    assert agent._sydney_last_actual_input_tokens == 8
+    assert agent._sydney_input_budget.used(at=datetime.now(timezone.utc)) == 8
+
+
 def test_confirmed_stream_delivery_completes_without_a_second_send(
     tmp_path: Path,
 ) -> None:
@@ -2827,6 +3020,12 @@ def test_runtime_classifies_recent_query_tools_as_read_only(tool_name: str) -> N
     assert _side_effect_class(tool_name) == "read_only"
 
 
+def test_runtime_classifies_skill_view_as_read_only() -> None:
+    from sydney_runtime import _side_effect_class
+
+    assert _side_effect_class("skill_view") == "read_only"
+
+
 @pytest.mark.parametrize(
     "tool_name",
     (
@@ -3090,6 +3289,80 @@ def test_internal_continuation_activates_watcher_claim_for_cached_provider(
     assert provider.active_lease_owner == "hermes:continuation-watcher:42"
 
 
+def test_equivalent_message_after_reset_reuses_active_run_without_superseding(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    class CoalescingBackend(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = 0
+
+        def start_run(self, payload: dict) -> dict:
+            self.calls.append(("run", payload))
+            self.started += 1
+            return {
+                "run": {
+                    "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "identity_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "state": "running" if self.started > 1 else "queued",
+                },
+                "replayed": False,
+                "coalesced": self.started > 1,
+            }
+
+    backend = CoalescingBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="before-reset",
+        content="Source all September birthdays and home anniversaries.",
+    )
+    run_id = provider.active_run_id
+    assert run_id is not None
+    assert stage_inbound_acknowledgement(agent)
+
+    provider.spool.rotate_session(
+        session_id="session-after-reset",
+        logical_conversation_id=provider.logical_conversation_id,
+        platform="telegram",
+        external_user_id="brandon",
+        external_chat_id="private-chat",
+        parent_session_id="session-1",
+        continuation_reason="manual_reset",
+    )
+    provider._session_id = "session-after-reset"
+
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id="after-reset",
+        content="  source ALL september birthdays\n and home anniversaries.  ",
+    )
+
+    assert provider.active_run_id == run_id
+    assert agent._sydney_inbound_coalesced is True
+    assert stage_inbound_acknowledgement(agent) == (
+        "This request is already in progress. Sydney will continue it "
+        "automatically; you do not need to reset or resend it."
+    )
+    assert len([call for call in backend.calls if call[0] == "claim"]) == 1
+    assert not any(
+        name == "run_update"
+        and payload.get("error_code") == "superseded_by_newer_inbound"
+        for name, payload in backend.calls
+    )
+
+
 def test_deferred_acknowledgement_is_durable_without_completing_the_run(
     tmp_path: Path,
 ) -> None:
@@ -3171,6 +3444,178 @@ def test_deferred_acknowledgement_is_durable_without_completing_the_run(
         name == "run_update"
         and payload.get("state") in {"succeeded", "terminal_failure"}
         for name, payload in backend.calls
+    )
+
+
+def test_accepted_acknowledgement_is_staged_before_send_and_replayed_once(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        confirm_inbound_acknowledgement,
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-before-model"
+
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Source September birthdays.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+
+    assert acknowledgement == (
+        "Got it — Sydney saved this request and is working on it now. "
+        "You do not need to reset or resend it."
+    )
+    staged = provider.spool.get_final_delivery(
+        platform="telegram",
+        chat_id="private-chat",
+        platform_message_id=message_id,
+    )
+    assert staged is not None
+    assert staged["delivery_kind"] == "accepted"
+    assert staged["event_batch"]["events"][0]["content"] == acknowledgement
+    assert not any(
+        event["content"] == acknowledgement
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+    )
+
+    confirm_inbound_acknowledgement(agent, acknowledgement, ambiguous=False)
+
+    accepted_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["content"] == acknowledgement
+    ]
+    assert len(accepted_events) == 1
+    assert accepted_events[0]["metadata"]["delivery_kind"] == "accepted"
+    assert not any(name == "run_update" for name, _payload in backend.calls)
+
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Source September birthdays.",
+    )
+    assert stage_inbound_acknowledgement(agent) is None
+
+
+def test_ambiguous_accepted_acknowledgement_is_never_resent(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import (
+        confirm_inbound_acknowledgement,
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-ambiguous"
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September campaign.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+    assert acknowledgement
+
+    confirm_inbound_acknowledgement(agent, acknowledgement, ambiguous=True)
+
+    accepted_records = [
+        record
+        for record in provider.spool.matching_records(
+            state="acknowledged", source_prefix="run:"
+        )
+        if record.kind == "control_delivery_bundle"
+        and record.payload.get("delivery_kind") == "accepted"
+    ]
+    assert len(accepted_records) == 1
+    assert accepted_records[0].payload["delivery_ambiguous"] is True
+    assert not record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September campaign.",
+    )
+    assert stage_inbound_acknowledgement(agent) is None
+
+
+@pytest.mark.asyncio
+async def test_restart_drains_ambiguous_accepted_ack_without_blocking_run(
+    tmp_path: Path,
+) -> None:
+    from sydney_gateway import _block_uncertain_final_delivery
+    from sydney_runtime import (
+        record_inbound_before_model,
+        stage_inbound_acknowledgement,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    message_id = "accepted-restart-ambiguity"
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id=message_id,
+        content="Prepare the September audience.",
+    )
+    acknowledgement = stage_inbound_acknowledgement(agent)
+    assert acknowledgement
+    run_id = provider.active_run_id
+    lease_owner = provider.active_lease_owner
+    assert run_id and lease_owner
+
+    blocked = await _block_uncertain_final_delivery(
+        backend=backend,
+        spool=provider.spool,
+        run={
+            "id": run_id,
+            "lease_owner": lease_owner,
+            "platform_message_id": message_id,
+        },
+        platform="telegram",
+        chat_id="private-chat",
+    )
+
+    assert blocked is False
+    assert not any(
+        name == "run_update"
+        and payload.get("state")
+        in {"blocked_side_effect", "terminal_failure", "succeeded"}
+        for name, payload in backend.calls
+    )
+    assert (
+        len(
+            [
+                event
+                for name, payload in backend.calls
+                if name == "ingest"
+                for event in payload["events"]
+                if event.get("content") == acknowledgement
+            ]
+        )
+        == 1
     )
 
 

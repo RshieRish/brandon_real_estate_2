@@ -8,12 +8,11 @@ from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from schemas.sydney_context import ContextEventBatchRequest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
 
-REVISION = "85e8b7c9d4f1"
+REVISION = "86f9c8a0d2e1"
 
 
 def _request(*, content: str = "Remember the gold folder") -> ContextEventBatchRequest:
@@ -51,7 +50,8 @@ async def context_sessions(context_database):
     with sync_engine.begin() as connection:
         connection.execute(
             sa.text(
-                "TRUNCATE agent_tool_invocations, agent_run_jobs, "
+                "TRUNCATE agent_tool_invocations, agent_run_request_receipts, "
+                "agent_run_jobs, "
                 "agent_context_projection_claims, "
                 "agent_memory_facts, agent_context_checkpoints, "
                 "agent_conversation_event_segments, agent_conversation_events, "
@@ -676,6 +676,287 @@ async def test_distinct_caller_keys_do_not_collapse_on_a_redacted_argument_hash(
 
 
 @pytest.mark.asyncio
+async def test_tool_invocation_limit_survives_new_sessions_and_preserves_replays(
+    context_sessions,
+) -> None:
+    from schemas.sydney_context import (
+        ContextRunClaimRequest,
+        ContextRunStartRequest,
+        ContextToolInvocationRequest,
+    )
+    from services.sydney_context_service import (
+        claim_runs,
+        ingest_event_batch,
+        start_run,
+        start_tool_invocation,
+    )
+
+    _engine, factory = context_sessions
+    now = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)
+    batch = _request()
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, batch)
+        started = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingested.identity_id,
+                platform_message_id="aggregate-tool-limit",
+                inbound_event_id=ingested.event_ids[0],
+                session_id=ingested.session_id,
+                logical_conversation_id=batch.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.commit()
+
+    async with factory() as session:
+        await claim_runs(
+            session,
+            ContextRunClaimRequest(
+                lease_owner="atlas-tool-limit",
+                run_id=started.run.id,
+            ),
+            now=now,
+        )
+        first = await start_tool_invocation(
+            session,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="within-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "September"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=1),
+            invocation_limit=1,
+        )
+        await session.commit()
+
+    async with factory() as continuation_session:
+        blocked = await start_tool_invocation(
+            continuation_session,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="continued-over-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "October"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=2),
+            invocation_limit=1,
+        )
+        await continuation_session.commit()
+
+    async with factory() as later_continuation:
+        still_blocked = await start_tool_invocation(
+            later_continuation,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="another-continuation-over-limit",
+                tool_name="status_read",
+                arguments={},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=3),
+            invocation_limit=1,
+        )
+        replay = await start_tool_invocation(
+            later_continuation,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="within-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "September"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=3),
+            invocation_limit=1,
+        )
+        stored_count = await later_continuation.scalar(
+            sa.text(
+                "SELECT count(*) FROM agent_tool_invocations WHERE run_id = :run_id"
+            ),
+            {"run_id": started.run.id},
+        )
+
+    assert first.replay_decision == "execute"
+    assert first.invocation_count == first.invocation_limit == 1
+    assert first.limit_reached is True
+    for receipt in (blocked, still_blocked):
+        assert receipt.invocation_id is None
+        assert receipt.replay_decision == "block_limit"
+        assert receipt.invocation_count == receipt.invocation_limit == 1
+        assert receipt.limit_reached is True
+    assert replay.invocation_id == first.invocation_id
+    assert replay.replay_decision == "repeat_read"
+    assert replay.invocation_count == replay.invocation_limit == 1
+    assert stored_count == 1
+
+
+@pytest.mark.asyncio
+async def test_equivalent_active_requests_coalesce_across_manual_session_reset(
+    context_sessions,
+) -> None:
+    from schemas.sydney_context import ContextRunStartRequest
+    from services.sydney_context_service import ingest_event_batch, start_run
+
+    _engine, factory = context_sessions
+    base = _request(
+        content="  Source ALL September birthdays\n and home anniversaries  "
+    )
+    reset_batch = base.model_copy(
+        update={
+            "hermes_session_id": "session-after-manual-reset",
+            "parent_hermes_session_id": base.hermes_session_id,
+            "continuation_reason": "manual_reset",
+            "events": [
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "session-after-manual-reset:message-1",
+                        "content": (
+                            "source all september birthdays and home anniversaries"
+                        ),
+                        "metadata": {"telegram_message_id": "12"},
+                    }
+                )
+            ],
+        }
+    )
+    async with factory() as session:
+        first_ingest = await ingest_event_batch(session, base)
+        reset_ingest = await ingest_event_batch(session, reset_batch)
+        await session.commit()
+
+    now = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+
+    async def start(
+        *, platform_message_id: str, inbound_event_id: UUID, session_id: UUID
+    ):
+        async with factory() as session:
+            result = await start_run(
+                session,
+                ContextRunStartRequest(
+                    identity_id=first_ingest.identity_id,
+                    platform_message_id=platform_message_id,
+                    inbound_event_id=inbound_event_id,
+                    session_id=session_id,
+                    logical_conversation_id=base.logical_conversation_id,
+                    terminal_deadline_at=now + timedelta(hours=24),
+                ),
+            )
+            await session.commit()
+            return result
+
+    first, reset = await asyncio.gather(
+        start(
+            platform_message_id="telegram-11",
+            inbound_event_id=first_ingest.event_ids[0],
+            session_id=first_ingest.session_id,
+        ),
+        start(
+            platform_message_id="telegram-12",
+            inbound_event_id=reset_ingest.event_ids[0],
+            session_id=reset_ingest.session_id,
+        ),
+    )
+
+    assert first.run.id == reset.run.id
+    assert {first.coalesced, reset.coalesced} == {False, True}
+    assert first.replayed is False
+    assert reset.replayed is False
+
+    async with factory() as session:
+        run_count = await session.scalar(sa.text("SELECT count(*) FROM agent_run_jobs"))
+        receipts = (
+            await session.execute(
+                sa.text(
+                    "SELECT platform_message_id, disposition, run_id "
+                    "FROM agent_run_request_receipts ORDER BY platform_message_id"
+                )
+            )
+        ).all()
+    assert run_count == 1
+    assert [(row.platform_message_id, row.disposition) for row in receipts] == [
+        ("telegram-11", "primary"),
+        ("telegram-12", "coalesced"),
+    ]
+    assert {row.run_id for row in receipts} == {first.run.id}
+
+    replay = await start(
+        platform_message_id="telegram-12",
+        inbound_event_id=reset_ingest.event_ids[0],
+        session_id=reset_ingest.session_id,
+    )
+    assert replay.replayed is True
+    assert replay.coalesced is True
+    assert replay.run.id == first.run.id
+
+
+@pytest.mark.asyncio
+async def test_terminal_request_fingerprint_can_start_fresh_work(
+    context_sessions,
+) -> None:
+    from schemas.sydney_context import ContextRunStartRequest
+    from services.sydney_context_service import ingest_event_batch, start_run
+
+    _engine, factory = context_sessions
+    base = _request(content="September birthdays")
+    later = base.model_copy(
+        update={
+            "hermes_session_id": "terminal-repeat-session",
+            "events": [
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "terminal-repeat-session:message-2",
+                        "metadata": {"telegram_message_id": "22"},
+                    }
+                )
+            ],
+        }
+    )
+    now = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    async with factory() as session:
+        first_ingest = await ingest_event_batch(session, base)
+        first = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=first_ingest.identity_id,
+                platform_message_id="telegram-21",
+                inbound_event_id=first_ingest.event_ids[0],
+                session_id=first_ingest.session_id,
+                logical_conversation_id=base.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.execute(
+            sa.text(
+                "UPDATE agent_run_jobs SET state = 'terminal_failure' WHERE id = :id"
+            ),
+            {"id": first.run.id},
+        )
+        second_ingest = await ingest_event_batch(session, later)
+        second = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=first_ingest.identity_id,
+                platform_message_id="telegram-22",
+                inbound_event_id=second_ingest.event_ids[0],
+                session_id=second_ingest.session_id,
+                logical_conversation_id=base.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.commit()
+
+    assert second.coalesced is False
+    assert second.run.id != first.run.id
+
+
+@pytest.mark.asyncio
 async def test_run_fifo_claim_and_tool_ledger_prevent_duplicate_side_effects(
     context_sessions,
 ) -> None:
@@ -790,6 +1071,7 @@ async def test_run_fifo_claim_and_tool_ledger_prevent_duplicate_side_effects(
         )
         await session.commit()
     assert replay.replayed is True
+    assert replay.coalesced is False
     assert replay.run.id == first.run.id
 
     async with factory() as session:
@@ -1788,7 +2070,11 @@ async def test_health_ignores_superseded_and_recovered_terminal_history(
     context_sessions,
 ) -> None:
     from models.sydney_context import AgentRunJob
-    from services.sydney_context_service import get_context_health, ingest_event_batch
+    from services.sydney_context_service import (
+        get_context_health,
+        ingest_event_batch,
+        request_fingerprint_sha256,
+    )
 
     _engine, factory = context_sessions
     now = datetime.now(UTC)
@@ -1801,6 +2087,9 @@ async def test_health_ignores_superseded_and_recovered_terminal_history(
             inbound_event_id=ingested.event_ids[0],
             session_id=ingested.session_id,
             logical_conversation_id=request.logical_conversation_id,
+            request_fingerprint_sha256=request_fingerprint_sha256(
+                request.events[0].content
+            ),
             state="terminal_failure",
             attempt_count=1,
             terminal_deadline_at=now + timedelta(hours=1),

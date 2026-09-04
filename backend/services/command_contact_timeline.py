@@ -36,6 +36,10 @@ _ORIGIN_RANK: dict[TimelineOrigin, Literal[0, 1, 2, 3]] = {
     TimelineOrigin.LEGACY_LEAD: 2,
     TimelineOrigin.BOOKING: 3,
 }
+_TECHNICAL_ACTIVITY_KINDS = (
+    "archive_contact_imported",
+    "archive_timeline_capture",
+)
 
 
 class ContactNotFound(LookupError):
@@ -280,6 +284,7 @@ async def _activity_candidates(
     statement = select(CRMActivity).where(
         CRMActivity.contact_id == contact_id,
         CRMActivity.source_record_id.is_(None),
+        CRMActivity.kind.not_in(_TECHNICAL_ACTIVITY_KINDS),
     )
     if cursor is not None:
         statement = statement.where(

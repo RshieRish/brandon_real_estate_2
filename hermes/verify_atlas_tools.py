@@ -39,6 +39,8 @@ EXPECTED_TOOLS = [
     "context_history_search",
     "command_contacts_search",
     "command_contact_audience_preview",
+    "command_contact_celebrations_preview",
+    "command_card_campaign_draft_create",
 ]
 ORIGINAL_TOOLS = EXPECTED_TOOLS[:22]
 FORBIDDEN_TOOLS = {
@@ -56,6 +58,8 @@ FORBIDDEN_TOOLS = {
     "context_tools_execute",
     "command_contacts_send",
     "command_contacts_draft",
+    "command_card_campaign_approve",
+    "command_card_campaign_send",
 }
 
 
@@ -154,6 +158,8 @@ def _build_proof(tools: list[dict[str, Any]]) -> dict[str, Any]:
     gmail_send = by_name.get("gmail_send", {})
     send_schema = gmail_send.get("inputSchema", {})
     request_schema = send_schema.get("properties", {}).get("request_id", {})
+    card_draft = by_name.get("command_card_campaign_draft_create", {})
+    card_draft_schema = card_draft.get("inputSchema", {})
     return {
         "jsonrpc_method": "tools/list",
         "count": len(names),
@@ -165,20 +171,27 @@ def _build_proof(tools: list[dict[str, Any]]) -> dict[str, Any]:
         "gmail_send_request_id_required": "request_id"
         in send_schema.get("required", []),
         "gmail_send_request_id_schema": request_schema,
+        "card_draft_required": card_draft_schema.get("required", []),
+        "card_draft_request_id_schema": card_draft_schema.get("properties", {}).get(
+            "request_id", {}
+        ),
     }
 
 
 def _contract_matches(proof: dict[str, Any]) -> bool:
     request_schema = proof["gmail_send_request_id_schema"]
     return bool(
-        proof["count"] == 25
-        and proof["unique_count"] == 25
+        proof["count"] == 27
+        and proof["unique_count"] == 27
         and proof["exact_expected_order"]
         and proof["original_22_unchanged"]
         and proof["forbidden_present"] == []
         and proof["gmail_send_request_id_required"]
         and request_schema.get("type") == "string"
         and request_schema.get("format") == "uuid"
+        and proof["card_draft_required"] == ["request_id", "month"]
+        and proof["card_draft_request_id_schema"].get("type") == "string"
+        and proof["card_draft_request_id_schema"].get("format") == "uuid"
     )
 
 

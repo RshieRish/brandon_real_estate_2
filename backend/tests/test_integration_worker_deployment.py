@@ -63,6 +63,13 @@ TASK13_CONTEXT_TESTS = (
     "tests/test_agent_control_command.py",
     "tests/test_sydney_context_e2e.py",
 )
+SYDNEY_COMMAND_CARD_TESTS = (
+    "tests/test_card_campaign_migration.py",
+    "tests/test_card_campaign_models.py",
+    "tests/test_card_campaign_service.py",
+    "tests/test_command_cards_router.py",
+    "tests/test_agent_control_cards.py",
+)
 TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
@@ -353,7 +360,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
     assert pytest_step is not None
     assert (
         tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body")))
-        == TASK9_TESTS + TASK13_CONTEXT_TESTS
+        == TASK9_TESTS + TASK13_CONTEXT_TESTS + SYDNEY_COMMAND_CARD_TESTS
     )
     assert workflow.count('"backend/tests/test_gmail_task_intake_e2e.py"') == 2
 
@@ -361,7 +368,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         r"name: Run the exact MCP, overlay, spool, and retry contracts\n"
         r"\s+working-directory: backend\n"
         r"(?P<body>.*?)"
-        r"\n\s+- name: Verify the exact 25-tool JSON-RPC registry",
+        r"\n\s+- name: Verify the exact 27-tool JSON-RPC registry",
         workflow,
         flags=re.DOTALL,
     )

@@ -12,15 +12,18 @@ from middleware.agent_control import require_agent_control
 from schemas.agent_control_command import (
     CommandContactAudiencePreviewRequest,
     CommandContactAudiencePreviewResponse,
+    CommandContactCelebrationsPreviewRequest,
+    CommandContactCelebrationsPreviewResponse,
     CommandContactsSearchRequest,
     CommandContactsSearchResponse,
 )
-from services.agent_control_audit import write_agent_audit
+from services.agent_control_audit import write_agent_audit_transactional
 from services.agent_control_command import (
     CommandContactAudienceChanged,
     CommandContactsCursorInvalid,
     CommandContactsUnavailable,
     preview_command_contact_audience,
+    preview_command_contact_celebrations,
     search_command_contacts,
 )
 
@@ -38,7 +41,7 @@ async def _audit(
     request_meta: dict[str, object],
     response_meta: dict[str, object],
 ) -> None:
-    await write_agent_audit(
+    await write_agent_audit_transactional(
         db,
         request=request,
         actor=agent["actor"],
@@ -120,6 +123,46 @@ async def command_contact_audience_preview(
         response_meta={
             "audience_ref": str(result.audience_ref),
             "exact_count": result.exact_count,
+            "sample_count": len(result.samples),
+        },
+    )
+    return result
+
+
+@router.post(
+    "/crm/command-contact-celebrations/preview",
+    response_model=CommandContactCelebrationsPreviewResponse,
+)
+async def command_contact_celebrations_preview(
+    payload: CommandContactCelebrationsPreviewRequest,
+    request: Request,
+    db: Database,
+    agent: Agent,
+) -> CommandContactCelebrationsPreviewResponse:
+    try:
+        result = await preview_command_contact_celebrations(db, payload)
+    except CommandContactAudienceChanged:
+        raise HTTPException(409, "command_contacts_changed_during_preview") from None
+    except CommandContactsUnavailable:
+        raise HTTPException(503, "command_contacts_unavailable") from None
+    await _audit(
+        db,
+        request=request,
+        agent=agent,
+        action_id="crm.command_contact_celebrations.preview",
+        request_meta={
+            "month": payload.month,
+            "include_birthdays": payload.include_birthdays,
+            "include_home_anniversaries": payload.include_home_anniversaries,
+        },
+        response_meta={
+            "audience_ref": str(result.audience_ref),
+            "birthday_count": result.birthday_count,
+            "home_anniversary_count": result.home_anniversary_count,
+            "union_count": result.union_count,
+            "address_ready_count": result.address_ready_count,
+            "missing_address_count": result.missing_address_count,
+            "reconciliation_status": result.reconciliation_status,
             "sample_count": len(result.samples),
         },
     )

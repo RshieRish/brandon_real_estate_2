@@ -6,9 +6,12 @@ import os
 from collections.abc import Sequence
 from typing import Annotated, NoReturn
 
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import NoResultFound
+
 from config import settings
 from database import get_db
-from fastapi import APIRouter, Depends, HTTPException, Request
 from middleware.agent_control import require_agent_control
 from schemas.sydney_context import (
     ContextEventBatchRequest,
@@ -49,8 +52,6 @@ from services.sydney_context_service import (
     update_run_state,
     update_tool_invocation,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.exc import NoResultFound
 
 router = APIRouter(dependencies=[Depends(require_agent_control)])
 
@@ -388,7 +389,11 @@ async def start_context_tool(
 ) -> ContextToolInvocationResponse:
     _require_master()
     try:
-        result = await start_tool_invocation(db, payload)
+        result = await start_tool_invocation(
+            db,
+            payload,
+            invocation_limit=settings.SYDNEY_CONTEXT_MAX_TOOL_INVOCATIONS,
+        )
     except _CONTEXT_ERRORS as error:
         _raise_bounded(error)
     await _audit(
@@ -397,9 +402,14 @@ async def start_context_tool(
         agent=agent,
         action_id="context.tools.start",
         response_meta={
-            "invocation_id": str(result.invocation_id),
+            "invocation_id": (
+                str(result.invocation_id) if result.invocation_id is not None else None
+            ),
             "state": result.state,
             "replay_decision": result.replay_decision,
+            "invocation_count": result.invocation_count,
+            "invocation_limit": result.invocation_limit,
+            "limit_reached": result.limit_reached,
         },
     )
     return result

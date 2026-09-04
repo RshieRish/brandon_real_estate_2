@@ -4,6 +4,7 @@ import { expect, test } from './fixtures/command';
 
 const wcagTags = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 async function axe(page: Page) {
+  await expect(page).not.toHaveTitle('');
   const results = await new AxeBuilder({ page }).withTags(wcagTags).analyze();
   expect(results.violations, results.violations.map((item) => `${item.id}: ${item.nodes.map((node) => node.target.join(' ')).join(', ')}`).join('\n')).toEqual([]);
 }
@@ -15,6 +16,9 @@ test('exactly four meaningful Contacts states pass axe', async ({ commandPage })
 
   await commandPage.goto('/admin/command/contacts/1');
   await expect(commandPage.getByRole('heading', { name: 'Avery Lake' })).toBeVisible();
+  const expand = commandPage.getByRole('button', { name: 'Show full activity' });
+  await expand.click();
+  await expect(commandPage.getByRole('button', { name: 'Collapse activity' })).toHaveAttribute('aria-expanded', 'true');
   await axe(commandPage);
 
   await commandPage.getByRole('tab', { name: 'Tasks' }).click();

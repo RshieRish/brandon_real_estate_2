@@ -23,7 +23,7 @@
             "source": "skills/atlas-backend-operations/SKILL.md",
             "deployed_source": "atlas_backend_operations_skill.md",
             "destination": "skills/productivity/atlas-backend-operations/SKILL.md",
-            "sha256": "7a8711fab72c32792f0140d2e8c63a243d0d95f67ad2f49519c5ecd4af5b321b"
+            "sha256": "6591213eeb790dc305108f68e554f08d6d6a33c911de83b7da02c2a7aa08d45d"
         }
     },
     "tools": {
@@ -52,7 +52,9 @@
             "crm_task_suggestions_dismiss_proposal",
             "context_history_search",
             "command_contacts_search",
-            "command_contact_audience_preview"
+            "command_contact_audience_preview",
+            "command_contact_celebrations_preview",
+            "command_card_campaign_draft_create"
         ]
     }
 }

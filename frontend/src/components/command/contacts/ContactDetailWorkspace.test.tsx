@@ -658,6 +658,14 @@ describe('ContactDetailWorkspace', () => {
       expect(within(topTabs).getByRole('tab', { name })).toBeInTheDocument();
     }
     expect(within(topTabs).getAllByRole('tab')).toHaveLength(8);
+    expect(within(within(topTabs).getByRole('tab', { name: 'Timeline' })).getByText('2 events')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Opportunities' })).getByText('2 captured · 1 SWS')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'SmartPlans' })).getByText('2 captured · 1 SWS')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Tasks' })).getByText('3 captured · 4 SWS')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Notes' })).getByText('0 verified · 1 SWS')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Saved Searches' })).getByText('Source partial · 1 SWS')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Source Evidence' })).getByText('1 capture')).toBeInTheDocument();
+    expect(within(within(topTabs).getByRole('tab', { name: 'Bookings · SWS internal' })).getByText('2 SWS')).toBeInTheDocument();
     const topValues = ['timeline', 'opportunities', 'smart_plans', 'tasks', 'notes', 'saved_searches', 'evidence', 'bookings'];
     for (const value of topValues) {
       const tab = document.getElementById(`contact-detail-view-tab-${value}`);
@@ -698,7 +706,7 @@ describe('ContactDetailWorkspace', () => {
     expect(await screen.findByText('Discovery call completed')).toBeInTheDocument();
     expect(screen.getByText('Discussed a possible September listing.')).toBeInTheDocument();
     expect(screen.getByText('Follow up next Tuesday')).toBeInTheDocument();
-    expect(screen.getByText('Follow up next Tuesday').nextElementSibling).toHaveAttribute('datetime');
+    expect(screen.getByText('Follow up next Tuesday').closest('article')?.querySelector('time')).toHaveAttribute('datetime');
     expect(screen.getByText('Consultation booked')).toBeInTheDocument();
     expect(screen.getByText('SWS consultation at the office.')).toBeInTheDocument();
     const timelineRegion = screen.getByRole('region', { name: 'Contact timeline' });
@@ -720,6 +728,52 @@ describe('ContactDetailWorkspace', () => {
     ]);
     expect(api.timeline).toHaveBeenCalledTimes(1);
     expect(document.body).not.toHaveTextContent('/workspace');
+  });
+
+  it('defensively hides technical archive activities and bounds malformed long timeline values', async () => {
+    const api = fakeApi();
+    const rawArchiveValue = `- button command at header ${'raw accessibility node '.repeat(80)}`;
+    vi.mocked(api.timeline).mockResolvedValue({
+      rows: [
+        {
+          ...timeline.rows[0]!,
+          key: 'activity:801',
+          entity_id: 801,
+          kind: 'archive_timeline_capture',
+          title: 'INTERNAL_CRM · ARCHIVE_TIMELINE_CAPTURE',
+          body: rawArchiveValue,
+        },
+        {
+          ...timeline.rows[0]!,
+          key: 'activity:802',
+          entity_id: 802,
+          kind: 'archive_contact_imported',
+          title: 'INTERNAL_CRM · ARCHIVE_CONTACT_IMPORTED',
+        },
+        {
+          ...timeline.rows[0]!,
+          key: 'activity:803',
+          entity_id: 803,
+          kind: 'note_created',
+          title: rawArchiveValue,
+          body: 'A real event with a defensively bounded malformed title.',
+        },
+      ],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    renderWorkspace(api);
+
+    expect(await screen.findByText('A real event with a defensively bounded malformed title.')).toBeInTheDocument();
+    expect(screen.queryByText('INTERNAL_CRM · ARCHIVE_TIMELINE_CAPTURE')).not.toBeInTheDocument();
+    expect(screen.queryByText('INTERNAL_CRM · ARCHIVE_CONTACT_IMPORTED')).not.toBeInTheDocument();
+    expect(screen.queryByText(rawArchiveValue)).not.toBeInTheDocument();
+    const expand = screen.getByRole('button', { name: 'Show full activity' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(expand);
+    expect(screen.getByRole('heading', { name: rawArchiveValue.trim() })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse activity' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('shows yearless, sentinel, and verified celebrations without presenting 1900 as verified', async () => {
@@ -886,6 +940,9 @@ describe('ContactDetailWorkspace', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Source Evidence' }));
 
     const evidencePanel = await screen.findByRole('region', { name: 'Contact capture evidence' });
+    const recoverySummary = within(evidencePanel).getByRole('region', { name: 'Current contact recovery summary' });
+    expect(within(recoverySummary).getByRole('heading', { name: '1 recovered Command capture linked' })).toBeInTheDocument();
+    expect(within(recoverySummary).getByText('2 of 8 section checks are complete, with 9 captured records.')).toBeInTheDocument();
     expect(within(evidencePanel).getByText('317 provider contact rows')).toBeInTheDocument();
     expect(within(evidencePanel).getByText('317 resolved provider identities')).toBeInTheDocument();
     expect(within(evidencePanel).getByText('0 coalesced aliases')).toBeInTheDocument();
@@ -1645,14 +1702,46 @@ describe('ContactDetailWorkspace', () => {
       section_matrix: [],
     });
     renderWorkspace(api);
-    expect(await screen.findByText('Timeline was not fully captured')).toBeInTheDocument();
+    const timelineRegion = await screen.findByRole('region', { name: 'Contact timeline' });
+    expect(await within(timelineRegion).findByText('No recovered Command record is linked to this contact')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Notes' }));
-    expect(await screen.findByText('Notes were not fully captured')).toBeInTheDocument();
+    expect(await within(screen.getByRole('region', { name: 'Captured source notes' })).findByText('No recovered Command record is linked to this contact')).toBeInTheDocument();
     expect(screen.queryByText('No notes were captured')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Source Evidence' }));
     expect(await screen.findByText('No contact capture positions')).toBeInTheDocument();
     expect(screen.getByText('317 provider contact rows')).toBeInTheDocument();
     expect(screen.getByText('Recovered archive (global)')).toBeInTheDocument();
+  });
+
+  it('labels unreconciled and unavailable recovered source coverage instead of showing empty tabs', async () => {
+    const unreconciledApi = fakeApi();
+    vi.mocked(unreconciledApi.timeline).mockResolvedValue({ rows: [], next_cursor: null, has_more: false });
+    vi.mocked(unreconciledApi.evidence).mockResolvedValue({
+      ...evidence,
+      provider_contact_rows: 0,
+      resolved_provider_identities: 0,
+      capture_positions: [],
+      section_matrix: [],
+      sources: [],
+      capture_quality: 'limitation',
+    });
+    const first = renderWorkspace(unreconciledApi);
+    const unreconciledTimeline = await screen.findByRole('region', { name: 'Contact timeline' });
+    expect(await within(unreconciledTimeline).findByText('Recovered Command timeline has not been restored')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Notes' }));
+    expect(await within(screen.getByRole('region', { name: 'Captured source notes' })).findByText('Recovered Command notes have not been restored')).toBeInTheDocument();
+    first.unmount();
+
+    const unavailableApi = fakeApi();
+    vi.mocked(unavailableApi.timeline).mockResolvedValue({ rows: [], next_cursor: null, has_more: false });
+    vi.mocked(unavailableApi.evidence).mockRejectedValue(new Error('PRIVATE_EVIDENCE_FAILURE'));
+    renderWorkspace(unavailableApi);
+    const unavailableTimeline = await screen.findByRole('region', { name: 'Contact timeline' });
+    expect(await within(unavailableTimeline).findByText('Recovered source coverage is unavailable')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('PRIVATE_EVIDENCE_FAILURE');
+    await userEvent.click(screen.getByRole('tab', { name: 'Notes' }));
+    expect(await within(screen.getByRole('region', { name: 'Captured source notes' })).findByText('Recovered source coverage is unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No notes were captured')).not.toBeInTheDocument();
   });
 
   it('renders matching evidence cells even when the timeline has no rows', async () => {

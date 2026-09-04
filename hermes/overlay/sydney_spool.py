@@ -175,12 +175,23 @@ def _final_delivery_meta_key(
     return "final_delivery:" + hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
 
 
-def control_delivery_source_key(run_id: str, delivery_kind: str) -> str:
-    if delivery_kind not in {"deferred", "terminal_error"}:
+def control_delivery_source_key(
+    run_id: str,
+    delivery_kind: str,
+    *,
+    platform_message_id: str | None = None,
+) -> str:
+    if delivery_kind not in {"accepted", "deferred", "terminal_error"}:
         raise ValueError("control delivery kind is invalid")
     exact_run_id = str(run_id)
     if not exact_run_id:
         raise ValueError("control delivery run id is required")
+    if delivery_kind == "accepted":
+        exact_message_id = str(platform_message_id or "")
+        if not exact_message_id:
+            raise ValueError("accepted delivery platform message id is required")
+        message_digest = hashlib.sha256(exact_message_id.encode("utf-8")).hexdigest()
+        return f"run:{exact_run_id}:control:accepted:{message_digest}"
     return f"run:{exact_run_id}:control:{delivery_kind}"
 
 
@@ -753,7 +764,7 @@ class SydneySpool:
         values = (platform, chat_id, platform_message_id, run_id)
         if not all(isinstance(value, str) and value for value in values):
             raise ValueError("control delivery identity is incomplete")
-        if delivery_kind not in {"deferred", "terminal_error"}:
+        if delivery_kind not in {"accepted", "deferred", "terminal_error"}:
             raise ValueError("control delivery kind is invalid")
         if not re.fullmatch(r"[0-9a-f]{64}", str(response_sha256)):
             raise ValueError("control delivery response hash is invalid")
@@ -761,10 +772,18 @@ class SydneySpool:
             raise ValueError("control delivery event batch is invalid")
         if delivery_kind == "terminal_error" and not isinstance(run_update, dict):
             raise ValueError("terminal control delivery requires a run update")
-        if delivery_kind == "deferred" and run_update is not None:
-            raise ValueError("deferred control delivery cannot terminalize the run")
+        if delivery_kind in {"accepted", "deferred"} and run_update is not None:
+            raise ValueError(
+                f"{delivery_kind} control delivery cannot terminalize the run"
+            )
 
-        source_key = control_delivery_source_key(run_id, delivery_kind)
+        source_key = control_delivery_source_key(
+            run_id,
+            delivery_kind,
+            platform_message_id=(
+                platform_message_id if delivery_kind == "accepted" else None
+            ),
+        )
         prior_record = self.get_record(source_key)
         if prior_record is not None:
             return "delivered" if prior_record.state == "acknowledged" else "pending"
@@ -813,7 +832,13 @@ class SydneySpool:
             raise SpoolConflict("control delivery confirmation does not match")
         source_key = str(
             existing.get("source_key")
-            or control_delivery_source_key(str(existing["run_id"]), delivery_kind)
+            or control_delivery_source_key(
+                str(existing["run_id"]),
+                delivery_kind,
+                platform_message_id=(
+                    platform_message_id if delivery_kind == "accepted" else None
+                ),
+            )
         )
         local_id = self.enqueue(
             kind="control_delivery_bundle",

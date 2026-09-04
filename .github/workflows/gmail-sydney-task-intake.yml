@@ -58,6 +58,11 @@ on:
       - "frontend/src/components/command/shell/commandNavigation.ts"
       - "frontend/src/components/command/shell/commandNavigation.test.ts"
       - "frontend/src/components/command/shell/CommandShell.test.tsx"
+      - "frontend/src/app/admin/command/**"
+      - "frontend/src/components/command/**"
+      - "frontend/src/lib/command/**"
+      - "frontend/e2e/**"
+      - "frontend/playwright.config.ts"
       - ".github/workflows/gmail-sydney-task-intake.yml"
   push:
     branches:
@@ -118,6 +123,11 @@ on:
       - "frontend/src/components/command/shell/commandNavigation.ts"
       - "frontend/src/components/command/shell/commandNavigation.test.ts"
       - "frontend/src/components/command/shell/CommandShell.test.tsx"
+      - "frontend/src/app/admin/command/**"
+      - "frontend/src/components/command/**"
+      - "frontend/src/lib/command/**"
+      - "frontend/e2e/**"
+      - "frontend/playwright.config.ts"
       - ".github/workflows/gmail-sydney-task-intake.yml"
   workflow_dispatch:
 
@@ -327,12 +337,17 @@ jobs:
             tests/test_sydney_context_router.py \
             tests/test_sydney_context_projection.py \
             tests/test_agent_control_command.py \
-            tests/test_sydney_context_e2e.py
+            tests/test_sydney_context_e2e.py \
+            tests/test_card_campaign_migration.py \
+            tests/test_card_campaign_models.py \
+            tests/test_card_campaign_service.py \
+            tests/test_command_cards_router.py \
+            tests/test_agent_control_cards.py
 
       - name: Verify Sydney is the sole migration head
         working-directory: backend
         run: |
-          test "$(alembic heads | tr -d '\r')" = "85e8b7c9d4f1 (head)"
+          test "$(alembic heads | tr -d '\r')" = "87a0d9b1e3f2 (head)"
 
       - name: Remove the exact disposable fixtures
         if: always()
@@ -398,7 +413,7 @@ jobs:
             tests/test_sydney_backfill.py \
             tests/test_sydney_context_e2e.py
 
-      - name: Verify the exact 25-tool JSON-RPC registry
+      - name: Verify the exact 27-tool JSON-RPC registry
         run: |
           python hermes/verify_atlas_tools.py \
             --server hermes/atlas_backend_mcp.py
@@ -422,33 +437,70 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Run the exact Task 7 Command review tests
+      - name: Run the complete frontend component suite
         working-directory: frontend
-        run: |
-          npm test -- \
-            src/lib/command/task-suggestions.test.ts \
-            src/components/command/TaskSuggestionsWorkspace.test.tsx \
-            src/components/command/shell/commandNavigation.test.ts \
-            src/components/command/shell/CommandShell.test.tsx
+        run: npm test -- --run
 
       - name: Type-check the frontend
         working-directory: frontend
         run: npm run typecheck
 
-      - name: Lint only the Task 7 frontend scope
+      - name: Lint the Sydney, cards, and contact repair scope
         working-directory: frontend
         run: |
           npm exec eslint -- \
+            playwright.config.ts \
+            e2e/command-contacts.spec.ts \
+            e2e/command-contacts-mobile.spec.ts \
+            e2e/command-contacts-accessibility.spec.ts \
+            e2e/command-contacts-visual.spec.ts \
+            e2e/command-visual.spec.ts \
+            e2e/fixtures/command-contacts.ts \
             src/instrumentation-client.ts \
             src/proxy.ts \
             src/app/admin/layout.tsx \
+            src/app/admin/command/cards/page.tsx \
+            src/app/admin/command/cards/\[campaignId\]/page.tsx \
             src/app/admin/command/task-suggestions/page.tsx \
             src/app/admin/login/page.tsx \
+            src/lib/command/cards.ts \
+            src/lib/command/cards.test.ts \
+            src/lib/command/contacts.ts \
+            src/lib/command/contacts.test.ts \
             src/lib/command/task-suggestion-handoff.ts \
             src/lib/command/task-suggestions.ts \
             src/lib/command/task-suggestions.test.ts \
+            src/components/command/cards/CardCampaignReview.tsx \
+            src/components/command/cards/CardCampaignsWorkspace.tsx \
+            src/components/command/cards/CardCampaignsWorkspace.test.tsx \
+            src/components/command/contacts/ContactCaptureEvidence.tsx \
+            src/components/command/contacts/ContactDetailTabs.tsx \
+            src/components/command/contacts/ContactDetailWorkspace.tsx \
+            src/components/command/contacts/ContactDetailWorkspace.test.tsx \
+            src/components/command/contacts/ContactExpandableValue.tsx \
+            src/components/command/contacts/ContactSectionSurface.tsx \
+            src/components/command/contacts/ContactTimelineTab.tsx \
             src/components/command/TaskSuggestionsWorkspace.tsx \
             src/components/command/TaskSuggestionsWorkspace.test.tsx \
             src/components/command/shell/commandNavigation.ts \
             src/components/command/shell/commandNavigation.test.ts \
-            src/components/command/shell/CommandShell.test.tsx
+            src/components/command/shell/CommandShell.test.tsx \
+            src/components/command/ui/CommandTabs.tsx
+
+      - name: Install the pinned Chromium runtime
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Sydney Command contact browser gates
+        working-directory: frontend
+        run: |
+          npx playwright test \
+            --project=command-desktop \
+            --project=command-mobile \
+            --project=command-a11y \
+            --project=command-visual \
+            e2e/command-contacts.spec.ts \
+            e2e/command-contacts-mobile.spec.ts \
+            e2e/command-contacts-accessibility.spec.ts \
+            e2e/command-contacts-visual.spec.ts \
+            e2e/command-visual.spec.ts

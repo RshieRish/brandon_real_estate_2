@@ -23,6 +23,7 @@ import type {
   ContactDetail,
   ContactDirectoryRequest,
   ContactEvidence,
+  ContactEvidenceStatus,
   ContactInternalTask,
   ContactLifecycleInternalTask,
   ContactInternalWorkspace,
@@ -34,7 +35,11 @@ import type {
   ContactWorkspaceSummary,
   ContactsApi,
 } from '@/lib/command/contacts';
-import { contactsApi, serializeDirectoryRequest } from '@/lib/command/contacts';
+import {
+  contactsApi,
+  isTechnicalContactTimelineEntry,
+  serializeDirectoryRequest,
+} from '@/lib/command/contacts';
 import { CommandHttpError } from '@/lib/command/http';
 import {
   CommandConflictError,
@@ -48,6 +53,7 @@ import { CommandStatePanel } from '../ui/CommandStatePanel';
 import { useCommandToast } from '../ui/CommandToastProvider';
 import { ContactCaptureEvidence } from './ContactCaptureEvidence';
 import { ContactDetailTabs, ContactTaskTabs } from './ContactDetailTabs';
+import { ContactExpandableValue } from './ContactExpandableValue';
 import { ContactProfilePanel } from './ContactProfilePanel';
 import { CapturedSection, InternalState } from './ContactSectionSurface';
 import { ContactTimelineTab } from './ContactTimelineTab';
@@ -1435,6 +1441,13 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const currentDetail = detail?.contact.id === contactId ? detail : null;
   const currentInternal = internal?.contact.id === contactId ? internal : null;
   const currentEvidence = evidence?.contact_id === contactId ? evidence : null;
+  const evidenceStatus: ContactEvidenceStatus = currentEvidence
+    ? 'available'
+    : evidenceFailed ? 'unavailable' : 'loading';
+  const internalStatus: ContactEvidenceStatus = currentInternal
+    ? 'available'
+    : internalFailed && !internalLoading ? 'unavailable' : 'loading';
+  const visibleTimelineRows = timelineRows.filter((row) => !isTechnicalContactTimelineEntry(row));
   const currentNeighborUniverse = `${contactId}:${requestKey}`;
   const currentNeighbors = neighborUniverseKey === currentNeighborUniverse
     ? neighbors
@@ -1537,14 +1550,47 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
           />
         </div>
         <div className="command-contact-detail-main">
-          <ContactDetailTabs value={view} onChange={writeView} />
+          <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
+            <div className="command-contact-summary-heading">
+              <span>Current workspace</span>
+              <strong>SWS-owned records</strong>
+            </div>
+            {summary && currentDetail ? (
+              <>
+                <span><strong>{typeof summary.active_tasks === 'number' ? summary.active_tasks : summary.open_tasks}</strong>{typeof summary.active_tasks === 'number' ? 'active tasks' : 'open tasks'}</span>
+                <span><strong>{summary.completed_tasks}</strong>completed tasks</span>
+                {typeof summary.cancelled_tasks === 'number' ? <span><strong>{summary.cancelled_tasks}</strong>cancelled tasks</span> : null}
+                <span>
+                  <strong>{summary.archived_tasks}</strong>archived tasks
+                  {typeof summary.archived_mutable_tasks === 'number'
+                    && typeof summary.archived_recovered_evidence === 'number' ? (
+                      <>
+                        <span className="command-visually-hidden">{countLabel(summary.archived_mutable_tasks, 'restorable SWS task')}</span>
+                        <span className="command-visually-hidden">{countLabel(summary.archived_recovered_evidence, 'recovered evidence task')}</span>
+                      </>
+                    ) : <span className="command-visually-hidden">Archived task breakdown unavailable during update</span>}
+                </span>
+                {SUMMARY_NON_TASK_KEYS.map((key) => <span key={key}><strong>{summary[key]}</strong>{key.replaceAll('_', ' ')}</span>)}
+              </>
+            ) : <span className="command-contact-summary-loading">Loading current counts…</span>}
+          </aside>
+          <ContactDetailTabs
+            value={view}
+            onChange={writeView}
+            evidence={currentEvidence}
+            evidenceStatus={evidenceStatus}
+            internal={currentInternal}
+            internalStatus={internalStatus}
+            timelineCount={visibleTimelineRows.length}
+            timelineHasMore={timelineHasMore}
+          />
           {DETAIL_VIEWS.map((panelView) => {
             const selected = panelView === view;
             const panelId = `contact-detail-view-panel-${panelView}`;
             const tabId = `contact-detail-view-tab-${panelView}`;
             return (
               <section key={panelView} id={panelId} role="tabpanel" aria-labelledby={tabId} hidden={!selected} className="command-contact-detail-panel">
-                {panelView === 'timeline' ? <ContactTimelineTab rows={timelineRows} evidence={currentEvidence} loading={timelineLoading} error={timelineFailed} hasMore={timelineHasMore} loadingMore={timelineLoadingMore} loadMoreError={timelineLoadMoreFailed} onRetry={() => void loadTimeline(false, null)} onLoadMore={() => void loadTimeline(true, timelineCursor)} /> : null}
+                {panelView === 'timeline' ? <ContactTimelineTab rows={visibleTimelineRows} evidence={currentEvidence} evidenceStatus={evidenceStatus} loading={timelineLoading} error={timelineFailed} hasMore={timelineHasMore} loadingMore={timelineLoadingMore} loadMoreError={timelineLoadMoreFailed} onRetry={() => void loadTimeline(false, null)} onRetryEvidence={() => void loadEvidence()} onLoadMore={() => void loadTimeline(true, timelineCursor)} /> : null}
                 {panelView === 'tasks' ? (
                   <>
                     <ContactTaskTabs value={taskView} onChange={writeTask} />
@@ -1557,7 +1603,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
                         <section key={state} id={`contact-task-state-panel-${state}`} role="tabpanel" aria-labelledby={`contact-task-state-tab-${state}`} hidden={state !== taskView} className="command-contact-task-panel">
                           {state === taskView ? (
                             <>
-                              <CapturedSection section={nestedSection} page={nestedPage} evidence={currentEvidence} internal={currentInternal} loading={sectionLoading.has(nestedSection)} error={sectionFailed.has(nestedSection)} onRetry={() => void loadSection(nestedSection)} onViewEvidence={() => writeView('evidence')} />
+                              <CapturedSection section={nestedSection} page={nestedPage} evidence={currentEvidence} evidenceStatus={evidenceStatus} internal={currentInternal} loading={sectionLoading.has(nestedSection)} error={sectionFailed.has(nestedSection)} onRetry={() => void loadSection(nestedSection)} onRetryEvidence={() => void loadEvidence()} onViewEvidence={() => writeView('evidence')} />
                               {nestedState && nestedState.page < nestedState.page_count ? <><button type="button" className="command-secondary-button command-print-hidden" disabled={mutationPending || sectionLoading.has(nestedSection) || sectionLoadingMore.has(nestedSection)} onClick={() => void loadSection(nestedSection, nestedState.page + 1, true)}>{sectionLoading.has(nestedSection) || sectionLoadingMore.has(nestedSection) ? 'Loading…' : sectionLoadMoreFailed.has(nestedSection) ? 'Retry more captured tasks' : 'Load more captured tasks'}</button>{sectionLoadMoreFailed.has(nestedSection) ? <p role="alert">More captured tasks could not be loaded.</p> : null}</> : null}
                               <InternalState label={`${state === 'to_do' ? 'to-do' : state} tasks`} loading={internalLoading} available={!internalFailed && currentInternal !== null} empty={internalTaskRows.length === 0} onRetry={() => void loadInternal()}>
                                 {currentInternal ? <InternalCards section={nestedSection} workspace={currentInternal} onAddTask={openTaskForm} onDeleteNote={() => undefined} onRestoreTask={restoreTaskFromContact} registerRestoreButton={registerTaskRestoreButton} mutationPending={mutationPending} addTaskRef={taskOpenerRef} /> : null}
@@ -1577,7 +1623,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
                   const rows = currentInternal ? internalRows(currentInternal, section) : [];
                   return (
                     <>
-                      <CapturedSection section={section} page={page} evidence={currentEvidence} internal={currentInternal} loading={sectionLoading.has(section)} error={sectionFailed.has(section)} onRetry={() => void loadSection(section)} onViewEvidence={() => writeView('evidence')} />
+                      <CapturedSection section={section} page={page} evidence={currentEvidence} evidenceStatus={evidenceStatus} internal={currentInternal} loading={sectionLoading.has(section)} error={sectionFailed.has(section)} onRetry={() => void loadSection(section)} onRetryEvidence={() => void loadEvidence()} onViewEvidence={() => writeView('evidence')} />
                       {sectionState && sectionState.page < sectionState.page_count ? <><button type="button" className="command-secondary-button command-print-hidden" disabled={mutationPending || sectionLoading.has(section) || sectionLoadingMore.has(section)} onClick={() => void loadSection(section, sectionState.page + 1, true)}>{sectionLoading.has(section) || sectionLoadingMore.has(section) ? 'Loading…' : sectionLoadMoreFailed.has(section) ? `Retry more captured ${sectionLabel(section)}` : `Load more captured ${sectionLabel(section)}`}</button>{sectionLoadMoreFailed.has(section) ? <p role="alert">More captured {sectionLabel(section)} could not be loaded.</p> : null}</> : null}
                       <InternalState label={sectionLabel(section)} loading={internalLoading} available={!internalFailed && currentInternal !== null} empty={rows.length === 0} onRetry={() => void loadInternal()}>
                         {currentInternal ? <InternalCards section={section} workspace={currentInternal} onAddTask={() => undefined} onDeleteNote={(id) => void deleteNote(id)} onRestoreTask={restoreTaskFromContact} registerRestoreButton={registerTaskRestoreButton} mutationPending={mutationPending} /> : null}
@@ -1588,7 +1634,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
                 {panelView === 'evidence' ? currentEvidence ? <ContactCaptureEvidence evidence={currentEvidence} api={api} contactId={contactId} /> : evidenceFailed ? <CommandStatePanel kind="error" title="Source evidence is unavailable" message="The contact evidence graph could not be read." actionLabel="Retry" onAction={() => void loadEvidence()} /> : <CommandStatePanel kind="loading" title="Loading source evidence" message="Reading capture positions and source artifacts." /> : null}
                 {panelView === 'bookings' ? (
                   <InternalState label="bookings" loading={internalLoading} available={!internalFailed && currentInternal !== null} empty={(currentInternal?.bookings.length ?? 0) === 0} onRetry={() => void loadInternal()}>
-                    {currentInternal ? <section className="command-contact-bookings"><h3>{currentInternal.bookings.length} SWS internal bookings</h3>{currentInternal.bookings.map((booking) => <article key={booking.id} aria-label={`SWS internal booking ${booking.id}`}><h4>{booking.meeting_type}</h4><p>{booking.context}</p>{booking.location ? <p>{booking.location}</p> : null}{booking.notes ? <p>{booking.notes}</p> : null}<time>{new Date(booking.scheduled_at).toLocaleString()}</time></article>)}</section> : null}
+                    {currentInternal ? <section className="command-contact-bookings"><h3>{currentInternal.bookings.length} SWS internal bookings</h3>{currentInternal.bookings.map((booking) => <article key={booking.id} aria-label={`SWS internal booking ${booking.id}`}><ContactExpandableValue value={booking.meeting_type} limit={180} element="h4" label="booking title" /><ContactExpandableValue value={booking.context} limit={420} element="p" label="booking context" />{booking.location ? <ContactExpandableValue value={booking.location} limit={260} element="p" label="booking location" /> : null}{booking.notes ? <ContactExpandableValue value={booking.notes} limit={420} element="p" label="booking notes" /> : null}<time>{new Date(booking.scheduled_at).toLocaleString()}</time></article>)}</section> : null}
                   </InternalState>
                 ) : null}
               </section>
@@ -1609,26 +1655,6 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
       {taskRestoreProgress ? <p ref={taskRestoreProgressRef} className="command-contact-universe-state" role="status" aria-live="polite" aria-atomic="true" tabIndex={-1}>{taskRestoreProgress}</p> : null}
       {taskRestoreNotice ? <p className="command-contact-universe-state" role="status" aria-live="polite" aria-atomic="true">{taskRestoreNotice}</p> : null}
       {mutationVerification ? <p className="command-contact-universe-state" role="alert">{mutationVerification.taskOutcome === 'confirmed' ? 'Task was saved, but current contact data could not be verified.' : `${mutationVerification.label} status is unknown. Current contact data could not be verified.`} <button type="button" className="command-secondary-button command-touch-target command-print-hidden" disabled={mutationVerificationRetrying} onClick={() => void retryMutationVerification()}>{mutationVerificationRetrying ? 'Refreshing…' : 'Retry contact refresh'}</button></p> : null}
-      <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
-        {summary && currentDetail ? (
-          <>
-            <span><strong>{typeof summary.active_tasks === 'number' ? summary.active_tasks : summary.open_tasks}</strong>{typeof summary.active_tasks === 'number' ? 'active tasks' : 'open tasks'}</span>
-            <span><strong>{summary.completed_tasks}</strong>completed tasks</span>
-            {typeof summary.cancelled_tasks === 'number' ? <span><strong>{summary.cancelled_tasks}</strong>cancelled tasks</span> : null}
-            <span>
-              <strong>{summary.archived_tasks}</strong>archived tasks
-              {typeof summary.archived_mutable_tasks === 'number'
-                && typeof summary.archived_recovered_evidence === 'number' ? (
-                  <>
-                    <span className="command-visually-hidden">{countLabel(summary.archived_mutable_tasks, 'restorable SWS task')}</span>
-                    <span className="command-visually-hidden">{countLabel(summary.archived_recovered_evidence, 'recovered evidence task')}</span>
-                  </>
-                ) : <span className="command-visually-hidden">Archived task breakdown unavailable during update</span>}
-            </span>
-            {SUMMARY_NON_TASK_KEYS.map((key) => <span key={key}><strong>{summary[key]}</strong>{key.replaceAll('_', ' ')}</span>)}
-          </>
-        ) : null}
-      </aside>
     </section>
   );
 }

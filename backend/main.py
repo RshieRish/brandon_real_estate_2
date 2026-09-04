@@ -13,6 +13,7 @@ from middleware.context_event_batch_limit import ContextEventBatchLimitMiddlewar
 from routers import (
     admin_integrations,
     agent_control,
+    agent_control_cards,
     agent_control_command,
     agent_control_context,
     agent_control_crm,
@@ -22,6 +23,7 @@ from routers import (
     booking,
     chat,
     command,
+    command_cards,
     command_contacts,
     command_provenance,
     command_task_suggestions,
@@ -106,6 +108,11 @@ app.include_router(
     prefix="/api/v1/agent-control",
     tags=["agent-control-command"],
 )
+app.include_router(
+    agent_control_cards.router,
+    prefix="/api/v1/agent-control",
+    tags=["agent-control-cards"],
+)
 app.include_router(workspace.router, prefix="/api/v1/workspace", tags=["workspace"])
 app.include_router(
     admin_integrations.router,
@@ -118,6 +125,11 @@ app.include_router(
     tags=["command-contacts"],
 )
 app.include_router(command.router, prefix="/api/v1/command", tags=["command"])
+app.include_router(
+    command_cards.router,
+    prefix="/api/v1/command",
+    tags=["command-cards"],
+)
 app.include_router(
     command_task_suggestions.router,
     prefix="/api/v1/command",

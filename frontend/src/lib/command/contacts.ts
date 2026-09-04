@@ -9,6 +9,7 @@ import {
 
 export type ContactCaptureQuality = 'complete' | 'partial' | 'shell' | 'error';
 export type ContactEvidenceQuality = 'complete' | 'partial' | 'limitation';
+export type ContactEvidenceStatus = 'loading' | 'available' | 'unavailable';
 export type ContactSectionName =
   | 'timeline'
   | 'opportunities'
@@ -256,6 +257,104 @@ export type ContactEvidence = Readonly<{
   sources: readonly ContactSourceMetadata[];
   capture_quality: ContactEvidenceQuality;
 }>;
+
+export type ContactSectionCoverageState =
+  | 'unreconciled'
+  | 'not_linked'
+  | 'partial'
+  | 'verified_empty'
+  | 'captured';
+
+export type ContactSectionCoverage = Readonly<{
+  state: ContactSectionCoverageState;
+  recovered_count: number;
+  capture_positions: number;
+  complete_positions: number;
+}>;
+
+export type ContactPresentationText = Readonly<{
+  preview: string;
+  full: string;
+  truncated: boolean;
+}>;
+
+/**
+ * Bounds archive-derived values by Unicode code point for safe presentation.
+ * The full value remains available only through a deliberate UI expansion.
+ */
+export function contactPresentationText(value: string, limit: number): ContactPresentationText {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new RangeError('Contact presentation limit must be a positive safe integer');
+  }
+  const characters = Array.from(value);
+  if (characters.length <= limit) return { preview: value, full: value, truncated: false };
+  return {
+    preview: `${characters.slice(0, limit).join('')}…`,
+    full: value,
+    truncated: true,
+  };
+}
+
+const TECHNICAL_CONTACT_TIMELINE_KINDS = new Set([
+  'archive_contact_imported',
+  'archive_timeline_capture',
+]);
+
+export function isTechnicalContactTimelineEntry(entry: ContactTimelineEntry): boolean {
+  return entry.origin === 'internal_crm' && TECHNICAL_CONTACT_TIMELINE_KINDS.has(entry.kind);
+}
+
+/**
+ * Describes only evidence attached to this contact. Global archive totals are
+ * useful migration context, but never prove that an individual section is empty.
+ */
+export function contactSectionCoverage(
+  evidence: ContactEvidence,
+  section: ContactSectionName,
+): ContactSectionCoverage {
+  const capturePositions = evidence.capture_positions.length;
+  if (capturePositions === 0) {
+    return {
+      state: evidence.provider_contact_rows === 0 && evidence.resolved_provider_identities === 0
+        ? 'unreconciled'
+        : 'not_linked',
+      recovered_count: 0,
+      capture_positions: 0,
+      complete_positions: 0,
+    };
+  }
+
+  const positionIds = new Set(evidence.capture_positions.map((position) => position.capture_position_id));
+  const cells = evidence.section_matrix.filter((cell) => (
+    cell.section === section && positionIds.has(cell.capture_position_id)
+  ));
+  const completePositions = new Set(cells.filter((cell) => (
+    cell.capture_quality === 'complete'
+  )).map((cell) => cell.capture_position_id)).size;
+  const recoveredCount = cells.reduce((total, cell) => total + cell.row_count, 0);
+  const everyPositionRepresented = cells.length === capturePositions
+    && evidence.capture_positions.every((position) => cells.filter((cell) => (
+      cell.capture_position_id === position.capture_position_id
+    )).length === 1);
+
+  if (recoveredCount > 0) {
+    return {
+      state: 'captured',
+      recovered_count: recoveredCount,
+      capture_positions: capturePositions,
+      complete_positions: completePositions,
+    };
+  }
+  const verifiedEmpty = everyPositionRepresented && cells.every((cell) => (
+    cell.capture_quality === 'complete' && cell.is_empty && cell.row_count === 0
+  ));
+  return {
+    state: verifiedEmpty ? 'verified_empty' : 'partial',
+    recovered_count: 0,
+    capture_positions: capturePositions,
+    complete_positions: completePositions,
+  };
+}
 
 export type ContactCelebrationRow = Readonly<{
   contact_id: number;

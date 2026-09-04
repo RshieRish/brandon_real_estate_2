@@ -1,5 +1,12 @@
 from models.admin_user import AdminUser
 from models.agent_action_audit import AgentActionAudit
+from models.card_campaign import (
+    CardCampaign,
+    CardCampaignRecipient,
+    CardDeliveryAttempt,
+    CardProviderConnection,
+    CardProviderReceipt,
+)
 from models.command import CRMContact, CRMTask
 from models.command_contacts import (
     CRMContactAddress,
@@ -56,6 +63,7 @@ from models.sydney_context import (
     AgentConversationSession,
     AgentMemoryFact,
     AgentRunJob,
+    AgentRunRequestReceipt,
     AgentToolInvocation,
 )
 from models.sydney_tasks import (
@@ -66,6 +74,7 @@ from models.sydney_tasks import (
 )
 
 __all__ = [
+    "AdminUser",
     "AgentActionAudit",
     "AgentContextCheckpoint",
     "AgentContextProjectionClaim",
@@ -75,8 +84,13 @@ __all__ = [
     "AgentConversationSession",
     "AgentMemoryFact",
     "AgentRunJob",
+    "AgentRunRequestReceipt",
     "AgentToolInvocation",
-    "AdminUser",
+    "CardCampaign",
+    "CardCampaignRecipient",
+    "CardDeliveryAttempt",
+    "CardProviderConnection",
+    "CardProviderReceipt",
     "CRMContact",
     "CRMContactAddress",
     "CRMContactAuditEvent",
@@ -106,8 +120,6 @@ __all__ = [
     "CRMTaskSuggestionSuppression",
     "CaptureQuality",
     "EvidenceLevel",
-    "IntegrationHealthState",
-    "IntegrationWorkerHeartbeat",
     "GmailBackfillRequest",
     "GmailExtractedObligation",
     "GmailExtractionAttempt",
@@ -117,6 +129,8 @@ __all__ = [
     "GmailSyncAccount",
     "GmailSyncPageCheckpoint",
     "GmailSyncRun",
+    "IntegrationHealthState",
+    "IntegrationWorkerHeartbeat",
     "SydneyQuestionOutbox",
     "TaskSuggestionApprovalNonce",
 ]

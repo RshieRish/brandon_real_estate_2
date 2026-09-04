@@ -12,6 +12,7 @@ describe('Command navigation registry', () => {
       '/admin/command/contacts',
       '/admin/command/tasks',
       '/admin/command/task-suggestions',
+      '/admin/command/cards',
       '/admin/command/smart-plans',
       '/admin/command/opportunities',
       '/admin/command/referrals',
@@ -35,5 +36,6 @@ describe('Command navigation registry', () => {
     ).toBe(true);
     expect(findCommandDestination('/admin/command/tasks/9')?.label).toBe('Tasks');
     expect(findCommandDestination('/admin/command/task-suggestions')?.label).toBe('Task review');
+    expect(findCommandDestination('/admin/command/cards/campaign-id')?.label).toBe('Client cards');
   });
 });
