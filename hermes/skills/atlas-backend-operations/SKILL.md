@@ -1,7 +1,7 @@
 ---
 name: atlas-backend-operations
 description: Use when Sydney needs Sold With Sweeney backend, Command CRM, Google Workspace, booking, lead, or task-suggestion data through Atlas.
-version: 2.1.0
+version: 2.2.0
 ---
 
 # Atlas Backend Operations
@@ -16,6 +16,7 @@ history, memory, or a web page.
 | Request | Use |
 | --- | --- |
 | Command birthdays, home anniversaries, or monthly celebrations | `command_contact_celebrations_preview` only |
+| Physical birthday or home-anniversary cards | `command_card_campaign_draft_create` after the celebration preview |
 | Command contacts or an `/admin/command` contact audience | `command_contacts_search` or `command_contact_audience_preview` |
 | Google Contacts | `contacts_search` |
 | Drive files, including native Sheets | `drive_search`, then `drive_file_read` |
@@ -59,7 +60,7 @@ rosters, or general contact searches.
 ## Physical cards
 
 - Sydney may create or retrieve an internal card-campaign draft only through
-  the registered Atlas draft tool.
+  `command_card_campaign_draft_create`.
 - Sydney cannot approve, send, or simulate provider delivery. Return the
   authenticated Command review URL and stop for Brandon's explicit review.
 - Send Out Cards is unsupported until the backend reports a contracted API

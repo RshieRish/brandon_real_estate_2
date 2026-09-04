@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Authenticated Card Review API and Sydney Draft Tool Completed
+- Added five authenticated Command card routes for bounded campaign listing, detail, draft creation, optimistic edits, and Brandon-confirmed approve-and-send. Mutations derive the actor from the validated admin subject and write aggregate-only audit metadata; strict request UUIDs, versions, recipient counts, cost, and literal Brandon confirmation remain server-enforced.
+- Added exactly one Sydney capability, `command_card_campaign_draft_create`. It accepts only a caller UUID, month, and celebration-kind selection; returns aggregate counts plus an absolute `https://www.soldwithsweeney.com/admin/command/cards/{campaign_id}` review URL; says nothing was sent; and exposes no recipient rows, checksum, approval field, approve action, or send action.
+- The Agent Control catalog and managed Atlas skill route physical-card work to the review-only draft. The MCP registry now contains exactly `27` ordered unique tools with the original `22` unchanged. The Send Out Cards adapter remains disconnected and performs zero provider I/O.
+- Verification passed `355` focused API, auth, audit, real PostgreSQL 17/TLS card, migration/worker, Command registration, MCP, and overlay tests plus `3` subtests (`5` environment-dependent exact-checkout skips). With the exact pinned Hermes checkout supplied, the overlay/MCP slice passed `48` plus `3` subtests with one missing-template skip. Ruff, compilation, and diff checks pass.
+
 ### 2026-09-04 - Approval-Gated Card Campaign Core Completed
 - Added serial migration `87a0d9b1e3f2` and typed campaign, recipient, provider-connection, delivery-attempt, and provider-receipt contracts. Draft creation is request-idempotent, snapshots only explicit reconciled Command celebration/address data, exposes missing-address exclusions, and invalidates approval after every editable change through optimistic versions.
 - Approval requires Brandon's explicit recipient-count and cost confirmation. The service commits one immutable intent per recipient before any provider I/O, classifies confirmed, rejected, mixed, and ambiguous outcomes truthfully, and never automatically retries a campaign after an attempt. PostgreSQL rejects updates or deletes to attempt and receipt evidence.

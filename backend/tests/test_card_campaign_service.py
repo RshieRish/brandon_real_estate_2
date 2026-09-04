@@ -539,3 +539,39 @@ async def test_classified_provider_outcomes_set_truthful_terminal_status(
 
     assert result.status == expected_status
     assert [row.delivery_outcome for row in result.recipients] == list(outcomes)
+
+
+@pytest.mark.asyncio
+async def test_campaign_listing_is_bounded_ordered_and_reports_authoritative_total(
+    card_runtime,
+):
+    from schemas.card_campaign import CardCampaignDraftRequest
+    from services.card_campaign_service import CardCampaignService
+    from services.card_provider import DisabledCardProvider
+
+    sessions = card_runtime
+    await _seed_contacts(sessions)
+    service = CardCampaignService(provider=DisabledCardProvider())
+    for title in ("First draft", "Second draft"):
+        async with sessions() as session:
+            await service.create_or_get_draft(
+                session,
+                CardCampaignDraftRequest(
+                    request_id=uuid4(),
+                    month=9,
+                    title=title,
+                ),
+            )
+            await session.commit()
+
+    async with sessions() as session:
+        first_page = await service.list_campaigns(session, limit=1, offset=0)
+        second_page = await service.list_campaigns(session, limit=1, offset=1)
+
+    assert first_page.total == 2
+    assert len(first_page.campaigns) == 1
+    assert len(second_page.campaigns) == 1
+    assert len({first_page.campaigns[0].id, second_page.campaigns[0].id}) == 2
+    with pytest.raises(ValueError):
+        async with sessions() as session:
+            await service.list_campaigns(session, limit=51)

@@ -638,6 +638,35 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             ["month"],
         ),
     },
+    "command_card_campaign_draft_create": {
+        "name": "command_card_campaign_draft_create",
+        "description": (
+            "Create or retrieve a review-only Command card campaign draft. "
+            "Returns an absolute Command review URL; never approves, sends, "
+            "simulates delivery, or automates a provider website."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/card-campaign-drafts",
+        "inputSchema": _object_schema(
+            {
+                "request_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": (
+                        "Caller-supplied idempotency UUID; preserve it for an "
+                        "exact retry of the same draft request."
+                    ),
+                },
+                "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                "include_birthdays": {"type": "boolean", "default": True},
+                "include_home_anniversaries": {
+                    "type": "boolean",
+                    "default": True,
+                },
+            },
+            ["request_id", "month"],
+        ),
+    },
 }
 
 

@@ -73,7 +73,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
         tools = self.bridge.list_tools()
         tool_names = {tool["name"] for tool in tools}
 
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 27)
         self.assertEqual(
             [tool["name"] for tool in tools],
             [
@@ -103,6 +103,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 "command_contacts_search",
                 "command_contact_audience_preview",
                 "command_contact_celebrations_preview",
+                "command_card_campaign_draft_create",
             ],
         )
         self.assertEqual(
@@ -134,6 +135,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 "command_contacts_search",
                 "command_contact_audience_preview",
                 "command_contact_celebrations_preview",
+                "command_card_campaign_draft_create",
             },
         )
         for tool in tools:
@@ -227,6 +229,19 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 },
             },
         )
+        card_draft = by_name["command_card_campaign_draft_create"]
+        self.assertEqual(card_draft["inputSchema"]["required"], ["request_id", "month"])
+        self.assertEqual(
+            set(card_draft["inputSchema"]["properties"]),
+            {
+                "request_id",
+                "month",
+                "include_birthdays",
+                "include_home_anniversaries",
+            },
+        )
+        self.assertIn("never approves", card_draft["description"].lower())
+        self.assertIn("absolute command review url", card_draft["description"].lower())
 
         answer_schema = by_name["crm_task_clarifications_answer"]["inputSchema"]
         self.assertEqual(
@@ -606,6 +621,12 @@ class AtlasBackendMcpTests(unittest.TestCase):
             "include_birthdays": True,
             "include_home_anniversaries": True,
         }
+        card_draft = {
+            "request_id": str(uuid4()),
+            "month": 9,
+            "include_birthdays": True,
+            "include_home_anniversaries": True,
+        }
 
         self.bridge.call_tool("context_history_search", history, client=client)
         self.bridge.call_tool("command_contacts_search", search, client=client)
@@ -617,6 +638,11 @@ class AtlasBackendMcpTests(unittest.TestCase):
         self.bridge.call_tool(
             "command_contact_celebrations_preview",
             celebrations,
+            client=client,
+        )
+        self.bridge.call_tool(
+            "command_card_campaign_draft_create",
+            card_draft,
             client=client,
         )
 
@@ -646,6 +672,12 @@ class AtlasBackendMcpTests(unittest.TestCase):
                     "path": "/api/v1/agent-control/crm/command-contact-celebrations/preview",
                     "params": {},
                     "body": celebrations,
+                },
+                {
+                    "method": "POST",
+                    "path": "/api/v1/agent-control/crm/card-campaign-drafts",
+                    "params": {},
+                    "body": card_draft,
                 },
             ],
         )
@@ -868,7 +900,7 @@ class AtlasBackendMcpTests(unittest.TestCase):
             client=client,
         )
         self.assertEqual(listed["id"], 2)
-        self.assertEqual(len(listed["result"]["tools"]), 26)
+        self.assertEqual(len(listed["result"]["tools"]), 27)
 
         called = self.bridge.handle_request(
             {

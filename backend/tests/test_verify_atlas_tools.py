@@ -23,7 +23,16 @@ def test_verifier_probes_real_server_and_reports_exact_contract() -> None:
     assert completed.returncode == 0, completed.stderr
     proof = json.loads(completed.stdout)
     assert proof == {
-        "count": 26,
+        "card_draft_request_id_schema": {
+            "description": (
+                "Caller-supplied idempotency UUID; preserve it for an exact "
+                "retry of the same draft request."
+            ),
+            "format": "uuid",
+            "type": "string",
+        },
+        "card_draft_required": ["request_id", "month"],
+        "count": 27,
         "exact_expected_order": True,
         "forbidden_present": [],
         "gmail_send_request_id_required": True,
@@ -63,9 +72,10 @@ def test_verifier_probes_real_server_and_reports_exact_contract() -> None:
             "command_contacts_search",
             "command_contact_audience_preview",
             "command_contact_celebrations_preview",
+            "command_card_campaign_draft_create",
         ],
         "original_22_unchanged": True,
-        "unique_count": 26,
+        "unique_count": 27,
     }
 
 

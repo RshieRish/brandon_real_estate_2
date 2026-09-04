@@ -254,7 +254,7 @@ class CardCampaignDetail(CardCampaignListItem):
 
 
 class CardCampaignPage(CardModel):
-    campaigns: list[CardCampaignListItem]
+    campaigns: list[CardCampaignListItem] = Field(max_length=50)
     total: NonNegativeInt
 
 

@@ -327,7 +327,12 @@ jobs:
             tests/test_sydney_context_router.py \
             tests/test_sydney_context_projection.py \
             tests/test_agent_control_command.py \
-            tests/test_sydney_context_e2e.py
+            tests/test_sydney_context_e2e.py \
+            tests/test_card_campaign_migration.py \
+            tests/test_card_campaign_models.py \
+            tests/test_card_campaign_service.py \
+            tests/test_command_cards_router.py \
+            tests/test_agent_control_cards.py
 
       - name: Verify Sydney is the sole migration head
         working-directory: backend
@@ -398,7 +403,7 @@ jobs:
             tests/test_sydney_backfill.py \
             tests/test_sydney_context_e2e.py
 
-      - name: Verify the exact 25-tool JSON-RPC registry
+      - name: Verify the exact 27-tool JSON-RPC registry
         run: |
           python hermes/verify_atlas_tools.py \
             --server hermes/atlas_backend_mcp.py

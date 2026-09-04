@@ -21,6 +21,8 @@ from schemas.card_campaign import (
     CardCampaignApproveRequest,
     CardCampaignDetail,
     CardCampaignDraftRequest,
+    CardCampaignListItem,
+    CardCampaignPage,
     CardCampaignUpdateRequest,
     CardRecipientOut,
 )
@@ -199,6 +201,34 @@ async def _campaign_for_update(db: AsyncSession, campaign_id: UUID) -> CardCampa
 class CardCampaignService:
     def __init__(self, *, provider: CardProvider) -> None:
         self.provider = provider
+
+    async def list_campaigns(
+        self,
+        db: AsyncSession,
+        *,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> CardCampaignPage:
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("limit must be between 1 and 50")
+        if type(offset) is not int or not 0 <= offset <= 2_147_483_647:
+            raise ValueError("offset is out of range")
+        total = int(await db.scalar(select(func.count(CardCampaign.id))) or 0)
+        rows = list(
+            (
+                await db.scalars(
+                    select(CardCampaign)
+                    .order_by(CardCampaign.updated_at.desc(), CardCampaign.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).all()
+        )
+        campaigns = [
+            CardCampaignListItem.model_validate(await self.get_campaign(db, row.id))
+            for row in rows
+        ]
+        return CardCampaignPage(campaigns=campaigns, total=total)
 
     async def _sync_connection(
         self,
