@@ -15,6 +15,9 @@ test('exactly four meaningful Contacts states pass axe', async ({ commandPage })
 
   await commandPage.goto('/admin/command/contacts/1');
   await expect(commandPage.getByRole('heading', { name: 'Avery Lake' })).toBeVisible();
+  const expand = commandPage.getByRole('button', { name: 'Show full activity' });
+  await expand.click();
+  await expect(commandPage.getByRole('button', { name: 'Collapse activity' })).toHaveAttribute('aria-expanded', 'true');
   await axe(commandPage);
 
   await commandPage.getByRole('tab', { name: 'Tasks' }).click();

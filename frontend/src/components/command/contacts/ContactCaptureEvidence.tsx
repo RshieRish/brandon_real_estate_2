@@ -21,6 +21,18 @@ export function ContactCaptureEvidence({
   const requestIdRef = useRef(0);
   const contactIdRef = useRef(contactId);
   contactIdRef.current = contactId;
+  const completeSectionChecks = evidence.section_matrix.filter((cell) => cell.capture_quality === 'complete').length;
+  const capturedRows = evidence.section_matrix.reduce((total, cell) => total + cell.row_count, 0);
+  const coverageTitle = evidence.capture_positions.length > 0
+    ? `${evidence.capture_positions.length} recovered Command ${evidence.capture_positions.length === 1 ? 'capture' : 'captures'} linked`
+    : evidence.provider_contact_rows > 0
+      ? 'No recovered Command record is linked to this contact'
+      : 'Recovered contact restoration is pending';
+  const coverageMessage = evidence.capture_positions.length > 0
+    ? `${completeSectionChecks} of ${evidence.section_matrix.length} section checks are complete, with ${capturedRows} captured ${capturedRows === 1 ? 'record' : 'records'}.`
+    : evidence.provider_contact_rows > 0
+      ? 'The recovered archive is available globally, but global totals do not prove that this contact has a captured position.'
+      : 'No contact capture positions have been reconciled in this workspace yet. Protected source artifacts remain separate from current SWS records.';
 
   useEffect(() => {
     mountedRef.current = true;
@@ -75,6 +87,11 @@ export function ContactCaptureEvidence({
 
   return (
     <section className="command-contact-capture-evidence" role="region" aria-label="Contact capture evidence">
+      <section className="command-contact-evidence-overview" aria-label="Current contact recovery summary">
+        <p className="command-contacts-kicker">Current contact coverage</p>
+        <h3>{coverageTitle}</h3>
+        <p>{coverageMessage}</p>
+      </section>
       <section className="command-contact-global-evidence" aria-label="Recovered archive global evidence">
         <p className="command-contacts-kicker">Recovered archive (global)</p>
         <h3>Archive reconciliation totals</h3>

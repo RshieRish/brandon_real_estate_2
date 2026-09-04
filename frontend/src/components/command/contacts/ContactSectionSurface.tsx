@@ -1,12 +1,15 @@
 import type {
   ContactEvidence,
+  ContactEvidenceStatus,
   ContactInternalWorkspace,
   ContactMaterialization,
   ContactSectionName,
   ContactSectionPage,
 } from '@/lib/command/contacts';
+import { contactSectionCoverage } from '@/lib/command/contacts';
 import { CommandEvidencePanel } from '../ui/CommandEvidencePanel';
 import { CommandStatePanel } from '../ui/CommandStatePanel';
+import { ContactExpandableValue } from './ContactExpandableValue';
 
 const sectionLabels: Readonly<Record<Exclude<ContactSectionName, 'timeline'>, string>> = {
   opportunities: 'opportunities',
@@ -54,23 +57,63 @@ function internalTargetExists(
   return internal.saved_searches.some((value) => value.id === id);
 }
 
+function CapturedCoverageState({
+  evidence,
+  evidenceStatus,
+  section,
+  label,
+  onRetryEvidence,
+}: Readonly<{
+  evidence: ContactEvidence | null;
+  evidenceStatus: ContactEvidenceStatus;
+  section: Exclude<ContactSectionName, 'timeline'>;
+  label: string;
+  onRetryEvidence: () => void;
+}>) {
+  const titleLabel = `${label[0]?.toUpperCase()}${label.slice(1)}`;
+  if (evidenceStatus === 'loading') {
+    return <CommandStatePanel kind="loading" title="Checking recovered source coverage" message={`Reading this contact's captured Command ${label}.`} />;
+  }
+  if (evidenceStatus === 'unavailable' || evidence === null) {
+    return <CommandStatePanel kind="error" title="Recovered source coverage is unavailable" message={`Captured Command ${label} could not be verified. This is not an empty state.`} actionLabel="Retry source coverage" onAction={onRetryEvidence} />;
+  }
+  const coverage = contactSectionCoverage(evidence, section);
+  if (coverage.state === 'unreconciled') {
+    return <CommandStatePanel kind="evidence_only" title={`Recovered Command ${label} have not been restored`} message="This workspace has no reconciled contact capture positions yet. Protected archive evidence may still exist, so this section is not empty by default." />;
+  }
+  if (coverage.state === 'not_linked') {
+    return <CommandStatePanel kind="evidence_only" title="No recovered Command record is linked to this contact" message={`The recovered archive is available globally, but this contact has no matched capture position for ${label}. This is not a verified empty section.`} />;
+  }
+  if (coverage.state === 'verified_empty') {
+    return <CommandStatePanel kind="empty" title={`No ${label} were captured`} message="Every matching capture position records a complete empty state." />;
+  }
+  if (coverage.state === 'captured') {
+    return <CommandStatePanel kind="partial_capture" title={`Recovered ${label} are not available`} message={`Source evidence records ${coverage.recovered_count} captured item${coverage.recovered_count === 1 ? '' : 's'}, but this section returned none.`} />;
+  }
+  return <CommandStatePanel kind="partial_capture" title={`${titleLabel} were not fully captured`} message="The source evidence does not prove that this section was empty." />;
+}
+
 export function CapturedSection({
   section,
   page,
   evidence,
+  evidenceStatus,
   internal,
   loading,
   error,
   onRetry,
+  onRetryEvidence,
   onViewEvidence,
 }: Readonly<{
   section: Exclude<ContactSectionName, 'timeline'>;
   page: ContactSectionPage | null;
   evidence: ContactEvidence | null;
+  evidenceStatus: ContactEvidenceStatus;
   internal: ContactInternalWorkspace | null;
   loading: boolean;
   error: boolean;
   onRetry: () => void;
+  onRetryEvidence: () => void;
   onViewEvidence: () => void;
 }>) {
   const label = sectionLabels[section];
@@ -80,11 +123,7 @@ export function CapturedSection({
       position.capture_position_id === cell.capture_position_id
     ))
   )) ?? [];
-  const hasCompleteCoverage = (evidence?.capture_positions.length ?? 0) > 0
-    && cells.length === evidence?.capture_positions.length
-    && evidence?.capture_positions.every((position) => cells.filter((cell) => (
-      cell.capture_position_id === position.capture_position_id
-    )).length === 1);
+  const coverage = evidence ? contactSectionCoverage(evidence, section) : null;
 
   return (
     <section className="command-contact-source-region" role="region" aria-label={`Captured source ${label}`}>
@@ -92,7 +131,14 @@ export function CapturedSection({
       {loading ? <CommandStatePanel kind="loading" title={`Loading captured ${label}`} message="Reading the immutable source section." /> : null}
       {error ? <CommandStatePanel kind="error" title={`Captured ${label} are unavailable`} message="The source section could not be read." actionLabel="Retry" onAction={onRetry} /> : null}
       {!loading && !error && page && page.rows.length > 0 ? (
-        <div className="command-contact-cards">
+        <>
+          <p className="command-contact-source-summary">
+            <strong>{page.total} recovered source {page.total === 1 ? 'record' : 'records'}</strong>
+            <span>{coverage?.state === 'captured'
+              ? `${coverage.complete_positions} of ${coverage.capture_positions} capture positions complete`
+              : evidenceStatus === 'unavailable' ? 'Source coverage unavailable' : 'Source coverage is still being verified'}</span>
+          </p>
+          <div className="command-contact-cards">
           {page.rows.map((row) => {
             const title = row.value.title;
             const targetExists = internalTargetExists(row, internal);
@@ -101,8 +147,8 @@ export function CapturedSection({
               && row.value.kind === 'task';
             return (
               <article key={`${row.source_record_id}-${row.source_key_hash}-${row.section}-${row.occurrence_ordinal}`} className="command-contact-record-card">
-                <div className="command-contact-record-heading"><h4>{title}</h4><span>{row.capture_quality} capture</span></div>
-                {occurrenceDetails(row).map((detail) => <p key={detail}>{detail}</p>)}
+                <div className="command-contact-record-heading"><ContactExpandableValue value={title} limit={180} element="h4" label="recovered title" /><span>{row.capture_quality} capture</span></div>
+                {occurrenceDetails(row).map((detail, index) => <ContactExpandableValue key={`${index}-${detail.slice(0, 32)}`} value={detail} limit={420} element="p" label="recovered value" />)}
                 {row.status === 'source_only' ? (
                   <div className="command-contact-record-status">
                     <strong>{recoveredArchivedEvidence ? 'Recovered evidence' : 'Source evidence only'}</strong>
@@ -122,16 +168,11 @@ export function CapturedSection({
               </article>
             );
           })}
-        </div>
+          </div>
+        </>
       ) : null}
       {!loading && !error && page && page.rows.length === 0 ? (
-        hasCompleteCoverage && cells.every((cell) => (
-          cell.capture_quality === 'complete' && cell.is_empty && cell.row_count === 0
-        )) ? (
-          <CommandStatePanel kind="empty" title={`No ${label} were captured`} message="Every matching capture position records a complete empty state." />
-        ) : (
-          <CommandStatePanel kind="partial_capture" title={`${label[0]?.toUpperCase()}${label.slice(1)} were not fully captured`} message="The source evidence does not prove that this section was empty." />
-        )
+        <CapturedCoverageState evidence={evidence} evidenceStatus={evidenceStatus} section={section} label={label} onRetryEvidence={onRetryEvidence} />
       ) : null}
       {cells.map((cell) => (
         <CommandEvidencePanel
@@ -174,7 +215,7 @@ export function InternalState({
       ) : !available ? (
         <CommandStatePanel kind="error" title={`SWS internal ${label} are unavailable`} message="Current SWS records could not be verified. This is not an empty state." actionLabel="Retry" onAction={onRetry} />
       ) : empty ? (
-        <CommandStatePanel kind="empty" title={`No SWS internal ${label}`} message={`There are no current SWS-owned ${label} for this contact.`} />
+        <CommandStatePanel kind="empty" title={`No SWS internal ${label}`} message={`There are no current SWS-owned ${label} for this contact. Recovered Command records, when available, are shown separately above.`} />
       ) : children}
     </section>
   );

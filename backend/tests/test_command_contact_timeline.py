@@ -600,6 +600,74 @@ async def test_timeline_aggregates_all_origins_and_dedupes_only_shared_source(
 
 
 @pytest.mark.asyncio
+async def test_timeline_hides_technical_archive_activities_but_keeps_real_history(
+    timeline_db: AsyncSession,
+):
+    contact = CRMContact(
+        id=61,
+        first_name="Technical",
+        last_name="Archive",
+        stage="lead",
+    )
+    source = _source(62)
+    recovered = CRMContactTimelineEvent(
+        id=63,
+        contact_id=contact.id,
+        source_record_id=source.id,
+        source_system="kw_command",
+        source_event_key="synthetic:canonical-recovered",
+        kind="note",
+        title="Canonical recovered note",
+        body="A real recovered client event.",
+        occurred_at=BASE_TIME - timedelta(hours=1),
+        attributes_json="{}",
+    )
+    capture_dump = CRMActivity(
+        id=64,
+        contact_id=contact.id,
+        kind="archive_timeline_capture",
+        summary="button · command at header · " + "raw accessibility text " * 500,
+        created_at=BASE_TIME + timedelta(hours=2),
+    )
+    imported_marker = CRMActivity(
+        id=65,
+        contact_id=contact.id,
+        kind="archive_contact_imported",
+        summary="Imported from recovered Command archive",
+        created_at=BASE_TIME + timedelta(hours=1),
+    )
+    real_activity = CRMActivity(
+        id=66,
+        contact_id=contact.id,
+        kind="note_created",
+        summary="Follow-up note added",
+        created_at=BASE_TIME,
+    )
+    await _flush(
+        timeline_db,
+        contact,
+        source,
+        *_timeline_ownership(source.id, contact_id=contact.id),
+        recovered,
+        capture_dump,
+        imported_marker,
+        real_activity,
+    )
+
+    page = await list_contact_timeline(
+        timeline_db,
+        contact.id,
+        cursor=None,
+        page_size=10,
+    )
+
+    assert [row.key for row in page.rows] == ["activity:66", "recovered:63"]
+    assert all("archive_" not in row.kind for row in page.rows)
+    assert await timeline_db.get(CRMActivity, capture_dump.id) is capture_dump
+    assert await timeline_db.get(CRMActivity, imported_marker.id) is imported_marker
+
+
+@pytest.mark.asyncio
 async def test_timed_activity_mirror_never_replaces_nullable_recovered_event(
     timeline_db: AsyncSession,
 ):

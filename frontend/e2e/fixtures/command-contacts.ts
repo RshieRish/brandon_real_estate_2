@@ -25,6 +25,18 @@ const SECTION_NAMES: readonly ContactSectionName[] = [
   'tasks_to_do', 'tasks_completed', 'tasks_archived',
 ];
 
+export const BROKEN_ARCHIVE_TIMELINE_VALUE = [
+  '- button command at header',
+  'link connect at header',
+  'generic Contact Health Score 64%',
+  'heading Primary Contact Information',
+  'generic Timeline Opportunities SmartPlans Tasks Notes Saved Searches Source Evidence Bookings',
+  'generic legal terms notification center message composer',
+  'raw accessibility node '.repeat(120),
+].join(' ');
+
+export const LONG_REAL_TIMELINE_VALUE = `Recovered client interaction · ${'structured follow-up detail '.repeat(18)}`;
+
 export type ContactsFixtureResponse = Readonly<{
   status: number;
   body?: unknown;
@@ -544,11 +556,29 @@ function timeline(state: CommandContactsFixtureState, contactId: number): Contac
     entity_id: activity.id,
   }));
   return {
-    rows: [...internalRows, ...(contactId === 1 ? [{
-      key: 'activity:1', origin: 'recovered', kind: 'call', title: 'Recovered discovery call',
-      body: 'Synthetic observed timeline evidence.', outcome: 'Follow up', occurred_at: FIXED_AT,
-      source_record_id: sectionSourceId(contactId, 'timeline'), entity_type: 'activity', entity_id: 1,
-    } as const] : [])],
+    rows: [...internalRows, ...(contactId === 1 ? [
+      {
+        key: 'activity:910001', origin: 'internal_crm', kind: 'archive_timeline_capture',
+        title: BROKEN_ARCHIVE_TIMELINE_VALUE, body: null, outcome: null, occurred_at: ACTIVITY_AT,
+        source_record_id: null, entity_type: 'activity', entity_id: 910001,
+      } as const,
+      {
+        key: 'activity:910002', origin: 'internal_crm', kind: 'archive_contact_imported',
+        title: 'Imported from recovered Command archive', body: null, outcome: null, occurred_at: ACTIVITY_AT,
+        source_record_id: null, entity_type: 'activity', entity_id: 910002,
+      } as const,
+      {
+        key: 'activity:910003', origin: 'internal_crm', kind: 'note_created',
+        title: LONG_REAL_TIMELINE_VALUE, body: 'A real event remains readable even when its historic summary is malformed.',
+        outcome: null, occurred_at: ACTIVITY_AT, source_record_id: null,
+        entity_type: 'activity', entity_id: 910003,
+      } as const,
+      {
+        key: 'activity:1', origin: 'recovered', kind: 'call', title: 'Recovered discovery call',
+        body: 'Synthetic observed timeline evidence.', outcome: 'Follow up', occurred_at: FIXED_AT,
+        source_record_id: sectionSourceId(contactId, 'timeline'), entity_type: 'activity', entity_id: 1,
+      } as const,
+    ] : [])],
     next_cursor: null,
     has_more: false,
   };

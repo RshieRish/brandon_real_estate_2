@@ -1,63 +1,108 @@
-import type { ContactEvidence, ContactTimelineEntry } from '@/lib/command/contacts';
+import {
+  contactSectionCoverage,
+  isTechnicalContactTimelineEntry,
+  type ContactEvidence,
+  type ContactEvidenceStatus,
+  type ContactTimelineEntry,
+} from '@/lib/command/contacts';
 import { CommandEvidencePanel } from '../ui/CommandEvidencePanel';
 import { CommandStatePanel } from '../ui/CommandStatePanel';
+import { ContactExpandableValue } from './ContactExpandableValue';
+
+const TIMELINE_ORIGIN_LABELS: Readonly<Record<ContactTimelineEntry['origin'], string>> = {
+  recovered: 'Recovered Command',
+  internal_crm: 'SWS internal',
+  legacy_lead: 'Legacy lead',
+  booking: 'SWS booking',
+};
+
+function timelineKindLabel(kind: string): string {
+  return kind.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function TimelineCoverageState({
+  evidence,
+  evidenceStatus,
+  onRetryEvidence,
+}: Readonly<{
+  evidence: ContactEvidence | null;
+  evidenceStatus: ContactEvidenceStatus;
+  onRetryEvidence: () => void;
+}>) {
+  if (evidenceStatus === 'loading') {
+    return <CommandStatePanel kind="loading" title="Checking recovered source coverage" message="Reading this contact's captured Command timeline." />;
+  }
+  if (evidenceStatus === 'unavailable' || evidence === null) {
+    return <CommandStatePanel kind="error" title="Recovered source coverage is unavailable" message="The captured Command timeline could not be verified. This is not an empty state." actionLabel="Retry source coverage" onAction={onRetryEvidence} />;
+  }
+  const coverage = contactSectionCoverage(evidence, 'timeline');
+  if (coverage.state === 'unreconciled') {
+    return <CommandStatePanel kind="evidence_only" title="Recovered Command timeline has not been restored" message="This workspace has no reconciled contact capture positions yet. Protected archive evidence may still exist, so this is not an empty timeline." />;
+  }
+  if (coverage.state === 'not_linked') {
+    return <CommandStatePanel kind="evidence_only" title="No recovered Command record is linked to this contact" message="The recovered archive is available globally, but this contact has no matched capture position. This is not a verified empty timeline." />;
+  }
+  if (coverage.state === 'verified_empty') {
+    return <CommandStatePanel kind="empty" title="No timeline events" message="Every matching capture position records a complete empty timeline." />;
+  }
+  if (coverage.state === 'captured') {
+    return <CommandStatePanel kind="partial_capture" title="Recovered timeline events are not available" message={`Source evidence records ${coverage.recovered_count} timeline event${coverage.recovered_count === 1 ? '' : 's'}, but the merged timeline returned none.`} />;
+  }
+  return <CommandStatePanel kind="partial_capture" title="Timeline was not fully captured" message="The source evidence does not prove that this timeline is empty." />;
+}
 
 export function ContactTimelineTab({
   rows,
   evidence,
+  evidenceStatus,
   loading,
   error,
   hasMore,
   loadingMore,
   loadMoreError,
   onRetry,
+  onRetryEvidence,
   onLoadMore,
 }: Readonly<{
   rows: readonly ContactTimelineEntry[];
   evidence: ContactEvidence | null;
+  evidenceStatus: ContactEvidenceStatus;
   loading: boolean;
   error: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   loadMoreError: boolean;
   onRetry: () => void;
+  onRetryEvidence: () => void;
   onLoadMore: () => void;
 }>) {
+  const visibleRows = rows.filter((row) => !isTechnicalContactTimelineEntry(row));
   const cells = evidence?.section_matrix.filter((cell) => (
     cell.section === 'timeline'
     && evidence.capture_positions.some((position) => (
       position.capture_position_id === cell.capture_position_id
     ))
   )) ?? [];
-  const hasCompleteCoverage = (evidence?.capture_positions.length ?? 0) > 0
-    && cells.length === evidence?.capture_positions.length
-    && evidence?.capture_positions.every((position) => cells.filter((cell) => (
-      cell.capture_position_id === position.capture_position_id
-    )).length === 1);
-  const verifiedEmpty = hasCompleteCoverage && cells.every((cell) => (
-    cell.capture_quality === 'complete' && cell.is_empty && cell.row_count === 0
-  ));
+
   return (
     <section className="command-contact-timeline" aria-label="Contact timeline">
       {loading ? <CommandStatePanel kind="loading" title="Loading timeline" message="Collecting the merged contact history." /> : null}
-      {!loading && error && rows.length === 0 ? <CommandStatePanel kind="error" title="Timeline is unavailable" message="The merged contact history could not be read." actionLabel="Retry" onAction={onRetry} /> : null}
-      {!loading && !error && rows.length === 0 ? (
-        verifiedEmpty
-          ? <CommandStatePanel kind="empty" title="No timeline events" message="Every matching capture position records a complete empty timeline." />
-          : <CommandStatePanel kind="partial_capture" title="Timeline was not fully captured" message="The source evidence does not prove that this timeline is empty." />
+      {!loading && error && visibleRows.length === 0 ? <CommandStatePanel kind="error" title="Timeline is unavailable" message="The merged contact history could not be read." actionLabel="Retry" onAction={onRetry} /> : null}
+      {!loading && !error && visibleRows.length === 0 ? (
+        <TimelineCoverageState evidence={evidence} evidenceStatus={evidenceStatus} onRetryEvidence={onRetryEvidence} />
       ) : null}
-      {!loading && rows.map((row) => (
-          <article key={row.key}>
-            <div className="command-contact-timeline-marker" aria-hidden="true" />
-            <div>
-              <span>{row.origin} · {row.kind}</span>
-              <h3>{row.title}</h3>
-              {row.body ? <p>{row.body}</p> : null}
-              {row.outcome ? <strong>{row.outcome}</strong> : null}
-              <time dateTime={row.occurred_at ?? undefined}>{row.occurred_at ? new Date(row.occurred_at).toLocaleString() : 'Time was not captured'}</time>
-            </div>
-          </article>
-        ))}
+      {!loading && visibleRows.map((row) => (
+        <article key={row.key}>
+          <div className="command-contact-timeline-marker" aria-hidden="true" />
+          <div>
+            <span>{TIMELINE_ORIGIN_LABELS[row.origin]} · {timelineKindLabel(row.kind)}</span>
+            <ContactExpandableValue value={row.title} limit={180} element="h3" label="activity" />
+            {row.body ? <ContactExpandableValue value={row.body} limit={520} element="p" label="activity details" /> : null}
+            {row.outcome ? <ContactExpandableValue value={row.outcome} limit={260} element="strong" label="activity outcome" /> : null}
+            <time dateTime={row.occurred_at ?? undefined}>{row.occurred_at ? new Date(row.occurred_at).toLocaleString() : 'Time was not captured'}</time>
+          </div>
+        </article>
+      ))}
       {cells.map((cell) => (
         <CommandEvidencePanel
           key={`${cell.capture_position_id}-${cell.source_record_id}-${cell.section}`}

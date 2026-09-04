@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Command Contact Detail Evidence and Timeline Repaired
+- Technical recovery markers (`archive_timeline_capture` and `archive_contact_imported`) remain preserved in PostgreSQL and Source Evidence but are excluded from ordinary contact timelines at both the query and presentation boundaries. Real activity remains visible, with malformed long values safely bounded and explicitly expandable instead of filling the page.
+- Contact-detail tabs now show their own recovered and SWS-owned counts. Empty-looking sections distinguish loading, unavailable, unreconciled, not-linked, verified-empty, partial, recovered, and current-internal states, so global archive totals are never misrepresented as evidence for an individual contact.
+- Rebuilt the detail presentation with fixed-header clearance, readable recovered-versus-internal surfaces, a sticky scrollable tab rail, a compact swipeable mobile count strip, responsive containment, and full reduced-motion/accessibility behavior. The supplied raw accessibility-tree failure shape is now a deterministic regression fixture and never renders to the user.
+- Verification passed `46` focused backend timeline tests, `153` focused contact/UI tests, targeted desktop/mobile/axe browser regressions, all `7` zero-diff Contacts visual checks, TypeScript, scoped ESLint, a clean `37`-route Next.js production build, and diff checks. No archive reconciliation, production deployment, migration, or external action occurred in this task.
+
 ### 2026-09-04 - Command Card Review Workspace Completed
 - Added the authenticated Client cards workspace and campaign-review route with strict response decoders, bounded request validation, idempotent draft creation, recipient message/design edits, explicit exclusions, and optimistic conflict refresh. Command navigation now exposes Client cards across desktop, mobile, global search, and contextual create actions.
 - The asymmetric black/gold review UI makes provider disconnection, missing addresses, ready, sending, sent, partially sent, failed, and delivery-uncertain states explicit. Brandon must open a focus-contained final dialog and confirm the exact recipient count and cost before the single approve-and-send request; uncertain outcomes reconcile once and never retry automatically.
