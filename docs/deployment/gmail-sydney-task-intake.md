@@ -141,7 +141,7 @@ Before any enablement, require all of the following:
 
 1. The backend, worker, frontend, and Atlas deployments identify the intended
    reviewed commits and report success.
-2. Alembic `current` and `heads` both report sole head `84d7a5f9b2c3`.
+2. Alembic `current` and `heads` both report sole head `87a0d9b1e3f2`.
 3. Backend `/health`, worker `/health`, and the repository-owned `/ready` probe
    pass.
 4. Workspace profile and current Gmail History access pass without exposing the
@@ -151,9 +151,11 @@ Before any enablement, require all of the following:
    activity, exchange only prepares approval, and a separate click remains
    necessary.
 7. The live deployed Atlas check described in
-   `docs/deployment/hermes-railway.md` returns exactly 25 ordered unique tools,
-   retains the prior 22 unchanged, and exposes none of the five trusted write
-   tools.
+   `docs/deployment/hermes-railway.md` returns exactly 27 ordered unique tools,
+   retains the prior 22 unchanged, retains the next three durable-context read
+   tools, appends only the celebration-preview and card-draft tools, and exposes
+   neither the five trusted task writes nor any physical-card approval/send
+   tool.
 8. Pending unrelated suggestions and incidents are reviewed before enabling the
    global Sydney question job.
 
@@ -255,11 +257,15 @@ extends the original 48-hour clarification deadline. At most one reminder is due
 
 The live production gate remains the Railway SSH procedure in
 `docs/deployment/hermes-railway.md`. Source inspection, a local registry test, or
-the backend `/actions` response is not a substitute. The verified deployed
-registry after durable-context promotion contains exactly 25 ordered unique
+the backend `/actions` response is not a substitute. The historical deployed
+registry after durable-context promotion contained exactly 25 ordered unique
 tools: the original 16, six CRM review tools, and three read-only Sydney/Command
-tools. `gmail_send` requires a caller UUID. Confirmed suggestion
-approval/dismissal, confirmed task creation, archive, and restore remain absent.
+tools. The 2026-09-04 release is accepted only when the same live gate proves
+the exact ordered 27-tool registry by appending
+`command_contact_celebrations_preview` and
+`command_card_campaign_draft_create`. Both `gmail_send` and the card-draft tool
+require caller UUIDs. Confirmed suggestion approval/dismissal, confirmed task
+creation, archive, restore, and physical-card approval/send remain absent.
 
 ## Task 9 controlled production evidence
 
