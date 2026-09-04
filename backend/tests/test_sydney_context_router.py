@@ -6,12 +6,13 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from database import get_db
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from middleware.agent_control import require_agent_control
 from pydantic import ValidationError
+
+from database import get_db
+from middleware.agent_control import require_agent_control
 
 NEW_ACTIONS = {
     "context.events.ingest",
@@ -473,6 +474,57 @@ def test_run_start_contract_rejects_extra_prompt_content() -> None:
             json=payload,
         )
     assert response.status_code == 422
+
+
+def test_tool_start_uses_the_server_configured_aggregate_limit() -> None:
+    from schemas.sydney_context import ContextToolInvocationResponse
+
+    app = _app()
+    client = TestClient(app)
+    start = AsyncMock(
+        return_value=ContextToolInvocationResponse(
+            invocation_id=uuid4(),
+            canonical_tool_call_id="bounded-call",
+            state="started",
+            replay_decision="execute",
+            invocation_count=1,
+            invocation_limit=7,
+        )
+    )
+    with (
+        patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
+            True,
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_CONTEXT_MAX_TOOL_INVOCATIONS",
+            7,
+        ),
+        patch("routers.agent_control_context.start_tool_invocation", start),
+        patch(
+            "routers.agent_control_context.write_agent_audit",
+            AsyncMock(),
+        ),
+    ):
+        response = client.post(
+            "/api/v1/agent-control/context/tools/start",
+            headers=_headers(),
+            json={
+                "run_id": str(uuid4()),
+                "lease_owner": "atlas-one",
+                "tool_call_id": "bounded-call",
+                "tool_name": "status_read",
+                "arguments": {},
+                "side_effect_class": "read_only",
+            },
+        )
+
+    assert response.status_code == 200
+    assert start.await_args.kwargs["invocation_limit"] == 7
 
 
 def test_all_context_operations_return_strict_models_and_content_free_audits() -> None:

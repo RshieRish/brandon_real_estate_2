@@ -1340,6 +1340,7 @@ async def start_tool_invocation(
     request: ContextToolInvocationRequest,
     *,
     now: datetime | None = None,
+    invocation_limit: int = 12,
 ) -> ContextToolInvocationResponse:
     current = now or datetime.now(UTC)
     await _lock_live_tool_run(
@@ -1347,6 +1348,21 @@ async def start_tool_invocation(
         run_id=request.run_id,
         lease_owner=request.lease_owner,
         now=current,
+    )
+    if isinstance(invocation_limit, bool):
+        bounded_limit = 12
+    else:
+        try:
+            bounded_limit = max(1, min(int(invocation_limit), 100))
+        except (TypeError, ValueError):
+            bounded_limit = 12
+    invocation_count = int(
+        await db.scalar(
+            select(func.count(AgentToolInvocation.id)).where(
+                AgentToolInvocation.run_id == request.run_id
+            )
+        )
+        or 0
     )
     arguments_sha256 = canonical_json_hash(request.arguments)
     invocation = (
@@ -1378,6 +1394,9 @@ async def start_tool_invocation(
             state=invocation.state,
             replay_decision=decision,
             result_content=await _tool_result_content(db, invocation, decision),
+            invocation_count=invocation_count,
+            invocation_limit=bounded_limit,
+            limit_reached=invocation_count >= bounded_limit,
         )
 
     if request.side_effect_class != "read_only":
@@ -1417,7 +1436,22 @@ async def start_tool_invocation(
                 state=prior_intent.state,
                 replay_decision=decision,
                 result_content=await _tool_result_content(db, prior_intent, decision),
+                invocation_count=invocation_count,
+                invocation_limit=bounded_limit,
+                limit_reached=invocation_count >= bounded_limit,
             )
+
+    if invocation_count >= bounded_limit:
+        return ContextToolInvocationResponse(
+            invocation_id=None,
+            canonical_tool_call_id=request.tool_call_id,
+            state="not_delivered",
+            replay_decision="block_limit",
+            result_content=None,
+            invocation_count=invocation_count,
+            invocation_limit=bounded_limit,
+            limit_reached=True,
+        )
 
     candidate_id = uuid4()
     inserted_id = (
@@ -1456,6 +1490,9 @@ async def start_tool_invocation(
         state=invocation.state,
         replay_decision="execute",
         result_content=None,
+        invocation_count=invocation_count + 1,
+        invocation_limit=bounded_limit,
+        limit_reached=invocation_count + 1 >= bounded_limit,
     )
 
 

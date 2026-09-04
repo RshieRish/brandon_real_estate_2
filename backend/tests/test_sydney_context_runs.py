@@ -8,6 +8,25 @@ from uuid import uuid4
 import pytest
 
 
+def test_tool_limit_receipt_is_strict_and_has_no_synthetic_invocation() -> None:
+    from schemas.sydney_context import ContextToolInvocationResponse
+
+    receipt = ContextToolInvocationResponse(
+        invocation_id=None,
+        canonical_tool_call_id="blocked-after-limit",
+        state="not_delivered",
+        replay_decision="block_limit",
+        invocation_count=12,
+        invocation_limit=12,
+        limit_reached=True,
+    )
+
+    assert receipt.invocation_id is None
+    assert receipt.replay_decision == "block_limit"
+    assert receipt.invocation_count == receipt.invocation_limit == 12
+    assert receipt.limit_reached is True
+
+
 @pytest.mark.parametrize(
     ("side_effect_class", "state", "has_result", "expected"),
     [

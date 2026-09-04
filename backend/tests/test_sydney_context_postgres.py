@@ -676,6 +676,128 @@ async def test_distinct_caller_keys_do_not_collapse_on_a_redacted_argument_hash(
 
 
 @pytest.mark.asyncio
+async def test_tool_invocation_limit_survives_new_sessions_and_preserves_replays(
+    context_sessions,
+) -> None:
+    from schemas.sydney_context import (
+        ContextRunClaimRequest,
+        ContextRunStartRequest,
+        ContextToolInvocationRequest,
+    )
+    from services.sydney_context_service import (
+        claim_runs,
+        ingest_event_batch,
+        start_run,
+        start_tool_invocation,
+    )
+
+    _engine, factory = context_sessions
+    now = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)
+    batch = _request()
+    async with factory() as session:
+        ingested = await ingest_event_batch(session, batch)
+        started = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingested.identity_id,
+                platform_message_id="aggregate-tool-limit",
+                inbound_event_id=ingested.event_ids[0],
+                session_id=ingested.session_id,
+                logical_conversation_id=batch.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=24),
+            ),
+        )
+        await session.commit()
+
+    async with factory() as session:
+        await claim_runs(
+            session,
+            ContextRunClaimRequest(
+                lease_owner="atlas-tool-limit",
+                run_id=started.run.id,
+            ),
+            now=now,
+        )
+        first = await start_tool_invocation(
+            session,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="within-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "September"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=1),
+            invocation_limit=1,
+        )
+        await session.commit()
+
+    async with factory() as continuation_session:
+        blocked = await start_tool_invocation(
+            continuation_session,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="continued-over-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "October"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=2),
+            invocation_limit=1,
+        )
+        await continuation_session.commit()
+
+    async with factory() as later_continuation:
+        still_blocked = await start_tool_invocation(
+            later_continuation,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="another-continuation-over-limit",
+                tool_name="status_read",
+                arguments={},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=3),
+            invocation_limit=1,
+        )
+        replay = await start_tool_invocation(
+            later_continuation,
+            ContextToolInvocationRequest(
+                run_id=started.run.id,
+                lease_owner="atlas-tool-limit",
+                tool_call_id="within-limit",
+                tool_name="command_contacts_search",
+                arguments={"query": "September"},
+                side_effect_class="read_only",
+            ),
+            now=now + timedelta(seconds=3),
+            invocation_limit=1,
+        )
+        stored_count = await later_continuation.scalar(
+            sa.text(
+                "SELECT count(*) FROM agent_tool_invocations WHERE run_id = :run_id"
+            ),
+            {"run_id": started.run.id},
+        )
+
+    assert first.replay_decision == "execute"
+    assert first.invocation_count == first.invocation_limit == 1
+    assert first.limit_reached is True
+    for receipt in (blocked, still_blocked):
+        assert receipt.invocation_id is None
+        assert receipt.replay_decision == "block_limit"
+        assert receipt.invocation_count == receipt.invocation_limit == 1
+        assert receipt.limit_reached is True
+    assert replay.invocation_id == first.invocation_id
+    assert replay.replay_decision == "repeat_read"
+    assert replay.invocation_count == replay.invocation_limit == 1
+    assert stored_count == 1
+
+
+@pytest.mark.asyncio
 async def test_run_fifo_claim_and_tool_ledger_prevent_duplicate_side_effects(
     context_sessions,
 ) -> None:

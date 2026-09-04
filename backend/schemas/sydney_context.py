@@ -278,7 +278,7 @@ class ContextToolInvocationUpdateRequest(StrictModel):
 
 
 class ContextToolInvocationResponse(StrictModel):
-    invocation_id: UUID
+    invocation_id: UUID | None = None
     canonical_tool_call_id: str = Field(min_length=1, max_length=255)
     state: ToolInvocationState
     replay_decision: Literal[
@@ -287,8 +287,33 @@ class ContextToolInvocationResponse(StrictModel):
         "restore_result",
         "retry_not_delivered",
         "block_uncertain",
+        "block_limit",
     ]
     result_content: PreservedText | None = Field(default=None, max_length=1_000_000)
+    invocation_count: int | None = Field(default=None, ge=0, le=100)
+    invocation_limit: int | None = Field(default=None, ge=1, le=100)
+    limit_reached: bool = False
+
+    @model_validator(mode="after")
+    def validate_limit_receipt(self) -> ContextToolInvocationResponse:
+        has_count = self.invocation_count is not None
+        has_limit = self.invocation_limit is not None
+        if has_count != has_limit:
+            raise ValueError("context_tool_limit_receipt_incomplete")
+        if self.limit_reached and not has_count:
+            raise ValueError("context_tool_limit_receipt_missing")
+        if self.replay_decision == "block_limit":
+            if (
+                self.invocation_id is not None
+                or not self.limit_reached
+                or self.invocation_count is None
+                or self.invocation_limit is None
+                or self.invocation_count < self.invocation_limit
+            ):
+                raise ValueError("context_tool_limit_receipt_invalid")
+        elif self.invocation_id is None:
+            raise ValueError("context_tool_invocation_id_required")
+        return self
 
 
 class ContextHealthResponse(StrictModel):

@@ -35,6 +35,30 @@ class SydneyToolBeforeDecision:
 
 
 @dataclass(frozen=True)
+class SydneyToolPolicyHalt:
+    """Duck-typed terminal decision consumed by Hermes' guarded turn exit."""
+
+    code: str
+    message: str
+    tool_name: str
+    count: int
+    action: str = "halt"
+
+    @property
+    def should_halt(self) -> bool:
+        return True
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "code": self.code,
+            "message": self.message,
+            "tool_name": self.tool_name,
+            "count": self.count,
+        }
+
+
+@dataclass(frozen=True)
 class _PendingDelivery:
     provider: Any
     result: dict[str, Any]
@@ -58,6 +82,14 @@ REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE = (
     "Return the review packet, state that nothing was sent, and wait for fresh "
     "Brandon approval."
 )
+NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE = (
+    "This private Sydney run may use only the approved Atlas business tools and "
+    "skill_view. The requested local tool was not executed."
+)
+TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE = (
+    "Sydney reached this request's server-enforced tool limit. The tool was not "
+    "executed; stop now and use the results already gathered."
+)
 
 _REVIEW_ONLY_READ_TOOLS = frozenset(
     {
@@ -80,6 +112,35 @@ _REVIEW_ONLY_READ_TOOLS = frozenset(
     }
 )
 _ATLAS_MCP_TOOL_PREFIX = "mcp_atlas_backend_"
+_ATLAS_BUSINESS_TOOLS = frozenset(
+    {
+        "actions_list",
+        "bookings_recent",
+        "calendar_event_create",
+        "calendar_events_read",
+        "command_contact_audience_preview",
+        "command_contacts_search",
+        "contacts_search",
+        "context_history_search",
+        "crm_task_clarifications_answer",
+        "crm_task_drafts_create",
+        "crm_task_suggestions_approval_link",
+        "crm_task_suggestions_dismiss_proposal",
+        "crm_task_suggestions_read",
+        "crm_tasks_read",
+        "docs_create",
+        "drive_file_read",
+        "drive_search",
+        "gmail_draft_create",
+        "gmail_search",
+        "gmail_send",
+        "gmail_thread_read",
+        "leads_recent",
+        "sheets_append",
+        "status_read",
+        "workspace_status",
+    }
+)
 
 
 def _normalized_delivery_key(value: Any) -> tuple[str, str, str] | None:
@@ -151,6 +212,7 @@ def record_inbound_before_model(
     agent._sydney_degraded_delivery_key = None
     agent._sydney_terminal_replay_state = None
     agent._sydney_control_replay_state = None
+    agent._sydney_terminal_tool_policy_response = None
     provider = get_sydney_provider(agent)
     if provider is None:
         return True
@@ -483,6 +545,7 @@ def _side_effect_class(tool_name: str) -> str:
         "read",
         "search",
         "status",
+        "view",
     }
     if lowered in read_only_tools or tokens.intersection(read_markers):
         return "read_only"
@@ -495,6 +558,40 @@ def _review_only_tool_is_allowed(tool_name: str) -> bool:
     if normalized.startswith(_ATLAS_MCP_TOOL_PREFIX):
         normalized = normalized.removeprefix(_ATLAS_MCP_TOOL_PREFIX)
     return normalized in _REVIEW_ONLY_READ_TOOLS
+
+
+def _normal_business_tool_is_allowed(tool_name: str) -> bool:
+    normalized = tool_name.casefold()
+    if normalized == "skill_view":
+        return True
+    if normalized.startswith(_ATLAS_MCP_TOOL_PREFIX):
+        normalized = normalized.removeprefix(_ATLAS_MCP_TOOL_PREFIX)
+    return normalized in _ATLAS_BUSINESS_TOOLS
+
+
+def _set_terminal_tool_policy(
+    agent: Any,
+    *,
+    code: str,
+    block_message: str,
+    response: str,
+    tool_name: str,
+    count: int,
+) -> None:
+    if getattr(agent, "_tool_guardrail_halt_decision", None) is None:
+        agent._tool_guardrail_halt_decision = SydneyToolPolicyHalt(
+            code=code,
+            message=block_message,
+            tool_name=tool_name,
+            count=max(0, count),
+        )
+    if not getattr(agent, "_sydney_terminal_tool_policy_response", None):
+        agent._sydney_terminal_tool_policy_response = response
+
+
+def terminal_tool_policy_response(agent: Any) -> str | None:
+    response = getattr(agent, "_sydney_terminal_tool_policy_response", None)
+    return response if isinstance(response, str) and response else None
 
 
 def _caller_idempotency_key(
@@ -558,10 +655,8 @@ def tool_before(
         )
     source_key = f"tool:{run_id}:{tool_call_id}:before"
     side_effect_class = _side_effect_class(tool_name)
-    if (
-        provider.active_recovery_policy() == "review_only"
-        and not _review_only_tool_is_allowed(tool_name)
-    ):
+    recovery_policy = provider.active_recovery_policy()
+    if recovery_policy == "review_only" and not _review_only_tool_is_allowed(tool_name):
         provider.record_policy_denial(
             run_id=run_id,
             tool_call_id=tool_call_id,
@@ -570,6 +665,32 @@ def tool_before(
         )
         return SydneyToolBeforeDecision(
             block_message=REVIEW_ONLY_RECOVERY_BLOCK_MESSAGE
+        )
+    if recovery_policy != "review_only" and not _normal_business_tool_is_allowed(
+        tool_name
+    ):
+        provider.record_policy_denial(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            policy="atlas_business_tools_only",
+            error_code="normal_business_tool_blocked",
+            side_effect_class=side_effect_class,
+        )
+        _set_terminal_tool_policy(
+            agent,
+            code="sydney_business_tool_policy",
+            block_message=NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE,
+            response=(
+                "I stopped this request because Sydney attempted a tool outside the "
+                "approved business-tool lane. Nothing outside Atlas was executed."
+            ),
+            tool_name=tool_name,
+            count=1,
+        )
+        return SydneyToolBeforeDecision(
+            block_message=NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE
         )
     existing_receipt = provider.tool_replay_receipt(source_key)
     provider.record_tool_before(
@@ -593,6 +714,26 @@ def tool_before(
     receipt = receipt.get("tool", receipt)
     decision = receipt.get("replay_decision")
     canonical_tool_call_id = receipt.get("canonical_tool_call_id")
+    if decision == "block_limit":
+        count = receipt.get("invocation_count")
+        limit = receipt.get("invocation_limit")
+        safe_count = count if type(count) is int and count >= 0 else 0
+        safe_limit = limit if type(limit) is int and limit > 0 else safe_count
+        _set_terminal_tool_policy(
+            agent,
+            code="sydney_run_tool_limit",
+            block_message=TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE,
+            response=(
+                f"I stopped this request at Sydney's {safe_limit}-tool safety limit. "
+                "I will use the results already gathered and will not keep retrying "
+                "or ask you to reset."
+            ),
+            tool_name=tool_name,
+            count=safe_count,
+        )
+        return SydneyToolBeforeDecision(
+            block_message=TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE
+        )
     if (
         decision in {"execute", "repeat_read", "retry_not_delivered"}
         and isinstance(canonical_tool_call_id, str)

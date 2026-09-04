@@ -32,6 +32,7 @@ def test_durable_context_flags_default_off_and_limits_are_bounded() -> None:
     assert config.SYDNEY_CONTEXT_PROMPT_COMPRESS_TOKENS == 96_000
     assert config.SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET == 500_000
     assert config.SYDNEY_CONTEXT_MAX_TURNS == 16
+    assert config.SYDNEY_CONTEXT_MAX_TOOL_INVOCATIONS == 12
     assert config.SYDNEY_CONTEXT_EVENT_BATCH_LIMIT == 100
     assert config.SYDNEY_CONTEXT_SEGMENT_CHARS == 16_000
     assert config.SYDNEY_CONTEXT_RUN_LEASE_SECONDS == 120

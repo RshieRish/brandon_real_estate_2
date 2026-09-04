@@ -1203,6 +1203,21 @@ def _patch_conversation_loop(contents: str) -> str:
     contents = _replace_exact(
         contents, usage_anchor, usage_replacement, "usage metadata accounting"
     )
+    terminal_policy_anchor = """\
+                    final_response = agent._toolguard_controlled_halt_response(decision)"""
+    terminal_policy_replacement = """\
+                    # SYDNEY_TERMINAL_TOOL_POLICY_RESPONSE
+                    from agent.sydney_runtime import terminal_tool_policy_response
+                    final_response = (
+                        terminal_tool_policy_response(agent)
+                        or agent._toolguard_controlled_halt_response(decision)
+                    )"""
+    contents = _replace_exact(
+        contents,
+        terminal_policy_anchor,
+        terminal_policy_replacement,
+        "terminal Sydney tool policy response",
+    )
     retry_anchor = """\
                 retry_count += 1
                 elapsed_time = time.time() - api_start_time"""

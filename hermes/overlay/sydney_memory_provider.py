@@ -1521,17 +1521,28 @@ class SydneyMemoryProvider(MemoryProvider):
         tool_call_id: str,
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> None:
+        policy: str = _REVIEW_ONLY_RECOVERY_POLICY,
+        error_code: str = "review_only_recovery_blocked",
+        side_effect_class: str = "non_idempotent_write",
+    ) -> dict[str, Any] | None:
         """Persist a deterministic, non-executed tool outcome for policy blocks."""
         self.record_tool_before(
             run_id=run_id,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             arguments=arguments,
-            side_effect_class="non_idempotent_write",
+            side_effect_class=side_effect_class,
             caller_idempotency_key=None,
         )
-        attempt_key = f"review_only:{tool_call_id}"
+        self.drain_once()
+        source_key = f"tool:{run_id}:{tool_call_id}:before"
+        receipt = self.tool_replay_receipt(source_key) or {}
+        tool_receipt = receipt.get("tool", receipt)
+        if not isinstance(tool_receipt, dict):
+            return None
+        if tool_receipt.get("replay_decision") == "block_limit":
+            return tool_receipt
+        attempt_key = f"{policy}:{tool_call_id}"
         attempt_digest = hashlib.sha256(attempt_key.encode()).hexdigest()
         denial_source_key = (
             f"tool:{run_id}:{tool_call_id}:after:not_delivered:{attempt_digest}"
@@ -1543,9 +1554,9 @@ class SydneyMemoryProvider(MemoryProvider):
                 state="not_delivered",
                 result_content=json.dumps(
                     {
-                        "error": "review_only_recovery_blocked",
+                        "error": error_code,
                         "executed": False,
-                        "policy": _REVIEW_ONLY_RECOVERY_POLICY,
+                        "policy": policy,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -1554,6 +1565,7 @@ class SydneyMemoryProvider(MemoryProvider):
                 attempt_key=attempt_key,
             )
         self.drain_once()
+        return tool_receipt
 
     def activate_claimed_run(
         self,

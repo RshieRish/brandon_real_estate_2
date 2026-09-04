@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Sydney Business-Tool Lane and Durable Run Ceiling Completed
+- Normal private Sydney runs now allow only `skill_view` and the manifest-pinned Atlas business tools. Native shell, code execution, process, filesystem, browser-adjacent session search, and local-memory attempts are blocked before execution, durably recorded as not delivered, and end the turn with a fixed plain-language result. Review-only recovery behavior remains unchanged.
+- Tool starts now return a server-authoritative aggregate count with a configurable default limit of `12`. The database run row serializes admission; retries restore prior receipts without consuming another slot, while every new call after the ceiling receives `block_limit`. A new Hermes session or continuation cannot reset that database count.
+- The managed Atlas skill now routes birthdays, home anniversaries, and "my contacts" celebration requests only to the dedicated Command celebration preview, prohibits Google/Drive/roster fallbacks, and limits physical-card work to an internal draft plus authenticated Command review. Send Out Cards browser automation remains prohibited.
+- Verification passed `203` non-PostgreSQL Sydney/overlay tests plus `3` subtests (`1` expected missing-template skip), all `28` Sydney PostgreSQL 17/TLS tests, twice-applied exact pinned Hermes installation, strict registry/skill hash checks, scoped Ruff, and diff checks.
+
 ### 2026-09-04 - Sydney Nullable Usage Accounting Repaired
 - Added production-shaped coverage for Gemini responses whose canonical input-token count is absent or malformed. Missing, boolean, negative, string, and arbitrary values now leave the safe preflight reservation intact instead of crashing the run or inventing usage.
 - A real nonnegative integer still reconciles any provider-reported excess against the rolling budget. The focused budget regressions passed `7/7`; the complete Sydney memory-provider file passed `103/103`; scoped Ruff and diff checks passed.

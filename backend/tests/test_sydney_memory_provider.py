@@ -1628,6 +1628,147 @@ def test_review_only_recovery_allows_read_tools(
     assert not [payload for name, payload in backend.calls if name == "tool_after"]
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "terminal",
+        "execute_code",
+        "read_file",
+        "write_file",
+        "search_files",
+        "process",
+        "session_search",
+        "memory",
+    ),
+)
+def test_normal_sydney_run_blocks_non_business_tools_before_execution(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE, tool_before
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("normal-business-policy", "Use Command contacts.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    decision = tool_before(
+        agent,
+        f"blocked-{tool_name}",
+        tool_name,
+        {"query": "must-not-execute"},
+    )
+
+    assert decision is not None
+    assert decision.block_message == NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE
+    assert agent._sydney_terminal_tool_policy_response == (
+        "I stopped this request because Sydney attempted a tool outside the approved "
+        "business-tool lane. Nothing outside Atlas was executed."
+    )
+    denials = [payload for name, payload in backend.calls if name == "tool_after"]
+    assert len(denials) == 1
+    assert denials[0]["state"] == "not_delivered"
+    denial_events = [
+        event
+        for name, payload in backend.calls
+        if name == "ingest"
+        for event in payload["events"]
+        if event["event_type"] == "tool_result"
+    ]
+    assert json.loads(denial_events[-1]["content"]) == {
+        "error": "normal_business_tool_blocked",
+        "executed": False,
+        "policy": "atlas_business_tools_only",
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "skill_view",
+        "status_read",
+        "command_contacts_search",
+        "mcp_atlas_backend_command_contact_audience_preview",
+    ),
+)
+def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    from sydney_runtime import tool_before
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound(f"normal-allowed-{tool_name}", "Use the approved source.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    assert tool_before(agent, f"allowed-{tool_name}", tool_name, {}) is None
+    assert not hasattr(agent, "_sydney_terminal_tool_policy_response")
+
+
+def test_normal_sydney_business_tool_policy_matches_the_pinned_registry() -> None:
+    from sydney_runtime import _ATLAS_BUSINESS_TOOLS
+
+    manifest = json.loads((OVERLAY / "manifest.json").read_text())
+
+    assert _ATLAS_BUSINESS_TOOLS == frozenset(manifest["tools"]["include"])
+
+
+def test_server_tool_ceiling_sets_a_fixed_terminal_result(tmp_path: Path) -> None:
+    from sydney_runtime import (
+        TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE,
+        terminal_tool_policy_response,
+        tool_before,
+    )
+
+    class LimitBackend(FakeBackend):
+        def start_tool(self, payload: dict) -> dict:
+            self.calls.append(("tool_before", payload))
+            return {
+                "state": "not_delivered",
+                "replay_decision": "block_limit",
+                "invocation_count": 12,
+                "invocation_limit": 12,
+                "limit_reached": True,
+            }
+
+    backend = LimitBackend()
+    provider = _provider(tmp_path, backend)
+    provider.record_inbound("tool-ceiling", "Finish within the safe limit.")
+    provider.drain_once()
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+
+    decision = tool_before(
+        agent,
+        "over-limit-call",
+        "command_contacts_search",
+        {"query": "one call too many"},
+    )
+
+    assert decision is not None
+    assert decision.block_message == TOOL_INVOCATION_LIMIT_BLOCK_MESSAGE
+    assert terminal_tool_policy_response(agent) == (
+        "I stopped this request at Sydney's 12-tool safety limit. I will use the "
+        "results already gathered and will not keep retrying or ask you to reset."
+    )
+    assert agent._tool_guardrail_halt_decision.code == "sydney_run_tool_limit"
+    assert not [payload for name, payload in backend.calls if name == "tool_after"]
+
+
 def test_review_only_policy_survives_provider_restart_and_still_blocks_writes(
     tmp_path: Path,
 ) -> None:
@@ -2875,6 +3016,12 @@ def test_runtime_classifies_recent_query_tools_as_read_only(tool_name: str) -> N
     from sydney_runtime import _side_effect_class
 
     assert _side_effect_class(tool_name) == "read_only"
+
+
+def test_runtime_classifies_skill_view_as_read_only() -> None:
+    from sydney_runtime import _side_effect_class
+
+    assert _side_effect_class("skill_view") == "read_only"
 
 
 @pytest.mark.parametrize(
