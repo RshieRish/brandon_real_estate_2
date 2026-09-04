@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from database import get_db
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from middleware.agent_control import require_agent_control
 from schemas.agent_control_cards import (
     AgentCardCampaignDraftRequest,
@@ -20,6 +18,7 @@ from services.card_campaign_service import (
     CardCampaignError,
     CardCampaignIdempotencyConflict,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(dependencies=[Depends(require_agent_control)])
 Database = Annotated[AsyncSession, Depends(get_db)]

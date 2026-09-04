@@ -5,11 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
 from uuid import UUID, uuid4
 
+from database import get_db
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
-from database import get_db
 from middleware.auth import require_admin, require_admin_subject
 from schemas.card_campaign import CardCampaignDetail, CardCampaignPage
 

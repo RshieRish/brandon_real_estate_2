@@ -1,7 +1,7 @@
 # Sydney, Command Contacts, and Card Fulfillment Repair Design
 
-**Date:** 2026-09-04  
-**Status:** Approved  
+**Date:** 2026-09-04
+**Status:** Approved
 **Scope:** Sydney Telegram runtime, Command contact reconciliation/detail UI,
 and a compliant Send Out Cards fulfillment boundary.
 

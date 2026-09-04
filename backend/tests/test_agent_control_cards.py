@@ -7,13 +7,12 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from database import get_db
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
-
-from database import get_db
 from middleware.agent_control import require_agent_control
 from models.agent_action_audit import AgentActionAudit
+from pydantic import ValidationError
 from schemas.card_campaign import CardCampaignDetail
 
 CAMPAIGN_ID = UUID("8ea082cb-c9f5-4ddb-95bf-717ca36cb483")

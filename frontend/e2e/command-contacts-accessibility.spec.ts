@@ -4,6 +4,7 @@ import { expect, test } from './fixtures/command';
 
 const wcagTags = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 async function axe(page: Page) {
+  await expect(page).not.toHaveTitle('');
   const results = await new AxeBuilder({ page }).withTags(wcagTags).analyze();
   expect(results.violations, results.violations.map((item) => `${item.id}: ${item.nodes.map((node) => node.target.join(' ')).join(', ')}`).join('\n')).toEqual([]);
 }

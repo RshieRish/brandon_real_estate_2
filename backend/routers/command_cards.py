@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from database import get_db
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from middleware.auth import AdminSubject, require_admin
 from schemas.card_campaign import (
     CardCampaignApproveRequest,
@@ -30,6 +28,7 @@ from services.card_campaign_service import (
     CardCampaignVersionConflict,
 )
 from services.card_provider import configured_card_provider
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 Database = Annotated[AsyncSession, Depends(get_db)]

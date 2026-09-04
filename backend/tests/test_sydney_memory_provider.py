@@ -1694,6 +1694,8 @@ def test_normal_sydney_run_blocks_non_business_tools_before_execution(
         "status_read",
         "command_contacts_search",
         "mcp_atlas_backend_command_contact_audience_preview",
+        "mcp_atlas_backend_command_contact_celebrations_preview",
+        "command_card_campaign_draft_create",
     ),
 )
 def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(

@@ -57,11 +57,13 @@ time.
 
 ## 1. Schema and archive preflight
 
-The reconciliation/contact schema is additive. The implemented single Alembic
-head is `7d1f3a5b6c8e`. The relevant linear chain is
+The reconciliation/contact foundation is additive. Its linear chain is
 `f0c8a6d9e431 -> 1d6e7f8a9b10 -> 2e7f9a0b1c2d -> 4a8c0d1e2f3b ->
-5b9d1e2f3a4c -> 6c0e2f4a5b7d -> 7d1f3a5b6c8e`; operators must upgrade through
-the chain to the sole head and must not stop at an intermediate revision.
+5b9d1e2f3a4c -> 6c0e2f4a5b7d -> 7d1f3a5b6c8e`. The current release continues
+serially through `81a4d2c6e9f0 -> 82b5e3d7f0a1 -> 83c6f4e8a1b2 ->
+84d7a5f9b2c3 -> 85e8b7c9d4f1 -> 86f9c8a0d2e1 -> 87a0d9b1e3f2`.
+Operators must upgrade through the full chain to the sole head and must not stop
+at an intermediate revision.
 
 Revision `6c0e2f4a5b7d` performs an online, batched canonical-email backfill and
 verification before it creates timeline query indexes. Its upgrade deliberately
@@ -77,7 +79,7 @@ approve one monolithic offline `f0c8a6d9e431:7d1f3a5b6c8e` script.
 `alembic heads` must print exactly:
 
 ```text
-7d1f3a5b6c8e (head)
+87a0d9b1e3f2 (head)
 ```
 
 Before a production migration, take a provider-level database snapshot and
@@ -102,9 +104,25 @@ upgrade sequentially and inspect the current revision after every boundary:
 "$PYTHON" -m alembic current
 "$PYTHON" -m alembic upgrade 7d1f3a5b6c8e
 "$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 81a4d2c6e9f0
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 82b5e3d7f0a1
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 83c6f4e8a1b2
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 84d7a5f9b2c3
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 85e8b7c9d4f1
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 86f9c8a0d2e1
+"$PYTHON" -m alembic current
+"$PYTHON" -m alembic upgrade 87a0d9b1e3f2
+"$PYTHON" -m alembic current
 ```
 
-The final `alembic current` must report `7d1f3a5b6c8e`. Do not run the reconciliation
+Production already verified at `85e8b7c9d4f1` may begin the approved release at
+the `86f9c8a0d2e1` boundary after a fresh protected backup. The final
+`alembic current` must report `87a0d9b1e3f2`. Do not run the reconciliation
 CLI if the database is below that sole deployed head or if required provenance,
 reconciliation, or contact-parity tables are absent. All CLI modes create audit
 rows, so a database at an intermediate revision is not an approved operating
@@ -310,7 +328,7 @@ contact audit events, or materialized contacts.
 The exact command path is implemented, but **do not execute it merely because it
 is documented here**. Operational authorization requires all prerequisites in
 the current executable safety state: the exact reviewed deployment, sole
-`7d1f3a5b6c8e` database head, accepted target-database verification, reviewed
+`87a0d9b1e3f2` database head, accepted target-database verification, reviewed
 manifest-aware dry run, approved private manifest, provider snapshot, and
 explicit change approval. Always select only `--module contacts`; unbounded
 apply remains policy-prohibited.
@@ -614,14 +632,23 @@ foundation migrations are additive. Prefer this order:
 4. leave the additive provenance and audit tables intact; and
 5. diagnose from the immutable archive and reconciliation ledger.
 
+Revisions `86f9c8a0d2e1` and `87a0d9b1e3f2` also contain durable evidence
+guards. Revision 87 refuses downgrade once any campaign or provider-connection
+row exists; revision 86 refuses downgrade once any coalesced-request receipt
+exists. After either kind of evidence is present, keep the schema, disable the
+application path, and roll application code back without downgrading.
+
 Do not manually delete source records, artifact links, entity links, run rows,
 or result rows. The implemented importer has no general semantic undo command;
 after an apply, data rollback requires an approved provider snapshot restore or
 a separately reviewed compensating migration.
 
-If no apply has occurred and an explicitly approved schema-only rollback from
-the current sole head is required, take a fresh snapshot and cross each safety
-boundary separately. The `7d1f3a5b6c8e -> 6c0e2f4a5b7d` step drops only the
+If no reconciliation apply, campaign/provider row, or coalesced-request receipt
+exists and an explicitly approved schema-only rollback is required, take a fresh
+snapshot and cross the 87 and 86 migration boundaries separately before using
+the older foundation instructions below. Never force those evidence checks or
+delete rows to manufacture a downgrade. The `7d1f3a5b6c8e -> 6c0e2f4a5b7d`
+step drops only the
 five workspace-summary indexes, and the `6c0e2f4a5b7d -> 5b9d1e2f3a4c` step
 drops only its four query indexes and two recomputable `normalized_email`
 columns. Both downgrades are offline-renderable:
@@ -699,7 +726,7 @@ Therefore verify-only was deliberately not executed during that audit. This is
 a dated observation, not evidence of the database's current revision; this
 documentation correction performed no new live audit. Under the current source
 contract, any target still at that observed revision must follow the staged
-upgrade through the sole head `7d1f3a5b6c8e` before running the reconciliation
+upgrade through the sole head `87a0d9b1e3f2` before running the reconciliation
 CLI. Running verify-only before the full approved migration would attempt to
 write audit rows into an unsupported schema state. No migration or semantic
 reconciliation write was performed by the historical audit.

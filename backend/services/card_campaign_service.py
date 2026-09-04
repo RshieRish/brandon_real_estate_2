@@ -674,7 +674,7 @@ class CardCampaignService:
                     provider_status="provider_error",
                     detail_code="provider_error",
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - unknown provider outcome is ambiguous
                 result = CardSendResult(
                     outcome="ambiguous",
                     provider_status="unexpected_error",
