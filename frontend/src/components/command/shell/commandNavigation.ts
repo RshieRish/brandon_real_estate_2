@@ -1,5 +1,6 @@
 import {
   Archive,
+  CardsThree,
   ChartBar,
   CheckCircle,
   ClipboardText,
@@ -62,6 +63,16 @@ export const commandNavigation: readonly CommandDestination[] = Object.freeze([
     group: 'core',
     icon: ClipboardText,
     searchTerms: ['Sydney', 'Gmail', 'approval', 'suggestions'],
+  },
+  {
+    label: 'Client cards',
+    shortLabel: 'Cards',
+    href: '/admin/command/cards',
+    group: 'core',
+    icon: CardsThree,
+    createLabel: 'New card campaign',
+    createHref: '/admin/command/cards?create=campaign',
+    searchTerms: ['birthdays', 'anniversaries', 'mail', 'Send Out Cards', 'Sydney'],
   },
   {
     label: 'Smart Plans',

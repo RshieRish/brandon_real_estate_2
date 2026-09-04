@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Command Card Review Workspace Completed
+- Added the authenticated Client cards workspace and campaign-review route with strict response decoders, bounded request validation, idempotent draft creation, recipient message/design edits, explicit exclusions, and optimistic conflict refresh. Command navigation now exposes Client cards across desktop, mobile, global search, and contextual create actions.
+- The asymmetric black/gold review UI makes provider disconnection, missing addresses, ready, sending, sent, partially sent, failed, and delivery-uncertain states explicit. Brandon must open a focus-contained final dialog and confirm the exact recipient count and cost before the single approve-and-send request; uncertain outcomes reconcile once and never retry automatically.
+- Send Out Cards remains safely locked in the UI and backend until contracted API access is configured. The screen can prepare and review campaigns without implying a provider connection or delivery.
+- Verification passed `37` focused card client/component/navigation/shell tests, TypeScript, scoped ESLint, a clean `37`-route Next.js production build, and diff checks. No provider call, external card send, production deployment, or migration occurred.
+
 ### 2026-09-04 - Authenticated Card Review API and Sydney Draft Tool Completed
 - Added five authenticated Command card routes for bounded campaign listing, detail, draft creation, optimistic edits, and Brandon-confirmed approve-and-send. Mutations derive the actor from the validated admin subject and write aggregate-only audit metadata; strict request UUIDs, versions, recipient counts, cost, and literal Brandon confirmation remain server-enforced.
 - Added exactly one Sydney capability, `command_card_campaign_draft_create`. It accepts only a caller UUID, month, and celebration-kind selection; returns aggregate counts plus an absolute `https://www.soldwithsweeney.com/admin/command/cards/{campaign_id}` review URL; says nothing was sent; and exposes no recipient rows, checksum, approval field, approve action, or send action.
