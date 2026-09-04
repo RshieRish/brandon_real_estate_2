@@ -266,12 +266,14 @@ def reserve_input_budget(agent: Any, tokens: int) -> None:
     agent._sydney_current_reserved_input_tokens = reservation
 
 
-def reconcile_input_usage(agent: Any, actual_tokens: int) -> None:
+def reconcile_input_usage(agent: Any, actual_tokens: Any) -> None:
     """Account for any provider-reported input beyond the preflight estimate."""
     provider = get_sydney_provider(agent)
     if provider is None or not getattr(provider, "retry_enabled", False):
         return
-    actual = max(0, int(actual_tokens))
+    if type(actual_tokens) is not int or actual_tokens < 0:
+        return
+    actual = actual_tokens
     reserved = max(0, int(getattr(agent, "_sydney_current_reserved_input_tokens", 0)))
     agent._sydney_last_actual_input_tokens = actual
     difference = max(0, actual - reserved)

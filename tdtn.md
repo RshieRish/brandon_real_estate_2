@@ -3,6 +3,10 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Sydney Nullable Usage Accounting Repaired
+- Added production-shaped coverage for Gemini responses whose canonical input-token count is absent or malformed. Missing, boolean, negative, string, and arbitrary values now leave the safe preflight reservation intact instead of crashing the run or inventing usage.
+- A real nonnegative integer still reconciles any provider-reported excess against the rolling budget. The focused budget regressions passed `7/7`; the complete Sydney memory-provider file passed `103/103`; scoped Ruff and diff checks passed.
+
 ### 2026-09-04 - Sydney, Command Contacts, and Card Repair Design Approved
 - Diagnosed the current production incident without replaying the failed request or mutating production. Sydney's exact crash is nullable provider input-token metadata being coerced with `int(None)`; equivalent Telegram messages then created separate durable runs that wandered through native shell/filesystem tools and unrelated Google/Drive sources.
 - Confirmed the manual reset did not repair the work: it opened a new Hermes session while the original durable run continued. The approved repair adds a receipt-guarded immediate acknowledgement, equivalent in-flight request coalescing, transparent continuation, an enforced business-tool boundary, and aggregate run budgets so Brandon does not need `/reset`, `/new`, or `/compact`.

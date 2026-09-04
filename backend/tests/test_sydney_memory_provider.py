@@ -2452,6 +2452,56 @@ def test_runtime_tpm_budget_uses_the_configured_limit(tmp_path: Path) -> None:
             reserve_input_budget(agent, 5)
 
 
+@pytest.mark.parametrize("reported_tokens", [None, True, -1, "12", object()])
+def test_runtime_usage_reconciliation_ignores_missing_or_invalid_counts(
+    tmp_path: Path,
+    reported_tokens: object,
+) -> None:
+    from sydney_runtime import reconcile_input_usage, reserve_input_budget
+
+    provider = _provider(tmp_path)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET": "10"},
+        clear=False,
+    ):
+        reserve_input_budget(agent, 6)
+        reconcile_input_usage(agent, reported_tokens)
+
+    assert agent._sydney_current_reserved_input_tokens == 6
+    assert not hasattr(agent, "_sydney_last_actual_input_tokens")
+    assert agent._sydney_input_budget.used(at=datetime.now(timezone.utc)) == 6
+
+
+def test_runtime_usage_reconciliation_accounts_for_a_real_nonnegative_count(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import reconcile_input_usage, reserve_input_budget
+
+    provider = _provider(tmp_path)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(
+            get_provider=lambda name: provider if name == "sydney" else None
+        )
+    )
+    with patch.dict(
+        os.environ,
+        {"SYDNEY_CONTEXT_INTERACTIVE_TPM_BUDGET": "10"},
+        clear=False,
+    ):
+        reserve_input_budget(agent, 6)
+        reconcile_input_usage(agent, 8)
+
+    assert agent._sydney_current_reserved_input_tokens == 6
+    assert agent._sydney_last_actual_input_tokens == 8
+    assert agent._sydney_input_budget.used(at=datetime.now(timezone.utc)) == 8
+
+
 def test_confirmed_stream_delivery_completes_without_a_second_send(
     tmp_path: Path,
 ) -> None:
