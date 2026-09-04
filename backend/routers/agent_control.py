@@ -358,6 +358,17 @@ AGENT_ACTIONS = [
         side_effects=False,
         description="Preview a masked, checksum-bound Command contact audience without sending.",
     ),
+    AgentAction(
+        id="crm.command_contact_celebrations.preview",
+        method="POST",
+        path="/api/v1/agent-control/crm/command-contact-celebrations/preview",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description=(
+            "Preview exact Command birthdays and home anniversaries with masked "
+            "examples and mailing-address readiness; never send cards."
+        ),
+    ),
 ]
 
 

@@ -9,25 +9,33 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from models.command_contacts import CRMContactAddress
+from models.command_provenance import CRMReconciliationResult, CRMReconciliationRun
 from schemas.agent_control_command import (
     CommandContactAudiencePreviewRequest,
     CommandContactAudiencePreviewResponse,
     CommandContactAudienceSample,
+    CommandContactCelebrationOccurrence,
+    CommandContactCelebrationSample,
+    CommandContactCelebrationsPreviewRequest,
+    CommandContactCelebrationsPreviewResponse,
     CommandContactFilters,
     CommandContactResult,
     CommandContactsSearchRequest,
     CommandContactsSearchResponse,
 )
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from services.command_contact_contracts import (
+    ContactCelebrationRow,
     ContactDirectoryFilters,
     ContactDirectoryRow,
 )
 from services.command_contacts import (
     ContactDirectoryError,
+    list_contact_celebrations,
     list_contacts,
     list_contacts_cursor,
 )
@@ -36,6 +44,8 @@ _AUDIENCE_DOMAIN = b"sydney-command-audience-v1\x00"
 _AUDIENCE_NAMESPACE = UUID("571651d5-3832-4f60-82fb-20d0a5ce7f1b")
 _AUDIENCE_PAGE_SIZE = 100
 _SEARCH_CURSOR_VERSION = 1
+_CELEBRATION_DOMAIN = b"sydney-command-celebrations-v1\x00"
+_CELEBRATION_NAMESPACE = UUID("8be84ee1-57fa-4e65-a33d-c9c3f3b96016")
 
 
 class CommandContactsUnavailable(RuntimeError):
@@ -110,6 +120,132 @@ def _audience_checksum(contact_ids: list[int]) -> str:
         digest.update(str(contact_id).encode("ascii"))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def _present(value: str | None) -> bool:
+    return bool(value and value.strip())
+
+
+def _mailing_address_ready(row: CRMContactAddress) -> bool:
+    """Require explicit structured mailing fields; never infer from a label."""
+    return all(
+        _present(value) for value in (row.line1, row.city, row.state, row.postal_code)
+    )
+
+
+async def _address_ready_contact_ids(
+    db: AsyncSession,
+    contact_ids: set[int],
+) -> set[int]:
+    if not contact_ids:
+        return set()
+    with db.no_autoflush:
+        rows = (
+            await db.scalars(
+                select(CRMContactAddress)
+                .where(CRMContactAddress.contact_id.in_(contact_ids))
+                .order_by(
+                    CRMContactAddress.contact_id,
+                    CRMContactAddress.is_primary.desc(),
+                    CRMContactAddress.id,
+                )
+            )
+        ).all()
+    return {row.contact_id for row in rows if _mailing_address_ready(row)}
+
+
+async def _contact_reconciliation_status(
+    db: AsyncSession,
+) -> str:
+    """Summarize the latest authoritative contacts apply evidence."""
+    row = (
+        await db.execute(
+            select(
+                CRMReconciliationRun.status,
+                CRMReconciliationResult.error_count,
+            )
+            .join(
+                CRMReconciliationResult,
+                CRMReconciliationResult.run_id == CRMReconciliationRun.id,
+            )
+            .where(
+                CRMReconciliationRun.mode == "apply",
+                CRMReconciliationResult.module == "contacts",
+            )
+            .order_by(
+                CRMReconciliationRun.started_at.desc(),
+                CRMReconciliationRun.id.desc(),
+            )
+            .limit(1)
+        )
+    ).one_or_none()
+    if row is None:
+        return "not_reconciled"
+    if row.status == "completed" and row.error_count == 0:
+        return "reconciled"
+    return "incomplete"
+
+
+def _selected_celebrations(
+    rows: tuple[ContactCelebrationRow, ...],
+    *,
+    kind: str,
+) -> tuple[tuple[int, str, str, int, int | None, str, str], ...]:
+    public_kind = "home_anniversary" if kind == "anniversary" else "birthday"
+    return tuple(
+        (
+            row.contact_id,
+            row.display_name,
+            public_kind,
+            row.day,
+            row.year,
+            row.year_quality,
+            row.origin,
+        )
+        for row in rows
+    )
+
+
+def _celebration_checksum(
+    *,
+    month: int,
+    include_birthdays: bool,
+    include_home_anniversaries: bool,
+    selected: tuple[tuple[int, str, str, int, int | None, str, str], ...],
+    address_ready_ids: set[int],
+) -> str:
+    material = {
+        "address_ready_contact_ids": sorted(address_ready_ids),
+        "include_birthdays": include_birthdays,
+        "include_home_anniversaries": include_home_anniversaries,
+        "month": month,
+        "occurrences": [
+            {
+                "contact_id": contact_id,
+                "day": day,
+                "kind": kind,
+                "origin": origin,
+                "year": year,
+                "year_quality": year_quality,
+            }
+            for (
+                contact_id,
+                _display_name,
+                kind,
+                day,
+                year,
+                year_quality,
+                origin,
+            ) in sorted(selected, key=lambda item: (item[0], item[2], item[3]))
+        ],
+    }
+    canonical = json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(_CELEBRATION_DOMAIN + canonical.encode("utf-8")).hexdigest()
 
 
 def _search_filter_hash(request: CommandContactFilters) -> str:
@@ -295,10 +431,106 @@ async def preview_command_contact_audience(
     )
 
 
+async def preview_command_contact_celebrations(
+    db: AsyncSession,
+    request: CommandContactCelebrationsPreviewRequest,
+) -> CommandContactCelebrationsPreviewResponse:
+    try:
+        await db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+        celebrations = await list_contact_celebrations(db, month=request.month)
+        selected: tuple[tuple[int, str, str, int, int | None, str, str], ...] = ()
+        birthdays = celebrations.birthdays if request.include_birthdays else ()
+        anniversaries = (
+            celebrations.anniversaries if request.include_home_anniversaries else ()
+        )
+        if birthdays:
+            selected += _selected_celebrations(birthdays, kind="birthday")
+        if anniversaries:
+            selected += _selected_celebrations(
+                anniversaries,
+                kind="anniversary",
+            )
+
+        audience: dict[
+            int,
+            dict[str, object],
+        ] = {}
+        for contact_id, display_name, kind, day, *_private in selected:
+            current = audience.setdefault(
+                contact_id,
+                {"display_name": display_name, "celebrations": []},
+            )
+            if current["display_name"] != display_name:
+                raise CommandContactAudienceChanged(
+                    "command_contacts_changed_during_preview"
+                )
+            current["celebrations"].append((kind, day))  # type: ignore[union-attr]
+
+        audience_ids = set(audience)
+        address_ready_ids = await _address_ready_contact_ids(db, audience_ids)
+        reconciliation_status = await _contact_reconciliation_status(db)
+    except CommandContactAudienceChanged:
+        raise
+    except (ContactDirectoryError, SQLAlchemyError):
+        raise CommandContactsUnavailable("command_contacts_unavailable") from None
+
+    checksum = _celebration_checksum(
+        month=request.month,
+        include_birthdays=request.include_birthdays,
+        include_home_anniversaries=request.include_home_anniversaries,
+        selected=selected,
+        address_ready_ids=address_ready_ids,
+    )
+
+    def sample_order(item: tuple[int, dict[str, object]]) -> tuple[int, str, int]:
+        contact_id, value = item
+        occurrences = value["celebrations"]
+        assert isinstance(occurrences, list)
+        first_day = min(day for _kind, day in occurrences)
+        return first_day, str(value["display_name"]).casefold(), contact_id
+
+    samples: list[CommandContactCelebrationSample] = []
+    for contact_id, value in sorted(audience.items(), key=sample_order)[:5]:
+        occurrences = value["celebrations"]
+        assert isinstance(occurrences, list)
+        samples.append(
+            CommandContactCelebrationSample(
+                display_name=_mask_name(str(value["display_name"])),
+                celebrations=[
+                    CommandContactCelebrationOccurrence(kind=kind, day=day)
+                    for kind, day in sorted(
+                        occurrences,
+                        key=lambda item: (
+                            0 if item[0] == "birthday" else 1,
+                            item[1],
+                        ),
+                    )
+                ],
+                address_ready=contact_id in address_ready_ids,
+            )
+        )
+    ready_count = len(audience_ids.intersection(address_ready_ids))
+    return CommandContactCelebrationsPreviewResponse(
+        month=request.month,
+        include_birthdays=request.include_birthdays,
+        include_home_anniversaries=request.include_home_anniversaries,
+        audience_ref=uuid5(_CELEBRATION_NAMESPACE, checksum),
+        audience_checksum=checksum,
+        birthday_count=len(birthdays),
+        home_anniversary_count=len(anniversaries),
+        union_count=len(audience_ids),
+        address_ready_count=ready_count,
+        missing_address_count=len(audience_ids) - ready_count,
+        reconciliation_status=reconciliation_status,  # type: ignore[arg-type]
+        samples=samples,
+    )
+
+
 __all__ = [
     "CommandContactAudienceChanged",
     "CommandContactsCursorInvalid",
     "CommandContactsUnavailable",
     "preview_command_contact_audience",
+    "preview_command_contact_celebrations",
     "search_command_contacts",
 ]

@@ -52,7 +52,8 @@
             "crm_task_suggestions_dismiss_proposal",
             "context_history_search",
             "command_contacts_search",
-            "command_contact_audience_preview"
+            "command_contact_audience_preview",
+            "command_contact_celebrations_preview"
         ]
     }
 }

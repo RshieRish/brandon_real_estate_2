@@ -616,6 +616,28 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             }
         ),
     },
+    "command_contact_celebrations_preview": {
+        "name": "command_contact_celebrations_preview",
+        "description": (
+            "Preview exact Command birthdays and home anniversaries for one "
+            "month with masked examples and mailing-address readiness. Never "
+            "substitute Google, Drive, a roster, or an admin-page scrape, and "
+            "never send cards."
+        ),
+        "method": "POST",
+        "path": "/api/v1/agent-control/crm/command-contact-celebrations/preview",
+        "inputSchema": _object_schema(
+            {
+                "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                "include_birthdays": {"type": "boolean", "default": True},
+                "include_home_anniversaries": {
+                    "type": "boolean",
+                    "default": True,
+                },
+            },
+            ["month"],
+        ),
+    },
 }
 
 

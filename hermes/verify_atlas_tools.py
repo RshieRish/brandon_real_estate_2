@@ -39,6 +39,7 @@ EXPECTED_TOOLS = [
     "context_history_search",
     "command_contacts_search",
     "command_contact_audience_preview",
+    "command_contact_celebrations_preview",
 ]
 ORIGINAL_TOOLS = EXPECTED_TOOLS[:22]
 FORBIDDEN_TOOLS = {
@@ -171,8 +172,8 @@ def _build_proof(tools: list[dict[str, Any]]) -> dict[str, Any]:
 def _contract_matches(proof: dict[str, Any]) -> bool:
     request_schema = proof["gmail_send_request_id_schema"]
     return bool(
-        proof["count"] == 25
-        and proof["unique_count"] == 25
+        proof["count"] == 26
+        and proof["unique_count"] == 26
         and proof["exact_expected_order"]
         and proof["original_22_unchanged"]
         and proof["forbidden_present"] == []

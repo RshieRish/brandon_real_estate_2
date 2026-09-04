@@ -55,6 +55,7 @@ NEW_READ_TOOLS = [
     "context_history_search",
     "command_contacts_search",
     "command_contact_audience_preview",
+    "command_contact_celebrations_preview",
 ]
 
 TEMPLATE_DOCKERFILE = """\
@@ -164,8 +165,8 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertEqual(manifest["tools"]["include"][:16], EXISTING_TOOLS)
         self.assertEqual(manifest["tools"]["include"][16:22], CRM_TOOLS)
         self.assertEqual(manifest["tools"]["include"][22:], NEW_READ_TOOLS)
-        self.assertEqual(len(manifest["tools"]["include"]), 25)
-        self.assertEqual(len(set(manifest["tools"]["include"])), 25)
+        self.assertEqual(len(manifest["tools"]["include"]), 26)
+        self.assertEqual(len(set(manifest["tools"]["include"])), 26)
 
     def test_managed_atlas_skill_routes_command_without_stale_fallback(self):
         root = Path(__file__).resolve().parents[2]
@@ -178,7 +179,7 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertIn("command_contact_celebrations_preview", text)
         self.assertIn("navigation locator", lowered)
         self.assertIn("google contacts only", lowered)
-        self.assertIn("treat \"my contacts\" as command", lowered)
+        self.assertIn('treat "my contacts" as command', lowered)
         self.assertIn("native shell", lowered)
         self.assertIn("never scrape its website", lowered)
         self.assertIn("review-only", lowered)
@@ -547,7 +548,7 @@ class HermesOverlayTests(unittest.TestCase):
             )
             self.assertEqual(list(source.glob(".atlas-overlay-*")), [])
 
-    def test_bootstrap_preserves_existing_config_and_writes_exact_25_tool_contract(
+    def test_bootstrap_preserves_existing_config_and_writes_exact_26_tool_contract(
         self,
     ):
         bootstrap = _load_overlay_module("atlas_backend_bootstrap.py")

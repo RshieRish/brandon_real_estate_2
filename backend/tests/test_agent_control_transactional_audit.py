@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -10,9 +11,7 @@ from fastapi import Response
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from starlette.requests import Request
-
 from tests.gmail_task_postgres import async_test_url, migrated_test_database
-
 
 REVISION = "84d7a5f9b2c3"
 CHAT_ID = "424242"
@@ -53,7 +52,8 @@ async def audit_runtime(audit_database):
                 "crm_task_clarifications, crm_task_suggestions, crm_tasks, "
                 "crm_task_creation_requests, crm_task_sources, "
                 "crm_record_lifecycle_events, crm_activities, crm_task_links, "
-                "agent_action_audits, admin_users, crm_contacts CASCADE"
+                "agent_action_audits, crm_reconciliation_results, "
+                "crm_reconciliation_runs, admin_users, crm_contacts CASCADE"
             )
         )
     engine = create_async_engine(async_test_url(url), poolclass=NullPool)
@@ -321,3 +321,179 @@ async def test_clarification_answer_audit_failure_rolls_back_answer_and_handoff(
             )
             == 0
         )
+
+
+@pytest.mark.asyncio
+async def test_celebration_preview_audit_is_content_free_and_fail_closed(
+    audit_runtime, monkeypatch
+):
+    from models.agent_action_audit import AgentActionAudit
+    from routers.agent_control_command import command_contact_celebrations_preview
+    from schemas.agent_control_command import (
+        CommandContactCelebrationsPreviewRequest,
+        CommandContactCelebrationsPreviewResponse,
+    )
+
+    sessions = audit_runtime
+    result = CommandContactCelebrationsPreviewResponse(
+        month=9,
+        include_birthdays=True,
+        include_home_anniversaries=True,
+        audience_ref="9ad04f43-adaf-5ef6-a17d-8f6d09df2401",
+        audience_checksum="c" * 64,
+        birthday_count=2,
+        home_anniversary_count=1,
+        union_count=3,
+        address_ready_count=2,
+        missing_address_count=1,
+        reconciliation_status="reconciled",
+        samples=[],
+    )
+    monkeypatch.setattr(
+        "routers.agent_control_command.preview_command_contact_celebrations",
+        AsyncMock(return_value=result),
+    )
+    payload = CommandContactCelebrationsPreviewRequest(month=9)
+    request = _request("/api/v1/agent-control/crm/command-contact-celebrations/preview")
+    async with sessions() as session:
+        returned = await command_contact_celebrations_preview(
+            payload,
+            request,
+            session,
+            {"actor": "hermes"},
+        )
+        await session.commit()
+    assert returned == result
+
+    async with sessions() as session:
+        audit = await session.scalar(
+            sa.select(AgentActionAudit).where(
+                AgentActionAudit.action_id == "crm.command_contact_celebrations.preview"
+            )
+        )
+        assert audit is not None
+        combined = audit.request_meta_json + audit.response_meta_json
+        assert "9ad04f43" in combined
+        assert "c" * 64 not in combined
+        assert "@" not in combined
+
+    monkeypatch.setattr(
+        "routers.agent_control_command.write_agent_audit_transactional",
+        _audit_failure,
+    )
+    async with sessions() as session:
+        with pytest.raises(RuntimeError, match="synthetic_audit_failure"):
+            await command_contact_celebrations_preview(
+                payload,
+                request,
+                session,
+                {"actor": "hermes"},
+            )
+
+
+@pytest.mark.asyncio
+async def test_celebration_preview_reads_dates_addresses_and_reconciliation_together(
+    audit_runtime,
+):
+    from models.command import CRMContact
+    from models.command_contacts import CRMContactAddress, CRMContactProfile
+    from models.command_provenance import (
+        CRMReconciliationResult,
+        CRMReconciliationRun,
+    )
+    from schemas.agent_control_command import CommandContactCelebrationsPreviewRequest
+    from services.agent_control_command import preview_command_contact_celebrations
+
+    sessions = audit_runtime
+    async with sessions() as session:
+        first = CRMContact(
+            first_name="Ready",
+            last_name="Birthday",
+            stage="lead",
+            birthday=date(1990, 9, 8),
+        )
+        dual = CRMContact(
+            first_name="Missing",
+            last_name="Dual",
+            stage="lead",
+            birthday=date(1985, 9, 12),
+            anniversary=date(2014, 9, 22),
+        )
+        recovered = CRMContact(
+            first_name="Recovered",
+            last_name="Anniversary",
+            stage="lead",
+        )
+        session.add_all([first, dual, recovered])
+        await session.flush()
+        session.add_all(
+            [
+                CRMContactProfile(
+                    contact_id=recovered.id,
+                    birth_year_quality="unknown",
+                    anniversary_month=9,
+                    anniversary_day=27,
+                    anniversary_year_quality="yearless",
+                ),
+                CRMContactAddress(
+                    contact_id=first.id,
+                    source_key="test:ready",
+                    line1="1 Main Street",
+                    city="Boston",
+                    state="MA",
+                    postal_code="02108",
+                    formatted="1 Main Street, Boston, MA 02108",
+                    is_primary=True,
+                ),
+                CRMContactAddress(
+                    contact_id=dual.id,
+                    source_key="test:formatted-only",
+                    formatted="Unstructured address must not be inferred",
+                    is_primary=True,
+                ),
+            ]
+        )
+        run = CRMReconciliationRun(
+            bundle_fingerprint="d" * 64,
+            parser_version="contacts-v1",
+            mode="apply",
+            status="completed",
+            requested_modules_json='["contacts"]',
+            error_text="",
+            started_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 9, 4, 0, 5, tzinfo=timezone.utc),
+        )
+        session.add(run)
+        await session.flush()
+        session.add(
+            CRMReconciliationResult(
+                run_id=run.id,
+                source_system="kw_command",
+                module="contacts",
+                expected_count=3,
+                observed_count=3,
+                rendered_count=3,
+                normalized_count=3,
+                evidence_only_count=0,
+                unmatched_count=0,
+                duplicate_content_count=0,
+                error_count=0,
+                details_json="{}",
+            )
+        )
+        await session.commit()
+
+        result = await preview_command_contact_celebrations(
+            session,
+            CommandContactCelebrationsPreviewRequest(month=9),
+        )
+
+    assert (result.birthday_count, result.home_anniversary_count) == (2, 2)
+    assert result.union_count == 3
+    assert (result.address_ready_count, result.missing_address_count) == (1, 2)
+    assert result.reconciliation_status == "reconciled"
+    assert [sample.display_name for sample in result.samples] == [
+        "R*** B***",
+        "M*** D***",
+        "R*** A***",
+    ]

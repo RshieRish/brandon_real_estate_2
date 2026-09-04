@@ -3,6 +3,12 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-09-04
 
+### 2026-09-04 - Authoritative Command Celebration Preview Completed
+- Added the read-only `command_contact_celebrations_preview` Agent Control and Atlas tool. It accepts one strict month and birthday/home-anniversary selection, reads only explicit Command dates in one repeatable-read snapshot, and never substitutes Google Contacts, Drive, a former-office roster, or an admin-page scrape.
+- The result provides exact birthday, home-anniversary, and deduplicated contact counts; structured-address ready/missing counts; a stable checksum and opaque audience reference; up to five masked examples; and the latest contacts-apply reconciliation state. Full names, addresses, dates of birth years, and the audience checksum are excluded from the content-free audit record.
+- Mailing readiness requires explicit street, city, state, and postal-code fields; a display-only address string is not guessed into a deliverable address. The MCP registry now appends exactly one tool while preserving the original order.
+- Verification passed `63` focused Command/Agent Control/MCP/overlay tests, `3` exact-Hermes subtests, and one expected unrelated template-checkout skip, including PostgreSQL 17/TLS date, address, reconciliation, and transactional-audit coverage. No production reconciliation, card creation, provider call, deployment, or external message occurred.
+
 ### 2026-09-04 - Sydney Immediate Receipt and Reset-Proof Request Coalescing Completed
 - Every accepted private Sydney prompt now receives a short receipt-guarded Telegram acknowledgement before the first model call. The acknowledgement has its own staged delivery record, so a lost or ambiguous platform receipt is never retried blindly and does not complete or block the underlying run.
 - Normalized request text is hashed only on the backend and bound to active work. Equivalent messages in queued, running, or waiting-retry state now share one executable run while retaining one immutable request receipt per Telegram message; raw prompt content is absent from indexes, locks, receipts, and logs. A terminal request remains repeatable from a later message.
