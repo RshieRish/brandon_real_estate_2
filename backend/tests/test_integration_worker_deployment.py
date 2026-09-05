@@ -121,6 +121,7 @@ def test_ci_preserves_only_failed_synthetic_contact_screenshots_without_weakenin
     assert "trace.zip" not in artifact and "storageState" not in artifact
     gate = workflow.split("- name: Run Sydney Command contact browser gates", 1)[1].split("- name:", 1)[0]
     assert "--update-snapshots" not in gate and "continue-on-error" not in gate
+    assert "e2e/command-archive.spec.ts" in gate
 
 
 def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> None:

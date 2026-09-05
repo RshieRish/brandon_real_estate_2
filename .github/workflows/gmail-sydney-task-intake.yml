@@ -519,6 +519,7 @@ jobs:
             --project=command-mobile \
             --project=command-a11y \
             --project=command-visual \
+            e2e/command-archive.spec.ts \
             e2e/command-contacts.spec.ts \
             e2e/command-contacts-mobile.spec.ts \
             e2e/command-contacts-accessibility.spec.ts \

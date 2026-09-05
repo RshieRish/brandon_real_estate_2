@@ -1,8 +1,8 @@
 import { expect, test } from './fixtures/command';
 
 const bundle = {
-  entry_type: 'artifact', id: 21, domain: 'docusign', path: 'docusign_full/download_bundles/Complete_with_DocuSign_2024_Lease_352_Mammot.zip',
-  source_path: 'docusign_full/download_bundles/Complete_with_DocuSign_2024_Lease_352_Mammot.zip', filename: 'Complete_with_DocuSign_2024_Lease_352_Mammot.zip',
+  entry_type: 'artifact', id: 21, domain: 'docusign', path: 'docusign_full/download_bundles/Complete_with_DocuSign_Example_Lease.zip',
+  source_path: 'docusign_full/download_bundles/Complete_with_DocuSign_Example_Lease.zip', filename: 'Complete_with_DocuSign_Example_Lease.zip',
   artifact_type: 'zip', sha256: 'a'.repeat(64), size_bytes: 476918, download_available: true, content_kind: 'document_bundle',
 };
 const summary = { files: 169, folders: 11, document_bundles: 149, documents: 0, source_captures: 14, data_exports: 5, supporting_files: 1, unavailable_files: 0 };
@@ -15,7 +15,7 @@ test('archive exposes imported folders and original PDF names without horizontal
     const query = url.searchParams.get('query') || '';
     const members = url.pathname.endsWith('/members');
     const entries = members
-      ? [{ entry_type: 'member', member_index: 0, path: '2024_Lease_352_Mammoth.pdf', filename: '2024_Lease_352_Mammoth.pdf', artifact_type: 'pdf', size_bytes: 43105, content_kind: 'document', download_available: true, unavailable_reason: null, unsafe_path: false }]
+      ? [{ entry_type: 'member', member_index: 0, path: 'Example_Lease_Document.pdf', filename: 'Example_Lease_Document.pdf', artifact_type: 'pdf', size_bytes: 43105, content_kind: 'document', download_available: true, unavailable_reason: null, unsafe_path: false }]
       : path === 'docusign_full/download_bundles' ? [bundle]
         : path === 'docusign_full' ? [folder('docusign_full/download_bundles', 148), folder('docusign_full/templates', 4)]
           : [folder('docusign', 4), folder('docusign_full', 164), folder('docusign_records', 1)];
@@ -31,7 +31,7 @@ test('archive exposes imported folders and original PDF names without horizontal
   await commandPage.screenshot({ path: testInfo.outputPath('archive-bundles.png'), fullPage: true, animations: 'disabled' });
   expect(await commandPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await commandPage.getByRole('button', { name: `Open bundle ${bundle.filename}` }).click();
-  await expect(commandPage.getByRole('button', { name: 'Download 2024_Lease_352_Mammoth.pdf' })).toBeEnabled();
+  await expect(commandPage.getByRole('button', { name: 'Download Example_Lease_Document.pdf' })).toBeEnabled();
   await expect(commandPage.getByText('Original document', { exact: true })).toBeVisible();
   await commandPage.evaluate(() => window.scrollTo(0, 0));
   await commandPage.screenshot({ path: testInfo.outputPath('archive-pdfs.png'), fullPage: true, animations: 'disabled' });
