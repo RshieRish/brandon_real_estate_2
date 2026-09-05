@@ -1718,6 +1718,137 @@ def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(
     assert not hasattr(agent, "_sydney_terminal_tool_policy_response")
 
 
+def test_private_sydney_model_surface_excludes_tools_blocked_by_execution_policy(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import filter_business_tool_surface
+
+    provider = _provider(tmp_path, FakeBackend())
+    names = [
+        "terminal",
+        "read_file",
+        "execute_code",
+        "process",
+        "session_search",
+        "memory",
+        "skill_manage",
+        "skills_list",
+        "send_message",
+        "delegate_task",
+        "skill_view",
+        "context_history_search",
+        "mcp_atlas_backend_command_contact_celebrations_preview",
+        "mcp_atlas_backend_command_card_campaign_draft_create",
+        "mcp_atlas_backend_gmail_search",
+        "mcp_other_server_command_contacts_search",
+    ]
+    shared_definitions = [
+        {"type": "function", "function": {"name": name, "parameters": {}}}
+        for name in names
+    ]
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(get_provider=lambda name: provider),
+        tools=shared_definitions,
+        valid_tool_names=set(names),
+        _cached_system_prompt="Stale instructions advertising terminal",
+    )
+
+    filter_business_tool_surface(agent)
+
+    expected = {
+        "skill_view",
+        "context_history_search",
+        "mcp_atlas_backend_command_contact_celebrations_preview",
+        "mcp_atlas_backend_command_card_campaign_draft_create",
+        "mcp_atlas_backend_gmail_search",
+    }
+    assert {t["function"]["name"] for t in agent.tools} == expected
+    assert agent.valid_tool_names == expected
+    assert agent._cached_system_prompt is None
+    assert len(shared_definitions) == len(names)  # never mutate Hermes' cache
+    first = list(agent.tools)
+    filter_business_tool_surface(agent)
+    assert agent.tools == first
+
+
+@pytest.mark.parametrize("available,retry", [(False, True), (True, False)])
+def test_business_surface_filter_preserves_agents_outside_enabled_sydney_lane(
+    available: bool,
+    retry: bool,
+) -> None:
+    from sydney_runtime import filter_business_tool_surface
+
+    provider = SimpleNamespace(is_available=lambda: available, retry_enabled=retry)
+    definitions = [{"type": "function", "function": {"name": "terminal"}}]
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(get_provider=lambda name: provider),
+        tools=definitions,
+        valid_tool_names={"terminal"},
+        _cached_system_prompt="unchanged",
+    )
+    filter_business_tool_surface(agent)
+    assert agent.tools is definitions
+    assert agent.valid_tool_names == {"terminal"}
+    assert agent._cached_system_prompt == "unchanged"
+
+
+def test_business_surface_filter_reapplies_before_a_cached_agent_runs(
+    tmp_path: Path,
+) -> None:
+    from sydney_runtime import record_inbound_before_model
+
+    provider = _provider(tmp_path, FakeBackend())
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(get_provider=lambda name: provider),
+        tools=[
+            {"type": "function", "function": {"name": "terminal"}},
+            {"type": "function", "function": {"name": "skill_view"}},
+        ],
+        valid_tool_names={"terminal", "skill_view"},
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="model-surface",
+        content="September birthdays",
+    )
+    assert agent.valid_tool_names == {"skill_view"}
+
+
+def test_delivered_policy_halt_is_terminal_failure_not_success(tmp_path: Path) -> None:
+    from sydney_runtime import (
+        record_delivery_by_key,
+        record_inbound_before_model,
+        stage_run_outcome,
+        tool_before,
+    )
+
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(get_provider=lambda name: provider),
+    )
+    assert record_inbound_before_model(
+        agent,
+        platform_message_id="policy-halt",
+        content="September cards",
+    )
+    tool_before(agent, "halt-terminal", "terminal", {"command": "must-not-run"})
+    # Hermes considers a controlled halt a completed model turn; the durable
+    # business run must still be a failure, even when its explanation is sent.
+    result = {
+        "final_response": agent._sydney_terminal_tool_policy_response,
+        "completed": True,
+    }
+    assert stage_run_outcome(agent, result)
+    assert result["completed"] is False
+    assert result["failed"] is True
+    record_delivery_by_key(agent._sydney_delivery_key, delivered=True)
+    updates = [p for name, p in backend.calls if name == "run_update"]
+    assert updates[-1]["state"] == "terminal_failure"
+    assert updates[-1]["error_code"] == "sydney_business_tool_policy"
+    assert not any(p.get("state") == "succeeded" for p in updates)
+
+
 def test_normal_sydney_business_tool_policy_matches_the_pinned_registry() -> None:
     from sydney_runtime import _ATLAS_BUSINESS_TOOLS
 

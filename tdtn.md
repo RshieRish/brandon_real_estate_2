@@ -1,7 +1,19 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-09-04
+Last Updated: 2026-09-05
+
+### 2026-09-05 - Sydney Model Tool Surface and Existing-Chat Repair
+- The real September request `7027a640-e258-4073-847d-fca08c092bae` loaded the correct managed skill but attempted native terminal tools without calling the celebration preview. Production discovery exposed the correct 27 Atlas tools alongside native tools that the execution policy prohibited; the error explanation was then incorrectly recorded as a successful run.
+- Added identity-scoped model-schema filtering after all Hermes schema injection and before every inbound request. The existing business allowlist, native execution guard, durable history, invocation ceiling, other identities, and shared registry remain intact.
+- Independent review reproduced a second seam: existing conversations restored obsolete SQLite system prompts after cache invalidation. The repair now rebuilds only the marked private-chat instruction cache without resetting the session, removing history, or firing session-start hooks. Delivered policy halts preserve their exact error code as terminal failures.
+- Red/green runtime and real pinned `AIAgent`/`SessionDB` regressions pass. The complete exact Hermes/template/MCP/spool/retry gate passes `305` tests plus `3` subtests; scoped lint and diff checks pass. Production rollout and model-level verification are recorded separately below when confirmed.
+- An isolated candidate-surface check using the live Gemini model and live Atlas read handler completed in `8.9s`, selecting only `skill_view` and `command_contact_celebrations_preview`. It returned `1` birthday, `13` home anniversaries, `14` unique contacts, and `0` complete mailing addresses. The probe used a disposable local session, no live Telegram message or durable-run receipt, and a read-only execution boundary; it is not represented as a delivered production conversation.
+
+### 2026-09-05 - Prior Command Production Reconciliation Verified
+- PRs `#34` and `#35` merged to `main` at `d9f9c2b` and `3dd9661`; the coordinated backend/frontend release and protected additive migration reached sole head `87a0d9b1e3f2` before this follow-up. The archive apply was preceded by the protected PostgreSQL backup and reviewed two-overlap manifest.
+- Fresh database verification confirms apply run `3` and idempotency replay `4` completed with `317/317` contacts normalized and zero unmatched/error records. Final verify-only run `5` completed with all `12,580/12,580` archive artifacts and zero errors. Production contains `317` profiles, `317` capture positions, and `2,536` captured contact sections; these steps are complete and must not be restarted as part of the Sydney routing fix.
+- Prior browser verification checked the repaired contact directory/detail/timeline and recovered-versus-internal section counts. Send Out Cards is still disconnected; a fresh pre-fix baseline confirms zero card campaigns, delivery attempts, and provider receipts.
 
 ### 2026-09-04 - Sydney, Command, and Client Cards Release Gate Completed
 - Completed the coordinated development gate at sole migration head `87a0d9b1e3f2`. The PostgreSQL 16.13/TLS workflow matrix passed `1443` tests, and the broader Command/Agent Control/card slice passed `1493` with `93` intentional skips. A PostgreSQL 17 attempt was correctly rejected only by the workflow's explicit PostgreSQL-16 version assertion; it was rerun on the pinned release version rather than misreported as a product failure.

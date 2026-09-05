@@ -916,6 +916,111 @@ class HermesOverlayTests(unittest.TestCase):
                 check=True,
             )
 
+    def test_exact_hermes_agent_init_filters_the_private_model_tool_surface(self):
+        checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
+        if not checkout:
+            self.skipTest("HERMES_EXACT_CHECKOUT is not configured")
+        installer = _load_overlay_module("install_sydney_overlay.py")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "hermes"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-checkout", checkout, str(source)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(source),
+                    "checkout",
+                    "--quiet",
+                    "--detach",
+                    HERMES_COMMIT,
+                ],
+                check=True,
+            )
+            installer.install(source)
+            home = Path(temporary_directory) / "home"
+            home.mkdir()
+            (home / "config.yaml").write_text("memory:\n  provider: sydney\n")
+            environment = {
+                **os.environ,
+                "PYTHONPATH": str(source),
+                "HERMES_HOME": str(home),
+                "TERMINAL_CWD": str(home),
+                "SYDNEY_DURABLE_CONTEXT_ENABLED": "true",
+                "SYDNEY_DURABLE_CONTEXT_RETRY_ENABLED": "true",
+                "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": "true",
+                "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "surface-user",
+                "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "surface-user",
+                "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "surface-chat",
+                "BRANDON_BACKEND_URL": "http://127.0.0.1:1",
+                "BRANDON_AGENT_CONTROL_TOKEN": "test-only-not-a-credential",
+            }
+            probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    """
+from unittest.mock import patch
+from run_agent import AIAgent
+from plugins.memory.sydney import SydneyMemoryProvider
+from agent.conversation_loop import _restore_or_build_system_prompt
+from hermes_state import SessionDB
+from pathlib import Path
+import os
+
+names = ["terminal", "read_file", "skill_manage", "skill_view",
+         "mcp_atlas_backend_context_history_search",
+         "mcp_atlas_backend_command_contact_celebrations_preview",
+         "mcp_atlas_backend_command_card_campaign_draft_create"]
+schemas = [{"type": "function", "function": {"name": n, "description": n,
+           "parameters": {"type": "object", "properties": {}}}} for n in names]
+provider = SydneyMemoryProvider(backend=object(), start_drain_thread=False)
+with patch("run_agent.get_tool_definitions", return_value=schemas), \\
+     patch("plugins.memory.load_memory_provider", return_value=provider), \\
+     patch.object(AIAgent, "_create_openai_client", return_value=object()):
+    agent = AIAgent(model="gpt-4.1-mini", api_key="test-only-not-a-credential",
+                    base_url="http://127.0.0.1:1/v1",
+                    provider="openrouter", enabled_toolsets=["memory", "skills", "terminal", "atlas_backend"],
+                    platform="telegram", user_id="surface-user", chat_id="surface-chat",
+                    session_id="surface-probe", quiet_mode=True, skip_context_files=True)
+assert provider.is_available() and provider.retry_enabled
+expected = {"skill_view", "context_history_search",
+            "mcp_atlas_backend_command_contact_celebrations_preview",
+            "mcp_atlas_backend_command_card_campaign_draft_create"}
+assert {t["function"]["name"] for t in agent.tools} == expected, agent.valid_tool_names
+assert agent.valid_tool_names == expected
+assert len(schemas) == len(names), "Shared registry list was mutated"
+db = SessionDB(Path(os.environ["HERMES_HOME"]) / "surface.db")
+db.create_session("surface-probe", source="telegram", system_prompt="Obsolete terminal guidance")
+agent._session_db = db
+history = [{"role": "user", "content": "Keep our conversation"}]
+with patch.object(agent, "_build_system_prompt", return_value="Current business-only guidance") as build, \\
+     patch("hermes_cli.plugins.invoke_hook") as session_hook:
+    _restore_or_build_system_prompt(agent, None, history)
+    assert agent._cached_system_prompt == "Current business-only guidance"
+    assert db.get_session("surface-probe")["system_prompt"] == "Current business-only guidance"
+    assert history == [{"role": "user", "content": "Keep our conversation"}]
+    assert agent.session_id == "surface-probe"
+    build.assert_called_once_with(None)
+    session_hook.assert_not_called()  # this is not a new conversation
+    agent._cached_system_prompt = None
+    _restore_or_build_system_prompt(agent, None, history)
+    build.assert_called_once_with(None)  # reuse the refreshed cache thereafter
+db.close()
+print("private Sydney model surface verified")
+""",
+                ],
+                cwd=home,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+
     def test_exact_hermes_patch_preserves_the_runtime_behavior_contract(self):
         checkout = os.environ.get("HERMES_EXACT_CHECKOUT")
         if not checkout:

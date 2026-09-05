@@ -17,6 +17,27 @@ Required runtime env vars:
 Both live on the Railway `atlas-agent` service. Do not commit or print the
 token.
 
+## Sydney's model-visible business tools
+
+The exact private Sydney identity receives only `skill_view`, the scoped durable
+history tool, and the approved Atlas business schemas. The filter runs after
+Hermes finishes registering native, memory, and context-engine schemas and is
+reapplied before each inbound request, including cached-agent reuse. The shared
+Hermes registry and other identities are not modified. The execution guard and
+server-counted invocation limit remain separate fail-closed defenses.
+
+When this removes obsolete native tools, the existing conversation's cached
+system prompt is rebuilt and persisted without deleting messages, changing the
+session identity, or firing a new-session hook. Brandon does not need a reset
+to receive the new tool instructions. A policy-halt explanation is recorded as
+a terminal failure after delivery, never as a successful business run.
+
+Do not use `tools/list` alone as proof of Sydney routing. The exact-version gate
+also constructs a real `AIAgent`, inspects its model-visible schemas, and resumes
+it against `SessionDB` containing obsolete tool instructions. A deployed routing
+check must distinguish isolated read-only model verification from a real
+Telegram request and must never fake a delivery receipt.
+
 ## Railway Template Overlay
 
 The overlay is reproducible and refuses moving or dirty source trees:
