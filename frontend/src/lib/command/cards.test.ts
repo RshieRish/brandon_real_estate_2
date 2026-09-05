@@ -85,6 +85,20 @@ describe('Command card campaign contract', () => {
     expect(decodeCardCampaignDetail(detail)).toEqual(detail);
   });
 
+  it('sends an explicit address refresh through the versioned update route', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...detail, version: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await cardsApi.update(CAMPAIGN_ID, { expected_version: 1, refresh_missing_addresses: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1].method).toBe('PATCH');
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body as string)).toEqual({
+      expected_version: 1, refresh_missing_addresses: true,
+    });
+    expect(() => cardsApi.update(CAMPAIGN_ID, {
+      expected_version: 1, refresh_missing_addresses: false,
+    })).toThrow(CommandDecodeError);
+  });
+
   it.each([
     ['an unknown campaign field', { ...detail, private_note: 'must not cross the boundary' }],
     ['a malformed campaign status', { ...detail, status: 'probably_sent' }],

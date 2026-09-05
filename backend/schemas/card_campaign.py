@@ -134,6 +134,7 @@ class CardRecipientUpdate(CardModel):
 
 class CardCampaignUpdateRequest(CardModel):
     expected_version: PositiveInt
+    refresh_missing_addresses: StrictBool = False
     title: str | None = Field(default=None, min_length=1, max_length=255)
     birthday_message_template: str | None = Field(
         default=None,
@@ -181,6 +182,7 @@ class CardCampaignUpdateRequest(CardModel):
             and self.birthday_design_key is None
             and self.home_anniversary_design_key is None
             and not self.recipient_updates
+            and not self.refresh_missing_addresses
         ):
             raise ValueError("campaign update must change at least one field")
         return self

@@ -609,6 +609,165 @@ describe('ContactDetailWorkspace', () => {
     expect(document.querySelector('.command-contact-profile-column')).not.toBeNull();
   });
 
+  it('shows date-only and literal recovered task due dates without a timezone shift', async () => {
+    const api = fakeApi();
+    vi.mocked(api.section).mockResolvedValue(sectionPage([
+      occurrence({ section: 'tasks_to_do', source_record_id: 801, value: {
+        kind: 'task', title: 'Date-only reminder', description: null, state: 'to_do',
+        due_at: null, due_date: '2026-08-30', due_date_text: '08/30/2026',
+      } }),
+      occurrence({ section: 'tasks_to_do', source_record_id: 802, value: {
+        kind: 'task', title: 'Ambiguous source date', description: null, state: 'to_do',
+        due_at: null, due_date: null, due_date_text: '09/06/2026',
+      } }),
+    ]));
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+
+    const captured = await screen.findByRole('region', { name: 'Captured source to-do tasks' });
+    expect(await within(captured).findByText('Due Aug 30, 2026')).toBeInTheDocument();
+    expect(within(captured).getByText('Due date as captured: 09/06/2026')).toBeInTheDocument();
+    expect(within(captured).queryByText('Due date was not captured')).not.toBeInTheDocument();
+  });
+
+  it('shows an internal task due timestamp when SWS already has one', async () => {
+    renderWorkspace(fakeApi());
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }));
+
+    const task = screen.getByRole('article', { name: 'SWS internal task 101' });
+    const due = within(task).getByText(`Due ${new Date('2026-08-21T14:00:00Z').toLocaleString()}`);
+    expect(due).toHaveAttribute('datetime', '2026-08-21T14:00:00Z');
+  });
+
+  it('labels captured opportunity budgets separately from opportunity value', async () => {
+    const api = fakeApi();
+    vi.mocked(api.section).mockResolvedValue(sectionPage([
+      occurrence({ section: 'opportunities', source_record_id: 803, value: {
+        kind: 'opportunity', title: 'Condo search', stage: 'active',
+        value_cents: 0, budget: '$440,000.00',
+      } }),
+    ]));
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Opportunities' }));
+
+    const captured = await screen.findByRole('region', { name: 'Captured source opportunities' });
+    expect(await within(captured).findByText('Budget: $440,000.00')).toBeInTheDocument();
+    expect(within(captured).getByText('Value: $0')).toBeInTheDocument();
+    expect(within(captured).queryByText('Value: $440,000')).not.toBeInTheDocument();
+  });
+
+  it('shows separate current and recovered counts instead of describing their sum as SWS-owned', async () => {
+    const api = fakeApi();
+    const counts = {
+      active_tasks: 10, completed_tasks: 0, cancelled_tasks: 0, archived_tasks: 0,
+      active_smart_plans: 0, opportunities: 0, notes: 0, saved_searches: 0, bookings: 0,
+    };
+    vi.mocked(api.workspace).mockResolvedValue({
+      ...expandedSummary, open_tasks: 20, active_tasks: 20,
+      internal_counts: counts, recovered_counts: counts,
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    const countStrip = screen.getByRole('complementary', { name: 'Contact workspace counts' });
+    expect(within(countStrip).getByText('10 SWS')).toBeVisible();
+    expect(within(countStrip).getByText('10 recovered')).toBeVisible();
+    expect(within(countStrip).queryByText('20')).not.toBeInTheDocument();
+    expect(within(countStrip).queryByText('SWS-owned records')).not.toBeInTheDocument();
+  });
+
+  it('uses stored SmartPlan names and readable saved-search criteria', async () => {
+    const api = fakeApi();
+    vi.mocked(api.internalWorkspace).mockResolvedValue({
+      ...internalWorkspace,
+      smart_plans: [{ id: 121, plan_id: 1, plan_name: 'Quarterly homeowner check-in', status: 'active' }],
+      saved_searches: [{
+        id: 131, name: 'Lakeside condos', criteria: '{"beds":2}', criteria_summary: ['Beds: 2'],
+      }],
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'SmartPlans' }));
+    expect(await within(screen.getByRole('region', { name: 'SWS internal SmartPlans' })).findByRole(
+      'heading', { name: 'Quarterly homeowner check-in' },
+    )).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Saved Searches' }));
+    const searches = screen.getByRole('region', { name: 'SWS internal saved searches' });
+    expect(await within(searches).findByText('Beds: 2')).toBeInTheDocument();
+    expect(within(searches).queryByText('{"beds":2}')).not.toBeInTheDocument();
+  });
+
+  it('reveals unsupported nested saved-search criteria without replacing the short summary', async () => {
+    const neighborhoods = { include: ['Highlands', 'Belvidere'], exclude: ['Downtown'], strict: true };
+    const requirements = `${'Keep this exact requirement. '.repeat(25)}Final stored detail.`;
+    const api = fakeApi();
+    vi.mocked(api.internalWorkspace).mockResolvedValue({
+      ...internalWorkspace,
+      saved_searches: [{
+        id: 131, name: 'Lowell neighborhoods',
+        criteria: JSON.stringify({ neighborhoods, custom_requirements: requirements }),
+        criteria_summary: ['Additional stored criteria are not summarized'],
+      }],
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Saved Searches' }));
+    const card = await screen.findByRole('article', { name: 'SWS internal saved search 131' });
+    const disclosure = within(card).getByText('All stored search criteria');
+    expect(disclosure.closest('details')).not.toHaveAttribute('open');
+    expect(within(card).getByText('Additional stored criteria are not summarized')).toBeVisible();
+    expect(within(card).queryByText('neighborhoods')).not.toBeInTheDocument();
+
+    await userEvent.click(disclosure);
+    expect(await within(card).findByText('neighborhoods')).toBeVisible();
+    const nestedValue = within(card).getByText((_text, node) =>
+      node?.tagName === 'P' && node.textContent === JSON.stringify(neighborhoods, null, 2));
+    expect(nestedValue).toBeVisible();
+    expect(within(card).queryByText(requirements)).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole('button', { name: 'Show full custom requirements criterion' }));
+    expect(within(card).getByText(requirements)).toBeVisible();
+    expect(within(card).getByText('Additional stored criteria are not summarized')).toBeVisible();
+  });
+
+  it('progressively reveals every stored search field in a bounded list', async () => {
+    const api = fakeApi();
+    const criteria = Object.fromEntries(Array.from({ length: 13 }, (_, index) => [`field_${index + 1}`, `value ${index + 1}`]));
+    vi.mocked(api.internalWorkspace).mockResolvedValue({
+      ...internalWorkspace,
+      saved_searches: [{ id: 132, name: 'Detailed search', criteria: JSON.stringify(criteria) }],
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Saved Searches' }));
+    const card = await screen.findByRole('article', { name: 'SWS internal saved search 132' });
+    await userEvent.click(within(card).getByText('All stored search criteria'));
+    expect(await within(card).findByText('field 12')).toBeVisible();
+    expect(within(card).queryByText('field 13')).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole('button', { name: 'Show more stored criteria' }));
+    expect(within(card).getByText('field 13')).toBeVisible();
+    expect(within(card).getByText('value 13')).toBeVisible();
+  });
+
+  it('preserves the original criteria when JavaScript cannot safely represent a stored number', async () => {
+    const criteria = '{"neighborhoods":{"reference":9007199254740993}}';
+    const api = fakeApi();
+    vi.mocked(api.internalWorkspace).mockResolvedValue({
+      ...internalWorkspace,
+      saved_searches: [{ id: 133, name: 'Exact stored criteria', criteria }],
+    });
+    renderWorkspace(api);
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    await userEvent.click(screen.getByRole('tab', { name: 'Saved Searches' }));
+    const card = await screen.findByRole('article', { name: 'SWS internal saved search 133' });
+    await userEvent.click(within(card).getByText('All stored search criteria'));
+    expect(await within(card).findByText(criteria)).toBeVisible();
+    expect(within(card).queryByText(/9007199254740992/)).not.toBeInTheDocument();
+  });
+
   it('renders one visible archived total with accessible mutable and recovered subtotals', async () => {
     const api = fakeApi();
     vi.mocked(api.workspace).mockResolvedValue(expandedSummary);
@@ -728,6 +887,14 @@ describe('ContactDetailWorkspace', () => {
     ]);
     expect(api.timeline).toHaveBeenCalledTimes(1);
     expect(document.body).not.toHaveTextContent('/workspace');
+  });
+
+  it('explains a capture containing only profile and page controls without claiming missing events', async () => {
+    const api = fakeApi();
+    vi.mocked(api.timeline).mockResolvedValue({ rows: [], next_cursor: null, has_more: false, filtered_capture_count: 2 });
+    renderWorkspace(api);
+    expect(await screen.findByText('No activity entries in this capture')).toBeVisible();
+    expect(screen.queryByText('Recovered timeline events are not available')).not.toBeInTheDocument();
   });
 
   it('defensively hides technical archive activities and bounds malformed long timeline values', async () => {

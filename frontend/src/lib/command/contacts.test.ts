@@ -316,6 +316,47 @@ function privateDecodeFailure(operation: () => unknown): void {
 }
 
 describe('Command contacts wire decoders', () => {
+  it('decodes captured date-only and budget fields while retaining legacy occurrence support', () => {
+    const taskRow = { ...sourceOnlyRow, value: {
+      ...sourceOnlyRow.value, due_at: null, due_date: '2026-08-30', due_date_text: '08/30/2026',
+    } };
+    const opportunityRow = { ...materializedRow, value: {
+      ...materializedRow.value, budget: '$440,000.00',
+    } };
+    const payload = { ...sectionPage, rows: [taskRow, opportunityRow] };
+    expect(decodeContactSectionPage(payload)).toEqual(payload);
+    expect(decodeContactSectionPage(sectionPage)).toEqual(sectionPage);
+    expect(() => decodeContactSectionPage({ ...payload, rows: [{ ...taskRow, value: {
+      ...taskRow.value, due_date: '2026-02-30',
+    } }] })).toThrow(CommandDecodeError);
+  });
+
+  it('validates separate internal and recovered summary counts against the totals', () => {
+    const counts = {
+      active_tasks: 10, completed_tasks: 0, cancelled_tasks: 0, archived_tasks: 0,
+      active_smart_plans: 0, opportunities: 0, notes: 0, saved_searches: 0, bookings: 0,
+    };
+    const payload = {
+      ...counts, open_tasks: 20, active_tasks: 20,
+      archived_mutable_tasks: 0, archived_recovered_evidence: 0,
+      internal_counts: counts, recovered_counts: counts,
+    };
+    expect(decodeContactWorkspaceSummary(payload)).toEqual(payload);
+    expect(() => decodeContactWorkspaceSummary({ ...payload, internal_counts: {
+      ...counts, active_tasks: 9,
+    } })).toThrow(CommandDecodeError);
+    expect(() => decodeContactWorkspaceSummary({ ...payload, recovered_counts: null })).toThrow(CommandDecodeError);
+  });
+
+  it('decodes named internal SmartPlans and readable saved-search criteria', () => {
+    const payload = {
+      ...internalWorkspace,
+      smart_plans: [{ id: 121, plan_id: 1, status: 'active', plan_name: 'Quarterly homeowner check-in' }],
+      saved_searches: [{ id: 131, name: 'Lakeside condos', criteria: '{"beds":2}', criteria_summary: ['Beds: 2'] }],
+    };
+    expect(decodeContactInternalWorkspace(payload)).toEqual(payload);
+  });
+
   it('decodes the complete directory wire without renaming snake_case fields', () => {
     expect(decodeContactDirectoryPage(directoryPage)).toEqual(directoryPage);
   });

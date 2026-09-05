@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -111,6 +112,7 @@ from services.command_contact_contracts import (
     ContactTagValue,
     ContactTaskOccurrence,
     ContactUpdateCommand,
+    ContactWorkspaceCounts,
     ContactWorkspaceSummary,
     SavedSearchDeletionResult,
     SortDirection,
@@ -1568,9 +1570,87 @@ def _explicit_due_at(value: object) -> datetime | None:
 def _saved_search_criterion(value: object) -> str | None:
     if isinstance(value, str):
         normalized = value.strip()
-        return normalized if 1 <= len(normalized) <= 120 else None
+        return normalized if 1 <= len(normalized) <= 120 and normalized != "-" else None
     if type(value) is int and value >= 0:
         return str(value)
+    return None
+
+
+def _captured_saved_search_criteria_summary(value: object) -> tuple[str, ...]:
+    """Present explicitly captured criteria without exposing a raw record dump."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return ()
+    if not isinstance(value, dict):
+        return ()
+    criteria = []
+    for key, label in (("price", "Price"), ("beds", "Beds"), ("baths", "Baths")):
+        projected = _saved_search_criterion(value.get(key))
+        if projected is not None:
+            criteria.append(f"{label}: {projected}")
+    return tuple(criteria)
+
+
+def saved_search_criteria_summary(value: object) -> tuple[str, ...]:
+    """Describe internal SWS contexts and filters without dumping stored JSON."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return ("Stored criteria summary unavailable",)
+    if not isinstance(value, dict):
+        return ("Stored criteria summary unavailable",)
+
+    criteria: list[str] = []
+    summarized_keys: set[str] = set()
+    if value.get("scope") == "contact_workspace":
+        criteria.append("SWS contact workspace context")
+        summarized_keys.add("scope")
+    if value.get("saved_from") == "command":
+        criteria.append("Saved from Command")
+    for key, label in (
+        ("price", "Price"), ("min_price", "Minimum price"), ("max_price", "Maximum price"),
+        ("beds", "Beds"), ("baths", "Baths"), ("city", "City"), ("state", "State"),
+        ("postal_code", "Postal code"), ("zip", "Postal code"),
+        ("location", "Location"), ("property_type", "Property type"),
+    ):
+        raw = value.get(key)
+        projected = _saved_search_criterion(raw)
+        if type(raw) is float and math.isfinite(raw) and raw >= 0:
+            projected = str(raw)
+        if projected is not None and len(projected) <= 120:
+            criteria.append(f"{label}: {projected}")
+            summarized_keys.add(key)
+
+    metadata_keys = {"contact_id", "saved_from", "created_by", "created_at", "updated_at"}
+    has_unshown_criteria = any(
+        key not in summarized_keys and key not in metadata_keys
+        and raw not in (None, "", "-")
+        for key, raw in value.items()
+    )
+    if has_unshown_criteria or len(criteria) > 8:
+        return (*criteria[:8], "Additional stored criteria are not summarized")
+    return tuple(criteria) if criteria else ("No search criteria recorded",)
+
+
+def _explicit_due_date(value: str | None) -> str | None:
+    """Normalize only dates whose day and month are unambiguous."""
+    if value is None:
+        return None
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return date.fromisoformat(value).isoformat()
+        parts = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", value)
+        if parts:
+            first, second, year = map(int, parts.groups())
+            if 1 <= first <= 12 and (second > 12 or first == second):
+                return date(year, first, second).isoformat()
+            if first > 12 and 1 <= second <= 12:
+                return date(year, second, first).isoformat()
+    except ValueError:
+        return None
     return None
 
 
@@ -1597,6 +1677,7 @@ def _project_section_occurrence(
             value_cents=(
                 value_cents if type(value_cents) is int and value_cents >= 0 else None
             ),
+            budget=_bounded_occurrence_text(values, "budget", max_length=120),
         )
     if section is ContactSection.SMART_PLANS:
         return ContactSmartPlanOccurrence(
@@ -1605,29 +1686,23 @@ def _project_section_occurrence(
             status=_bounded_occurrence_text(values, "status", max_length=120),
         )
     if section is ContactSection.SAVED_SEARCHES:
-        criteria: list[str] = []
-        for key, label in (
-            ("price", "Price"),
-            ("beds", "Beds"),
-            ("baths", "Baths"),
-        ):
-            projected = _saved_search_criterion(values.get(key))
-            if projected is not None:
-                criteria.append(f"{label}: {projected}")
         return ContactSavedSearchOccurrence(
             kind="saved_search",
             title=_required_occurrence_title(source, values, "name"),
-            criteria_summary=tuple(criteria),
+            criteria_summary=_captured_saved_search_criteria_summary(values),
         )
     state = _TASK_SECTION_STATES.get(section)
     if state is None:
         raise ContactDataIntegrityError("contact occurrence payload is invalid")
+    due_date_text = _bounded_occurrence_text(values, "due_date", max_length=120)
     return ContactTaskOccurrence(
         kind="task",
         title=_required_occurrence_title(source, values, "title"),
         description=_bounded_occurrence_text(values, "description", max_length=20_000),
         state=state,  # type: ignore[arg-type]
         due_at=_explicit_due_at(values.get("due_at")),
+        due_date=_explicit_due_date(due_date_text),
+        due_date_text=due_date_text,
     )
 
 
@@ -2036,7 +2111,7 @@ async def get_contact_workspace_summary(
     db: AsyncSession,
     contact_id: int,
 ) -> ContactWorkspaceSummary:
-    """Count internal and recovered workspace rows without double-counting."""
+    """Count each origin, excluding only recovered rows with a verified entity link."""
     if type(contact_id) is not int or contact_id <= 0:
         _safe_not_found()
     with db.no_autoflush:
@@ -2179,6 +2254,28 @@ async def get_contact_workspace_summary(
         notes=len(notes) + counts["notes"],
         saved_searches=len(searches) + counts["saved_searches"],
         bookings=bookings,
+        internal_counts=ContactWorkspaceCounts(
+            active_tasks=task_counts["active"],
+            completed_tasks=task_counts["completed"],
+            cancelled_tasks=task_counts["cancelled"],
+            archived_tasks=archived_mutable_tasks,
+            active_smart_plans=active_enrollments,
+            opportunities=len(opportunities),
+            notes=len(notes),
+            saved_searches=len(searches),
+            bookings=bookings,
+        ),
+        recovered_counts=ContactWorkspaceCounts(
+            active_tasks=counts["tasks_to_do"],
+            completed_tasks=counts["tasks_completed"],
+            cancelled_tasks=0,
+            archived_tasks=archived_recovered_evidence,
+            active_smart_plans=counts["smart_plans"],
+            opportunities=counts["opportunities"],
+            notes=counts["notes"],
+            saved_searches=counts["saved_searches"],
+            bookings=0,
+        ),
     )
 
 
@@ -4347,6 +4444,7 @@ __all__ = [
     "get_contact_evidence",
     "get_contact_neighbors",
     "get_contact_workspace_summary",
+    "saved_search_criteria_summary",
     "import_contacts",
     "ingest_archive_contacts",
     "list_contact_celebrations",

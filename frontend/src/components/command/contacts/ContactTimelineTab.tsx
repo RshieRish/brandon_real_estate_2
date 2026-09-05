@@ -20,13 +20,27 @@ function timelineKindLabel(kind: string): string {
   return kind.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function timelineDateLabel(row: ContactTimelineEntry): string {
+  if (row.occurred_at) return new Date(row.occurred_at).toLocaleString();
+  const day = row.captured_date ? new Intl.DateTimeFormat('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+  }).format(new Date(`${row.captured_date}T12:00:00Z`)) : null;
+  const parts = row.captured_time?.split(':');
+  const hour = parts ? Number(parts[0]) : null;
+  const clock = hour !== null ? `${hour % 12 || 12}:${parts?.[1]} ${hour < 12 ? 'AM' : 'PM'}` : null;
+  if (day || clock) return `${[day, clock].filter(Boolean).join(' · ')} (as captured)`;
+  return 'Time was not captured';
+}
+
 function TimelineCoverageState({
   evidence,
   evidenceStatus,
+  filteredCaptureCount,
   onRetryEvidence,
 }: Readonly<{
   evidence: ContactEvidence | null;
   evidenceStatus: ContactEvidenceStatus;
+  filteredCaptureCount: number;
   onRetryEvidence: () => void;
 }>) {
   if (evidenceStatus === 'loading') {
@@ -46,6 +60,9 @@ function TimelineCoverageState({
     return <CommandStatePanel kind="empty" title="No timeline events" message="Every matching capture position records a complete empty timeline." />;
   }
   if (coverage.state === 'captured') {
+    if (filteredCaptureCount > 0 && filteredCaptureCount === coverage.recovered_count) {
+      return <CommandStatePanel kind="empty" title="No activity entries in this capture" message="This capture contains profile information and page controls. They are kept in Source Evidence and excluded from the activity timeline." />;
+    }
     return <CommandStatePanel kind="partial_capture" title="Recovered timeline events are not available" message={`Source evidence records ${coverage.recovered_count} timeline event${coverage.recovered_count === 1 ? '' : 's'}, but the merged timeline returned none.`} />;
   }
   return <CommandStatePanel kind="partial_capture" title="Timeline was not fully captured" message="The source evidence does not prove that this timeline is empty." />;
@@ -53,6 +70,7 @@ function TimelineCoverageState({
 
 export function ContactTimelineTab({
   rows,
+  filteredCaptureCount = 0,
   evidence,
   evidenceStatus,
   loading,
@@ -65,6 +83,7 @@ export function ContactTimelineTab({
   onLoadMore,
 }: Readonly<{
   rows: readonly ContactTimelineEntry[];
+  filteredCaptureCount?: number;
   evidence: ContactEvidence | null;
   evidenceStatus: ContactEvidenceStatus;
   loading: boolean;
@@ -89,7 +108,7 @@ export function ContactTimelineTab({
       {loading ? <CommandStatePanel kind="loading" title="Loading timeline" message="Collecting the merged contact history." /> : null}
       {!loading && error && visibleRows.length === 0 ? <CommandStatePanel kind="error" title="Timeline is unavailable" message="The merged contact history could not be read." actionLabel="Retry" onAction={onRetry} /> : null}
       {!loading && !error && visibleRows.length === 0 ? (
-        <TimelineCoverageState evidence={evidence} evidenceStatus={evidenceStatus} onRetryEvidence={onRetryEvidence} />
+        <TimelineCoverageState evidence={evidence} evidenceStatus={evidenceStatus} filteredCaptureCount={filteredCaptureCount} onRetryEvidence={onRetryEvidence} />
       ) : null}
       {!loading && visibleRows.map((row) => (
         <article key={row.key}>
@@ -99,7 +118,10 @@ export function ContactTimelineTab({
             <ContactExpandableValue value={row.title} limit={180} element="h3" label="activity" />
             {row.body ? <ContactExpandableValue value={row.body} limit={520} element="p" label="activity details" /> : null}
             {row.outcome ? <ContactExpandableValue value={row.outcome} limit={260} element="strong" label="activity outcome" /> : null}
-            <time dateTime={row.occurred_at ?? undefined}>{row.occurred_at ? new Date(row.occurred_at).toLocaleString() : 'Time was not captured'}</time>
+            <time dateTime={row.occurred_at ?? row.captured_date ?? undefined}
+              title={!row.occurred_at && (row.captured_date || row.captured_time) ? 'Source date and local clock time. The capture did not specify a timezone.' : undefined}>
+              {timelineDateLabel(row)}
+            </time>
           </div>
         </article>
       ))}

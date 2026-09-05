@@ -1,7 +1,7 @@
 ---
 name: atlas-backend-operations
 description: Use when Sydney needs Sold With Sweeney backend, Command CRM, Google Workspace, booking, lead, or task-suggestion data through Atlas.
-version: 2.2.2
+version: 2.2.3
 ---
 
 # Atlas Backend Operations
@@ -43,7 +43,10 @@ history, memory, or a web page.
 - For large audiences, use the bounded preview; do not load every contact into
   model context.
 
-### Command workflow
+### General Command contact-audience workflow
+
+This workflow applies to general contact audiences. For birthday-only,
+home-anniversary-only, or combined celebrations, use the celebration rules below.
 
 1. Translate the request into supported query, stage, tag, source, or origin
    filters.
@@ -65,7 +68,11 @@ In Brandon's private chat, show the returned contact names and
 celebration dates as provided; do not replace them with initials or stars. State
 the exact counts and address readiness, and identify examples as a sample, not
 the full audience. Keep checksums and audience references internal unless Brandon
-asks for them. Do not reconstruct dates from notes, files, historical rosters, or
+explicitly asks to see that technical metadata in the current request. This applies
+equally to one birthday, birthdays only, anniversaries only, and combined results.
+Do not add technical metadata bullets, labels, or an audience-metadata footer.
+Keep the original tool values available internally for the approved draft workflow.
+Do not reconstruct dates from notes, files, historical rosters, or
 general contact searches.
 
 ## Physical cards
@@ -90,6 +97,12 @@ general contact searches.
 
 ## Task suggestions and approval links
 
+- `crm_tasks_read` returns open or in-progress, nonarchived CRM tasks and excludes
+  explicitly labelled controlled rollout/test records by default. For an explicit
+  request for historical, completed, or cancelled tasks, use `task_mode: history`;
+  this includes all nonarchived statuses. Use `include_controlled_tests: true` only
+  when Brandon explicitly requests controlled test records. Its limit applies after
+  those filters. Recovered contact task evidence is a separate surface.
 - Read current suggestion/version before clarification, dismissal proposal, or
   approval-link work.
 - Return a complete absolute Command URL. Opening it is not approval; Brandon

@@ -29,13 +29,23 @@ function occurrenceDetails(row: ContactMaterialization): readonly string[] {
       value.value_cents === null
         ? 'Value was not captured'
         : `Value: ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value.value_cents / 100)}`,
+      ...(value.budget ? [`Budget: ${value.budget}`] : []),
     ];
   }
   if (value.kind === 'smart_plan') return [value.status ?? 'Status was not captured'];
   if (value.kind === 'task') {
+    const due = value.due_at
+      ? `Due ${new Date(value.due_at).toLocaleString()}`
+      : value.due_date
+        ? `Due ${new Intl.DateTimeFormat('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+        }).format(new Date(`${value.due_date}T00:00:00Z`))}`
+        : value.due_date_text
+          ? `Due date as captured: ${value.due_date_text}`
+          : 'Due date was not captured';
     return [
       value.description ?? 'Description was not captured',
-      value.due_at ? `Due ${new Date(value.due_at).toLocaleString()}` : 'Due date was not captured',
+      due,
     ];
   }
   if (value.kind === 'note') return [value.body ?? 'Note body was not captured'];

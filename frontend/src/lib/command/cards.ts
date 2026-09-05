@@ -99,6 +99,7 @@ export type CardRecipientUpdate = Readonly<{
 
 export type CardCampaignUpdateRequest = Readonly<{
   expected_version: number;
+  refresh_missing_addresses?: boolean;
   title?: string;
   birthday_message_template?: string;
   home_anniversary_message_template?: string;
@@ -480,6 +481,9 @@ function validateDraft(payload: CardCampaignDraftRequest): CardCampaignDraftRequ
 
 function validateUpdate(payload: CardCampaignUpdateRequest): CardCampaignUpdateRequest {
   positiveInteger(payload.expected_version, 'request.expected_version');
+  if (payload.refresh_missing_addresses !== undefined) {
+    booleanValue(payload.refresh_missing_addresses, 'request.refresh_missing_addresses');
+  }
   const updates = payload.recipient_updates ?? [];
   if (updates.length > 500) return invalid('request.recipient_updates', 'array at most 500');
   const hasTopLevelChange = [
@@ -489,7 +493,7 @@ function validateUpdate(payload: CardCampaignUpdateRequest): CardCampaignUpdateR
     payload.birthday_design_key,
     payload.home_anniversary_design_key,
   ].some((value) => value !== undefined);
-  if (!hasTopLevelChange && updates.length === 0) {
+  if (!hasTopLevelChange && updates.length === 0 && payload.refresh_missing_addresses !== true) {
     return invalid('request', 'campaign change');
   }
   if (payload.title !== undefined) stringValue(payload.title, 'request.title', 1, 255);

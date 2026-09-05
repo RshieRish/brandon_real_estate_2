@@ -243,6 +243,18 @@ class ContactNeighborsOut(ContactBoundaryModel):
     next_contact_id: PositiveInt | None
 
 
+class ContactWorkspaceCountsOut(ContactBoundaryModel):
+    active_tasks: NonnegativeInt
+    completed_tasks: NonnegativeInt
+    cancelled_tasks: NonnegativeInt
+    archived_tasks: NonnegativeInt
+    active_smart_plans: NonnegativeInt
+    opportunities: NonnegativeInt
+    notes: NonnegativeInt
+    saved_searches: NonnegativeInt
+    bookings: NonnegativeInt
+
+
 class ContactWorkspaceSummaryOut(ContactBoundaryModel):
     open_tasks: NonnegativeInt
     active_tasks: NonnegativeInt
@@ -256,6 +268,8 @@ class ContactWorkspaceSummaryOut(ContactBoundaryModel):
     notes: NonnegativeInt
     saved_searches: NonnegativeInt
     bookings: NonnegativeInt
+    internal_counts: ContactWorkspaceCountsOut | None = None
+    recovered_counts: ContactWorkspaceCountsOut | None = None
 
     @model_validator(mode="after")
     def _consistent_task_totals(self) -> ContactWorkspaceSummaryOut:
@@ -265,6 +279,14 @@ class ContactWorkspaceSummaryOut(ContactBoundaryModel):
             self.archived_mutable_tasks + self.archived_recovered_evidence
         ):
             raise ValueError("archived task total must equal its subtotals")
+        if (self.internal_counts is None) != (self.recovered_counts is None):
+            raise ValueError("workspace count breakdown must include both origins")
+        if self.internal_counts is not None and self.recovered_counts is not None:
+            for key in ContactWorkspaceCountsOut.model_fields:
+                if getattr(self, key) != (
+                    getattr(self.internal_counts, key) + getattr(self.recovered_counts, key)
+                ):
+                    raise ValueError("workspace total must equal its origin subtotals")
         return self
 
 
@@ -273,6 +295,7 @@ class ContactOpportunityOccurrenceOut(ContactBoundaryModel):
     title: str
     stage: str | None
     value_cents: NonnegativeInt | None
+    budget: str | None = Field(default=None, max_length=120)
 
 
 class ContactSmartPlanOccurrenceOut(ContactBoundaryModel):
@@ -287,6 +310,17 @@ class ContactTaskOccurrenceOut(ContactBoundaryModel):
     description: str | None
     state: Literal["to_do", "completed", "archived"]
     due_at: datetime | None
+    due_date: str | None = None
+    due_date_text: str | None = Field(default=None, max_length=120)
+
+    @field_validator("due_date")
+    @classmethod
+    def _exact_due_date(cls, value: str | None) -> str | None:
+        if value is not None:
+            if _DATE_ONLY.fullmatch(value) is None:
+                raise ValueError("task due date must be a calendar date")
+            date.fromisoformat(value)
+        return value
 
 
 class ContactNoteOccurrenceOut(ContactBoundaryModel):
@@ -360,12 +394,15 @@ class ContactTimelineEntryOut(ContactBoundaryModel):
     source_record_id: PositiveInt | None
     entity_type: str
     entity_id: PositiveInt
+    captured_date: date | None = None
+    captured_time: str | None = None
 
 
 class ContactTimelinePageOut(ContactBoundaryModel):
     rows: list[ContactTimelineEntryOut] = Field(default_factory=list)
     next_cursor: str | None
     has_more: bool
+    filtered_capture_count: NonnegativeInt = 0
 
 
 class ContactArtifactMetadataOut(ContactBoundaryModel):
@@ -753,6 +790,7 @@ class LegacyNoteOut(ContactBoundaryModel):
 class LegacySmartPlanOut(ContactBoundaryModel):
     id: PositiveInt
     plan_id: PositiveInt
+    plan_name: str | None = None
     status: str
 
 
@@ -768,6 +806,7 @@ class LegacySavedSearchOut(ContactBoundaryModel):
     id: PositiveInt
     name: str
     criteria: str
+    criteria_summary: list[str] = Field(default_factory=list)
 
 
 class LegacyBookingOut(ContactBoundaryModel):
@@ -840,6 +879,7 @@ __all__ = [
     "ContactTaskOccurrenceOut",
     "ContactTimelineEntryOut",
     "ContactTimelinePageOut",
+    "ContactWorkspaceCountsOut",
     "ContactUpdateIn",
     "ContactWorkspaceSummaryOut",
     "LegacyBookingOut",

@@ -24,8 +24,11 @@ export function ContactObservedMap({ addresses }: { addresses: readonly ContactA
           const hasCoordinates = address.latitude !== null && address.longitude !== null;
           return (
             <article key={address.id}>
-              <strong>{address.formatted ?? 'Address text was not captured'}</strong>
+              <strong className="whitespace-pre-line break-words">{address.formatted ?? 'Address text was not captured'}</strong>
               {address.address_type ? <span>{address.address_type}</span> : null}
+              {address.source_record_id !== null && address.address_type === 'mailing'
+                ? <small>Recovered from Command. Confirm this is current before mailing.</small>
+                : null}
               {hasCoordinates ? (
                 <>
                   <p>{address.latitude}, {address.longitude}</p>

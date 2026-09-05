@@ -7,7 +7,7 @@ import hashlib
 import json
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -55,6 +55,12 @@ from services.task_suggestion_approval_service import (
 
 
 router = APIRouter(dependencies=[Depends(require_agent_control)])
+
+# Only explicit leading control labels identify fixtures. Ordinary words such
+# as "water test" or "rollout testing" are valid business task titles.
+_CONTROLLED_TASK_TITLE = (
+    r"^\s*\[\s*(rollout[\s_-]+test|controlled[\s_-]+(rollout[\s_-]+)?test)\s*\]"
+)
 
 
 def _suggestion(row: CRMTaskSuggestion) -> TaskSuggestionSummary:
@@ -197,14 +203,33 @@ async def list_crm_tasks(
     limit: int = Query(default=25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     agent: dict = Depends(require_agent_control),
+    *,
+    task_mode: Annotated[
+        Literal["active", "history"],
+        Query(
+            description="Active by default; history includes all nonarchived statuses, including completed and cancelled tasks."
+        ),
+    ] = "active",
+    include_controlled_tests: Annotated[
+        bool,
+        Query(
+            description="Explicitly include labelled controlled rollout/test tasks; false by default."
+        ),
+    ] = False,
 ) -> CRMTaskList:
+    statement = select(CRMTask).where(CRMTask.archived_at.is_(None))
+    if task_mode == "active":
+        statement = statement.where(CRMTask.status.in_(("open", "in_progress")))
+    if not include_controlled_tests:
+        statement = statement.where(
+            ~CRMTask.title.regexp_match(_CONTROLLED_TASK_TITLE, flags="i")
+        )
     rows = list(
         (
             await db.scalars(
-                select(CRMTask)
-                .where(CRMTask.archived_at.is_(None))
-                .order_by(CRMTask.updated_at.desc(), CRMTask.id.desc())
-                .limit(limit)
+                statement.order_by(CRMTask.updated_at.desc(), CRMTask.id.desc()).limit(
+                    limit
+                )
             )
         ).all()
     )
@@ -216,7 +241,11 @@ async def list_crm_tasks(
         action_id="crm.tasks.read",
         status_code=200,
         allowed=True,
-        response_meta={"count": len(rows)},
+        response_meta={
+            "count": len(rows),
+            "task_mode": task_mode,
+            "include_controlled_tests": include_controlled_tests,
+        },
     )
     return response
 

@@ -74,6 +74,20 @@ SYDNEY_COMMAND_CARD_TESTS = (
     "tests/test_command_cards_router.py",
     "tests/test_agent_control_cards.py",
 )
+COMMAND_CAPTURE_REPAIR_TESTS = (
+    "tests/test_command_archive_browser.py",
+    "tests/test_command_contact_capture_content.py",
+    "tests/test_command_contact_capture_timeline.py",
+    "tests/test_command_contact_timeline.py",
+    "tests/test_command_contact_timeline_html.py",
+    "tests/test_command_contact_timeline_snapshot.py",
+    "tests/test_command_contact_timeline_alignment.py",
+    "tests/test_command_contact_address_repair.py",
+    "tests/test_command_contact_address_repair_cli.py",
+    "tests/test_command_contact_address_repair_postgres.py",
+    "tests/test_command_contact_section_presentation.py",
+    "tests/test_card_campaign_address_refresh.py",
+)
 TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_atlas_backend_mcp.py",
     "backend/tests/test_agent_control_router.py",
@@ -90,6 +104,24 @@ TASK4_EXPLICIT_TRIGGER_PATHS = (
     "backend/tests/test_workspace_actions.py",
     "backend/tests/test_workspace_oauth.py",
 )
+
+
+def test_ci_preserves_only_failed_synthetic_contact_screenshots_without_weakening_gate() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows/gmail-sydney-task-intake.yml"
+    ).read_text(encoding="utf-8")
+    marker = "- name: Preserve failed synthetic contact screenshots"
+    assert marker in workflow
+    artifact = workflow.split(marker, 1)[1].split("- name:", 1)[0]
+    assert "if: failure()" in artifact
+    assert "uses: actions/upload-artifact@v4" in artifact
+    assert "retention-days: 3" in artifact
+    assert "frontend/test-results/command-contacts-visual-*/contact-*-actual.png" in artifact
+    assert "frontend/test-results/command-contacts-visual-*/contact-*-diff.png" in artifact
+    assert "trace.zip" not in artifact and "storageState" not in artifact
+    gate = workflow.split("- name: Run Sydney Command contact browser gates", 1)[1].split("- name:", 1)[0]
+    assert "--update-snapshots" not in gate and "continue-on-error" not in gate
+    assert "e2e/command-archive.spec.ts" in gate
 
 
 def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> None:
@@ -378,7 +410,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
     assert pytest_step is not None
     assert (
         tuple(re.findall(r"tests/[a-z0-9_]+\.py", pytest_step.group("body")))
-        == TASK9_TESTS + TASK13_CONTEXT_TESTS + SYDNEY_COMMAND_CARD_TESTS
+        == TASK9_TESTS + TASK13_CONTEXT_TESTS + SYDNEY_COMMAND_CARD_TESTS + COMMAND_CAPTURE_REPAIR_TESTS
     )
     assert workflow.count('"backend/tests/test_gmail_task_intake_e2e.py"') == 2
 
@@ -400,7 +432,10 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         "tests/test_sydney_retry.py",
         "tests/test_sydney_backfill.py",
         "tests/test_sydney_context_e2e.py",
+        "tests/test_sydney_celebration_replies.py",
     )
+    assert 'export CRM_TASK_TEST_DATABASE_NAME="$GMAIL_TASK_TEST_DATABASE_NAME"' in pytest_step.group("body")
+    assert 'export CRM_TASK_TEST_DATABASE_URL="$GMAIL_TASK_TEST_DATABASE_URL"' in pytest_step.group("body")
     assert "7224d7c1a4dcffe9304f49bc843f55716f5561b4" in workflow
     assert "77a1650c78a4cb1813d8a81fa1da40a15b6a3ec5" in workflow
     task12_job = re.search(

@@ -1299,14 +1299,14 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     routes = _main_command_routes()
     inventory = _mounted_inventory(routes)
 
-    assert len(inventory) == 102
+    assert len(inventory) == 105
     assert inventory[:24] == FULL_ROUTE_INVENTORY
     assert inventory[-6:] == PROVENANCE_ROUTE_INVENTORY
     assert tuple(inventory.index(pair) for pair in RETAINED_GLOBAL_ROUTE_INVENTORY) == (
-        38,
-        39,
-        40,
         41,
+        42,
+        43,
+        44,
     )
     assert len(set(inventory)) == len(inventory)
     assert all(
@@ -1314,7 +1314,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
     )
     assert all(
         routes[index].endpoint.__module__ == "routers.command"
-        for index in (38, 39, 40, 41)
+        for index in (41, 42, 43, 44)
     )
     assert all(
         route.endpoint.__module__ == "routers.command_provenance"
@@ -1324,7 +1324,7 @@ def test_main_mounts_cutover_routers_once_in_exact_order_and_ownership():
 
 def test_cutover_has_no_monolith_contact_aliases_or_legacy_owner_helper():
     assert MOVED_MONOLITH_NAMES.isdisjoint(vars(command_router))
-    assert _route_inventory(command_router.router)[14:18] == (
+    assert _route_inventory(command_router.router)[17:21] == (
         RETAINED_GLOBAL_ROUTE_INVENTORY
     )
 
@@ -1342,7 +1342,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method in sorted(route.methods or ())
         if method != "HEAD"
     )
-    assert len(inventory) == 89
+    assert len(inventory) == 92
     assert len(set(inventory)) == len(inventory)
     schema = fresh.openapi()
     operation_ids = [
@@ -1351,7 +1351,7 @@ def test_fresh_command_openapi_has_unique_routes_and_operation_ids():
         for method, operation in path.items()
         if method.lower() in {"get", "post", "patch", "delete", "put"}
     ]
-    assert len(operation_ids) == 89
+    assert len(operation_ids) == 92
     assert len(set(operation_ids)) == len(operation_ids)
     expected_response_schemas = {
         ("/api/v1/command/contacts/directory", "get"): "ContactDirectoryPageOut",
@@ -1721,6 +1721,8 @@ def test_celebration_detail_neighbors_summary_and_evidence_delegate(monkeypatch)
         "notes": 7,
         "saved_searches": 8,
         "bookings": 9,
+        "internal_counts": None,
+        "recovered_counts": None,
     }
     assert client.get("/contacts/7/evidence").json()["capture_quality"] == (
         "limitation"

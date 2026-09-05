@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import services.command_contact_timeline as timeline_service
 from database import Base
 from models.booking import Booking
-from models.command import CRMActivity, CRMContact
+from models.command import CRMActivity, CRMArchiveArtifact, CRMContact
 from models.command_contacts import (
     CRMContactCapturePosition,
     CRMContactMethod,
@@ -22,7 +22,7 @@ from models.command_contacts import (
     CRMContactSourceOccurrence,
     CRMContactTimelineEvent,
 )
-from models.command_provenance import CRMSourceRecord
+from models.command_provenance import CRMSourceRecord, CRMSourceRecordArtifact
 from models.lead import Lead
 from services.command_contact_contracts import (
     ContactTimelineEntry,
@@ -45,6 +45,8 @@ TABLES = (
     CRMContact.__table__,
     Booking.__table__,
     CRMSourceRecord.__table__,
+    CRMArchiveArtifact.__table__,
+    CRMSourceRecordArtifact.__table__,
     CRMContactMethod.__table__,
     CRMContactCapturePosition.__table__,
     CRMContactSectionCapture.__table__,

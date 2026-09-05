@@ -381,12 +381,25 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     },
     "crm_tasks_read": {
         "name": "crm_tasks_read",
-        "description": "Read active CRM task summaries for review.",
+        "description": (
+            "Read active CRM tasks by default. task_mode=history includes all "
+            "nonarchived statuses, including completed and cancelled tasks. "
+            "Controlled rollout/test records require include_controlled_tests=true. "
+            "Limit applies after filtering."
+        ),
         "method": "GET",
         "path": "/api/v1/agent-control/crm/tasks",
-        "query_params": ("limit",),
+        "query_params": ("limit", "task_mode", "include_controlled_tests"),
         "inputSchema": _object_schema(
-            {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}
+            {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "task_mode": {
+                    "type": "string",
+                    "enum": ["active", "history"],
+                    "default": "active",
+                },
+                "include_controlled_tests": {"type": "boolean", "default": False},
+            }
         ),
     },
     "crm_task_suggestions_read": {
@@ -621,7 +634,9 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         "description": (
             "Preview exact Command birthdays and home anniversaries for one "
             "month with real contact names in bounded examples and mailing-address "
-            "readiness for Brandon's private chat. Never "
+            "readiness for Brandon's private chat. Keep audience checksums and "
+            "references internal unless the current user explicitly requests them; "
+            "this includes birthday-only and anniversary-only replies. Never "
             "substitute Google, Drive, a roster, or an admin-page scrape, and "
             "never send cards."
         ),
