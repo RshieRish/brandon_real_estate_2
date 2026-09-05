@@ -61,6 +61,10 @@ TASK13_CONTEXT_TESTS = (
     "tests/test_sydney_context_router.py",
     "tests/test_sydney_context_projection.py",
     "tests/test_agent_control_command.py",
+    "tests/test_command_contact_notes.py",
+    "tests/test_command_contact_sections.py",
+    "tests/test_command_contacts_service.py",
+    "tests/test_command_contacts_router.py",
     "tests/test_sydney_context_e2e.py",
 )
 SYDNEY_COMMAND_CARD_TESTS = (

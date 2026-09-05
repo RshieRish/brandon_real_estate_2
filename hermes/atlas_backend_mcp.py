@@ -620,7 +620,8 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         "name": "command_contact_celebrations_preview",
         "description": (
             "Preview exact Command birthdays and home anniversaries for one "
-            "month with masked examples and mailing-address readiness. Never "
+            "month with real contact names in bounded examples and mailing-address "
+            "readiness for Brandon's private chat. Never "
             "substitute Google, Drive, a roster, or an admin-page scrape, and "
             "never send cards."
         ),

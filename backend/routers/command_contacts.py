@@ -60,6 +60,7 @@ from services.command_contact_contracts import (
     decode_timeline_cursor,
 )
 from services.command_contact_identity import canonical_email
+from services.command_contact_notes import present_contact_notes
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
 )
@@ -536,7 +537,7 @@ async def _legacy_contact_workspace(
             for item in activities
         ],
         "tasks": tasks,
-        "notes": notes,
+        "notes": await present_contact_notes(db, contact_id=contact_id, notes=notes),
         "smart_plans": [
             {
                 "id": item.id,

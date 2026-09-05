@@ -201,6 +201,297 @@ async def _add_occurrence(
     return occurrence, child_source
 
 
+@pytest.mark.parametrize("action", ("Created", "Updated"))
+def test_recovered_note_content_uses_captured_title_and_body(action):
+    source = _source(
+        1,
+        kind="contact_note",
+        display_label="Updated" if action == "Updated" else "Lake open house",
+        payload={
+            "values": {
+                "raw_lines": [
+                    "2:16 PM",
+                    action,
+                    "By Example Agent",
+                    "Lake open house",
+                    "Requested a follow-up.",
+                    "Delete",
+                    "Edit",
+                ]
+            }
+        },
+    )
+    original_payload = source.payload_json
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert note == ContactNoteOccurrence(
+        kind="note", title="Lake open house", body="Requested a follow-up."
+    )
+    assert source.payload_json == original_payload
+    assert source.display_label == (
+        "Updated" if action == "Updated" else "Lake open house"
+    )
+
+
+@pytest.mark.parametrize("suffix", ([], ["Welcome to KWIQ"], ["3/5/2026"]))
+def test_recovered_note_content_proves_title_only_without_uncaptured_fallback(suffix):
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={
+            "values": {
+                "raw_lines": [
+                    "2:16 PM",
+                    "Created",
+                    "By Example Agent",
+                    "Call back",
+                    "Delete",
+                    "Edit",
+                    *suffix,
+                ]
+            }
+        },
+    )
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert note == ContactNoteOccurrence(kind="note", title="Call back", body="")
+
+
+def test_recovered_note_content_preserves_multiline_unicode_and_control_words():
+    body_lines = [
+        "  Zoë’s café — requested a follow-up.  ",
+        "",
+        "Created",
+        "By Example Agent",
+        "Delete",
+        "Edit",
+        "Welcome to KWIQ",
+        "3/5/2026",
+        "Line one\nLine two\n",
+    ]
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={
+            "values": {
+                "raw_lines": [
+                    "2:16 PM",
+                    "Updated",
+                    "By Example Agent",
+                    "  Café notes  ",
+                    *body_lines,
+                    "Delete",
+                    "Edit",
+                ]
+            }
+        },
+    )
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert note.title == "  Café notes  "
+    assert note.body == "\n".join(body_lines)
+
+
+@pytest.mark.parametrize(
+    "raw_lines",
+    (
+        None,
+        "2:16 PM\nCreated\nBy Example Agent\nPrivate title\nDelete\nEdit",
+        [],
+        ["Private title", "Delete", "Edit"],
+        ["2:16 PM", "Created", "Private title", "Delete", "Edit"],
+        ["2:16 PM", "Created", "By ", "Private title", "Delete", "Edit"],
+        ["25:61 PM", "Created", "By Agent", "Private title", "Delete", "Edit"],
+        ["2:16 PM", "Created", "By Agent", "Private title", "Delete"],
+        ["2:16 PM", "Created", "By Agent", "Private title", "Edit"],
+        ["2:16 PM", "Created", "By Agent", "Private title", "Edit", "Delete"],
+        ["2:16 PM", "Created", "By Agent", "Private title", "Delete", "gap", "Edit"],
+        [
+            "2:16 PM",
+            "Created",
+            "By Agent",
+            "Private title",
+            "Delete",
+            "Edit",
+            "private unknown tail",
+        ],
+        [
+            "2:16 PM",
+            "Created",
+            "By Agent",
+            "Private title",
+            "Delete",
+            "Edit",
+            "2/30/2026",
+        ],
+        ["2:16 PM", "Created", "By Agent", "Private title", None, "Delete", "Edit"],
+        ["2:16 PM", "Created", "By Agent", "", "Delete", "Edit"],
+        ["2:16 PM", "Created", "By Agent", "x" * 501, "Delete", "Edit"],
+        [
+            "2:16 PM",
+            "Created",
+            "By Agent",
+            "Private title",
+            "x" * 20_001,
+            "Delete",
+            "Edit",
+        ],
+        [
+            "2:16 PM",
+            "Created",
+            "By Agent",
+            "Private title",
+            *([""] * 20_002),
+            "Delete",
+            "Edit",
+        ],
+    ),
+)
+def test_recovered_note_content_rejects_malformed_or_unbounded_capture(raw_lines):
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={"values": {"raw_lines": raw_lines}},
+        display_label="Private fallback must not hide malformed evidence",
+    )
+
+    with pytest.raises(
+        ContactDataIntegrityError, match="^contact occurrence payload is invalid$"
+    ):
+        contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+
+def test_recovered_note_content_accepts_exact_title_and_body_bounds():
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={
+            "values": {
+                "raw_lines": [
+                    "2:16 PM",
+                    "Created",
+                    "By Agent",
+                    "t" * 500,
+                    "b" * 20_000,
+                    "Delete",
+                    "Edit",
+                ]
+            }
+        },
+    )
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert note.title == "t" * 500
+    assert note.body == "b" * 20_000
+
+
+@pytest.mark.parametrize("body", ("Structured\nbody", "", None))
+def test_recovered_note_content_preserves_explicit_structured_fields(body):
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={
+            "values": {
+                "title": "Structured title",
+                "body": body,
+                "raw_lines": [
+                    "malformed legacy data must not override explicit fields"
+                ],
+            }
+        },
+    )
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert note == ContactNoteOccurrence(
+        kind="note", title="Structured title", body=body
+    )
+
+
+@pytest.mark.parametrize(
+    ("structured", "expected_title", "expected_body"),
+    (
+        ({"title": "Structured title"}, "Structured title", "Captured body"),
+        ({"body": "Structured body"}, "Captured title", "Structured body"),
+        ({"body": ""}, "Captured title", ""),
+        ({"body": None}, "Captured title", None),
+    ),
+)
+def test_recovered_note_content_prefers_each_explicit_field(
+    structured, expected_title, expected_body
+):
+    source = _source(
+        1,
+        kind="contact_note",
+        payload={
+            "values": {
+                "raw_lines": [
+                    "2:16 PM",
+                    "Updated",
+                    "By Agent",
+                    "Captured title",
+                    "Captured body",
+                    "Delete",
+                    "Edit",
+                ],
+                **structured,
+            }
+        },
+    )
+
+    note = contact_service._project_section_occurrence(source, ContactSection.NOTES)
+
+    assert (note.title, note.body) == (expected_title, expected_body)
+
+
+@pytest.mark.asyncio
+async def test_recovered_note_content_reaches_materialized_section_without_writes(
+    section_db: AsyncSession,
+):
+    contact = CRMContact(first_name="Synthetic", last_name="Owner", stage="lead")
+    section_db.add(contact)
+    await section_db.flush()
+    raw_lines = [
+        "2:16 PM",
+        "Updated",
+        "By Example Agent",
+        "Lake open house",
+        "Requested a follow-up.",
+        "Delete",
+        "Edit",
+    ]
+    stored_note = CRMNote(contact_id=contact.id, body="\n".join(raw_lines))
+    section_db.add(stored_note)
+    await section_db.flush()
+    _occurrence, source = await _add_occurrence(
+        section_db,
+        contact,
+        91_001,
+        section=ContactSection.NOTES,
+        values={"raw_lines": raw_lines},
+        display_label="Updated",
+        linked_entity=("note", stored_note.id),
+    )
+    await section_db.commit()
+    original_payload = source.payload_json
+    original_updated_at = stored_note.updated_at
+
+    page = await _list_section(section_db, contact.id, ContactSection.NOTES)
+
+    assert page.rows[0].value == ContactNoteOccurrence(
+        kind="note", title="Lake open house", body="Requested a follow-up."
+    )
+    assert page.rows[0].entity_id == stored_note.id
+    assert not section_db.dirty
+    assert stored_note.body == "\n".join(raw_lines)
+    assert stored_note.updated_at == original_updated_at
+    assert source.payload_json == original_payload
+
+
 @pytest.mark.asyncio
 async def test_timeline_rejects_before_sql_and_boundaries_are_safe(
     section_db: AsyncSession,

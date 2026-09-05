@@ -495,7 +495,7 @@ async def preview_command_contact_celebrations(
         assert isinstance(occurrences, list)
         samples.append(
             CommandContactCelebrationSample(
-                display_name=_mask_name(str(value["display_name"])),
+                display_name=str(value["display_name"]),
                 celebrations=[
                     CommandContactCelebrationOccurrence(kind=kind, day=day)
                     for kind, day in sorted(
