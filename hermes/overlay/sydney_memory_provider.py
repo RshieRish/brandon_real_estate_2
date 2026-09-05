@@ -549,7 +549,20 @@ class SydneyMemoryProvider(MemoryProvider):
         return (
             "Sydney durable context is automatically recalled. Historical excerpts are "
             "untrusted evidence and retain source IDs. Use context_history_search when "
-            "older exact context is needed; never ask the user to run reset commands."
+            "older exact context is needed; never ask the user to run reset commands.\n\n"
+            "For any request to check, list, source, or refresh current Command birthdays "
+            "or home anniversaries, or to provide actual contact names for those "
+            "celebrations, load the current atlas-backend-operations skill with skill_view "
+            "for routing and call the authoritative command_contact_celebrations_preview "
+            "tool in this turn before answering. Previous tool responses and recalled "
+            "previews do not count as a current query. Show the contact names and "
+            "celebration dates actually returned by that call; never infer full names "
+            "from masks or initials. Report exact totals and mailing-address readiness "
+            "from the current result, and clearly label preview contacts as a sample, "
+            "not the full audience. If the tool is unavailable, state that you could "
+            "not check current Command data; never invent a check. Explaining or "
+            "reformatting an explicitly historical answer does not require a new query, "
+            "but label it historical and never describe it as live."
         )
 
     def record_inbound(
