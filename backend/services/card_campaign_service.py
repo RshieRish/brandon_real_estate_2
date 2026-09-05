@@ -486,6 +486,10 @@ class CardCampaignService:
             raise CardCampaignAlreadyAttempted("card_campaign_already_attempted")
         if campaign.version != request.expected_version:
             raise CardCampaignVersionConflict("card_campaign_version_conflict")
+        if request.refresh_missing_addresses and campaign.status not in {
+            "draft", "needs_addresses", "needs_connection", "ready_for_review", "approved",
+        }:
+            raise CardCampaignNotReady("card_campaign_address_refresh_not_allowed")
         recipients = await _campaign_recipients(db, campaign.id, lock=True)
         if request.title is not None:
             campaign.title = request.title
@@ -551,6 +555,62 @@ class CardCampaignService:
                 recipient.exclusion_reason = (
                     change.exclusion_reason if change.excluded else None
                 )
+
+        if request.refresh_missing_addresses:
+            missing_contact_ids = {
+                recipient.contact_id
+                for recipient in recipients
+                if recipient.address_status == "missing"
+            }
+            ready_addresses: dict[int, CRMContactAddress] = {}
+            if missing_contact_ids:
+                address_rows = (
+                    await db.scalars(
+                        select(CRMContactAddress)
+                        .where(CRMContactAddress.contact_id.in_(missing_contact_ids))
+                        .order_by(
+                            CRMContactAddress.contact_id,
+                            CRMContactAddress.is_primary.desc(),
+                            CRMContactAddress.id,
+                        )
+                    )
+                ).all()
+                for address in address_rows:
+                    if _mailing_address_ready(address):
+                        ready_addresses.setdefault(address.contact_id, address)
+            for recipient in recipients:
+                address = ready_addresses.get(recipient.contact_id)
+                if recipient.address_status == "missing" and address is not None:
+                    recipient.address_id = address.id
+                    recipient.address_snapshot_json = _address_json(address)
+                    recipient.address_status = "ready"
+
+            # Reuse the frozen occurrences; current CRM celebrations cannot add
+            # recipients or change the occasion being reviewed.
+            checksum = _celebration_checksum(
+                month=campaign.month,
+                include_birthdays=campaign.include_birthdays,
+                include_home_anniversaries=campaign.include_home_anniversaries,
+                selected=tuple(
+                    (
+                        recipient.contact_id,
+                        recipient.display_name_snapshot,
+                        recipient.celebration_kind,
+                        recipient.celebration_day,
+                        recipient.celebration_year,
+                        recipient.celebration_year_quality,
+                        recipient.celebration_origin,
+                    )
+                    for recipient in recipients
+                ),
+                address_ready_ids={
+                    recipient.contact_id
+                    for recipient in recipients
+                    if recipient.address_status == "ready"
+                },
+            )
+            campaign.audience_checksum = checksum
+            campaign.audience_ref = uuid5(_CELEBRATION_NAMESPACE, checksum)
 
         for recipient in recipients:
             recipient.content_hash = _content_hash(recipient)

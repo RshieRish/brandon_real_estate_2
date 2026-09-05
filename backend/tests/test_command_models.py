@@ -93,6 +93,8 @@ def test_focused_contact_compatibility_field_contracts_are_exact():
         "notes",
         "saved_searches",
         "bookings",
+        "internal_counts",
+        "recovered_counts",
     )
     assert tuple(ContactTagAssignmentOut.model_fields) == ("contact_id", "tag_id")
     assert tuple(ContactTagRemovalOut.model_fields) == (
@@ -131,7 +133,9 @@ def test_contact_workspace_summary_requires_consistent_task_subtotals():
         "saved_searches": 7,
         "bookings": 8,
     }
-    assert ContactWorkspaceSummaryOut.model_validate(valid).model_dump() == valid
+    assert ContactWorkspaceSummaryOut.model_validate(valid).model_dump() == {
+        **valid, "internal_counts": None, "recovered_counts": None,
+    }
 
     for invalid in (
         {**valid, "open_tasks": 4},

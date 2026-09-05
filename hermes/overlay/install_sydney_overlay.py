@@ -1234,6 +1234,27 @@ def _patch_telegram(contents: str) -> str:
 
 
 def _patch_conversation_loop(contents: str) -> str:
+    request_anchor = "    agent._persist_user_message_idx = current_turn_user_idx\n"
+    request_replacement = """\
+    agent._persist_user_message_idx = current_turn_user_idx
+    # SYDNEY_CURRENT_REQUEST_BOUNDARY
+    from agent.sydney_runtime import pin_celebration_request
+    pin_celebration_request(agent, user_msg, original_user_message)
+"""
+    contents = _replace_exact(
+        contents, request_anchor, request_replacement, "Sydney current request boundary"
+    )
+    reply_anchor = "    # Determine if conversation completed successfully\n"
+    reply_replacement = """\
+    # SYDNEY_CELEBRATION_REPLY_BEFORE_PERSISTENCE
+    from agent.sydney_runtime import finalize_celebration_reply
+    final_response = finalize_celebration_reply(agent, final_response, messages)
+
+    # Determine if conversation completed successfully
+"""
+    contents = _replace_exact(
+        contents, reply_anchor, reply_replacement, "Sydney celebration reply presentation"
+    )
     prompt_restore_anchor = """\
     if stored_prompt:
         # Continuing session — reuse the exact system prompt from the"""

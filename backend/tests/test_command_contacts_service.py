@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -48,6 +49,7 @@ from services.command_contact_contracts import (
     ContactSmartView,
     ContactSortKey,
     ContactSourceFilter,
+    ContactWorkspaceCounts,
     ContactWorkspaceSummary,
     SortDirection,
 )
@@ -67,6 +69,10 @@ from services.command_contacts import (
 )
 
 NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+EMPTY_WORKSPACE_COUNTS = ContactWorkspaceCounts(
+    active_tasks=0, completed_tasks=0, cancelled_tasks=0, archived_tasks=0,
+    active_smart_plans=0, opportunities=0, notes=0, saved_searches=0, bookings=0,
+)
 
 
 @pytest.mark.asyncio
@@ -844,6 +850,14 @@ async def test_workspace_summary_counts_internal_and_source_only_union_once(
         notes=18,
         saved_searches=2,
         bookings=1,
+        internal_counts=ContactWorkspaceCounts(
+            active_tasks=2, completed_tasks=1, cancelled_tasks=1, archived_tasks=2,
+            active_smart_plans=1, opportunities=1, notes=1, saved_searches=1, bookings=1,
+        ),
+        recovered_counts=ContactWorkspaceCounts(
+            active_tasks=1, completed_tasks=1, cancelled_tasks=0, archived_tasks=1,
+            active_smart_plans=1, opportunities=1, notes=17, saved_searches=1, bookings=0,
+        ),
     )
     assert selects <= 14
 
@@ -1048,6 +1062,8 @@ async def test_workspace_summary_ignores_valid_timeline_source_links(
         notes=0,
         saved_searches=0,
         bookings=0,
+        internal_counts=EMPTY_WORKSPACE_COUNTS,
+        recovered_counts=EMPTY_WORKSPACE_COUNTS,
     )
 
 
@@ -1195,6 +1211,8 @@ async def test_workspace_summary_empty_lead_booking_and_query_work_are_bounded(
         notes=0,
         saved_searches=0,
         bookings=2,
+        internal_counts=replace(EMPTY_WORKSPACE_COUNTS, bookings=2),
+        recovered_counts=EMPTY_WORKSPACE_COUNTS,
     )
     assert selects <= 15
     assert flushes == 0

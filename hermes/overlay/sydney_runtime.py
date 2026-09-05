@@ -482,6 +482,286 @@ def defer_compression_exhaustion(agent: Any) -> str | None:
     return provider.defer_compression_exhaustion()
 
 
+def _celebration_metadata(content: Any) -> dict[str, str]:
+    """Read exact internal values from the known preview/MCP response shapes."""
+    for _ in range(4):
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except (TypeError, ValueError):
+                return {}
+        if not isinstance(content, dict) or content.get("isError"):
+            return {}
+        if "result" in content and set(content) <= {"result", "structuredContent"}:
+            content = content["result"]
+            continue
+        reference = content.get("audience_ref")
+        checksum = content.get("audience_checksum")
+        if (
+            isinstance(reference, str)
+            and re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", reference
+            )
+            and isinstance(checksum, str)
+            and re.fullmatch(r"[0-9a-fA-F]{64}", checksum)
+        ):
+            return {"reference": reference, "checksum": checksum}
+        blocks = content.get("content")
+        if not isinstance(blocks, list) or len(blocks) != 1:
+            return {}
+        block = blocks[0]
+        if not isinstance(block, dict) or block.get("type") != "text":
+            return {}
+        content = block.get("text")
+    return {}
+
+
+def _requests_celebration_metadata(content: Any) -> bool:
+    if not isinstance(content, str):
+        return False
+    metadata_term = r"\b(?:checksums?|audience[ _-]+(?:checksums?|refs?|references?|metadata|identifiers?))\b"
+    modifiers = r"(?:(?:me|us|the|a|an|exact|current|internal|technical|returned|actual|full|my|their|its|our)\s+){0,5}"
+    polite = r"(?:(?:please|now|also)\s+)*(?:(?:can|could|will|would)\s+you\s+(?:please\s+)?)?"
+    # Quoted instructions are discussion content, not this turn's permission.
+    # Only this local intent string changes; original user/history text is intact.
+    intent = re.sub(
+        r'"[^"\n]*"|“[^”]*”|‘[^’]*’|`[^`]*`|(?<!\w)\'[^\'\n]+\'(?!\w)',
+        " ",
+        content,
+    ).replace("’", "'")
+    metadata_request = (
+        r"\s*(?:"
+        + polite
+        + r"(?:show|give|get|include|return|display|provide|tell|report|share|list|print)|"
+        r"(?:can|could|may)\s+I\s+(?:please\s+)?have|I\s+(?:want|need)|"
+        r"I(?:'d|\s+would)\s+like|what(?:\s+(?:is|are|was|were))?|which(?:\s+(?:is|are))?)\s+"
+        + modifiers
+        + metadata_term
+    )
+    requested = False
+    metadata_seen = False
+    for sentence in re.split(r"[.!?;\n]", intent):
+        has_metadata = bool(re.search(metadata_term, sentence, re.IGNORECASE))
+        metadata_seen = metadata_seen or has_metadata
+        if has_metadata and (
+            re.search(
+                r"\b(?:not|without|omit|exclude|hide|no|leave\s+out|leaving\s+out|(?:do not|don't|never)\s+"
+                r"(?:show|give|include|return|display|provide|print|report|list|tell|share|disclose|expose))"
+                r"\b.{0,100}" + metadata_term,
+                sentence,
+                re.IGNORECASE,
+            )
+            or re.search(
+                r"\bkeep\b.{0,80}" + metadata_term + r".{0,40}\binternal\b",
+                sentence,
+                re.IGNORECASE,
+            )
+        ):
+            return False
+        # A later/referring exclusion wins over an earlier affirmative request.
+        if metadata_seen and re.search(
+            r"\b(?:omit|exclude|hide|leave\s+out|(?:do not|don't|never)\s+"
+            r"(?:show|include|display|provide|print|share))\s+"
+            r"(?:it|them|those|these|(?:the\s+)?(?:values?|metadata|identifiers?))\b|"
+            r"\b(?:which|it|they|these|those|values?|metadata)\s+"
+            r"(?:(?:should|must)\s+)?(?:stay|remain|be(?:\s+kept)?)\s+internal\b",
+            sentence,
+            re.IGNORECASE,
+        ):
+            return False
+        if not has_metadata or re.match(
+            r"\s*" + polite + r"(?:why|how|when|explain|describe|discuss|summarize)\b",
+            sentence,
+            re.IGNORECASE,
+        ):
+            continue
+        # Match a direct request at a clause boundary, never a verb embedded in
+        # a retrospective question such as "Why did you tell me ...?".
+        requested = requested or any(
+            re.match(metadata_request, clause, re.IGNORECASE)
+            for clause in re.split(r",|\band\b", sentence, flags=re.IGNORECASE)
+        )
+        requested = requested or bool(
+            re.match(
+                r"\s*" + polite + r"(?:show|give|check|list|preview)\b.{0,120}"
+                r"\b(?:birthdays?|anniversaries|celebrations?)\b.{0,120}\bincluding\s+"
+                + modifiers
+                + metadata_term,
+                sentence,
+                re.IGNORECASE,
+            )
+        )
+    return bool(requested)
+
+
+def pin_celebration_request(agent: Any, message: dict, content: Any) -> None:
+    """Remember the real request outside transcript/synthetic message metadata."""
+    provider = get_sydney_provider(agent)
+    agent._sydney_celebration_request = (
+        (message, content) if provider is not None and provider.is_available() else None
+    )
+
+
+def finalize_celebration_reply(agent: Any, response: Any, messages: Any) -> Any:
+    """Hide only metadata proven by this private Sydney turn's celebration read.
+
+    Tool payloads remain intact for review/draft binding and durable evidence.
+    Nothing is inferred from arbitrary UUIDs, historical turns, or general tools.
+    """
+    provider = get_sydney_provider(agent)
+    if (
+        provider is None
+        or not isinstance(response, str)
+        or not response
+        or not isinstance(messages, list)
+        or not provider.is_available()
+    ):
+        return response
+    pinned = getattr(agent, "_sydney_celebration_request", None)
+    if isinstance(pinned, tuple) and len(pinned) == 2:
+        user_message, request_content = pinned
+        # Compression may retain or copy the real message, and append internal
+        # role=user continuations. Resolve the pinned request, not the last user.
+        start = next(
+            (i for i, message in enumerate(messages) if message is user_message), -1
+        )
+        if start < 0:
+            start = next(
+                (
+                    i
+                    for i in range(len(messages) - 1, -1, -1)
+                    if isinstance(messages[i], dict)
+                    and messages[i].get("role") == "user"
+                    and messages[i].get("content") == user_message.get("content")
+                ),
+                -1,
+            )
+    else:
+        # Compatibility for isolated callers that do not run the Hermes loop.
+        start = getattr(agent, "_persist_user_message_idx", None)
+        if (
+            not isinstance(start, int)
+            or not 0 <= start < len(messages)
+            or not isinstance(messages[start], dict)
+            or messages[start].get("role") != "user"
+        ):
+            start = next(
+                (
+                    i
+                    for i in range(len(messages) - 1, -1, -1)
+                    if isinstance(messages[i], dict)
+                    and messages[i].get("role") == "user"
+                ),
+                -1,
+            )
+        request_content = messages[start].get("content") if start >= 0 else None
+    if (
+        start < 0
+        or not isinstance(messages[start], dict)
+        or messages[start].get("role") != "user"
+    ):
+        return response
+    if _requests_celebration_metadata(request_content):
+        return response
+    current = [
+        message for message in messages[start + 1 :] if isinstance(message, dict)
+    ]
+    tool_names = {
+        call.get("id"): call.get("function", {}).get("name")
+        for message in current
+        if message.get("role") == "assistant"
+        for call in (message.get("tool_calls") or [])
+        if isinstance(call, dict) and isinstance(call.get("function"), dict)
+    }
+    metadata: set[str] = set()
+    for message in current:
+        name = (
+            message.get("name")
+            or message.get("tool_name")
+            or tool_names.get(message.get("tool_call_id"))
+        )
+        if message.get("role") == "tool" and name in {
+            "command_contact_celebrations_preview",
+            "mcp_atlas_backend_command_contact_celebrations_preview",
+        }:
+            metadata.update(_celebration_metadata(message.get("content")).values())
+    if not metadata:
+        return response
+    if (
+        current
+        and current[-1].get("role") == "assistant"
+        and not current[-1].get("tool_calls")
+        and isinstance(current[-1].get("content"), str)
+    ):
+        # Hermes may already have removed secrets/reasoning from this message.
+        # Clean its existing text independently; never restore raw model text.
+        current[-1]["content"] = _clean_celebration_metadata(
+            current[-1]["content"], metadata
+        )
+    return _clean_celebration_metadata(response, metadata)
+
+
+def _clean_celebration_metadata(response: str, metadata: set[str]) -> str:
+    values = {value for value in metadata if value.lower() in response.lower()}
+    if not values:
+        return response
+    value_pattern = re.compile(
+        "|".join(re.escape(value) for value in sorted(values)), re.IGNORECASE
+    )
+    kept: list[str | None] = []
+    for line in response.splitlines():
+        if not value_pattern.search(line):
+            kept.append(line)
+            continue
+        remainder = value_pattern.sub("", line)
+        plain = re.sub(r"[*_`|]", " ", remainder)
+        plain = re.sub(r"^\s*(?:[-+>]\s*|\d+[.)]\s*)", "", plain)
+        plain = re.sub(
+            r"\b(?:audience|checksum|reference|ref)\b", "", plain, flags=re.IGNORECASE
+        )
+        if not plain.strip(" \t:=-,;()[]"):
+            kept.append(None)
+            continue
+        # Keep business details on a mixed line. Remove labelled metadata spans,
+        # then replace an unusually phrased exact value without guessing its text.
+        for value in values:
+            remainder_pattern = (
+                r"(?:\(\s*)?(?:\*\*|__)?(?:audience[ _-]+)?(?:checksum|reference|ref)"
+                r"(?:\*\*|__)?\s*[:=]\s*(?:\*\*|__)?\s*`?"
+                + re.escape(value)
+                + r"`?(?:\*\*|__)?(?:\s*\))?"
+            )
+            line = re.sub(remainder_pattern, "", line, flags=re.IGNORECASE)
+        line = value_pattern.sub("kept internally", line)
+        line = re.sub(r"[ \t]+([.!?,;])", r"\1", line)
+        kept.append(re.sub(r"[ \t]{2,}", " ", line).rstrip())
+    # Remove only scaffolding attached to a metadata row we actually removed.
+    # A neighboring business row or unrelated reference ends the cleanup.
+    for index, line in enumerate(kept):
+        if line is not None:
+            continue
+        for previous in range(index - 1, -1, -1):
+            candidate = kept[previous]
+            if candidate is None:
+                continue
+            label = re.sub(r"[*_`|#:=+>\-]", " ", candidate)
+            label = re.sub(r"^\s*\d+[.)]\s*", "", label)
+            label = " ".join(label.split()).lower()
+            if label and not re.fullmatch(
+                r"(?:(?:internal|technical) )?(?:audience )?"
+                r"(?:metadata|details|checksum|reference|ref)|field value",
+                label,
+            ):
+                break
+            kept[previous] = None
+    cleaned = re.sub(
+        r"\n{3,}", "\n\n", "\n".join(line for line in kept if line is not None)
+    ).strip()
+    if not cleaned:
+        cleaned = "The celebration audience metadata is kept internally."
+    return cleaned
+
+
 def stage_run_outcome(agent: Any, result: dict[str, Any]) -> bool:
     """Hold a successful model result until the platform confirms delivery."""
     provider = get_sydney_provider(agent)
@@ -502,7 +782,10 @@ def stage_run_outcome(agent: Any, result: dict[str, Any]) -> bool:
         decision = getattr(agent, "_tool_guardrail_halt_decision", None)
         if isinstance(decision, SydneyToolPolicyHalt):
             error_code = decision.code
-    response = result.get("final_response")
+    response = finalize_celebration_reply(
+        agent, result.get("final_response"), result.get("messages")
+    )
+    result["final_response"] = response
     key = getattr(agent, "_sydney_delivery_key", None)
     if (
         not isinstance(response, str)

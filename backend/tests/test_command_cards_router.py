@@ -104,6 +104,40 @@ def test_card_routes_reject_missing_admin_auth_before_service_execution() -> Non
     service_factory.assert_not_called()
 
 
+def test_address_refresh_uses_only_the_authenticated_versioned_update_route() -> None:
+    from routers import command_cards
+
+    service = SimpleNamespace(
+        update_campaign=AsyncMock(return_value=_detail(version=2)),
+        approve_and_send=AsyncMock(),
+    )
+    path = f"/api/v1/command/cards/campaigns/{CAMPAIGN_ID}"
+    payload = {"expected_version": 1, "refresh_missing_addresses": True}
+    with (
+        patch.object(command_cards, "card_campaign_service", return_value=service),
+        patch.object(command_cards, "write_agent_audit_transactional", new_callable=AsyncMock),
+        TestClient(_app(authenticated=True), raise_server_exceptions=False) as client,
+    ):
+        response = client.patch(path, json=payload)
+        invalid = client.patch(path, json={**payload, "refresh_missing_addresses": "true"})
+    assert response.status_code == 200
+    assert invalid.status_code == 422
+    service.update_campaign.assert_awaited_once()
+    request = service.update_campaign.call_args.args[2]
+    assert request.expected_version == 1
+    assert request.refresh_missing_addresses is True
+    assert service.update_campaign.call_args.kwargs == {"actor": "admin:17"}
+    service.approve_and_send.assert_not_awaited()
+
+    with (
+        patch.object(command_cards, "card_campaign_service") as service_factory,
+        TestClient(_app(authenticated=False), raise_server_exceptions=False) as client,
+    ):
+        response = client.patch(path, json=payload)
+    assert response.status_code == 401
+    service_factory.assert_not_called()
+
+
 def test_admin_card_routes_correlate_requests_versions_actor_and_responses() -> None:
     from routers import command_cards
 

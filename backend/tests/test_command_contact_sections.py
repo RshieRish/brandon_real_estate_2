@@ -557,6 +557,7 @@ async def test_all_seven_sections_project_only_typed_whitelisted_values(
                 title="Exact opportunity",
                 stage="cultivate",
                 value_cents=123_456,
+                budget="$9m private",
             ),
         ),
         (
@@ -607,6 +608,7 @@ async def test_all_seven_sections_project_only_typed_whitelisted_values(
                 description="Explicit description",
                 state="to_do",
                 due_at=NOW.replace(minute=15, second=30),
+                due_date_text="Tomorrow private",
             ),
         ),
         (
@@ -666,11 +668,9 @@ async def test_all_seven_sections_project_only_typed_whitelisted_values(
         rendered = repr(page)
         assert source.source_key not in rendered
         for private_value in (
-            "$9m private",
             "private raw line",
             "private actor",
             "private field",
-            "Tomorrow private",
         ):
             assert private_value not in rendered
 

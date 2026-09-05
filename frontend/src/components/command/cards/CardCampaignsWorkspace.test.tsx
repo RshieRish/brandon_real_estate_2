@@ -175,6 +175,166 @@ describe('CardCampaignsWorkspace', () => {
 });
 
 describe('CardCampaignReview', () => {
+  it('copies updated contact addresses only after an explicit review action and never sends', async () => {
+    const missing: CardCampaignDetail = {
+      ...readyCampaign, status: 'needs_addresses', missing_address_count: 1,
+      sendable_recipients: 1, recipients: [
+        { ...readyCampaign.recipients[0], address_status: 'missing', address_summary: null },
+        readyCampaign.recipients[1],
+      ],
+    };
+    const api = fakeApi({ get: vi.fn().mockResolvedValue(missing) });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    const refresh = await screen.findByRole('button', { name: 'Check updated addresses' });
+    expect(api.update).not.toHaveBeenCalled();
+    await user.click(refresh);
+    expect(api.update).toHaveBeenCalledWith(CAMPAIGN_ID, {
+      expected_version: 3, refresh_missing_addresses: true,
+    });
+    expect(await screen.findByText('Mailing addresses checked. Review the draft before approving.')).toBeInTheDocument();
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
+  it('preserves unsaved card edits when only address snapshots are refreshed', async () => {
+    const missing: CardCampaignDetail = {
+      ...readyCampaign, status: 'needs_addresses', missing_address_count: 1,
+      sendable_recipients: 1, recipients: [
+        { ...readyCampaign.recipients[0], address_status: 'missing', address_summary: null },
+        readyCampaign.recipients[1],
+      ],
+    };
+    const api = fakeApi({ get: vi.fn().mockResolvedValue(missing) });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    const card = await screen.findByRole('article', { name: 'Card for Avery Stone' });
+    const message = within(card).getByRole('textbox', { name: 'Message for Avery Stone' });
+    await user.clear(message);
+    await user.type(message, 'Looking forward to celebrating with you.');
+    await user.click(within(card).getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: 'Check updated addresses' }));
+    await screen.findByText('Mailing addresses checked. Review the draft before approving.');
+    expect(message).toHaveValue('Looking forward to celebrating with you.');
+    expect(within(card).getByRole('checkbox')).toBeChecked();
+    expect(within(card).getByRole('textbox', { name: 'Reason for excluding Avery Stone' }))
+      .toHaveValue('Mailing address unavailable.');
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
+  it('recovers an address refresh version conflict without automatically retrying the update', async () => {
+    const missing = {
+      ...readyCampaign, status: 'needs_addresses' as const, missing_address_count: 1,
+      recipients: [{ ...readyCampaign.recipients[0], address_status: 'missing' as const, address_summary: null }],
+    };
+    const api = fakeApi({
+      get: vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce({ ...missing, version: 4 }),
+      update: vi.fn().mockRejectedValue(new CommandHttpError(409, 'campaign_stale')),
+    });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    await user.click(await screen.findByRole('button', { name: 'Check updated addresses' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Campaign changed while addresses were being checked');
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.update).toHaveBeenCalledTimes(1);
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
+  it('keeps dirty fields while merging untouched server fields after an address refresh conflict', async () => {
+    const missing: CardCampaignDetail = {
+      ...readyCampaign, status: 'needs_addresses', missing_address_count: 1,
+      recipients: [
+        { ...readyCampaign.recipients[0], address_status: 'missing', address_summary: null },
+        readyCampaign.recipients[1],
+      ],
+    };
+    const authoritative: CardCampaignDetail = {
+      ...missing, version: 4,
+      recipients: [
+        { ...missing.recipients[0], message: 'Updated in another tab.', design_key: 'birthday-gold' },
+        { ...missing.recipients[1], message: 'A newer anniversary note.' },
+      ],
+    };
+    const api = fakeApi({
+      get: vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(authoritative),
+      update: vi.fn().mockRejectedValue(new CommandHttpError(409, 'campaign_stale')),
+    });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    const card = await screen.findByRole('article', { name: 'Card for Avery Stone' });
+    const message = within(card).getByRole('textbox', { name: 'Message for Avery Stone' });
+    await user.clear(message);
+    await user.type(message, 'Keep my personal note.');
+    await user.click(within(card).getByRole('checkbox'));
+    const reason = within(card).getByRole('textbox', { name: 'Reason for excluding Avery Stone' });
+    await user.clear(reason);
+    await user.type(reason, 'Confirm with Avery first.');
+    await user.click(screen.getByRole('button', { name: 'Check updated addresses' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Campaign changed while addresses were being checked');
+    expect(message).toHaveValue('Keep my personal note.');
+    expect(within(card).getByRole('textbox', { name: 'Design key' })).toHaveValue('birthday-gold');
+    expect(within(card).getByRole('checkbox')).toBeChecked();
+    expect(reason).toHaveValue('Confirm with Avery first.');
+    expect(screen.getByRole('textbox', { name: 'Message for Jordan Lee' })).toHaveValue('A newer anniversary note.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Unsaved edits are kept');
+    expect(api.update).toHaveBeenCalledTimes(1);
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unsaved design after a conflicting server design and message update', async () => {
+    const missing: CardCampaignDetail = {
+      ...readyCampaign, status: 'needs_addresses', missing_address_count: 1,
+      recipients: [{ ...readyCampaign.recipients[0], address_status: 'missing', address_summary: null }],
+    };
+    const api = fakeApi({
+      get: vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce({
+        ...missing, version: 4,
+        recipients: [{ ...missing.recipients[0], message: 'Updated server note.', design_key: 'server-design' }],
+      }),
+      update: vi.fn().mockRejectedValue(new CommandHttpError(409, 'campaign_stale')),
+    });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    const card = await screen.findByRole('article', { name: 'Card for Avery Stone' });
+    const design = within(card).getByRole('textbox', { name: 'Design key' });
+    await user.clear(design);
+    await user.type(design, 'my-personal-design');
+    await user.click(screen.getByRole('button', { name: 'Check updated addresses' }));
+
+    await screen.findByRole('alert');
+    expect(design).toHaveValue('my-personal-design');
+    expect(within(card).getByRole('textbox', { name: 'Message for Avery Stone' })).toHaveValue('Updated server note.');
+    expect(api.update).toHaveBeenCalledTimes(1);
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
+  it('locks other actions during address refresh and reports a failed check without sending', async () => {
+    const missing: CardCampaignDetail = {
+      ...readyCampaign, excluded_recipients: 1, sendable_recipients: 1,
+      recipients: [
+        {
+          ...readyCampaign.recipients[0], address_status: 'missing', address_summary: null,
+          excluded: true, exclusion_reason: 'Review with client first.',
+        },
+        readyCampaign.recipients[1],
+      ],
+    };
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<CardCampaignDetail>((_resolve, fail) => { reject = fail; });
+    const api = fakeApi({ get: vi.fn().mockResolvedValue(missing), update: vi.fn().mockReturnValue(pending) });
+    const user = userEvent.setup();
+    render(<CardCampaignReview campaignId={CAMPAIGN_ID} api={api} />);
+    await user.click(await screen.findByRole('button', { name: 'Check updated addresses' }));
+    expect(screen.getByRole('button', { name: 'Checking addresses…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Review and send' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save Jordan Lee card' })).toBeDisabled();
+    reject(new CommandHttpError(503, 'unavailable'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Mailing addresses could not be checked. Nothing was sent.');
+    expect(screen.getByRole('button', { name: 'Check updated addresses' })).toBeEnabled();
+    expect(api.update).toHaveBeenCalledTimes(1);
+    expect(api.approveAndSend).not.toHaveBeenCalled();
+  });
+
   it('shows disconnected and missing-address gates without offering send', async () => {
     const campaign: CardCampaignDetail = {
       ...readyCampaign,
@@ -293,6 +453,7 @@ describe('CardCampaignReview', () => {
 
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry send/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check updated addresses' })).not.toBeInTheDocument();
   });
 
   it('renders a recoverable unavailable state when the campaign cannot load', async () => {

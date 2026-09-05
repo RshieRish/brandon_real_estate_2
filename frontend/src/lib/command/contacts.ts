@@ -129,6 +129,20 @@ type ContactWorkspaceSummaryBase = Readonly<{
   notes: number;
   saved_searches: number;
   bookings: number;
+  internal_counts?: ContactWorkspaceCounts | null;
+  recovered_counts?: ContactWorkspaceCounts | null;
+}>;
+
+export type ContactWorkspaceCounts = Readonly<{
+  active_tasks: number;
+  completed_tasks: number;
+  cancelled_tasks: number;
+  archived_tasks: number;
+  active_smart_plans: number;
+  opportunities: number;
+  notes: number;
+  saved_searches: number;
+  bookings: number;
 }>;
 
 type LegacyContactWorkspaceTaskSummary = Readonly<{
@@ -152,7 +166,7 @@ export type ContactWorkspaceSummary = ContactWorkspaceSummaryBase & (
 );
 
 export type ContactOccurrence =
-  | Readonly<{ kind: 'opportunity'; title: string; stage: string | null; value_cents: number | null }>
+  | Readonly<{ kind: 'opportunity'; title: string; stage: string | null; value_cents: number | null; budget?: string | null }>
   | Readonly<{ kind: 'smart_plan'; title: string; status: string | null }>
   | Readonly<{
       kind: 'task';
@@ -160,6 +174,8 @@ export type ContactOccurrence =
       description: string | null;
       state: 'to_do' | 'completed' | 'archived';
       due_at: string | null;
+      due_date?: string | null;
+      due_date_text?: string | null;
     }>
   | Readonly<{ kind: 'note'; title: string; body: string | null }>
   | Readonly<{ kind: 'saved_search'; title: string; criteria_summary: readonly string[] }>;
@@ -201,12 +217,15 @@ export type ContactTimelineEntry = Readonly<{
   source_record_id: number | null;
   entity_type: string;
   entity_id: number;
+  captured_date?: string | null;
+  captured_time?: string | null;
 }>;
 
 export type ContactTimelinePage = Readonly<{
   rows: readonly ContactTimelineEntry[];
   next_cursor: string | null;
   has_more: boolean;
+  filtered_capture_count?: number;
 }>;
 
 export type ContactArtifactMetadata = Readonly<{
@@ -429,6 +448,7 @@ export type ContactInternalNote = Readonly<{
 export type ContactInternalSmartPlan = Readonly<{
   id: number;
   plan_id: number;
+  plan_name?: string | null;
   status: string;
 }>;
 
@@ -444,6 +464,7 @@ export type ContactInternalSavedSearch = Readonly<{
   id: number;
   name: string;
   criteria: string;
+  criteria_summary?: readonly string[];
 }>;
 
 export type ContactInternalBooking = Readonly<{
@@ -909,7 +930,13 @@ export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (
     && input !== null
     && !Array.isArray(input)
     && additiveKeys.some((key) => Object.hasOwn(input, key));
-  const keys = hasAdditiveKey ? [...legacyKeys, ...additiveKeys] : legacyKeys;
+  const hasOriginCounts = typeof input === 'object' && input !== null && !Array.isArray(input)
+    && ['internal_counts', 'recovered_counts'].some((key) => Object.hasOwn(input, key));
+  const keys = [
+    ...legacyKeys,
+    ...(hasAdditiveKey ? additiveKeys : []),
+    ...(hasOriginCounts ? ['internal_counts', 'recovered_counts'] : []),
+  ];
   const read = objectReader(input, keys, path);
   const legacy = {
     open_tasks: nonnegativeInteger(read('open_tasks'), `${path}.open_tasks`),
@@ -921,7 +948,10 @@ export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (
     saved_searches: nonnegativeInteger(read('saved_searches'), `${path}.saved_searches`),
     bookings: nonnegativeInteger(read('bookings'), `${path}.bookings`),
   };
-  if (!hasAdditiveKey) return legacy;
+  if (!hasAdditiveKey) {
+    if (hasOriginCounts) return invalid(path, 'complete summary with origin counts');
+    return legacy;
+  }
   const additive = {
     active_tasks: nonnegativeInteger(read('active_tasks'), `${path}.active_tasks`),
     cancelled_tasks: nonnegativeInteger(read('cancelled_tasks'), `${path}.cancelled_tasks`),
@@ -938,7 +968,27 @@ export const decodeContactWorkspaceSummary: Decoder<ContactWorkspaceSummary> = (
       additive.archived_mutable_tasks + additive.archived_recovered_evidence
     )
   ) return invalid(path, 'consistent task summary totals');
-  return { ...legacy, ...additive };
+  const summary = { ...legacy, ...additive };
+  if (!hasOriginCounts) return summary;
+  if (read('internal_counts') === null && read('recovered_counts') === null) {
+    return { ...summary, internal_counts: null, recovered_counts: null };
+  }
+  const countKeys = [
+    'active_tasks', 'completed_tasks', 'cancelled_tasks', 'archived_tasks',
+    'active_smart_plans', 'opportunities', 'notes', 'saved_searches', 'bookings',
+  ] as const;
+  const counts = (value: unknown, countPath: string): ContactWorkspaceCounts => {
+    const readCount = objectReader(value, countKeys, countPath);
+    return Object.fromEntries(countKeys.map((key) => [
+      key, nonnegativeInteger(readCount(key), `${countPath}.${key}`),
+    ])) as ContactWorkspaceCounts;
+  };
+  const internalCounts = counts(read('internal_counts'), `${path}.internal_counts`);
+  const recoveredCounts = counts(read('recovered_counts'), `${path}.recovered_counts`);
+  if (countKeys.some((key) => summary[key] !== internalCounts[key] + recoveredCounts[key])) {
+    return invalid(path, 'consistent workspace origin counts');
+  }
+  return { ...summary, internal_counts: internalCounts, recovered_counts: recoveredCounts };
 };
 
 function occurrenceValue(input: unknown, path: string): ContactOccurrence {
@@ -949,13 +999,15 @@ function occurrenceValue(input: unknown, path: string): ContactOccurrence {
     `${path}.kind`,
   );
   if (kind === 'opportunity') {
-    const read = objectReader(input, ['kind', 'title', 'stage', 'value_cents'], path);
+    const hasBudget = Object.hasOwn(input, 'budget');
+    const read = objectReader(input, ['kind', 'title', 'stage', 'value_cents', ...(hasBudget ? ['budget'] : [])], path);
     const rawValue = read('value_cents');
     return {
       kind,
       title: stringValue(read('title'), `${path}.title`),
       stage: nullableString(read('stage'), `${path}.stage`),
       value_cents: rawValue === null ? null : nonnegativeInteger(rawValue, `${path}.value_cents`),
+      ...(hasBudget ? { budget: read('budget') === null ? null : stringValue(read('budget'), `${path}.budget`, 0, 120) } : {}),
     };
   }
   if (kind === 'smart_plan') {
@@ -963,13 +1015,21 @@ function occurrenceValue(input: unknown, path: string): ContactOccurrence {
     return { kind, title: stringValue(read('title'), `${path}.title`), status: nullableString(read('status'), `${path}.status`) };
   }
   if (kind === 'task') {
-    const read = objectReader(input, ['kind', 'title', 'description', 'state', 'due_at'], path);
+    const hasDueDate = Object.hasOwn(input, 'due_date') || Object.hasOwn(input, 'due_date_text');
+    const read = objectReader(input, [
+      'kind', 'title', 'description', 'state', 'due_at',
+      ...(hasDueDate ? ['due_date', 'due_date_text'] : []),
+    ], path);
     return {
       kind,
       title: stringValue(read('title'), `${path}.title`),
       description: nullableString(read('description'), `${path}.description`),
       state: enumValue(read('state'), ['to_do', 'completed', 'archived'], `${path}.state`),
       due_at: nullableRfc3339(read('due_at'), `${path}.due_at`),
+      ...(hasDueDate ? {
+        due_date: nullableDate(read('due_date'), `${path}.due_date`),
+        due_date_text: read('due_date_text') === null ? null : stringValue(read('due_date_text'), `${path}.due_date_text`, 0, 120),
+      } : {}),
     };
   }
   if (kind === 'note') {
@@ -1029,11 +1089,18 @@ export const decodeContactSectionPage: Decoder<ContactSectionPage> = (input, pat
 };
 
 function timelineEntryValue(input: unknown, path: string): ContactTimelineEntry {
+  const hasCapturedDate = typeof input === 'object' && input !== null
+    && (Object.hasOwn(input, 'captured_date') || Object.hasOwn(input, 'captured_time'));
   const read = objectReader(
     input,
-    ['key', 'origin', 'kind', 'title', 'body', 'outcome', 'occurred_at', 'source_record_id', 'entity_type', 'entity_id'],
+    ['key', 'origin', 'kind', 'title', 'body', 'outcome', 'occurred_at', 'source_record_id', 'entity_type', 'entity_id',
+      ...(hasCapturedDate ? ['captured_date', 'captured_time'] : [])],
     path,
   );
+  const capturedTime = hasCapturedDate ? nullableString(read('captured_time'), `${path}.captured_time`) : null;
+  if (capturedTime !== null && !/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(capturedTime)) {
+    return invalid(`${path}.captured_time`, 'captured clock time HH:MM:SS');
+  }
   return {
     key: stringValue(read('key'), `${path}.key`),
     origin: enumValue(read('origin'), ['recovered', 'internal_crm', 'legacy_lead', 'booking'], `${path}.origin`),
@@ -1045,15 +1112,21 @@ function timelineEntryValue(input: unknown, path: string): ContactTimelineEntry 
     source_record_id: nullablePositiveInteger(read('source_record_id'), `${path}.source_record_id`),
     entity_type: stringValue(read('entity_type'), `${path}.entity_type`),
     entity_id: positiveInteger(read('entity_id'), `${path}.entity_id`),
+    ...(hasCapturedDate ? {
+      captured_date: nullableDate(read('captured_date'), `${path}.captured_date`),
+      captured_time: capturedTime,
+    } : {}),
   };
 }
 
 export const decodeContactTimelinePage: Decoder<ContactTimelinePage> = (input, path = 'response') => {
-  const read = objectReader(input, ['rows', 'next_cursor', 'has_more'], path);
+  const hasFilteredCount = typeof input === 'object' && input !== null && Object.hasOwn(input, 'filtered_capture_count');
+  const read = objectReader(input, ['rows', 'next_cursor', 'has_more', ...(hasFilteredCount ? ['filtered_capture_count'] : [])], path);
   return {
     rows: arrayValue(read('rows'), `${path}.rows`, timelineEntryValue),
     next_cursor: nullableString(read('next_cursor'), `${path}.next_cursor`),
     has_more: booleanValue(read('has_more'), `${path}.has_more`),
+    ...(hasFilteredCount ? { filtered_capture_count: nonnegativeInteger(read('filtered_capture_count'), `${path}.filtered_capture_count`) } : {}),
   };
 };
 
@@ -1375,10 +1448,12 @@ function internalNoteValue(input: unknown, path: string): ContactInternalNote {
 }
 
 function internalSmartPlanValue(input: unknown, path: string): ContactInternalSmartPlan {
-  const read = objectReader(input, ['id', 'plan_id', 'status'], path);
+  const hasName = typeof input === 'object' && input !== null && Object.hasOwn(input, 'plan_name');
+  const read = objectReader(input, ['id', 'plan_id', 'status', ...(hasName ? ['plan_name'] : [])], path);
   return {
     id: positiveInteger(read('id'), `${path}.id`),
     plan_id: positiveInteger(read('plan_id'), `${path}.plan_id`),
+    ...(hasName ? { plan_name: nullableString(read('plan_name'), `${path}.plan_name`) } : {}),
     status: stringValue(read('status'), `${path}.status`),
   };
 }
@@ -1398,11 +1473,15 @@ function internalOpportunityValue(input: unknown, path: string): ContactInternal
 }
 
 function internalSavedSearchValue(input: unknown, path: string): ContactInternalSavedSearch {
-  const read = objectReader(input, ['id', 'name', 'criteria'], path);
+  const hasCriteriaSummary = typeof input === 'object' && input !== null && Object.hasOwn(input, 'criteria_summary');
+  const read = objectReader(input, ['id', 'name', 'criteria', ...(hasCriteriaSummary ? ['criteria_summary'] : [])], path);
   return {
     id: positiveInteger(read('id'), `${path}.id`),
     name: stringValue(read('name'), `${path}.name`),
     criteria: stringValue(read('criteria'), `${path}.criteria`),
+    ...(hasCriteriaSummary ? { criteria_summary: arrayValue(
+      read('criteria_summary'), `${path}.criteria_summary`, (value, itemPath) => stringValue(value, itemPath),
+    ) } : {}),
   };
 }
 

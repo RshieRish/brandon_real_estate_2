@@ -78,6 +78,195 @@ async def agent_crm_runtime(agent_crm_database):
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_active_tasks_filters_status_archive_and_controlled_markers_before_limit(
+    agent_crm_runtime,
+):
+    from datetime import datetime, timedelta, timezone
+
+    from models.agent_action_audit import AgentActionAudit
+    from models.command import CRMTask
+    from routers.agent_control_crm import list_crm_tasks
+
+    now = datetime.now(timezone.utc)
+    titles = [
+        ("Prepare offer", "open", None),
+        ("Arrange inspection", "in_progress", None),
+        ("Completed call", "completed", None),
+        ("Archived call", "open", now),
+        ("[ROLLOUT TEST][Task 9] Verify task creation", "open", None),
+        ("  [ rollout-test ] Check reminder", "in_progress", None),
+        ("[CONTROLLED TEST] Test review", "open", None),
+    ]
+    async with agent_crm_runtime() as session:
+        for index, (title, status, archived_at) in enumerate(titles):
+            session.add(
+                CRMTask(
+                    title=title,
+                    status=status,
+                    archived_at=archived_at,
+                    updated_at=now + timedelta(seconds=index),
+                )
+            )
+        await session.commit()
+    async with agent_crm_runtime() as session:
+        response = await list_crm_tasks(
+            _request("/api/v1/agent-control/crm/tasks"), 2, session, {"actor": "hermes"}
+        )
+        await session.commit()
+    assert [task.title for task in response.tasks] == [
+        "Arrange inspection",
+        "Prepare offer",
+    ]
+    async with agent_crm_runtime() as session:
+        rows = list(
+            (await session.scalars(sa.select(CRMTask).order_by(CRMTask.id))).all()
+        )
+        assert [(row.title, row.status, row.archived_at) for row in rows] == titles
+        audits = list((await session.scalars(sa.select(AgentActionAudit))).all())
+        assert len(audits) == 1
+        assert audits[0].action_id == "crm.tasks.read"
+
+
+@pytest.mark.asyncio
+async def test_active_tasks_keeps_ordinary_titles_with_test_or_rollout_words(
+    agent_crm_runtime,
+):
+    from models.command import CRMTask
+    from routers.agent_control_crm import list_crm_tasks
+
+    titles = [
+        "Schedule water test",
+        "Discuss the rollout test results with seller",
+        "[TEST] Inspect smoke detectors",
+        "[ROLLOUT TESTING] Review marketing plan",
+        "[ROLLOUT TESTIMONIAL] Contact buyer",
+    ]
+    async with agent_crm_runtime() as session:
+        session.add_all([CRMTask(title=title) for title in titles])
+        await session.commit()
+    async with agent_crm_runtime() as session:
+        response = await list_crm_tasks(
+            _request("/api/v1/agent-control/crm/tasks"),
+            10,
+            session,
+            {"actor": "hermes"},
+        )
+    assert {task.title for task in response.tasks} == set(titles)
+
+
+def _task_read_app(monkeypatch, sessions):
+    from database import get_db
+    from routers import agent_control_crm
+
+    async def test_db():
+        async with sessions() as session:
+            yield session
+            await session.commit()
+
+    app = FastAPI()
+    app.include_router(agent_control_crm.router, prefix="/api/v1/agent-control")
+    app.dependency_overrides[get_db] = test_db
+    monkeypatch.setattr("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True)
+    monkeypatch.setattr(
+        "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "task-read-test-token"
+    )
+    return app
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ({}, ["Open task"]),
+        ({"task_mode": "history"}, ["Cancelled task", "Completed task", "Open task"]),
+        (
+            {"include_controlled_tests": "true"},
+            ["[ROLLOUT TEST] Open task", "Open task"],
+        ),
+        (
+            {"task_mode": "history", "include_controlled_tests": "true"},
+            [
+                "[ROLLOUT TEST] Completed task",
+                "[ROLLOUT TEST] Open task",
+                "Cancelled task",
+            ],
+        ),
+    ],
+)
+async def test_task_read_history_and_controlled_test_opt_in(
+    agent_crm_runtime, monkeypatch, query, expected
+):
+    from datetime import datetime, timedelta, timezone
+
+    from models.agent_action_audit import AgentActionAudit
+    from models.command import CRMTask
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        ("Open task", "open", None),
+        ("Completed task", "completed", None),
+        ("Cancelled task", "cancelled", None),
+        ("Archived task", "open", now),
+        ("[ROLLOUT TEST] Open task", "open", None),
+        ("[ROLLOUT TEST] Completed task", "completed", None),
+        ("[ROLLOUT TEST] Archived task", "open", now),
+    ]
+    async with agent_crm_runtime() as session:
+        session.add_all(
+            [
+                CRMTask(
+                    title=title,
+                    status=status,
+                    archived_at=archived_at,
+                    updated_at=now + timedelta(seconds=index),
+                )
+                for index, (title, status, archived_at) in enumerate(rows)
+            ]
+        )
+        await session.commit()
+    app = _task_read_app(monkeypatch, agent_crm_runtime)
+    with TestClient(app) as client:
+        assert (
+            client.get("/api/v1/agent-control/crm/tasks", params=query).status_code
+            == 401
+        )
+        response = client.get(
+            "/api/v1/agent-control/crm/tasks",
+            params={"limit": 3, **query},
+            headers={"Authorization": "Bearer task-read-test-token"},
+        )
+    assert response.status_code == 200
+    assert [task["title"] for task in response.json()["tasks"]] == expected
+    async with agent_crm_runtime() as session:
+        assert await session.scalar(
+            sa.select(sa.func.count()).select_from(CRMTask)
+        ) == len(rows)
+        audit = (await session.scalars(sa.select(AgentActionAudit))).one()
+        assert json.loads(audit.response_meta_json) == {
+            "count": len(expected),
+            "task_mode": query.get("task_mode", "active"),
+            "include_controlled_tests": query.get("include_controlled_tests") == "true",
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query", [{"task_mode": "everything"}, {"include_controlled_tests": "maybe"}]
+)
+async def test_task_read_rejects_unknown_history_modes_and_invalid_opt_ins(
+    agent_crm_runtime, monkeypatch, query
+):
+    app = _task_read_app(monkeypatch, agent_crm_runtime)
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/agent-control/crm/tasks",
+            params=query,
+            headers={"Authorization": "Bearer task-read-test-token"},
+        )
+    assert response.status_code == 422
+
+
 def test_registry_advertises_exactly_six_review_only_crm_actions():
     from routers.agent_control import AGENT_ACTIONS
 

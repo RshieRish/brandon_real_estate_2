@@ -895,6 +895,19 @@ class ContactNeighbors:
 
 
 @dataclass(frozen=True, slots=True)
+class ContactWorkspaceCounts:
+    active_tasks: int
+    completed_tasks: int
+    cancelled_tasks: int
+    archived_tasks: int
+    active_smart_plans: int
+    opportunities: int
+    notes: int
+    saved_searches: int
+    bookings: int
+
+
+@dataclass(frozen=True, slots=True)
 class ContactWorkspaceSummary:
     open_tasks: int
     active_tasks: int
@@ -908,6 +921,8 @@ class ContactWorkspaceSummary:
     notes: int
     saved_searches: int
     bookings: int
+    internal_counts: ContactWorkspaceCounts | None = None
+    recovered_counts: ContactWorkspaceCounts | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -916,6 +931,7 @@ class ContactOpportunityOccurrence:
     title: str
     stage: str | None
     value_cents: int | None
+    budget: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -932,6 +948,8 @@ class ContactTaskOccurrence:
     description: str | None
     state: Literal["to_do", "completed", "archived"]
     due_at: datetime | None
+    due_date: str | None = None
+    due_date_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1414,6 +1432,8 @@ class ContactTimelineEntry:
     source_record_id: int | None
     entity_type: str
     entity_id: int
+    captured_date: date | None = None
+    captured_time: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1421,6 +1441,7 @@ class ContactTimelinePage:
     rows: tuple[ContactTimelineEntry, ...]
     next_cursor: str | None
     has_more: bool
+    filtered_capture_count: int = 0
 
 
 __all__ = [

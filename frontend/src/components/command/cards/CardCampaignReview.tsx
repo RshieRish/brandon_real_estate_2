@@ -120,10 +120,12 @@ function statusContent(status: CardCampaignStatus): Readonly<{
 function RecipientEditor({
   recipient,
   editable,
+  busy,
   onSave,
 }: Readonly<{
   recipient: CardRecipient;
   editable: boolean;
+  busy: boolean;
   onSave: (input: Readonly<{
     message: string;
     designKey: string;
@@ -137,13 +139,29 @@ function RecipientEditor({
   const [exclusionReason, setExclusionReason] = useState(recipient.exclusion_reason ?? '');
   const [saving, setSaving] = useState(false);
   const [validation, setValidation] = useState<string | null>(null);
+  const serverValues = useRef({
+    message: recipient.message,
+    designKey: recipient.design_key,
+    excluded: recipient.excluded,
+    exclusionReason: recipient.exclusion_reason ?? '',
+  });
 
   useEffect(() => {
-    setMessage(recipient.message);
-    setDesignKey(recipient.design_key);
-    setExcluded(recipient.excluded);
-    setExclusionReason(recipient.exclusion_reason ?? '');
-  }, [recipient]);
+    const previous = serverValues.current;
+    // Each editor is keyed by recipient ID. Merge only fields that still match
+    // their prior server value so another tab cannot erase local draft edits.
+    setMessage((current) => current === previous.message ? recipient.message : current);
+    setDesignKey((current) => current === previous.designKey ? recipient.design_key : current);
+    setExcluded((current) => current === previous.excluded ? recipient.excluded : current);
+    setExclusionReason((current) => current === previous.exclusionReason
+      ? recipient.exclusion_reason ?? '' : current);
+    serverValues.current = {
+      message: recipient.message,
+      designKey: recipient.design_key,
+      excluded: recipient.excluded,
+      exclusionReason: recipient.exclusion_reason ?? '',
+    };
+  }, [recipient.message, recipient.design_key, recipient.excluded, recipient.exclusion_reason]);
 
   async function save() {
     if (message.trim().length === 0) {
@@ -224,7 +242,7 @@ function RecipientEditor({
           onChange={(event) => setMessage(event.target.value)}
           rows={4}
           maxLength={2000}
-          disabled={!editable || saving}
+          disabled={!editable || saving || busy}
         />
       </label>
       <label className="command-card-field">
@@ -233,7 +251,7 @@ function RecipientEditor({
           value={designKey}
           onChange={(event) => setDesignKey(event.target.value)}
           maxLength={120}
-          disabled={!editable || saving}
+          disabled={!editable || saving || busy}
         />
       </label>
       <label className="command-card-check">
@@ -246,7 +264,7 @@ function RecipientEditor({
               setExclusionReason('Mailing address unavailable.');
             }
           }}
-          disabled={!editable || saving}
+          disabled={!editable || saving || busy}
         />
         Exclude {recipient.display_name} from this campaign
       </label>
@@ -257,7 +275,7 @@ function RecipientEditor({
             value={exclusionReason}
             onChange={(event) => setExclusionReason(event.target.value)}
             maxLength={500}
-            disabled={!editable || saving}
+            disabled={!editable || saving || busy}
           />
         </label>
       ) : null}
@@ -267,7 +285,7 @@ function RecipientEditor({
           type="button"
           className="command-secondary-button command-touch-target command-card-save"
           onClick={() => void save()}
-          disabled={saving}
+          disabled={saving || busy}
         >
           <FloppyDisk aria-hidden="true" size={18} />
           {saving ? `Saving ${recipient.display_name}…` : `Save ${recipient.display_name} card`}
@@ -286,6 +304,8 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [sending, setSending] = useState(false);
+  const [refreshingAddresses, setRefreshingAddresses] = useState(false);
+  const [savingRecipient, setSavingRecipient] = useState(false);
   const approveTriggerRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -315,7 +335,8 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
       exclusionReason?: string;
     }>,
   ) {
-    if (campaign === null) return;
+    if (campaign === null || refreshingAddresses || savingRecipient || sending) return;
+    setSavingRecipient(true);
     setNotice(null);
     setAlert(null);
     try {
@@ -333,7 +354,7 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
       setNotice(`${recipient.display_name} card saved`);
     } catch (error) {
       if (isCardCampaignConflict(error)) {
-        setAlert('Campaign changed while you were reviewing it. The latest version is shown.');
+        setAlert('Campaign changed while you were reviewing it. Unsaved edits are kept; untouched fields show the latest version. Review before saving.');
         try {
           const authoritative = await api.get(campaignId);
           setCampaign(authoritative);
@@ -344,6 +365,40 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
         return;
       }
       setAlert(`${recipient.display_name} card could not be saved. Nothing was sent.`);
+    } finally {
+      setSavingRecipient(false);
+    }
+  }
+
+  async function refreshMissingAddresses() {
+    if (campaign === null || refreshingAddresses || savingRecipient || sending) return;
+    setRefreshingAddresses(true);
+    setConfirmationOpen(false);
+    setConfirmed(false);
+    setNotice(null);
+    setAlert(null);
+    try {
+      const updated = await api.update(campaignId, {
+        expected_version: campaign.version,
+        refresh_missing_addresses: true,
+      });
+      setCampaign(updated);
+      setNotice('Mailing addresses checked. Review the draft before approving.');
+    } catch (error) {
+      if (isCardCampaignConflict(error)) {
+        setAlert('Campaign changed while addresses were being checked. Unsaved edits are kept; untouched fields show the latest version. Review before saving.');
+        try {
+          const authoritative = await api.get(campaignId);
+          setCampaign(authoritative);
+          setLoadState('ready');
+        } catch {
+          setLoadState('error');
+        }
+        return;
+      }
+      setAlert('Mailing addresses could not be checked. Nothing was sent.');
+    } finally {
+      setRefreshingAddresses(false);
     }
   }
 
@@ -433,7 +488,7 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
             type="button"
             className="command-primary-button command-touch-target"
             onClick={() => setConfirmationOpen(true)}
-            disabled={sending}
+            disabled={sending || refreshingAddresses || savingRecipient}
           >
             <PaperPlaneTilt aria-hidden="true" size={18} weight="fill" />
             Review and send
@@ -485,6 +540,7 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
                   key={recipient.id}
                   recipient={recipient}
                   editable={editable}
+                  busy={refreshingAddresses || savingRecipient || sending}
                   onSave={(input) => saveRecipient(recipient, input)}
                 />
               )) : (
@@ -533,6 +589,26 @@ export function CardCampaignReview({ campaignId, api = cardsApi }: CardCampaignR
                 <EnvelopeOpen aria-hidden="true" size={24} weight="duotone" />
                 <h2>{campaign.missing_address_count} mailing address needed</h2>
                 <p>Open the contact record to add an address, or explicitly exclude the recipient.</p>
+              </section>
+            ) : null}
+
+            {editable && campaign.recipients.some((recipient) => recipient.address_status === 'missing') ? (
+              <section className="command-card-blocker">
+                <h2>Updated a contact’s address?</h2>
+                <p>
+                  Check for complete mailing addresses to fill missing entries in this draft.
+                  Recipients, messages, and exclusions stay unchanged. Nothing is sent.
+                </p>
+                <button
+                  type="button"
+                  className="command-secondary-button command-touch-target"
+                  onClick={() => void refreshMissingAddresses()}
+                  disabled={refreshingAddresses || savingRecipient || sending}
+                  aria-busy={refreshingAddresses}
+                >
+                  <ArrowClockwise aria-hidden="true" size={18} />
+                  {refreshingAddresses ? 'Checking addresses…' : 'Check updated addresses'}
+                </button>
               </section>
             ) : null}
 

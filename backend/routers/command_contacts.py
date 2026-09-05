@@ -19,6 +19,7 @@ from models.command import (
     CRMOpportunity,
     CRMOpportunityContact,
     CRMSavedSearch,
+    CRMSmartPlan,
     CRMSmartPlanEnrollment,
     CRMTag,
     CRMTask,
@@ -440,13 +441,15 @@ async def _legacy_contact_workspace(
             .order_by(CRMActivity.created_at.desc())
         )
     )
-    enrollments = list(
-        await db.scalars(
-            select(CRMSmartPlanEnrollment).where(
+    enrollments = (
+        await db.execute(
+            select(CRMSmartPlanEnrollment, CRMSmartPlan.name)
+            .outerjoin(CRMSmartPlan, CRMSmartPlan.id == CRMSmartPlanEnrollment.smart_plan_id)
+            .where(
                 CRMSmartPlanEnrollment.contact_id == contact_id
             )
         )
-    )
+    ).all()
     opportunity_rows = (
         await db.execute(
             select(CRMOpportunity, CRMOpportunityContact.role)
@@ -542,9 +545,10 @@ async def _legacy_contact_workspace(
             {
                 "id": item.id,
                 "plan_id": item.smart_plan_id,
+                "plan_name": plan_name,
                 "status": item.status,
             }
-            for item in enrollments
+            for item, plan_name in enrollments
         ],
         "opportunities": [
             {
@@ -557,7 +561,12 @@ async def _legacy_contact_workspace(
             for item, role in opportunity_rows
         ],
         "saved_searches": [
-            {"id": item.id, "name": item.name, "criteria": item.criteria_json}
+            {
+                "id": item.id,
+                "name": item.name,
+                "criteria": item.criteria_json,
+                "criteria_summary": contact_service.saved_search_criteria_summary(item.criteria_json),
+            }
             for item in searches
         ],
         "bookings": [

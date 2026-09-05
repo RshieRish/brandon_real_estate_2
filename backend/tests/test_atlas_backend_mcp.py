@@ -69,6 +69,52 @@ class AtlasBackendMcpTests(unittest.TestCase):
     def setUp(self):
         self.bridge = _load_bridge_module()
 
+    def test_task_read_advertises_optional_history_and_controlled_test_flags(self):
+        tool = next(
+            tool
+            for tool in self.bridge.list_tools()
+            if tool["name"] == "crm_tasks_read"
+        )
+        properties = tool["inputSchema"]["properties"]
+        self.assertEqual(
+            properties.get("task_mode"),
+            {
+                "type": "string",
+                "enum": ["active", "history"],
+                "default": "active",
+            },
+        )
+        self.assertEqual(
+            properties.get("include_controlled_tests"),
+            {
+                "type": "boolean",
+                "default": False,
+            },
+        )
+        self.assertFalse(tool["inputSchema"].get("required"))
+
+    def test_task_read_forwards_explicit_history_and_test_opt_in(self):
+        client = FakeBackendClient(response={"tasks": []})
+        arguments = {
+            "limit": 7,
+            "task_mode": "history",
+            "include_controlled_tests": True,
+        }
+
+        self.bridge.call_tool("crm_tasks_read", arguments, client=client)
+
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/v1/agent-control/crm/tasks",
+                    "params": arguments,
+                    "body": None,
+                }
+            ],
+        )
+
     def test_lists_expected_backend_tools(self):
         tools = self.bridge.list_tools()
         tool_names = {tool["name"] for tool in tools}
@@ -325,7 +371,12 @@ class AtlasBackendMcpTests(unittest.TestCase):
                 if name.startswith("crm_")
             },
             {
-                "crm_tasks_read": "Read active CRM task summaries for review.",
+                "crm_tasks_read": (
+                    "Read active CRM tasks by default. task_mode=history includes all "
+                    "nonarchived statuses, including completed and cancelled tasks. "
+                    "Controlled rollout/test records require include_controlled_tests=true. "
+                    "Limit applies after filtering."
+                ),
                 "crm_task_suggestions_read": "Read CRM task suggestions awaiting Brandon review.",
                 "crm_task_clarifications_answer": (
                     "Answer an opaque Sydney clarification with the required suggestion version "

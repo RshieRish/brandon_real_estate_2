@@ -33,6 +33,7 @@ import type {
   ContactSectionPage,
   ContactTimelineEntry,
   ContactWorkspaceSummary,
+  ContactWorkspaceCounts,
   ContactsApi,
 } from '@/lib/command/contacts';
 import {
@@ -77,6 +78,10 @@ const TASK_VIEWS: readonly ContactTaskView[] = ['to_do', 'completed', 'archived'
 const SUMMARY_NON_TASK_KEYS = [
   'active_smart_plans', 'opportunities', 'notes', 'saved_searches', 'bookings',
 ] as const satisfies readonly (keyof ContactWorkspaceSummary)[];
+const SUMMARY_COUNT_KEYS = [
+  'active_tasks', 'completed_tasks', 'cancelled_tasks', 'archived_tasks',
+  ...SUMMARY_NON_TASK_KEYS,
+] as const satisfies readonly (keyof ContactWorkspaceCounts)[];
 const SECTION_FOR_VIEW: Readonly<Partial<Record<ContactDetailView, Exclude<ContactSectionName, 'timeline'>>>> = {
   opportunities: 'opportunities',
   smart_plans: 'smart_plans',
@@ -258,6 +263,65 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function InternalSavedSearchCriteria({ criteria }: Readonly<{ criteria: string }>) {
+  const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(12);
+  const entries = useMemo(() => {
+    try {
+      let unsafeNumber = false;
+      const parsed: unknown = JSON.parse(criteria, (_key, value: unknown) => {
+        if (typeof value === 'number' && (!Number.isFinite(value)
+          || (Number.isInteger(value) && !Number.isSafeInteger(value)))) unsafeNumber = true;
+        return value;
+      });
+      return !unsafeNumber && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? Object.entries(parsed) : null;
+    } catch {
+      return null;
+    }
+  }, [criteria]);
+
+  return (
+    <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary className="command-inline-button command-touch-target">
+        <CaretDown aria-hidden="true" size={15} className={expanded ? 'rotate-180' : undefined} />
+        All stored search criteria
+      </summary>
+      {expanded ? entries === null ? (
+        <>
+          <p>Original stored criteria</p>
+          <ContactExpandableValue value={criteria} limit={420} element="p" label="stored criteria" />
+        </>
+      ) : entries.length === 0 ? <p>No search criteria recorded</p> : (
+        <>
+          <dl className="command-contact-profile-list">
+            {entries.slice(0, visibleCount).map(([key, value]) => {
+              const label = key.replace(/[_-]+/g, ' ') || '(empty key)';
+              const storedValue = typeof value === 'string' && value.length > 0
+                ? value : JSON.stringify(value, null, 2);
+              return (
+                <div key={key}>
+                  <dt><ContactExpandableValue value={label} limit={80} element="strong" label="criterion name" /></dt>
+                  <dd className="whitespace-pre-wrap">
+                    <ContactExpandableValue value={storedValue} limit={320} element="p" label={`${label} criterion`} />
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+          {entries.length > visibleCount ? (
+            <button
+              type="button"
+              className="command-inline-button command-touch-target"
+              onClick={() => setVisibleCount((count) => count + 12)}
+            >Show more stored criteria</button>
+          ) : null}
+        </>
+      ) : null}
+    </details>
+  );
+}
+
 function InternalCards({
   section,
   workspace,
@@ -287,7 +351,7 @@ function InternalCards({
   if (section === 'smart_plans') {
     return <div className="command-contact-cards">{workspace.smart_plans.map((row) => (
       <article key={row.id} className="command-contact-record-card" aria-label={`SWS internal SmartPlan ${row.id}`}>
-        <h4>Plan #{row.plan_id}</h4><p>{row.status}</p>
+        <h4>{row.plan_name?.trim() || 'SmartPlan name unavailable'}</h4><p>{row.status}</p>
       </article>
     ))}</div>;
   }
@@ -308,7 +372,11 @@ function InternalCards({
   if (section === 'saved_searches') {
     return <div className="command-contact-cards">{workspace.saved_searches.map((row) => (
       <article key={row.id} className="command-contact-record-card" aria-label={`SWS internal saved search ${row.id}`}>
-        <h4>{row.name}</h4><code>{row.criteria}</code>
+        <h4>{row.name}</h4>
+        {row.criteria_summary && row.criteria_summary.length > 0
+          ? row.criteria_summary.map((criterion) => <p key={criterion}>{criterion}</p>)
+          : <p>Search criteria summary unavailable</p>}
+        <InternalSavedSearchCriteria criteria={row.criteria} />
       </article>
     ))}</div>;
   }
@@ -321,6 +389,7 @@ function InternalCards({
           <h4>{row.title}</h4>
           {row.description ? <p>{row.description}</p> : null}
           <p>{row.status}</p>
+          {row.due_at ? <time dateTime={row.due_at}>Due {new Date(row.due_at).toLocaleString()}</time> : null}
           {section === 'tasks_archived' && lifecycleInternalTask(row) ? (
             <>
               <time dateTime={row.archived_at ?? undefined}>Archived {new Date(row.archived_at!).toLocaleString()}</time>
@@ -374,6 +443,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
   const [timelineRows, setTimelineRows] = useState<readonly ContactTimelineEntry[]>([]);
   const [timelineCursor, setTimelineCursor] = useState<string | null>(null);
   const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [timelineFilteredCount, setTimelineFilteredCount] = useState(0);
   const [timelineLoading, setTimelineLoading] = useState(true);
   const [timelineLoadingMore, setTimelineLoadingMore] = useState(false);
   const [timelineFailed, setTimelineFailed] = useState(false);
@@ -661,6 +731,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
         setTimelineRows((current) => append ? [...current, ...page.rows] : page.rows);
         setTimelineCursor(page.next_cursor);
         setTimelineHasMore(page.has_more);
+        setTimelineFilteredCount(page.filtered_capture_count ?? 0);
         return true;
       } catch (error) {
         if (!controller.signal.aborted && !abortError(error) && mountedRef.current && timelineRecordRef.current === record) {
@@ -859,6 +930,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
     setTimelineRows([]);
     setTimelineCursor(null);
     setTimelineHasMore(false);
+    setTimelineFilteredCount(0);
     setTimelineLoadMoreFailed(false);
     setOutsideUniverse(false);
     setNeighborUniverseKey(null);
@@ -1553,10 +1625,20 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
           <aside className="command-contact-summary-strip" aria-label="Contact workspace counts">
             <div className="command-contact-summary-heading">
               <span>Current workspace</span>
-              <strong>SWS-owned records</strong>
+              <strong>SWS &amp; recovered records</strong>
             </div>
             {summary && currentDetail ? (
-              <>
+              summary.internal_counts && summary.recovered_counts ? (
+                SUMMARY_COUNT_KEYS.map((key) => (
+                  <span key={key}>
+                    <strong>{summary.internal_counts![key]} SWS</strong>
+                    {key !== 'bookings' ? (
+                      <span title="Recovered source records without a verified SWS link">{summary.recovered_counts![key]} recovered</span>
+                    ) : null}
+                    <span>{key.replaceAll('_', ' ')}</span>
+                  </span>
+                ))
+              ) : <>
                 <span><strong>{typeof summary.active_tasks === 'number' ? summary.active_tasks : summary.open_tasks}</strong>{typeof summary.active_tasks === 'number' ? 'active tasks' : 'open tasks'}</span>
                 <span><strong>{summary.completed_tasks}</strong>completed tasks</span>
                 {typeof summary.cancelled_tasks === 'number' ? <span><strong>{summary.cancelled_tasks}</strong>cancelled tasks</span> : null}
@@ -1590,7 +1672,7 @@ export function ContactDetailWorkspace({ contactId, api = contactsApi }: Contact
             const tabId = `contact-detail-view-tab-${panelView}`;
             return (
               <section key={panelView} id={panelId} role="tabpanel" aria-labelledby={tabId} hidden={!selected} className="command-contact-detail-panel">
-                {panelView === 'timeline' ? <ContactTimelineTab rows={visibleTimelineRows} evidence={currentEvidence} evidenceStatus={evidenceStatus} loading={timelineLoading} error={timelineFailed} hasMore={timelineHasMore} loadingMore={timelineLoadingMore} loadMoreError={timelineLoadMoreFailed} onRetry={() => void loadTimeline(false, null)} onRetryEvidence={() => void loadEvidence()} onLoadMore={() => void loadTimeline(true, timelineCursor)} /> : null}
+                {panelView === 'timeline' ? <ContactTimelineTab rows={visibleTimelineRows} filteredCaptureCount={timelineFilteredCount} evidence={currentEvidence} evidenceStatus={evidenceStatus} loading={timelineLoading} error={timelineFailed} hasMore={timelineHasMore} loadingMore={timelineLoadingMore} loadMoreError={timelineLoadMoreFailed} onRetry={() => void loadTimeline(false, null)} onRetryEvidence={() => void loadEvidence()} onLoadMore={() => void loadTimeline(true, timelineCursor)} /> : null}
                 {panelView === 'tasks' ? (
                   <>
                     <ContactTaskTabs value={taskView} onChange={writeTask} />

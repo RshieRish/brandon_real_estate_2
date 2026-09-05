@@ -9,7 +9,7 @@ from fastapi import (
     Header,
     HTTPException,
     Path,
-    Response,
+    Query,
     UploadFile,
     status,
 )
@@ -28,7 +28,6 @@ from models.command import (
     CRMAgreementEvent,
     CRMAgreementRecipient,
     CRMAgreementTemplate,
-    CRMArchiveArtifact,
     CRMContact,
     CRMFileAsset,
     CRMGoal,
@@ -99,6 +98,7 @@ from schemas.command_contacts import (
     canonical_saved_search_criteria,
 )
 from services import command_contacts as contact_service
+from services import command_archive_browser as archive_browser
 from services.command_contact_contracts import (
     ContactImportRowCommand,
     ContactMutationResult,
@@ -230,32 +230,42 @@ async def reports_summary(db:AsyncSession=Depends(get_db)):
 @router.get("/archive/artifacts")
 async def archive_artifacts(domain: str | None = None, artifact_type: str | None = None, limit: int = 100, offset: int = 0, db: AsyncSession = Depends(get_db)):
     """Browse the complete private recovered-archive catalog."""
-    statement = select(CRMArchiveArtifact).order_by(CRMArchiveArtifact.source_path)
-    if domain:
-        statement = statement.where(CRMArchiveArtifact.domain == domain)
-    if artifact_type:
-        statement = statement.where(CRMArchiveArtifact.artifact_type == artifact_type)
-    count_statement = select(func.count()).select_from(CRMArchiveArtifact)
-    if domain:
-        count_statement = count_statement.where(CRMArchiveArtifact.domain == domain)
-    if artifact_type:
-        count_statement = count_statement.where(CRMArchiveArtifact.artifact_type == artifact_type)
-    total = int((await db.execute(count_statement)).scalar_one())
-    rows = (await db.execute(statement.offset(max(offset, 0)).limit(min(max(limit, 1), 200)))).scalars().all()
-    return {"total": total, "rows": [{"id": row.id, "domain": row.domain, "artifact_type": row.artifact_type, "filename": row.filename, "source_path": row.source_path, "sha256": row.sha256, "size_bytes": row.size_bytes, "text_preview": row.text_preview} for row in rows]}
+    return await archive_browser.flat_catalog(db, domain=domain, artifact_type=artifact_type, limit=min(max(limit, 1), 200), offset=max(offset, 0))
+
+
+@router.get("/archive/browse")
+async def archive_browse(
+    domain: Annotated[str | None, Query(max_length=64)] = None,
+    path: Annotated[str, Query(max_length=1000)] = "",
+    query: Annotated[str, Query(max_length=500)] = "",
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    return await archive_browser.browse_catalog(db, domain=domain, path=path, query=query, limit=limit, offset=offset)
 
 
 @router.get("/archive/artifacts/{artifact_id}/content")
 async def archive_artifact_content(artifact_id: int, db: AsyncSession = Depends(get_db)):
     """Return an original recovered artifact only to an authenticated admin."""
-    artifact = await db.get(CRMArchiveArtifact, artifact_id)
-    if not artifact:
-        raise HTTPException(404, "Recovered artifact not found")
-    if artifact.content_bytes is None:
-        raise HTTPException(409, "Recovered artifact bytes are not yet stored internally")
-    media_type = {"html": "text/html", "json": "application/json", "txt": "text/plain", "csv": "text/csv", "zip": "application/zip", "png": "image/png", "pdf": "application/pdf"}.get(artifact.artifact_type, "application/octet-stream")
-    safe_name = artifact.filename.replace('"', "")
-    return Response(content=artifact.content_bytes, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{safe_name}"', "X-Content-Type-Options": "nosniff"})
+    return await archive_browser.download_original(db, artifact_id)
+
+
+@router.get("/archive/artifacts/{artifact_id}/members")
+async def archive_bundle_members(
+    artifact_id: int,
+    path: Annotated[str, Query(max_length=1000)] = "",
+    query: Annotated[str, Query(max_length=500)] = "",
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    return await archive_browser.browse_bundle(db, artifact_id, path=path, query=query, limit=limit, offset=offset)
+
+
+@router.get("/archive/artifacts/{artifact_id}/members/{member_index}/content")
+async def archive_bundle_member_content(artifact_id: int, member_index: int, db: AsyncSession = Depends(get_db)):
+    return await archive_browser.download_member(db, artifact_id, member_index)
 
 
 @router.get("/reports/details/{metric}")

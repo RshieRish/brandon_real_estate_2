@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, Ref } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive,
@@ -121,6 +121,38 @@ function apiLifecycleRequest(intent: TaskLifecycleIntent): TaskLifecycleRequest 
 
 function actionLabel(action: LifecycleAction): string {
   return action === 'archive' ? 'Archive' : 'Restore';
+}
+
+function TaskSelectionCheckbox({
+  label,
+  checked,
+  disabled,
+  onChange,
+  inputRef,
+}: Readonly<{
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: () => void;
+  inputRef?: Ref<HTMLInputElement>;
+}>) {
+  return (
+    <span className={`relative grid h-11 w-11 shrink-0 place-items-center sm:h-4 sm:w-4${disabled ? ' opacity-40' : ''}`}>
+      <input
+        ref={inputRef}
+        type="checkbox"
+        aria-label={label}
+        disabled={disabled}
+        checked={checked}
+        onChange={onChange}
+        className="peer absolute inset-0 h-11 w-11 shrink-0 cursor-pointer accent-[#eac469] opacity-0 disabled:cursor-not-allowed sm:static sm:h-4 sm:w-4 sm:opacity-100"
+      />
+      <span aria-hidden="true" className="pointer-events-none h-4 w-4 rounded-[3px] border border-white/50 bg-black/20 peer-checked:border-[#eac469] peer-checked:bg-[#eac469] peer-indeterminate:border-[#eac469] peer-indeterminate:bg-[#eac469] sm:hidden" />
+      <Check aria-hidden="true" size={12} weight="bold" className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[#0a0a0a] opacity-0 peer-checked:opacity-100 peer-indeterminate:opacity-0 sm:hidden" />
+      <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-0.5 w-2 -translate-x-1/2 -translate-y-1/2 bg-[#0a0a0a] opacity-0 peer-indeterminate:opacity-100 sm:hidden" />
+      <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-lg peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[#eac469] sm:hidden" />
+    </span>
+  );
 }
 
 export function TasksWorkspace({
@@ -1049,14 +1081,12 @@ export function TasksWorkspace({
           <div className="mt-6 rounded-2xl border border-[#eac469]/20 bg-[linear-gradient(135deg,rgba(234,196,105,.11),rgba(255,255,255,.025))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.06)]">
             <div className="flex flex-wrap items-center gap-3">
               <label className="command-touch-target inline-flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2 text-sm font-bold text-white/75">
-                <input
-                  ref={pageSelectionRef}
-                  type="checkbox"
-                  aria-label="Select all tasks on this page"
+                <TaskSelectionCheckbox
+                  inputRef={pageSelectionRef}
+                  label="Select all tasks on this page"
                   disabled={mutationsLocked}
                   checked={pageIsSelected}
                   onChange={() => setSelectedTaskIds((current) => togglePageSelection(current, pageTaskIds))}
-                  className="h-4 w-4 accent-[#eac469]"
                 />
                 Select this page
               </label>
@@ -1114,13 +1144,11 @@ export function TasksWorkspace({
                 <>
                   <div className="flex flex-wrap items-center gap-3">
                     <label className="command-touch-target grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-white/10 bg-black/20">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${task.title}`}
+                      <TaskSelectionCheckbox
+                        label={`Select ${task.title}`}
                         disabled={mutationsLocked}
                         checked={selectedTaskIds.has(task.id)}
                         onChange={() => setSelectedTaskIds((current) => toggleTaskSelection(current, task.id))}
-                        className="h-4 w-4 accent-[#eac469]"
                       />
                     </label>
                     <button type="button" disabled={mutationsLocked} onClick={() => void complete(task)} aria-label={`Toggle ${task.title}`} className={`command-touch-target grid h-11 w-11 shrink-0 place-items-center rounded-full border ${task.status === 'completed' ? 'border-[#eac469] bg-[#eac469] text-black' : 'border-white/30'}`}>{task.status === 'completed' ? <Check aria-hidden="true" size={15} /> : null}</button>

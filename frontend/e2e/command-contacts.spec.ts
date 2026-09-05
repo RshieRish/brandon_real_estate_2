@@ -8,6 +8,43 @@ import {
 const defaultDirectory = '/contacts/directory?smart_view=all&sort=name&direction=asc&page=1&page_size=50';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+for (const width of [390, 1800]) {
+  test(`repaired capture dates, address, section dates and budgets are readable at ${width}px`, async ({ commandPage, routeState, mockCommandEndpoint }, testInfo) => {
+    await commandPage.setViewportSize({ width, height: 982 });
+    const detail = routeState.contacts.details.get(1)!;
+    routeState.contacts.details.set(1, { ...detail, addresses: [{ id: 1, address_type: 'mailing', formatted: '12 Example Lane\nUnit 7\nLowell, MA, 01852', latitude: null, longitude: null, source_record_id: 501 }] });
+    await mockCommandEndpoint('/contacts/1/timeline?page_size=50', {
+      rows: [{ key: 'recovered:1', origin: 'recovered', kind: 'note', title: 'Lake open house', body: 'Requested a follow-up about the property.', outcome: 'Created', occurred_at: null, captured_date: '2025-04-28', captured_time: '14:16:00', source_record_id: 501, entity_type: 'contact_timeline_event', entity_id: 1 }],
+      next_cursor: null, has_more: false, filtered_capture_count: 2,
+    });
+    await commandPage.goto('/admin/command/contacts/1');
+    await expect(commandPage.getByText('April 28, 2025 · 2:16 PM (as captured)')).toBeVisible();
+    if (width === 390) await commandPage.getByRole('button', { name: 'Profile details' }).click();
+    await expect(commandPage.getByText('Recovered from Command. Confirm this is current before mailing.')).toBeVisible();
+    await expect(commandPage.getByText(/12 Example Lane/)).toBeVisible();
+    if (width === 390) await commandPage.getByRole('button', { name: 'Profile details' }).click();
+    await commandPage.screenshot({ path: testInfo.outputPath('repaired-timeline.png'), fullPage: true, animations: 'disabled' });
+
+    const taskPath = '/contacts/1/tasks?state=to_do&page=1&page_size=50';
+    const taskPage = (await api(commandPage, taskPath)).body as { rows: { value: Record<string, unknown> }[] };
+    taskPage.rows[0]!.value = { ...taskPage.rows[0]!.value, due_at: null, due_date: '2026-09-14', due_date_text: '09/14/2026' };
+    await mockCommandEndpoint(taskPath, taskPage);
+    await commandPage.getByRole('tablist', { name: 'Contact detail views' }).getByRole('tab', { name: 'Tasks', exact: true }).click();
+    await expect(commandPage.getByRole('region', { name: 'Captured source to-do tasks' }).getByText('Due Sep 14, 2026')).toBeVisible();
+    await commandPage.screenshot({ path: testInfo.outputPath('repaired-tasks.png'), fullPage: true, animations: 'disabled' });
+
+    const opportunityPath = '/contacts/1/opportunities?page=1&page_size=50';
+    const opportunityPage = (await api(commandPage, opportunityPath)).body as { rows: { value: Record<string, unknown> }[] };
+    opportunityPage.rows[0]!.value = { ...opportunityPage.rows[0]!.value, budget: '$440,000.00' };
+    await mockCommandEndpoint(opportunityPath, opportunityPage);
+    await commandPage.getByRole('tablist', { name: 'Contact detail views' }).getByRole('tab', { name: 'Opportunities', exact: true }).click();
+    await expect(commandPage.getByText('Budget: $440,000.00')).toBeVisible();
+    const sizes = await commandPage.evaluate(() => ({ viewport: document.documentElement.clientWidth, page: document.documentElement.scrollWidth }));
+    expect(sizes.page).toBeLessThanOrEqual(sizes.viewport + 1);
+    await commandPage.screenshot({ path: testInfo.outputPath('repaired-opportunities.png'), fullPage: true, animations: 'disabled' });
+  });
+}
+
 async function api(page: Page, path: string, method = 'GET', body?: unknown) {
   return page.evaluate(async ({ requestPath, requestMethod, requestBody }) => {
     const response = await fetch(`/api/v1/command${requestPath}`, {

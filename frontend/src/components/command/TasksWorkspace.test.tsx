@@ -176,6 +176,23 @@ describe('TasksWorkspace archive lifecycle', () => {
     expect(screen.getByRole('checkbox', { name: 'Select all tasks on this page' })).toBeChecked();
   });
 
+  it('gives selection inputs mobile touch dimensions while retaining compact desktop controls', async () => {
+    const user = await renderWorkspace();
+    const page = screen.getByRole('checkbox', { name: 'Select all tasks on this page' });
+    const task = screen.getByRole('checkbox', { name: 'Select Call Jane' });
+    for (const input of screen.getAllByRole('checkbox')) {
+      expect(input).toHaveClass('h-11', 'w-11', 'shrink-0', 'sm:h-4', 'sm:w-4', 'opacity-0', 'sm:opacity-100');
+      expect(input.parentElement?.querySelector('span[aria-hidden="true"]'))
+        .toHaveClass('h-4', 'w-4', 'sm:hidden');
+    }
+    await user.click(task);
+    expect(task).toBeChecked();
+    expect(page).toBePartiallyChecked();
+    await user.click(page);
+    expect(screen.getByRole('checkbox', { name: 'Select Send market report' })).toBeChecked();
+    expect(page).toBeChecked();
+  });
+
   it('keeps individual selection across pages and clears it when filters change', async () => {
     const rows = Array.from({ length: 26 }, (_, index): Task => ({
       ...activeTask,
