@@ -210,6 +210,36 @@ def get_sydney_provider(agent: Any) -> Any | None:
         return None
 
 
+def filter_business_tool_surface(agent: Any) -> None:
+    """Offer only executable tools to the identity-scoped private Sydney agent.
+
+    Keep the executor guard as defense in depth for stale/history-generated
+    calls. Never alter the shared Hermes registry or another user's surface.
+    """
+    provider = get_sydney_provider(agent)
+    if (
+        provider is None
+        or not provider.is_available()
+        or not getattr(provider, "retry_enabled", False)
+    ):
+        return
+    definitions = getattr(agent, "tools", None)
+    if not isinstance(definitions, list):
+        return
+    filtered = [
+        tool
+        for tool in definitions
+        if isinstance(tool, dict)
+        and isinstance(tool.get("function"), dict)
+        and _normal_business_tool_is_allowed(tool["function"].get("name", ""))
+    ]
+    if filtered != definitions:
+        agent.tools = filtered
+        agent._cached_system_prompt = None
+        agent._sydney_refresh_tool_surface_prompt = True
+    agent.valid_tool_names = {tool["function"]["name"] for tool in filtered}
+
+
 def record_inbound_before_model(
     agent: Any,
     *,
@@ -230,6 +260,7 @@ def record_inbound_before_model(
         return True
     if not provider.is_available():
         return True
+    filter_business_tool_surface(agent)
     if not getattr(provider, "retry_enabled", False):
         if not internal:
             provider.record_inbound(platform_message_id, content)
@@ -462,6 +493,15 @@ def stage_run_outcome(agent: Any, result: dict[str, Any]) -> bool:
         result["final_response"] = ""
         result["already_sent"] = True
         return False
+    error_code = "model_terminal_failure"
+    if terminal_tool_policy_response(agent):
+        # A successfully delivered explanation is not a successful business
+        # run. Hermes reports controlled halts as completed model turns.
+        result["completed"] = False
+        result["failed"] = True
+        decision = getattr(agent, "_tool_guardrail_halt_decision", None)
+        if isinstance(decision, SydneyToolPolicyHalt):
+            error_code = decision.code
     response = result.get("final_response")
     key = getattr(agent, "_sydney_delivery_key", None)
     if (
@@ -474,7 +514,7 @@ def stage_run_outcome(agent: Any, result: dict[str, Any]) -> bool:
         if result.get("failed") or (
             result.get("completed") is False and not result.get("deferred")
         ):
-            provider.fail_active_run(error_code="model_terminal_failure")
+            provider.fail_active_run(error_code=error_code)
         return False
     delivery_kind = "final"
     if result.get("deferred"):
@@ -487,7 +527,7 @@ def stage_run_outcome(agent: Any, result: dict[str, Any]) -> bool:
                 key,
                 response,
                 delivery_kind=delivery_kind,
-                error_code="model_terminal_failure",
+                error_code=error_code,
             )
         except Exception:  # noqa: BLE001 - optional plugin boundary must fail closed.
             staged_status = "unavailable"

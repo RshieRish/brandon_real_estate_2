@@ -219,6 +219,21 @@ def _patch_agent_init(contents: str) -> str:
         new_prefixed_history_tool,
         "Sydney prefixed MCP history tool",
     )
+    surface_anchor = "    # Notify context engine of session start"
+    surface_replacement = """\
+    # SYDNEY_MODEL_BUSINESS_TOOL_SURFACE
+    # All native, memory, and context-engine schemas are registered by now.
+    # Filter this identity-scoped agent before its first prompt is built.
+    from agent.sydney_runtime import filter_business_tool_surface
+    filter_business_tool_surface(agent)
+
+    # Notify context engine of session start"""
+    contents = _replace_exact(
+        contents,
+        surface_anchor,
+        surface_replacement,
+        "Sydney model-visible business tool surface",
+    )
     compression_limit_anchor = "    agent.compression_enabled = compression_enabled"
     compression_limit_replacement = """\
     agent.compression_enabled = compression_enabled
@@ -1219,6 +1234,49 @@ def _patch_telegram(contents: str) -> str:
 
 
 def _patch_conversation_loop(contents: str) -> str:
+    prompt_restore_anchor = """\
+    if stored_prompt:
+        # Continuing session — reuse the exact system prompt from the"""
+    prompt_restore_replacement = """\
+    if stored_prompt and getattr(agent, "_sydney_refresh_tool_surface_prompt", False):
+        # SYDNEY_REFRESH_STALE_TOOL_PROMPT
+        # Preserve session identity and conversation history. Only replace the
+        # cached instructions that advertised tools this private agent cannot use.
+        agent._cached_system_prompt = agent._build_system_prompt(system_message)
+        agent._sydney_refresh_tool_surface_prompt = False
+        try:
+            agent._session_db.update_system_prompt(
+                agent.session_id, agent._cached_system_prompt
+            )
+        except Exception as exc:
+            logger.warning(
+                "Sydney tool-surface prompt cache write failed (session=%s): %s",
+                agent.session_id, exc,
+            )
+        return
+
+    if stored_prompt:
+        # Continuing session — reuse the exact system prompt from the"""
+    contents = _replace_exact(
+        contents,
+        prompt_restore_anchor,
+        prompt_restore_replacement,
+        "Sydney stale stored tool-prompt refresh",
+    )
+    prompt_build_anchor = (
+        "    agent._cached_system_prompt = agent._build_system_prompt(system_message)\n\n"
+    )
+    prompt_build_replacement = """\
+    agent._cached_system_prompt = agent._build_system_prompt(system_message)
+    agent._sydney_refresh_tool_surface_prompt = False
+
+"""
+    contents = _replace_exact(
+        contents,
+        prompt_build_anchor,
+        prompt_build_replacement,
+        "Sydney fresh tool-prompt cache acknowledgement",
+    )
     budget_anchor = """\
                 except Exception:
                     pass
