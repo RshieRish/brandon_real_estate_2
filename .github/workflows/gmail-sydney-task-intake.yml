@@ -524,3 +524,14 @@ jobs:
             e2e/command-contacts-accessibility.spec.ts \
             e2e/command-contacts-visual.spec.ts \
             e2e/command-visual.spec.ts
+
+      - name: Preserve failed synthetic contact screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: command-contact-visual-failures-${{ github.sha }}
+          retention-days: 3
+          if-no-files-found: ignore
+          path: |
+            frontend/test-results/command-contacts-visual-*/contact-*-actual.png
+            frontend/test-results/command-contacts-visual-*/contact-*-diff.png

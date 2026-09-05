@@ -106,6 +106,23 @@ TASK4_EXPLICIT_TRIGGER_PATHS = (
 )
 
 
+def test_ci_preserves_only_failed_synthetic_contact_screenshots_without_weakening_gate() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows/gmail-sydney-task-intake.yml"
+    ).read_text(encoding="utf-8")
+    marker = "- name: Preserve failed synthetic contact screenshots"
+    assert marker in workflow
+    artifact = workflow.split(marker, 1)[1].split("- name:", 1)[0]
+    assert "if: failure()" in artifact
+    assert "uses: actions/upload-artifact@v4" in artifact
+    assert "retention-days: 3" in artifact
+    assert "frontend/test-results/command-contacts-visual-*/contact-*-actual.png" in artifact
+    assert "frontend/test-results/command-contacts-visual-*/contact-*-diff.png" in artifact
+    assert "trace.zip" not in artifact and "storageState" not in artifact
+    gate = workflow.split("- name: Run Sydney Command contact browser gates", 1)[1].split("- name:", 1)[0]
+    assert "--update-snapshots" not in gate and "continue-on-error" not in gate
+
+
 def test_worker_dockerfile_and_railway_config_use_only_the_worker_contract() -> None:
     dockerfile_path = BACKEND_ROOT / "Dockerfile.worker"
     railway_path = BACKEND_ROOT / "railway.integration-worker.json"
