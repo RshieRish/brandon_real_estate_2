@@ -23,7 +23,7 @@
             "source": "skills/atlas-backend-operations/SKILL.md",
             "deployed_source": "atlas_backend_operations_skill.md",
             "destination": "skills/productivity/atlas-backend-operations/SKILL.md",
-            "sha256": "1c9aafb09ae065c45718bed2c24250b64d567ddb58c0853eeb7727fd8526bbae"
+            "sha256": "46b9b80824c4676b437957fe58e34b66a108f8575836f187af422983ae2ad12d"
         }
     },
     "tools": {

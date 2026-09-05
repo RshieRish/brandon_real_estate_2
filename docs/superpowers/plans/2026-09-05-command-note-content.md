@@ -46,10 +46,18 @@ assert both.samples[1].display_name == "Avery Client"
 - [x] Replace only the celebration sample's masking call with its authoritative display name. Retain the five-sample ceiling and general audience masking. Keep years, addresses and names out of content-free audit records.
 - [x] Update the managed skill's celebration instructions to show returned names and dates; do not re-mask real returned names. Keep checksums/reference IDs as internal reconciliation metadata unless specifically requested. Include the complete authenticated campaign review link when a draft exists; keep fulfillment disconnection and explicit approval boundaries intact.
 - [x] Validate the updated managed skill against the observed failing reply and an independent no-side-effect response scenario. Refresh its manifest hash using the repository's existing contract.
-- [ ] Run the Agent Control/MCP/overlay gates; independently review spec compliance and code quality before release.
+- [x] Run the Agent Control/MCP/overlay gates; independently review spec compliance and code quality before release.
 
 ## Verification and release
 
 - [x] Update `tdtn.md` and project `memory.md` with exact local verification and remaining deployment state.
 - [x] Run focused lint, whitespace, backend regressions, and read-only production-shaped projections. Do not re-run completed archive reconciliation or migrate the database for a read-path fix.
 - [ ] Use the established PR-to-main production workflow from the user's prior authorization; require green CI and exact deployed revision evidence before claiming live repair. Verify note #107 through the authenticated production read path and verify real celebration names via the protected live tool. No card order, outreach draft, Telegram message, or other external business action is part of this repair.
+
+### Live continuation follow-up
+
+PR #37's note repair is deployed and verified across all 178 notes. The unchanged existing-conversation model check still reused the old masked preview without a current tool call, including when its normal durable-context instructions were preserved. Complete the remaining name-display gate without resetting or editing history:
+
+- [ ] Add test-first, identity-scoped always-loaded instructions requiring a current-turn authoritative celebration read for current celebration/name requests. Distinguish historical explanation from a fresh check; never infer names from masks or claim a query that did not occur. Keep disabled/non-primary provider behavior, tool permissions, and mutation boundaries unchanged.
+- [ ] Clarify the managed skill's current-turn evidence requirement and celebration-name exception to generic masked audience wording; refresh its version and manifest hash.
+- [ ] Re-run the identical isolated existing-history model request against the candidate, require a real authorized read and returned names in the final response, then repeat against the deployed release. Verify visible history is unchanged and no business action was executed.

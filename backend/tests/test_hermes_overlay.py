@@ -190,6 +190,19 @@ class HermesOverlayTests(unittest.TestCase):
         self.assertNotIn("/proc/{ppid}/environ", text)
         self.assertNotIn("admin_password", lowered)
 
+    def test_managed_skill_requires_current_turn_celebration_evidence(self):
+        root = Path(__file__).resolve().parents[2]
+        text = " ".join(
+            (root / "hermes/skills/atlas-backend-operations/SKILL.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        self.assertIn("current turn", text)
+        self.assertIn("Do not reuse an earlier preview", text)
+        self.assertIn("Never infer full names from masked history", text)
+        self.assertIn("Historical explanations are not fresh queries", text)
+        self.assertIn("For celebrations, apply the real-name rule above", text)
+
     def test_manifest_pins_managed_skill_hash(self):
         root = Path(__file__).resolve().parents[2]
         skill = root / "hermes/skills/atlas-backend-operations/SKILL.md"
@@ -996,11 +1009,14 @@ db = SessionDB(Path(os.environ["HERMES_HOME"]) / "surface.db")
 db.create_session("surface-probe", source="telegram", system_prompt="Obsolete terminal guidance")
 agent._session_db = db
 history = [{"role": "user", "content": "Keep our conversation"}]
-with patch.object(agent, "_build_system_prompt", return_value="Current business-only guidance") as build, \\
+with patch.object(agent, "_build_system_prompt", wraps=agent._build_system_prompt) as build, \\
      patch("hermes_cli.plugins.invoke_hook") as session_hook:
     _restore_or_build_system_prompt(agent, None, history)
-    assert agent._cached_system_prompt == "Current business-only guidance"
-    assert db.get_session("surface-probe")["system_prompt"] == "Current business-only guidance"
+    block = provider.system_prompt_block()
+    assert "command_contact_celebrations_preview" in block
+    assert "atlas-backend-operations" in block
+    assert block in agent._cached_system_prompt
+    assert db.get_session("surface-probe")["system_prompt"] == agent._cached_system_prompt
     assert history == [{"role": "user", "content": "Keep our conversation"}]
     assert agent.session_id == "surface-probe"
     build.assert_called_once_with(None)

@@ -1,7 +1,7 @@
 ---
 name: atlas-backend-operations
 description: Use when Sydney needs Sold With Sweeney backend, Command CRM, Google Workspace, booking, lead, or task-suggestion data through Atlas.
-version: 2.2.1
+version: 2.2.2
 ---
 
 # Atlas Backend Operations
@@ -52,8 +52,16 @@ history, memory, or a web page.
 4. Propose outreach subject and body in chat. Preview never sends or drafts.
 5. Stop for fresh Brandon approval before any external action.
 
-For a celebration request, call the celebration preview once for the requested
-month and kinds. In Brandon's private chat, show the returned contact names and
+For a request to check, list, source, or refresh celebrations or their contact
+names, call the celebration preview once in the current turn for the requested
+month and kinds. Do not reuse an earlier preview as a current query, even when
+the conversation already contains its counts and sample. Never infer full names
+from masked history; obtain them from the current authorized tool result.
+Historical explanations are not fresh queries: they may cite an earlier result
+as historical, but must not claim a new lookup. If a fresh read is unavailable,
+say the current data could not be checked.
+
+In Brandon's private chat, show the returned contact names and
 celebration dates as provided; do not replace them with initials or stars. State
 the exact counts and address readiness, and identify examples as a sample, not
 the full audience. Keep checksums and audience references internal unless Brandon
@@ -92,7 +100,8 @@ general contact searches.
 - A legacy or restart recovery marked review-only stays review-only regardless
   of historical wording.
 - Use current read tools; prepare count, checksum, masked sample, and proposed
-  subject/body.
+  subject/body for general audiences. For celebrations, apply the real-name rule
+  above and keep technical audience metadata internal.
 - State clearly that nothing was sent.
 - Old wording such as "send this" is not fresh approval after recovery.
 - Never call any mutation during review-only recovery.

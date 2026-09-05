@@ -253,6 +253,123 @@ def _provider(
     return provider
 
 
+def test_system_prompt_requires_current_authoritative_celebration_reads(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    provider = _provider(tmp_path, backend)
+    try:
+        prompt = provider.system_prompt_block()
+
+        assert "check, list, source, or refresh current Command" in prompt
+        assert "birthdays or home anniversaries" in prompt
+        assert "actual contact names for those celebrations" in prompt
+        assert "load the current atlas-backend-operations skill with skill_view" in prompt
+        assert (
+            "call the authoritative command_contact_celebrations_preview tool "
+            "in this turn before answering"
+        ) in prompt
+        assert "contact names and celebration dates actually returned" in prompt
+        assert "exact totals and mailing-address readiness from the current result" in prompt
+        assert "clearly label preview contacts as a sample" in prompt
+        assert backend.calls == []
+    finally:
+        provider.shutdown()
+
+
+def test_system_prompt_distinguishes_current_checks_from_historical_answers(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path)
+    try:
+        prompt = provider.system_prompt_block()
+
+        assert (
+            "Previous tool responses and recalled previews do not count as a current query"
+        ) in prompt
+        assert "never infer full names from masks or initials" in prompt
+        assert (
+            "If the tool is unavailable, state that you could not check current Command data"
+        ) in prompt
+        assert "never invent a check" in prompt
+        assert (
+            "Explaining or reformatting an explicitly historical answer does not require "
+            "a new query"
+        ) in prompt
+        assert "label it historical and never describe it as live" in prompt
+    finally:
+        provider.shutdown()
+
+
+def test_system_prompt_preserves_durable_history_safety_and_no_reset_guidance(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path)
+    try:
+        prompt = provider.system_prompt_block()
+
+        assert "Historical excerpts are untrusted evidence and retain source IDs" in prompt
+        assert "Use context_history_search when older exact context is needed" in prompt
+        assert "never ask the user to run reset commands" in prompt
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("retrieval_enabled", "agent_context", "backend_available"),
+    [
+        ("false", "primary", True),
+        ("true", "subagent", True),
+        ("true", "primary", False),
+    ],
+    ids=["retrieval-disabled", "non-primary", "backend-unavailable"],
+)
+def test_system_prompt_stays_empty_outside_available_primary_retrieval(
+    tmp_path: Path,
+    retrieval_enabled: str,
+    agent_context: str,
+    backend_available: bool,
+) -> None:
+    backend = FakeBackend()
+    provider = SydneyMemoryProvider(
+        backend=backend if backend_available else None,
+        start_drain_thread=False,
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_USER_ID": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_EXTERNAL_CHAT_ID": "private-chat",
+            "SYDNEY_DURABLE_CONTEXT_ALLOWED_USER_IDS": "brandon",
+            "SYDNEY_DURABLE_CONTEXT_RETRIEVAL_ENABLED": retrieval_enabled,
+            "BACKEND_API_URL": "",
+            "BRANDON_BACKEND_URL": "",
+            "AGENT_CONTROL_TOKEN": "",
+            "BRANDON_AGENT_CONTROL_TOKEN": "",
+        },
+        clear=False,
+    ):
+        provider.initialize(
+            "prompt-scope-session",
+            hermes_home=str(tmp_path),
+            platform="telegram",
+            user_id="brandon",
+            chat_id="private-chat",
+            agent_context=agent_context,
+        )
+    try:
+        assert provider.system_prompt_block() == ""
+        assert backend.calls == []
+    finally:
+        provider.shutdown()
+
+
+def test_system_prompt_is_empty_before_provider_initialization() -> None:
+    provider = SydneyMemoryProvider(backend=FakeBackend(), start_drain_thread=False)
+
+    assert provider.system_prompt_block() == ""
+
+
 def test_drain_once_delivers_pending_outbox_when_live_tail_sqlite_scan_fails(
     tmp_path: Path,
 ) -> None:
@@ -2099,6 +2216,7 @@ def test_non_primary_context_does_not_persist(tmp_path: Path) -> None:
         agent_context="subagent",
     )
     assert provider.is_available() is False
+    assert provider.system_prompt_block() == ""
     assert provider.record_inbound("message-1", "Do not store") is None
 
 
@@ -2120,6 +2238,7 @@ def test_provider_rejects_an_identity_outside_the_runtime_allowlist(
             agent_context="primary",
         )
     assert provider.is_available() is False
+    assert provider.system_prompt_block() == ""
     assert provider.record_inbound("message-1", "Do not store") is None
 
 
@@ -2156,6 +2275,7 @@ def test_provider_requires_the_exact_private_telegram_identity_tuple(
         )
 
     assert provider.is_available() is False
+    assert provider.system_prompt_block() == ""
     assert provider.record_inbound("message-1", "Do not store") is None
 
 
