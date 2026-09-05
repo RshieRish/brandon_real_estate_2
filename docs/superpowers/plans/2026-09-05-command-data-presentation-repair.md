@@ -43,7 +43,15 @@ This continues the completed Task 8/9 rollout and the September 5 audit. It does
 
 - [x] Validate a protected full PostgreSQL backup outside the repository before applying recovered addresses.
 - [x] Finish the all-317-contact read-only comparison and independent review, with no unproven control cleanup.
-- [ ] Merge only reviewed source with complete green CI, then verify installed backend, worker, frontend and Atlas revisions/assets/27-tool registry.
-- [ ] Apply only the reviewed additive address fingerprint with its separate verified JSON backup, then prove an idempotent zero-row dry run.
-- [ ] Verify the authenticated live contact/archive UI and installed isolated Sydney reads. Preserve Telegram history and distinguish probes from actual delivery.
+- [x] Merge only reviewed source with complete green CI, then verify installed backend, worker, frontend and Atlas revisions/assets/27-tool registry.
+- [x] Apply only the reviewed additive address fingerprint with its separate verified JSON backup, then prove an idempotent zero-row dry run.
+- [x] Verify the authenticated live contact/archive UI and installed isolated Sydney reads. Preserve Telegram history and distinguish probes from actual delivery. Anniversary-only instruction freshness requires the narrow follow-up below; it is not counted as passing.
 - [ ] Record final release evidence and remaining genuine source/provider limitations.
+
+### Installed anniversary-only follow-up
+
+PR #39 is merged and deployed at `032169157992f8092e0f4015f21f3e071f88e7a7`, with green PR and main CI. Installed all-contact timeline, archive, section, source-preservation, and address checks passed; the additive address repair committed 207 records and repeats with zero proposed additions. Birthday-only and combined installed model checks pass. An added anniversary-only check returns correct current data and no audience IDs but omits the required current skill read. This continues the same repair; it does not restart Task 8/9.
+
+- [x] Add a test-first, current-request-scoped nonterminal skill preflight for celebration previews. Missing, old, wrong, failed or restored skill results must not count as fresh. Preserve tool schemas, all 27 tools, existing permissions, and history; do not set a terminal halt or require reset. Exact Hermes/template gate: 390 tests plus three subtests; full PostgreSQL16/TLS matrix: 2,231 tests.
+- [ ] Exercise the actual preflight in isolated deployed-model probes while detaching only ledger/delivery writes. Do not replace the enforcement hook with a canary stub or weaken the fresh-instruction requirement.
+- [ ] Independently review, release through a green PR/main path, then repeat the affected installed checks and final preservation evidence.

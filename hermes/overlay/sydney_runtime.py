@@ -120,6 +120,11 @@ _REVIEW_ONLY_READ_TOOLS = frozenset(
     }
 )
 _ATLAS_MCP_TOOL_PREFIX = "mcp_atlas_backend_"
+_CELEBRATION_SKILL_NAME = "atlas-backend-operations"
+# Coupled by regression tests to both the managed source and overlay manifest.
+_CELEBRATION_SKILL_SHA256 = (
+    "a5df6d6e7c443847d74c012372016d10aac31e46c922d690b4a92c189732a6a4"
+)
 _ATLAS_BUSINESS_TOOLS = frozenset(
     {
         "actions_list",
@@ -600,6 +605,138 @@ def pin_celebration_request(agent: Any, message: dict, content: Any) -> None:
     agent._sydney_celebration_request = (
         (message, content) if provider is not None and provider.is_available() else None
     )
+    agent._sydney_celebration_skill_pending = {}
+    agent._sydney_celebration_skill_proof = None
+
+
+def _current_celebration_request(agent: Any) -> tuple | None:
+    provider = get_sydney_provider(agent)
+    if (
+        provider is None
+        or not provider.is_available()
+        or not getattr(provider, "retry_enabled", False)
+    ):
+        return None
+    pinned = getattr(agent, "_sydney_celebration_request", None)
+    if (
+        isinstance(pinned, tuple)
+        and len(pinned) == 2
+        and isinstance(pinned[0], dict)
+        and pinned[0].get("role") == "user"
+    ):
+        return pinned
+    return None
+
+
+def celebration_tool_preflight(
+    agent: Any,
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> SydneyToolBeforeDecision | None:
+    """Require a proven current skill read before this request's preview.
+
+    This check has no ledger writes or terminal halt. The real executor and
+    isolated read canaries use the same gate; neither transcript text nor a
+    restored result can create its process-local execution proof.
+    """
+    if (
+        tool_name.casefold().removeprefix(_ATLAS_MCP_TOOL_PREFIX)
+        != "command_contact_celebrations_preview"
+    ):
+        return None
+    provider = get_sydney_provider(agent)
+    if (
+        provider is None
+        or not provider.is_available()
+        or not getattr(provider, "retry_enabled", False)
+    ):
+        return None
+    request = _current_celebration_request(agent)
+    proof = getattr(agent, "_sydney_celebration_skill_proof", None)
+    if (
+        request is not None
+        and isinstance(proof, tuple)
+        and len(proof) == 2
+        and proof[0] is request
+        and proof[1] == _CELEBRATION_SKILL_SHA256
+    ):
+        return None
+    return SydneyToolBeforeDecision(
+        block_message=(
+            "The celebration preview was not executed. First call skill_view with "
+            f'name="{_CELEBRATION_SKILL_NAME}" to read the current full skill in '
+            "this request, then retry the celebration preview. A historical, "
+            "restored, failed, or outdated skill result does not satisfy this check."
+        )
+    )
+
+
+def begin_celebration_skill_read(
+    agent: Any,
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> None:
+    """Called only after execution is admitted, never for restored results."""
+    if tool_name != "skill_view":
+        return
+    pending = getattr(agent, "_sydney_celebration_skill_pending", None)
+    if not isinstance(pending, dict):
+        pending = {}
+        agent._sydney_celebration_skill_pending = pending
+    pending.pop(tool_call_id, None)
+    if arguments.get("name") != _CELEBRATION_SKILL_NAME or arguments.get("file_path"):
+        return
+    agent._sydney_celebration_skill_proof = None
+    request = _current_celebration_request(agent)
+    if request is not None:
+        pending[tool_call_id] = (request, _CELEBRATION_SKILL_SHA256)
+
+
+def complete_celebration_skill_read(
+    agent: Any,
+    tool_call_id: str,
+    tool_name: str,
+    result: Any,
+    *,
+    failed: bool,
+) -> None:
+    """Accept only successful exact content from an admitted current read."""
+    pending = getattr(agent, "_sydney_celebration_skill_pending", None)
+    attempt = pending.pop(tool_call_id, None) if isinstance(pending, dict) else None
+    if attempt is None:
+        return
+    agent._sydney_celebration_skill_proof = None
+    request = _current_celebration_request(agent)
+    if (
+        request is None
+        or attempt[0] is not request
+        or attempt[1] != _CELEBRATION_SKILL_SHA256
+        or tool_name != "skill_view"
+        or failed
+    ):
+        return
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (TypeError, ValueError):
+            return
+    if (
+        not isinstance(result, dict)
+        or result.get("success") is not True
+        or result.get("name") != _CELEBRATION_SKILL_NAME
+        or result.get("error")
+        or result.get("isError")
+        or not isinstance(result.get("content"), str)
+    ):
+        return
+    try:
+        digest = hashlib.sha256(result["content"].encode("utf-8")).hexdigest()
+    except UnicodeError:
+        return
+    if digest == _CELEBRATION_SKILL_SHA256:
+        agent._sydney_celebration_skill_proof = (request, digest)
 
 
 def finalize_celebration_reply(agent: Any, response: Any, messages: Any) -> Any:
@@ -1049,7 +1186,14 @@ def tool_before(
             agent._sydney_degraded_delivery_key = None
         else:
             if _side_effect_class(tool_name) == "read_only":
-                return None
+                preflight = celebration_tool_preflight(
+                    agent, tool_call_id, tool_name, arguments
+                )
+                if preflight is None:
+                    begin_celebration_skill_read(
+                        agent, tool_call_id, tool_name, arguments
+                    )
+                return preflight
             return SydneyToolBeforeDecision(
                 block_message=(
                     "Sydney saved this request locally, but the durable backend is "
@@ -1104,6 +1248,9 @@ def tool_before(
         return SydneyToolBeforeDecision(
             block_message=NORMAL_BUSINESS_TOOL_BLOCK_MESSAGE
         )
+    preflight = celebration_tool_preflight(agent, tool_call_id, tool_name, arguments)
+    if preflight is not None:
+        return preflight
     existing_receipt = provider.tool_replay_receipt(source_key)
     provider.record_tool_before(
         run_id=run_id,
@@ -1163,6 +1310,7 @@ def tool_before(
             attempts = {}
             agent._sydney_tool_attempt_keys = attempts
         attempts[tool_call_id] = uuid4().hex
+        begin_celebration_skill_read(agent, tool_call_id, tool_name, arguments)
         return None
     if decision == "restore_result":
         result_content = receipt.get("result_content")
@@ -1195,6 +1343,9 @@ def tool_after(
     *,
     failed: bool,
 ) -> None:
+    complete_celebration_skill_read(
+        agent, tool_call_id, tool_name, result, failed=failed
+    )
     provider = get_sydney_provider(agent)
     if (
         provider is None
