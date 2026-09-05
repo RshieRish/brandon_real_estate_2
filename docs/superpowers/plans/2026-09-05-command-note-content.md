@@ -58,6 +58,6 @@ assert both.samples[1].display_name == "Avery Client"
 
 PR #37's note repair is deployed and verified across all 178 notes. The unchanged existing-conversation model check still reused the old masked preview without a current tool call, including when its normal durable-context instructions were preserved. Complete the remaining name-display gate without resetting or editing history:
 
-- [ ] Add test-first, identity-scoped always-loaded instructions requiring a current-turn authoritative celebration read for current celebration/name requests. Distinguish historical explanation from a fresh check; never infer names from masks or claim a query that did not occur. Keep disabled/non-primary provider behavior, tool permissions, and mutation boundaries unchanged.
-- [ ] Clarify the managed skill's current-turn evidence requirement and celebration-name exception to generic masked audience wording; refresh its version and manifest hash.
+- [x] Add test-first, identity-scoped always-loaded instructions requiring a current-turn authoritative celebration read for current celebration/name requests. Distinguish historical explanation from a fresh check; never infer names from masks or claim a query that did not occur. Keep disabled/non-primary provider behavior, tool permissions, and mutation boundaries unchanged.
+- [x] Clarify the managed skill's current-turn evidence requirement and celebration-name exception to generic masked audience wording; refresh its version and manifest hash.
 - [ ] Re-run the identical isolated existing-history model request against the candidate, require a real authorized read and returned names in the final response, then repeat against the deployed release. Verify visible history is unchanged and no business action was executed.

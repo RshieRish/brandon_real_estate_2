@@ -289,6 +289,19 @@ def test_ready_promotion_probe_fails_closed_on_bad_status_body_and_timeout() -> 
             assert forbidden not in completed.stderr
 
 
+def test_gmail_sydney_postgres_matrix_has_bounded_slow_runner_headroom() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "gmail-sydney-task-intake.yml"
+    ).read_text(encoding="utf-8")
+    runtime_header = re.search(
+        r"(?m)^  task1-runtime:\n    runs-on: ubuntu-latest\n"
+        r"    timeout-minutes: (?P<minutes>\d+)\n",
+        workflow,
+    )
+    assert runtime_header is not None
+    assert int(runtime_header.group("minutes")) == 30
+
+
 def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> None:
     workflow_path = (
         REPOSITORY_ROOT / ".github" / "workflows" / "gmail-sydney-task-intake.yml"

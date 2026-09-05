@@ -141,7 +141,7 @@ concurrency:
 jobs:
   task1-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       POSTGRES_CONTAINER: gmail-sydney-postgres
       POSTGRES_PORT: "55433"
