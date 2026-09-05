@@ -158,6 +158,7 @@ jobs:
       GOOGLE_WORKSPACE_REDIRECT_URI: http://localhost:3000/api/v1/workspace/oauth/callback
       SSL_CERT_FILE: /tmp/gmail-sydney-postgres-tls/server.crt
       JWT_SECRET: gmail-sydney-ci-fixture-only
+      GEMINI_API_KEY: gmail-sydney-ci-no-provider-calls
       CI: "true"
 
     steps:

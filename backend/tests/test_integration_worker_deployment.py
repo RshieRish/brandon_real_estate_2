@@ -303,6 +303,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         "DATABASE_URL:",
         "GMAIL_HISTORY_DATABASE_URL:",
         "GMAIL_PARTICIPANT_HASH_KEY: gmail-sydney-ci-participant-hash-key-only",
+        "GEMINI_API_KEY: gmail-sydney-ci-no-provider-calls",
         'INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: "10"',
         'CI: "true"',
         "SSL_CERT_FILE:",

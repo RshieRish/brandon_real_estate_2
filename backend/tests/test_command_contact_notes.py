@@ -166,6 +166,18 @@ def test_note_reader_rejects_malformed_payload_without_private_values(payload_js
         read_contact_note_content(payload_json, display_label="Private fallback")
 
 
+@pytest.mark.parametrize("suffix", ([], ["Welcome to KWIQ"], ["3/5/2026"]))
+def test_note_reader_accepts_maximum_newline_body_with_optional_capture_suffix(suffix):
+    raw_lines = [*RAW_LINES[:4], *([""] * 20_001), "Delete", "Edit", *suffix]
+
+    content = read_contact_note_content(
+        json.dumps({"values": {"raw_lines": raw_lines}}), display_label="Updated"
+    )
+
+    assert content.title == "Lake open house"
+    assert content.body == "\n" * 20_000
+
+
 @pytest.mark.parametrize(
     ("lines", "expected"),
     (
@@ -300,6 +312,53 @@ async def test_workspace_note_content_preserves_unproven_and_edited_notes(
     assert (
         await note_db.scalar(select(CRMNote.body).where(CRMNote.id == disputed.note.id))
         == expected_disputed
+    )
+
+
+@pytest.mark.parametrize(
+    "raw_lines",
+    (
+        ["not a time", *RAW_LINES[1:]],
+        [*RAW_LINES[:-2], "Edit"],
+        RAW_LINES[:-1],
+        [*RAW_LINES[:-1], "not a control", "Edit"],
+    ),
+    ids=("invalid_header", "missing_delete", "missing_edit", "split_controls"),
+)
+async def test_workspace_note_content_preserves_unproven_raw_capture_with_structured_fields(
+    note_db, raw_lines
+):
+    owner = CRMContact(first_name="Synthetic", last_name="Owner", stage="lead")
+    note_db.add(owner)
+    await note_db.flush()
+    captured = await add_captured_note(note_db, owner, 1, raw_lines=raw_lines)
+    captured.source.payload_json = json.dumps(
+        {
+            "values": {
+                "raw_lines": raw_lines,
+                "title": "Structured title",
+                "body": "Structured body",
+            }
+        }
+    )
+    await note_db.commit()
+    original_payload = captured.source.payload_json
+
+    _raw, notes = await workspace_notes(note_db, owner)
+
+    assert notes[captured.note.id].body == "\n".join(raw_lines)
+    assert not note_db.dirty
+    assert captured.source.payload_json == original_payload
+    assert await note_db.scalar(
+        select(CRMNote.body).where(CRMNote.id == captured.note.id)
+    ) == "\n".join(raw_lines)
+    # Source projection still trusts explicit structured fields independently of raw capture.
+    source_content = read_contact_note_content(
+        original_payload, display_label=captured.source.display_label
+    )
+    assert (source_content.title, source_content.body) == (
+        "Structured title",
+        "Structured body",
     )
 
 

@@ -74,7 +74,7 @@ def _bounded_raw_lines(value: object) -> list[str]:
     # Even empty body lines consume the body limit through their newline separators.
     if (
         not isinstance(value, list)
-        or not 6 <= len(value) <= _BODY_LIMIT + 7
+        or not 6 <= len(value) <= _BODY_LIMIT + 8
         or any(not isinstance(line, str) for line in value)
         or sum(len(line) + 1 for line in value) > _BODY_LIMIT + 2 * _TITLE_LIMIT + 64
     ):
@@ -218,6 +218,7 @@ async def present_contact_notes(
             raw_lines = _bounded_raw_lines(values.get("raw_lines"))
             if notes_by_id[note_id].body != "\n".join(raw_lines):
                 continue
+            _captured_note_content(raw_lines)
             content = _read_note_values(values, display_label=display_label)
         except ContactNoteContentError:
             # Unproven evidence cannot hide or rewrite an existing internal note.
