@@ -1819,7 +1819,7 @@ def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(
     tmp_path: Path,
     tool_name: str,
 ) -> None:
-    from sydney_runtime import tool_before
+    from sydney_runtime import pin_celebration_request, tool_after, tool_before
 
     backend = FakeBackend()
     provider = _provider(tmp_path, backend)
@@ -1830,6 +1830,31 @@ def test_normal_sydney_run_allows_skill_view_and_registered_atlas_tools(
             get_provider=lambda name: provider if name == "sydney" else None
         )
     )
+    if tool_name == "mcp_atlas_backend_command_contact_celebrations_preview":
+        request = {"role": "user", "content": "Check current Command celebrations."}
+        pin_celebration_request(agent, request, request["content"])
+        assert (
+            tool_before(
+                agent,
+                "required-current-skill",
+                "skill_view",
+                {"name": "atlas-backend-operations"},
+            )
+            is None
+        )
+        tool_after(
+            agent,
+            "required-current-skill",
+            "skill_view",
+            {
+                "success": True,
+                "name": "atlas-backend-operations",
+                "content": (
+                    OVERLAY.parent / "skills/atlas-backend-operations/SKILL.md"
+                ).read_text(),
+            },
+            failed=False,
+        )
 
     assert tool_before(agent, f"allowed-{tool_name}", tool_name, {}) is None
     assert not hasattr(agent, "_sydney_terminal_tool_policy_response")

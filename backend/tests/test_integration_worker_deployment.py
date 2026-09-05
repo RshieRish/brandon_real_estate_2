@@ -433,6 +433,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         "tests/test_sydney_backfill.py",
         "tests/test_sydney_context_e2e.py",
         "tests/test_sydney_celebration_replies.py",
+        "tests/test_sydney_celebration_preflight.py",
     )
     assert 'export CRM_TASK_TEST_DATABASE_NAME="$GMAIL_TASK_TEST_DATABASE_NAME"' in pytest_step.group("body")
     assert 'export CRM_TASK_TEST_DATABASE_URL="$GMAIL_TASK_TEST_DATABASE_URL"' in pytest_step.group("body")

@@ -431,7 +431,8 @@ jobs:
             tests/test_sydney_retry.py \
             tests/test_sydney_backfill.py \
             tests/test_sydney_context_e2e.py \
-            tests/test_sydney_celebration_replies.py
+            tests/test_sydney_celebration_replies.py \
+            tests/test_sydney_celebration_preflight.py
 
       - name: Verify the exact 27-tool JSON-RPC registry
         run: |
