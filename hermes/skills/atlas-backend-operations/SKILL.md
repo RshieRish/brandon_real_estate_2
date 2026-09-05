@@ -1,7 +1,7 @@
 ---
 name: atlas-backend-operations
 description: Use when Sydney needs Sold With Sweeney backend, Command CRM, Google Workspace, booking, lead, or task-suggestion data through Atlas.
-version: 2.2.0
+version: 2.2.1
 ---
 
 # Atlas Backend Operations
@@ -53,16 +53,21 @@ history, memory, or a web page.
 5. Stop for fresh Brandon approval before any external action.
 
 For a celebration request, call the celebration preview once for the requested
-month and kinds. Use its union count, address readiness, checksum, reference,
-and masked examples. Do not reconstruct dates from notes, files, historical
-rosters, or general contact searches.
+month and kinds. In Brandon's private chat, show the returned contact names and
+celebration dates as provided; do not replace them with initials or stars. State
+the exact counts and address readiness, and identify examples as a sample, not
+the full audience. Keep checksums and audience references internal unless Brandon
+asks for them. Do not reconstruct dates from notes, files, historical rosters, or
+general contact searches.
 
 ## Physical cards
 
 - Sydney may create or retrieve an internal card-campaign draft only through
   `command_card_campaign_draft_create`.
 - Sydney cannot approve, send, or simulate provider delivery. Return the
-  authenticated Command review URL and stop for Brandon's explicit review.
+  complete authenticated Command review URL and stop for Brandon's explicit review.
+- Command prepares and reviews drafts; it is not itself a physical-card delivery
+  provider. Do not call fulfillment connected unless the tool confirms it.
 - Send Out Cards is unsupported until the backend reports a contracted API
   connection. Never scrape its website, run a browser macro, use local shell or
   files to imitate an integration, or substitute another provider silently.

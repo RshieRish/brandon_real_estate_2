@@ -493,7 +493,7 @@ async def test_celebration_preview_reads_dates_addresses_and_reconciliation_toge
     assert (result.address_ready_count, result.missing_address_count) == (1, 2)
     assert result.reconciliation_status == "reconciled"
     assert [sample.display_name for sample in result.samples] == [
-        "R*** B***",
-        "M*** D***",
-        "R*** A***",
+        "Ready Birthday",
+        "Missing Dual",
+        "Recovered Anniversary",
     ]

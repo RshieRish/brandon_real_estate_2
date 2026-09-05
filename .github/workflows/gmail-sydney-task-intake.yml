@@ -158,6 +158,7 @@ jobs:
       GOOGLE_WORKSPACE_REDIRECT_URI: http://localhost:3000/api/v1/workspace/oauth/callback
       SSL_CERT_FILE: /tmp/gmail-sydney-postgres-tls/server.crt
       JWT_SECRET: gmail-sydney-ci-fixture-only
+      GEMINI_API_KEY: gmail-sydney-ci-no-provider-calls
       CI: "true"
 
     steps:
@@ -337,6 +338,10 @@ jobs:
             tests/test_sydney_context_router.py \
             tests/test_sydney_context_projection.py \
             tests/test_agent_control_command.py \
+            tests/test_command_contact_notes.py \
+            tests/test_command_contact_sections.py \
+            tests/test_command_contacts_service.py \
+            tests/test_command_contacts_router.py \
             tests/test_sydney_context_e2e.py \
             tests/test_card_campaign_migration.py \
             tests/test_card_campaign_models.py \

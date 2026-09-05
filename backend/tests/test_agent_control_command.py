@@ -305,7 +305,7 @@ async def test_audience_preview_is_exact_stable_masked_and_never_persists() -> N
 
 
 @pytest.mark.asyncio
-async def test_celebration_preview_is_exact_stable_masked_and_kind_selective() -> None:
+async def test_private_celebration_preview_preserves_names_and_counts() -> None:
     from schemas.agent_control_command import (
         CommandContactCelebrationsPreviewRequest,
     )
@@ -410,15 +410,16 @@ async def test_celebration_preview_is_exact_stable_masked_and_kind_selective() -
     assert both.reconciliation_status == "reconciled"
     assert len(both.audience_checksum) == 64
     assert len(both.samples) == 3
-    assert both.samples[0].display_name == "B*** S***"
-    assert both.samples[1].display_name == "A*** C***"
+    assert both.samples[0].display_name == "Brandon Sweeney"
+    assert both.samples[1].display_name == "Avery Client"
     assert [item.kind for item in both.samples[1].celebrations] == [
         "birthday",
         "home_anniversary",
     ]
     assert [item.day for item in both.samples[1].celebrations] == [14, 21]
     assert both.samples[1].address_ready is False
-    assert "Brandon Sweeney" not in repr(both.samples)
+    assert both.samples[2].display_name == "Casey Homeowner"
+    assert "1989" not in repr(both.samples)
     assert birthdays.home_anniversary_count == 0
     assert birthdays.union_count == 2
     assert birthdays.address_ready_count == 1
@@ -490,7 +491,7 @@ def test_protected_routes_are_read_only_and_write_content_free_audits() -> None:
         reconciliation_status="reconciled",
         samples=[
             CommandContactCelebrationSample(
-                display_name="B*** S***",
+                display_name="Brandon Sweeney",
                 celebrations=[
                     CommandContactCelebrationOccurrence(kind="birthday", day=4),
                     CommandContactCelebrationOccurrence(
@@ -543,9 +544,14 @@ def test_protected_routes_are_read_only_and_write_content_free_audits() -> None:
     assert preview_response.status_code == 200
     assert celebration_response.status_code == 200
     assert celebration_response.json()["union_count"] == 1
+    assert (
+        celebration_response.json()["samples"][0]["display_name"] == "Brandon Sweeney"
+    )
     assert audit.await_count == 3
     assert "private person" not in repr(audit.await_args_list)
     assert "brandon@example.com" not in repr(audit.await_args_list)
+    assert "Brandon Sweeney" not in repr(audit.await_args_list)
+    assert "b" * 64 not in repr(audit.await_args_list)
     celebration_audit = audit.await_args_list[2].kwargs
     assert celebration_audit["request_meta"] == {
         "month": 9,

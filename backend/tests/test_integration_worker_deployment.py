@@ -61,6 +61,10 @@ TASK13_CONTEXT_TESTS = (
     "tests/test_sydney_context_router.py",
     "tests/test_sydney_context_projection.py",
     "tests/test_agent_control_command.py",
+    "tests/test_command_contact_notes.py",
+    "tests/test_command_contact_sections.py",
+    "tests/test_command_contacts_service.py",
+    "tests/test_command_contacts_router.py",
     "tests/test_sydney_context_e2e.py",
 )
 SYDNEY_COMMAND_CARD_TESTS = (
@@ -299,6 +303,7 @@ def test_gmail_sydney_workflow_is_scoped_tls_postgresql16_through_task9() -> Non
         "DATABASE_URL:",
         "GMAIL_HISTORY_DATABASE_URL:",
         "GMAIL_PARTICIPANT_HASH_KEY: gmail-sydney-ci-participant-hash-key-only",
+        "GEMINI_API_KEY: gmail-sydney-ci-no-provider-calls",
         'INTEGRATION_PROVIDER_SOCKET_TIMEOUT_SECONDS: "10"',
         'CI: "true"',
         "SSL_CERT_FILE:",

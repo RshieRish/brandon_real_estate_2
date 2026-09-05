@@ -93,7 +93,6 @@ from services.command_contact_contracts import (
     ContactMutationResult,
     ContactNeighbors,
     ContactNoteCreateCommand,
-    ContactNoteOccurrence,
     ContactOpportunityOccurrence,
     ContactOriginFilter,
     ContactRecoveredProfile,
@@ -120,6 +119,10 @@ from services.command_contact_contracts import (
     canonical_workspace_saved_search_activity_json,
 )
 from services.command_contact_identity import canonical_email
+from services.command_contact_notes import (
+    ContactNoteContentError,
+    read_contact_note_content,
+)
 from services.command_contact_timeline import (
     ContactNotFound as TimelineContactNotFound,
     ContactTimelineIntegrityError,
@@ -1575,6 +1578,15 @@ def _project_section_occurrence(
     source: CRMSourceRecord,
     section: ContactSection,
 ):
+    if section is ContactSection.NOTES:
+        try:
+            return read_contact_note_content(
+                source.payload_json, display_label=source.display_label
+            )
+        except ContactNoteContentError:
+            raise ContactDataIntegrityError(
+                "contact occurrence payload is invalid"
+            ) from None
     values = _occurrence_values(source)
     if section is ContactSection.OPPORTUNITIES:
         value_cents = values.get("value_cents")
@@ -1591,12 +1603,6 @@ def _project_section_occurrence(
             kind="smart_plan",
             title=_required_occurrence_title(source, values, "name"),
             status=_bounded_occurrence_text(values, "status", max_length=120),
-        )
-    if section is ContactSection.NOTES:
-        return ContactNoteOccurrence(
-            kind="note",
-            title=_required_occurrence_title(source, values, "title"),
-            body=_bounded_occurrence_text(values, "body", max_length=20_000),
         )
     if section is ContactSection.SAVED_SEARCHES:
         criteria: list[str] = []

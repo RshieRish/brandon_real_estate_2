@@ -376,8 +376,9 @@ AGENT_ACTIONS = [
         risk_tier="auto_silent",
         side_effects=False,
         description=(
-            "Preview exact Command birthdays and home anniversaries with masked "
-            "examples and mailing-address readiness; never send cards."
+            "Preview exact Command birthdays and home anniversaries with real "
+            "contact names in bounded private-chat examples and mailing-address "
+            "readiness; never send cards."
         ),
     ),
 ]
