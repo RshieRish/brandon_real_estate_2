@@ -20,6 +20,8 @@ from schemas.sydney_context import (
     ContextHistorySearchRequest,
     ContextHistorySearchResponse,
     ContextPacket,
+    ContextQueueSettlementRequest,
+    ContextQueueSettlementResponse,
     ContextRetrieveRequest,
     ContextRunClaimRequest,
     ContextRunClaimResponse,
@@ -47,12 +49,12 @@ from services.sydney_context_service import (
     renew_run_lease,
     retrieve_context,
     search_history,
+    settle_terminal_queue_record,
     start_run,
     start_tool_invocation,
     update_run_state,
     update_tool_invocation,
 )
-
 router = APIRouter(dependencies=[Depends(require_agent_control)])
 
 _CONFLICTS = (
@@ -323,6 +325,34 @@ async def update_context_run(
         agent=agent,
         action_id="context.runs.update",
         response_meta={"run_id": str(result.id), "state": result.state},
+    )
+    return result
+
+
+@router.post("/context/queue/settle", response_model=ContextQueueSettlementResponse)
+async def settle_context_queue_record(
+    payload: ContextQueueSettlementRequest,
+    request: Request,
+    db: Database,
+    agent: Agent,
+) -> ContextQueueSettlementResponse:
+    _require_master()
+    try:
+        result = await settle_terminal_queue_record(db, payload)
+    except _CONTEXT_ERRORS as error:
+        _raise_bounded(error)
+    await _audit(
+        db,
+        request=request,
+        agent=agent,
+        action_id="context.queue.settle",
+        request_meta={
+            "run_id": str(payload.run_id),
+            "kind": payload.kind,
+            "source_key_sha256": payload.source_key_sha256,
+            "payload_sha256": payload.payload_sha256,
+        },
+        response_meta={"state": result.run.state, "disposition": result.disposition},
     )
     return result
 

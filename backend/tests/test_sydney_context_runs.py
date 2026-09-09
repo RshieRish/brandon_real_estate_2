@@ -52,6 +52,131 @@ def test_tool_limit_receipt_is_strict_and_has_no_synthetic_invocation() -> None:
     assert receipt.limit_reached is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ("succeeded", "terminal_failure"))
+async def test_terminal_queue_settlement_is_a_read_only_canonical_receipt(state):
+    from schemas.sydney_context import ContextQueueSettlementRequest
+    from services.sydney_context_service import settle_terminal_queue_record
+
+    run = _run_update_fixture(datetime.now(UTC))
+    run.state = state
+    run.lease_owner = run.lease_expires_at = None
+    run.final_response_event_id = uuid4() if state == "succeeded" else None
+    before = vars(run).copy()
+    db = SimpleNamespace(
+        scalars=AsyncMock(return_value=SimpleNamespace(one=lambda: run))
+    )
+    request = ContextQueueSettlementRequest(
+        run_id=run.id,
+        identity_id=run.identity_id,
+        kind="run_update",
+        requested_state="terminal_failure",
+        source_key_sha256="a" * 64,
+        payload_sha256="b" * 64,
+    )
+
+    receipt = await settle_terminal_queue_record(db, request)
+
+    assert receipt.disposition == "superseded_by_terminal_run"
+    assert receipt.run.state == state and receipt.run.id == run.id
+    assert receipt.payload_sha256 == request.payload_sha256
+    assert receipt.source_key_sha256 == request.source_key_sha256
+    assert vars(run) == before
+    assert "replay_decision" not in receipt.model_dump()
+    query = str(db.scalars.call_args.args[0])
+    assert "agent_run_jobs.identity_id" in query and "agent_run_jobs.id" in query
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state", ("queued", "running", "waiting_retry", "blocked_side_effect")
+)
+async def test_terminal_queue_settlement_rejects_nonabsorbing_runs(state):
+    from schemas.sydney_context import ContextQueueSettlementRequest
+    from services.sydney_context_service import (
+        ContextRunConflict,
+        settle_terminal_queue_record,
+    )
+
+    run = _run_update_fixture(datetime.now(UTC))
+    run.state = state
+    before = vars(run).copy()
+    db = SimpleNamespace(
+        scalars=AsyncMock(return_value=SimpleNamespace(one=lambda: run))
+    )
+    request = ContextQueueSettlementRequest(
+        run_id=run.id,
+        identity_id=run.identity_id,
+        kind="tool_before_bundle",
+        source_key_sha256="a" * 64,
+        payload_sha256="b" * 64,
+    )
+    with pytest.raises(ContextRunConflict, match="context_run_not_terminal"):
+        await settle_terminal_queue_record(db, request)
+    assert vars(run) == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"kind": "tool_after"},
+        {"kind": "run_completion_bundle"},
+        {"kind": "control_delivery_bundle"},
+        {"payload_sha256": "invalid"},
+        {"kind": "run_update", "requested_state": "succeeded"},
+        {"kind": "run_update"},
+        {"kind": "tool_before", "requested_state": "terminal_failure"},
+        {"final_response_event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+    ),
+)
+def test_terminal_settlement_schema_rejects_final_delivery_or_inexact_controls(
+    overrides,
+):
+    from pydantic import ValidationError
+    from schemas.sydney_context import ContextQueueSettlementRequest
+
+    payload = {
+        "run_id": uuid4(),
+        "identity_id": uuid4(),
+        "kind": "tool_before_bundle",
+        "source_key_sha256": "a" * 64,
+        "payload_sha256": "b" * 64,
+    }
+    with pytest.raises(ValidationError):
+        ContextQueueSettlementRequest(**(payload | overrides))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inconsistent", ("missing_final_event", "retained_lease"))
+async def test_terminal_settlement_rejects_inconsistent_success(inconsistent):
+    from schemas.sydney_context import ContextQueueSettlementRequest
+    from services.sydney_context_service import (
+        ContextRunConflict,
+        settle_terminal_queue_record,
+    )
+
+    run = _run_update_fixture(datetime.now(UTC))
+    run.state = "succeeded"
+    if inconsistent == "missing_final_event":
+        run.lease_owner = run.lease_expires_at = None
+    else:
+        run.final_response_event_id = uuid4()
+    db = SimpleNamespace(
+        scalars=AsyncMock(return_value=SimpleNamespace(one=lambda: run))
+    )
+    with pytest.raises(ContextRunConflict):
+        await settle_terminal_queue_record(
+            db,
+            ContextQueueSettlementRequest(
+                run_id=run.id,
+                identity_id=run.identity_id,
+                kind="tool_before",
+                source_key_sha256="a" * 64,
+                payload_sha256="b" * 64,
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("side_effect_class", "state", "has_result", "expected"),
     [

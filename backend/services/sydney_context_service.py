@@ -36,6 +36,8 @@ from schemas.sydney_context import (
     ContextHistorySearchResponse,
     ContextPacket,
     ContextPacketSection,
+    ContextQueueSettlementRequest,
+    ContextQueueSettlementResponse,
     ContextRetrieveRequest,
     ContextRunClaimRequest,
     ContextRunClaimResponse,
@@ -1160,6 +1162,38 @@ async def start_run(
         run=_run_summary(run),
         replayed=False,
         coalesced=coalesced,
+    )
+
+
+async def settle_terminal_queue_record(
+    db: AsyncSession,
+    request: ContextQueueSettlementRequest,
+) -> ContextQueueSettlementResponse:
+    """Read canonical terminal evidence; never execute or mutate the old control.
+
+    Only absorbing states can supersede these local queue records. A blocked
+    side effect may still be resolved, so it must retain the normal lease and
+    replay guards. The digests bind the receipt to one exact local record; they
+    do not assert that its original tool was executed (or was not delivered).
+    """
+    run = (
+        await db.scalars(
+            select(AgentRunJob).where(
+                AgentRunJob.id == request.run_id,
+                AgentRunJob.identity_id == request.identity_id,
+            )
+        )
+    ).one()
+    if run.state not in {"succeeded", "terminal_failure"}:
+        raise ContextRunConflict("context_run_not_terminal")
+    if run.state == "succeeded" and run.final_response_event_id is None:
+        raise ContextRunConflict("context_run_final_event_required")
+    if run.lease_owner is not None or run.lease_expires_at is not None:
+        raise ContextRunConflict("context_run_terminal_lease_conflict")
+    return ContextQueueSettlementResponse(
+        **request.model_dump(),
+        disposition="superseded_by_terminal_run",
+        run=_run_summary(run),
     )
 
 
