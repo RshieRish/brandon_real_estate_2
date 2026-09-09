@@ -20,6 +20,7 @@ NEW_ACTIONS = {
     "context.history.search",
     "context.runs.start",
     "context.runs.update",
+    "context.queue.settle",
     "context.runs.claim",
     "context.runs.renew",
     "context.tools.start",
@@ -166,6 +167,7 @@ def test_context_routes_keep_agent_auth_and_strict_response_models() -> None:
         "/api/v1/agent-control/context/history/search",
         "/api/v1/agent-control/context/runs/start",
         "/api/v1/agent-control/context/runs/update",
+        "/api/v1/agent-control/context/queue/settle",
         "/api/v1/agent-control/context/runs/claim",
         "/api/v1/agent-control/context/runs/renew",
         "/api/v1/agent-control/context/tools/start",
@@ -179,6 +181,101 @@ def test_context_routes_keep_agent_auth_and_strict_response_models() -> None:
         }
         assert require_agent_control in dependency_calls
     assert agent_control_context.router is not None
+
+
+@pytest.mark.parametrize(
+    "gate", ("unauthenticated", "disabled", "missing", "active", "terminal")
+)
+def test_terminal_settlement_route_is_authenticated_bounded_and_read_only(gate):
+    from schemas.sydney_context import ContextQueueSettlementResponse
+    from services.sydney_context_service import ContextRunConflict
+    from sqlalchemy.orm.exc import NoResultFound
+
+    payload = {
+        "identity_id": str(uuid4()),
+        "run_id": str(uuid4()),
+        "kind": "run_update",
+        "requested_state": "waiting_retry",
+        "source_key_sha256": "a" * 64,
+        "payload_sha256": "b" * 64,
+    }
+    receipt = ContextQueueSettlementResponse(
+        **payload,
+        disposition="superseded_by_terminal_run",
+        run={
+            "id": payload["run_id"],
+            "identity_id": payload["identity_id"],
+            "platform_message_id": "old-message",
+            "inbound_event_id": uuid4(),
+            "session_id": uuid4(),
+            "logical_conversation_id": uuid4(),
+            "state": "succeeded",
+            "attempt_count": 1,
+            "terminal_deadline_at": datetime.now(UTC) + timedelta(hours=1),
+            "final_response_event_id": uuid4(),
+        },
+    )
+    service = AsyncMock(return_value=receipt)
+    if gate == "missing":
+        service.side_effect = NoResultFound()
+    if gate == "active":
+        service.side_effect = ContextRunConflict("context_run_not_terminal")
+    with (
+        patch("middleware.agent_control.settings.AGENT_CONTROL_ENABLED", True),
+        patch(
+            "middleware.agent_control.settings.AGENT_CONTROL_TOKEN", "context-secret"
+        ),
+        patch(
+            "routers.agent_control_context.settings.SYDNEY_DURABLE_CONTEXT_ENABLED",
+            gate != "disabled",
+        ),
+        patch("routers.agent_control_context.settle_terminal_queue_record", service),
+        patch(
+            "routers.agent_control_context.write_agent_audit", new_callable=AsyncMock
+        ) as audit,
+        patch(
+            "routers.agent_control_context.update_run_state", new_callable=AsyncMock
+        ) as update,
+        patch(
+            "routers.agent_control_context.start_tool_invocation",
+            new_callable=AsyncMock,
+        ) as start,
+    ):
+        response = TestClient(_app()).post(
+            "/api/v1/agent-control/context/queue/settle",
+            json=payload,
+            headers={} if gate == "unauthenticated" else _headers(),
+        )
+    assert (
+        response.status_code
+        == {
+            "unauthenticated": 401,
+            "disabled": 503,
+            "missing": 404,
+            "active": 409,
+            "terminal": 200,
+        }[gate]
+    )
+    update.assert_not_awaited()
+    start.assert_not_awaited()
+    if gate in {"unauthenticated", "disabled"}:
+        service.assert_not_awaited()
+    if gate == "terminal":
+        assert response.json() == receipt.model_dump(mode="json")
+        meta = audit.await_args.kwargs
+        assert meta["action_id"] == "context.queue.settle"
+        assert meta["request_meta"] == {
+            "run_id": payload["run_id"],
+            "kind": "run_update",
+            "source_key_sha256": "a" * 64,
+            "payload_sha256": "b" * 64,
+        }
+        assert meta["response_meta"] == {
+            "state": "succeeded",
+            "disposition": "superseded_by_terminal_run",
+        }
+    else:
+        audit.assert_not_awaited()
 
 
 def test_master_and_retrieval_flags_fail_closed_before_service_calls() -> None:

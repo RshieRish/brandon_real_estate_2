@@ -270,6 +270,9 @@ class SydneyBackendClient:
     def update_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/v1/agent-control/context/runs/update", payload)
 
+    def settle_queue_record(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/api/v1/agent-control/context/queue/settle", payload)
+
     def start_tool(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/v1/agent-control/context/tools/start", payload)
 
@@ -299,6 +302,7 @@ class SydneyMemoryProvider(MemoryProvider):
         self._drain_interval = max(0.05, float(drain_interval_seconds))
         self._shutdown_deadline = max(0.0, float(shutdown_deadline_seconds))
         self._stop = threading.Event()
+        self._run_state_lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._spool: SydneySpool | None = None
         self._primary = True
@@ -725,6 +729,82 @@ class SydneyMemoryProvider(MemoryProvider):
             self._backend_session_ids[session_id] = str(backend_session)
             self.spool.set_meta(f"backend_session:{session_id}", str(backend_session))
 
+    def _settle_obsolete_control(
+        self, record: SpoolRecord, error: BackendRequestError
+    ) -> dict[str, Any]:
+        """Acknowledge only backend-proven obsolete controls, never tool outcomes."""
+        payload = record.payload
+        if error.status_code != 409 or not self._identity_id:
+            raise error
+        if record.kind == "run_update":
+            if (
+                payload.get("state") not in {"waiting_retry", "terminal_failure"}
+                or payload.get("final_response_event_id") is not None
+                or "uncertain" in str(payload.get("provider_category") or "")
+                or "uncertain" in str(payload.get("error_code") or "")
+                or str(payload.get("error_code") or "").startswith("final_delivery")
+            ):
+                raise error
+            control = payload
+        elif record.kind in {"tool_before", "tool_before_bundle"}:
+            control = (
+                payload["tool_start"] if record.kind.endswith("_bundle") else payload
+            )
+        else:
+            raise error
+        run_id = str(control.get("run_id") or "")
+        # Missing/malformed identity is not evidence that a queue record is stale.
+        UUID(run_id)
+        UUID(self._identity_id)
+        request_payload = {
+            "identity_id": self._identity_id,
+            "run_id": run_id,
+            "kind": record.kind,
+            "source_key_sha256": hashlib.sha256(
+                record.source_key.encode("utf-8")
+            ).hexdigest(),
+            "payload_sha256": hashlib.sha256(
+                json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest(),
+            "requested_state": control.get("state")
+            if record.kind == "run_update"
+            else None,
+        }
+        receipt = self._backend.settle_queue_record(request_payload)
+        run = receipt.get("run") if isinstance(receipt, dict) else None
+        if (
+            not isinstance(run, dict)
+            or set(receipt) != set(request_payload) | {"run", "disposition"}
+            or any(receipt.get(key) != value for key, value in request_payload.items())
+            or receipt.get("disposition") != "superseded_by_terminal_run"
+            or run.get("id") != run_id
+            or run.get("identity_id") != self._identity_id
+            or run.get("state") not in {"succeeded", "terminal_failure"}
+            or run.get("lease_owner") is not None
+            or run.get("lease_expires_at") is not None
+            or (
+                run.get("state") == "succeeded"
+                and not run.get("final_response_event_id")
+            )
+        ):
+            raise BackendRequestError(0, "backend_queue_settlement_unproven")
+        # Only the exact old run loses its local lease. Final-delivery markers,
+        # source events, invocation outcomes and any other active run remain intact.
+        with self._run_state_lock:
+            self.spool.mark_run_terminal(run_id, state=run["state"])
+            self.spool.delete_meta(f"claimed_run:{run_id}")
+            if run_id == self._active_run_id:
+                self._active_run_id = None
+                self._active_execution_run_id = None
+                self._active_run_hermes_session_id = None
+                self._active_run_attempt_count = 0
+                self._active_lease_owner = None
+                self._active_lease_expires_at = None
+            self.spool.compare_delete_meta("active_run_id", run_id)
+        return receipt
+
     def _deliver(self, record: SpoolRecord) -> dict[str, Any]:
         if self._backend is None:
             raise RuntimeError("Sydney backend is unavailable")
@@ -820,7 +900,10 @@ class SydneyMemoryProvider(MemoryProvider):
             )
             return response
         if record.kind == "run_update":
-            response = self._backend.update_run(payload)
+            try:
+                response = self._backend.update_run(payload)
+            except BackendRequestError as error:
+                return {"settlement": self._settle_obsolete_control(record, error)}
             if payload.get("state") != "running":
                 run_id = str(payload.get("run_id") or self._active_run_id or "")
                 if run_id:
@@ -847,7 +930,10 @@ class SydneyMemoryProvider(MemoryProvider):
                         self.spool.delete_meta("active_run_id")
             return response
         if record.kind == "tool_before":
-            return self._backend.start_tool(payload)
+            try:
+                return self._backend.start_tool(payload)
+            except BackendRequestError as error:
+                return {"settlement": self._settle_obsolete_control(record, error)}
         if record.kind == "tool_before_bundle":
             ingested = self._backend.ingest_events(payload["event_batch"])
             self._remember_backend_identity(
@@ -859,9 +945,16 @@ class SydneyMemoryProvider(MemoryProvider):
             )
             if not (ingested.get("event_ids") or []):
                 raise RuntimeError("tool call ingest receipt is incomplete")
+            try:
+                tool = self._backend.start_tool(payload["tool_start"])
+            except BackendRequestError as error:
+                return {
+                    "ingest": ingested,
+                    "settlement": self._settle_obsolete_control(record, error),
+                }
             return {
                 "ingest": ingested,
-                "tool": self._backend.start_tool(payload["tool_start"]),
+                "tool": tool,
             }
         if record.kind == "tool_after":
             return self._backend.update_tool(payload)
@@ -1598,6 +1691,15 @@ class SydneyMemoryProvider(MemoryProvider):
         return tool_receipt
 
     def activate_claimed_run(
+        self,
+        run: dict[str, Any],
+        *,
+        hermes_session_id: str | None = None,
+    ) -> None:
+        with self._run_state_lock:
+            self._activate_claimed_run(run, hermes_session_id=hermes_session_id)
+
+    def _activate_claimed_run(
         self,
         run: dict[str, Any],
         *,

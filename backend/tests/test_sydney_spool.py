@@ -25,6 +25,23 @@ from sydney_spool import (
 )
 
 
+def test_compare_delete_meta_preserves_newer_value_from_another_connection(tmp_path):
+    first = SydneySpool(tmp_path / "settlement.db")
+    second = SydneySpool(tmp_path / "settlement.db")
+    try:
+        first.set_meta("active_run_id", "old-run")
+        observed = first.get_meta("active_run_id")
+        second.set_meta("active_run_id", "new-run")
+        assert first.compare_delete_meta("active_run_id", observed) is False
+        assert second.get_meta("active_run_id") == "new-run"
+        assert first.compare_delete_meta("active_run_id", "new-run") is True
+        assert second.get_meta("active_run_id") is None
+        assert first.compare_delete_meta("active_run_id", "new-run") is False
+    finally:
+        first.close()
+        second.close()
+
+
 def test_accepted_control_delivery_key_is_unique_per_inbound_message() -> None:
     first = control_delivery_source_key(
         "run-1", "accepted", platform_message_id="telegram-11"
@@ -859,7 +876,9 @@ def test_shared_spool_concurrent_readers_preserve_exact_record_identity(
             kind="event_batch", source_key=source_key, payload={"index": index}
         )
         spool.acknowledge(record_id, {"receipt": index})
-        expected.append((record_id, source_key, index, "acknowledged", {"receipt": index}))
+        expected.append(
+            (record_id, source_key, index, "acknowledged", {"receipt": index})
+        )
     start = Barrier(24)
 
     def read_repeatedly(_worker: int) -> None:

@@ -67,6 +67,124 @@ async def context_sessions(context_database):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_state", ("succeeded", "terminal_failure"))
+async def test_terminal_queue_settlement_reads_exact_identity_without_mutation(
+    context_sessions,
+    terminal_state,
+) -> None:
+    from models.sydney_context import AgentRunJob, AgentToolInvocation
+    from schemas.sydney_context import (
+        ContextQueueSettlementRequest,
+        ContextRunClaimRequest,
+        ContextRunStartRequest,
+        ContextRunUpdateRequest,
+    )
+    from services.sydney_context_service import (
+        ContextRunConflict,
+        claim_runs,
+        ingest_event_batch,
+        settle_terminal_queue_record,
+        start_run,
+        update_run_state,
+    )
+    from sqlalchemy.orm.exc import NoResultFound
+
+    _engine, factory = context_sessions
+    now = datetime.now(UTC)
+    base = _request()
+    batch = base.model_copy(
+        update={
+            "events": [
+                base.events[0],
+                base.events[0].model_copy(
+                    update={
+                        "source_event_key": "session-1:final",
+                        "event_type": "assistant",
+                        "role": "assistant",
+                        "content": "Finished reply",
+                    }
+                ),
+            ]
+        }
+    )
+    async with factory() as session:
+        ingest = await ingest_event_batch(session, batch)
+        started = await start_run(
+            session,
+            ContextRunStartRequest(
+                identity_id=ingest.identity_id,
+                platform_message_id="settle-test",
+                inbound_event_id=ingest.event_ids[0],
+                session_id=ingest.session_id,
+                logical_conversation_id=ingest.logical_conversation_id,
+                terminal_deadline_at=now + timedelta(hours=1),
+            ),
+        )
+        await claim_runs(
+            session,
+            ContextRunClaimRequest(
+                lease_owner="settle-test-owner",
+                run_id=started.run.id,
+                identity_id=ingest.identity_id,
+            ),
+            now=now,
+        )
+        await session.commit()
+
+    request = ContextQueueSettlementRequest(
+        run_id=started.run.id,
+        identity_id=ingest.identity_id,
+        kind="tool_before_bundle",
+        source_key_sha256="a" * 64,
+        payload_sha256="b" * 64,
+    )
+    async with factory() as session:
+        with pytest.raises(ContextRunConflict, match="context_run_not_terminal"):
+            await settle_terminal_queue_record(session, request)
+        await session.rollback()
+    async with factory() as session:
+        terminal = await update_run_state(
+            session,
+            ContextRunUpdateRequest(
+                run_id=started.run.id,
+                state=terminal_state,
+                lease_owner="settle-test-owner",
+                final_response_event_id=ingest.event_ids[1]
+                if terminal_state == "succeeded"
+                else None,
+            ),
+            now=now + timedelta(seconds=1),
+        )
+        await session.commit()
+    async with factory() as session:
+        before = (await session.execute(sa.select(AgentRunJob.__table__))).all()
+        with pytest.raises(NoResultFound):
+            await settle_terminal_queue_record(
+                session, request.model_copy(update={"identity_id": uuid4()})
+            )
+        with pytest.raises(NoResultFound):
+            await settle_terminal_queue_record(
+                session, request.model_copy(update={"run_id": uuid4()})
+            )
+        receipt = await settle_terminal_queue_record(session, request)
+        assert receipt.run == terminal
+        assert receipt.disposition == "superseded_by_terminal_run"
+        assert "replay_decision" not in receipt.model_dump()
+        assert not session.new and not session.dirty and not session.deleted
+        await session.commit()
+    async with factory() as session:
+        assert (await session.execute(sa.select(AgentRunJob.__table__))).all() == before
+        assert (
+            await session.scalar(
+                sa.select(sa.func.count()).select_from(AgentToolInvocation)
+            )
+            == 0
+        )
+        replay = await settle_terminal_queue_record(session, request)
+        assert replay == receipt
+
+
+@pytest.mark.asyncio
 async def test_ingest_is_exactly_idempotent_and_redacts_before_commit(
     context_sessions,
 ) -> None:

@@ -256,6 +256,28 @@ class ContextRunStartResponse(StrictModel):
     coalesced: bool
 
 
+class ContextQueueSettlementRequest(StrictModel):
+    """Identify an obsolete local control record without submitting its content."""
+
+    identity_id: UUID
+    run_id: UUID
+    kind: Literal["run_update", "tool_before", "tool_before_bundle"]
+    source_key_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_state: Literal["waiting_retry", "terminal_failure"] | None = None
+
+    @model_validator(mode="after")
+    def validate_control_state(self) -> ContextQueueSettlementRequest:
+        if (self.kind == "run_update") != (self.requested_state is not None):
+            raise ValueError("context_queue_control_state_mismatch")
+        return self
+
+
+class ContextQueueSettlementResponse(ContextQueueSettlementRequest):
+    disposition: Literal["superseded_by_terminal_run"]
+    run: ContextRunSummary
+
+
 class ContextRunClaimResponse(StrictModel):
     runs: list[ContextRunSummary]
 

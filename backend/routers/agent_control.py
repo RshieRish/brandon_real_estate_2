@@ -314,6 +314,14 @@ AGENT_ACTIONS = [
         description="Record one validated Sydney continuation transition.",
     ),
     AgentAction(
+        id="context.queue.settle",
+        method="POST",
+        path="/api/v1/agent-control/context/queue/settle",
+        risk_tier="auto_silent",
+        side_effects=False,
+        description="Read canonical terminal evidence for an obsolete local control record.",
+    ),
+    AgentAction(
         id="context.runs.claim",
         method="POST",
         path="/api/v1/agent-control/context/runs/claim",

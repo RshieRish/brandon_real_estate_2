@@ -716,6 +716,15 @@ class SydneySpool:
         with self._lock, self.connection:
             self.connection.execute("DELETE FROM spool_meta WHERE key=?", (key,))
 
+    def compare_delete_meta(self, key: str, expected_value: Any) -> bool:
+        """Delete only the observed value, including across spool connections."""
+        encoded = _canonical_json(redact_payload(expected_value, key=key))
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM spool_meta WHERE key=? AND value_json=?", (key, encoded)
+            )
+            return cursor.rowcount == 1
+
     def stage_final_delivery(
         self,
         *,
@@ -1693,18 +1702,42 @@ class SydneySpool:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def acknowledge(self, record_id: int, receipt: dict[str, Any]) -> None:
+    def acknowledge(
+        self,
+        record_id: int,
+        receipt: dict[str, Any],
+        *,
+        expected_record: SpoolRecord | None = None,
+    ) -> None:
         encoded = _canonical_json(redact_payload(receipt))
+        predicate = ""
+        parameters: list[Any] = [_utc_now(), encoded, record_id]
+        if "settlement" in receipt and expected_record is None:
+            raise SpoolConflict("queue settlement requires an exact record snapshot")
+        if expected_record is not None:
+            if expected_record.id != record_id:
+                raise SpoolConflict("queue settlement record identity mismatch")
+            predicate = " AND source_key=? AND kind=? AND payload_sha256=?"
+            parameters.extend(
+                (
+                    expected_record.source_key,
+                    expected_record.kind,
+                    hashlib.sha256(
+                        _canonical_json(expected_record.payload).encode("utf-8")
+                    ).hexdigest(),
+                )
+            )
         with self._lock, self.connection:
             cursor = self.connection.execute(
                 """
                 UPDATE outbox SET state='acknowledged', acknowledged_at=?, receipt_json=?
                 WHERE id=? AND state='pending'
-                """,
-                (_utc_now(), encoded, record_id),
+                """
+                + predicate,
+                parameters,
             )
             if cursor.rowcount != 1:
-                raise SpoolConflict("outbox record was already acknowledged")
+                raise SpoolConflict("outbox record changed or was already acknowledged")
             row = self.connection.execute(
                 "SELECT * FROM outbox WHERE id=? AND state='acknowledged'",
                 (record_id,),
@@ -1761,7 +1794,10 @@ class SydneySpool:
                     receipt = handler(record)
                     if not isinstance(receipt, dict):
                         raise TypeError("spool delivery must return a receipt object")
-                    self.acknowledge(record.id, receipt)
+                    if "settlement" in receipt:
+                        self.acknowledge(record.id, receipt, expected_record=record)
+                    else:
+                        self.acknowledge(record.id, receipt)
                     acknowledged += 1
                 except Exception:  # noqa: BLE001 - external delivery boundary.
                     self.record_failure(record.id)
