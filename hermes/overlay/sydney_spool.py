@@ -470,6 +470,11 @@ class SydneySpool:
             self.path,
             isolation_level=None,
             check_same_thread=False,
+            # CPython's shared statement cache can return mismatched/NULL rows
+            # during concurrent reads (python/cpython#118172). The gateway and
+            # drain watcher share this connection; keep statement reuse local
+            # to each cursor instead of masking invalid record identities.
+            cached_statements=0,
             timeout=5.0,
         )
         self.connection.row_factory = sqlite3.Row

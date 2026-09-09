@@ -1,7 +1,13 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-09-05
+Last Updated: 2026-09-09
+
+### 2026-09-09 - Sydney Shared-SQLite Read Crash: Verified Cause and Release Gate
+- Inspected the actual installed conversation and runtime stack after the new crash report. The failure is in `tool_after -> drain_once -> _clear_acknowledged_control_deliveries -> matching_records -> _record`, where Python's shared SQLite statement cache returns an invalid null record identity. It is not evidence of a disconnected Google Workspace account. Production Python is 3.12.12 / SQLite 3.40.1 with serialized threading; live spool integrity checks pass.
+- A disposable installed-code stress probe reproduced incorrect records and exceptions in 23 of 24 simultaneous readers while database integrity remained valid. No live conversation/outbox record was changed. The real local 4,800-read regression also failed on unchanged code before the fix. Disable statement caching on the shared spool connection, preserving strict identity conversion, write/drain locks, receipts, idempotency, data, and all 27 tools. This addresses the documented CPython issue 118172 without substituting missing IDs or resetting Brandon's session.
+- Development gate: all 71 spool tests pass; the exact pinned Hermes/template matrix passes 391 tests plus three subtests. Independent code review found no Critical/Important issue; adopted the additional exact state/receipt assertions. PR/CI, a new runtime deployment (required to recreate the connection), installed repetition, and preservation/backlog checks remain required. Do not call this installed yet.
+- The existing Meta feed repair remains separate. Meta Business Settings is a stable sign-in URL usable from Brandon's own laptop, not an application-authorization receipt. Official Meta documentation still distinguishes potentially no-scheduled-expiry Page access from revocable credentials and browser sessions. No Meta account grant, token replacement, or live feed fix was performed during this crash investigation.
 
 ### 2026-09-05 - Sydney Current-Skill Preflight Development Gate
 - Added a narrow nonterminal celebration-preview preflight after existing lease/recovery-policy checks. Only a genuinely executed, successful `skill_view` with the exact managed content hash establishes proof, bound to the actual pinned request. New requests, failed refreshes and stale/wrong/restored results cannot reuse it. The model receives refresh-then-retry guidance, not a terminal halt or a reset request. Degraded read-only fallback and every existing write restriction remain intact; all 27 tool schemas are unchanged.

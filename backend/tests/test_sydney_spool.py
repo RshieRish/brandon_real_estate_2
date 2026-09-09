@@ -6,8 +6,9 @@ import subprocess
 import sys
 import textwrap
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Barrier, Event, Lock, Thread
 
 import pytest
 
@@ -844,6 +845,40 @@ def test_spool_record_tolerates_a_legacy_null_attempt_count(
 
     assert row is not None
     assert SydneySpool._record(row).attempt_count == 0
+
+
+def test_shared_spool_concurrent_readers_preserve_exact_record_identity(
+    tmp_path: Path,
+) -> None:
+    """The watcher and tool completion share this connection in production."""
+    spool = SydneySpool(tmp_path / "shared-reader-spool.db")
+    expected = []
+    for index in range(3):
+        source_key = f"run:shared-read-{index}"
+        record_id = spool.enqueue(
+            kind="event_batch", source_key=source_key, payload={"index": index}
+        )
+        spool.acknowledge(record_id, {"receipt": index})
+        expected.append((record_id, source_key, index, "acknowledged", {"receipt": index}))
+    start = Barrier(24)
+
+    def read_repeatedly(_worker: int) -> None:
+        start.wait(timeout=10)
+        for _ in range(200):
+            records = spool.matching_records(
+                state="acknowledged", source_prefix="run:", limit=100
+            )
+            assert [
+                (row.id, row.source_key, row.payload["index"], row.state, row.receipt)
+                for row in records
+            ] == expected
+
+    try:
+        with ThreadPoolExecutor(max_workers=24) as executor:
+            list(executor.map(read_repeatedly, range(24)))
+        assert spool.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        spool.close()
 
 
 def test_concurrent_spool_instances_deliver_each_pending_record_once(
