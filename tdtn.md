@@ -1,7 +1,16 @@
 # Things Done Till Now
 
 ## Project: Brandon Real Estate AI Platform
-Last Updated: 2026-09-09
+Last Updated: 2026-10-23
+
+### 2026-10-23 - Link Pack Listing Photo Save Repair
+- Confirmed the live second property, item 28 “Dracut Expanded Ranch,” has no stored thumbnail while item 26 has a working image. The original attempted upload's size/format is unknown; the supplied HEIC is a photograph of the page.
+- Fixed silent thumbnail/PDF upload failures, retained new-item IDs for retries, refreshed partially saved drafts on cancel, displayed selected/saved thumbnail previews, and corrected stale same-count item refreshes.
+- Added backend validation and resizing for still listing photos up to 20 MB, preserving orientation/transparency and serving content-versioned thumbnail URLs. Existing supported animations retain their bytes and 5 MB cap; unrelated profile/background limits stay unchanged.
+- Added real-database multipart save/reload/publish/image tests and component regressions; 31 focused backend tests and the real Chrome save/reload/publish/retry flow pass. Independent review found no remaining actionable findings.
+- Final checks: 730 frontend tests, TypeScript, targeted ESLint and production build pass. The full offline backend run has 3,322 passes, 752 skips and the same 16 unrelated/environment failure names reproduced on unchanged main; it is not universally green.
+- Verification details, broader backend baseline failures and deployment instructions: `docs/verification/2026-10-23-link-pack-photo-fix.md`.
+- Status: Repair complete on the review branch; merge and deployment remain pending. Production is unchanged; Brandon will need to re-upload the missing photo and publish after deployment.
 
 ### 2026-09-09 - Sydney Obsolete Queue Controls: Development Gate
 - Post-restart inspection found seven pending records behind two obsolete run updates for an already-succeeded request. The oldest update had 4,575 attempts; later tool-start/source events could not drain because normal backend guards correctly rejected terminal-run mutations. No source or queue row was deleted, no business tool was replayed, and no reset was performed.

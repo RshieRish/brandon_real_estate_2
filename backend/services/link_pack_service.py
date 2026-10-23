@@ -26,8 +26,14 @@ def _background_image_url(pack: LinkPack) -> str | None:
     return f"/api/v1/link-pack/images/background?v={version}"
 
 
-def _thumbnail_url(item: LinkPackItem) -> str | None:
-    return f"/api/v1/link-pack/images/items/{item.id}/thumbnail" if item.thumbnail_mime else None
+def item_thumbnail_url(item: LinkPackItem) -> str | None:
+    if not item.thumbnail_mime:
+        return None
+    path = f"/api/v1/link-pack/images/items/{item.id}/thumbnail"
+    if item.thumbnail_data:
+        version = hashlib.sha256(item.thumbnail_data).hexdigest()[:12]
+        return f"{path}?v={version}"
+    return path
 
 
 def _serialize_item(item: LinkPackItem, children: list[dict]) -> dict:
@@ -36,7 +42,7 @@ def _serialize_item(item: LinkPackItem, children: list[dict]) -> dict:
         "kind": item.kind,
         "title": item.title,
         "url": item.url,
-        "thumbnail_url": _thumbnail_url(item),
+        "thumbnail_url": item_thumbnail_url(item),
         "gated_filename": item.gated_filename,
         "gate_modal_headline": item.gate_modal_headline,
         "gate_modal_subtext": item.gate_modal_subtext,
