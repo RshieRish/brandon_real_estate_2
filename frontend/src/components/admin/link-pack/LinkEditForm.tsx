@@ -1,6 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { CircleNotch } from '@phosphor-icons/react';
+import { imageUrl } from '@/lib/link-pack/api';
 import type { LinkPackItem, LinkKind, Animation } from '@/lib/link-pack/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
@@ -13,6 +14,12 @@ const KINDS: { value: LinkKind; label: string }[] = [
 ];
 const ANIMATIONS: Animation[] = ['none', 'pulse', 'wobble', 'shake', 'breathe', 'bounce'];
 
+async function checkResponse(response: Response, fallback: string) {
+  if (response.ok) return;
+  const error = await response.json().catch(() => null);
+  throw new Error(typeof error?.detail === 'string' ? error.detail : fallback);
+}
+
 interface Props {
   existing?: LinkPackItem;
   parentId?: number | null;
@@ -21,6 +28,7 @@ interface Props {
 }
 
 export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: Props) {
+  const [itemId, setItemId] = useState(existing?.id);
   const [kind, setKind] = useState<LinkKind>(existing?.kind ?? (parentId ? 'classic' : 'classic'));
   const [title, setTitle] = useState(existing?.title ?? '');
   const [url, setUrl] = useState(existing?.url ?? '');
@@ -29,11 +37,18 @@ export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: 
   const [headline, setHeadline] = useState(existing?.gate_modal_headline ?? '');
   const [subtext, setSubtext] = useState(existing?.gate_modal_subtext ?? '');
   const [thumbFile, setThumbFile] = useState<File | null>(null);
+  const [thumbPreview, setThumbPreview] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const isEdit = !!existing;
+  const thumbnailId = useId();
+  const preview = thumbPreview ?? imageUrl(existing?.thumbnail_url ?? null);
+  useEffect(() => {
+    if (thumbPreview) return () => URL.revokeObjectURL(thumbPreview);
+  }, [thumbPreview]);
+
+  const isEdit = itemId != null;
   const inGroup = parentId != null;
   const usableKinds = inGroup ? KINDS.filter(k => k.value !== 'group') : KINDS;
 
@@ -42,7 +57,8 @@ export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: 
     setErr(null);
     try {
       const token = localStorage.getItem('admin_token');
-      let itemId = existing?.id;
+      if (!token) throw new Error('Please sign in again before saving.');
+      let savedItemId = itemId;
 
       if (!isEdit) {
         const body = {
@@ -56,40 +72,43 @@ export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: 
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error((await res.json()).detail ?? 'Create failed');
+        await checkResponse(res, 'Create failed');
         const created = await res.json();
-        itemId = created.id;
+        savedItemId = created.id;
+        setItemId(created.id);
       } else {
         const body = {
           title, url: url || null, animation, is_active: active,
           gate_modal_headline: kind === 'email_gate' ? (headline || null) : null,
           gate_modal_subtext: kind === 'email_gate' ? (subtext || null) : null,
         };
-        const res = await fetch(`${API_URL}/api/v1/link-pack/items/${itemId}`, {
+        const res = await fetch(`${API_URL}/api/v1/link-pack/items/${savedItemId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error('Update failed');
+        await checkResponse(res, 'Update failed');
       }
 
-      if (thumbFile && itemId) {
+      if (thumbFile && savedItemId) {
         const form = new FormData();
         form.append('file', thumbFile);
-        await fetch(`${API_URL}/api/v1/link-pack/items/${itemId}/thumbnail`, {
+        const res = await fetch(`${API_URL}/api/v1/link-pack/items/${savedItemId}/thumbnail`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: form,
         });
+        await checkResponse(res, 'Photo upload failed. Please try again.');
       }
-      if (pdfFile && itemId) {
+      if (pdfFile && savedItemId) {
         const form = new FormData();
         form.append('file', pdfFile);
-        await fetch(`${API_URL}/api/v1/link-pack/items/${itemId}/gated-file`, {
+        const res = await fetch(`${API_URL}/api/v1/link-pack/items/${savedItemId}/gated-file`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: form,
         });
+        await checkResponse(res, 'PDF upload failed. Please try again.');
       }
 
       onSaved();
@@ -136,14 +155,29 @@ export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: 
       )}
 
       {kind === 'thumbnail' && (
-        <div>
-          <label className="text-white/40 text-xs block mb-1">Thumbnail image</label>
+        <div className="space-y-2">
+          <label htmlFor={thumbnailId} className="text-white/40 text-xs block mb-1">Thumbnail image</label>
+          {preview && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview} alt={`${title || 'Listing'} thumbnail`} className="w-full max-w-sm aspect-video object-cover rounded-lg border border-dark-border" />
+          )}
+          <p className="text-white/50 text-xs">
+            {thumbFile ? `Selected photo: ${thumbFile.name}` : existing?.thumbnail_url
+              ? 'Saved photo. Choose a file to replace it.' : 'No photo saved yet.'}
+          </p>
           <input
+            id={thumbnailId}
             type="file"
-            accept="image/*"
-            onChange={(e) => setThumbFile(e.target.files?.[0] ?? null)}
-            className="text-white/70 text-xs"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            disabled={saving}
+            onChange={(e) => {
+              const file = e.target.files?.[0] ?? null;
+              setThumbFile(file);
+              setThumbPreview(file ? URL.createObjectURL(file) : null);
+            }}
+            className="max-w-full text-white/70 text-xs"
           />
+          <p className="text-white/40 text-xs">JPG, PNG, WebP or GIF. Photos up to 20 MB; animations up to 5 MB. Large photos are resized automatically.</p>
         </div>
       )}
 
@@ -195,10 +229,10 @@ export default function LinkEditForm({ existing, parentId, onCancel, onSaved }: 
         </label>
       </div>
 
-      {err && <p className="text-red-400 text-xs">{err}</p>}
+      {err && <p role="alert" className="text-red-400 text-xs">{err}</p>}
 
       <div className="flex gap-3 justify-end">
-        <button onClick={onCancel} className="text-xs text-white/40 border border-dark-border px-4 py-2 cursor-pointer">
+        <button onClick={onCancel} disabled={saving} className="text-xs text-white/40 border border-dark-border px-4 py-2 disabled:opacity-60 cursor-pointer">
           Cancel
         </button>
         <button

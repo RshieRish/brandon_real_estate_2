@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, type HTMLAttributes } from 'react';
 import { Pencil, Trash, CaretDown, Plus, DotsSixVertical } from '@phosphor-icons/react';
 import type { LinkPackItem } from '@/lib/link-pack/types';
 import LinkEditForm from './LinkEditForm';
@@ -10,7 +10,7 @@ interface Props {
   item: LinkPackItem;
   depth?: number;
   onChanged: () => void;
-  dragHandleProps?: any;
+  dragHandleProps?: HTMLAttributes<HTMLDivElement>;
   isDragging?: boolean;
 }
 
@@ -57,14 +57,14 @@ export default function LinkRow({ item, depth = 0, onChanged, dragHandleProps, i
         </div>
         <div className="flex items-center gap-2">
           {item.kind === 'group' && (
-            <button onClick={() => setExpanded(e => !e)} className="text-white/60 hover:text-white p-2">
+            <button aria-label={`${expanded ? 'Collapse' : 'Expand'} ${item.title}`} onClick={() => setExpanded(e => !e)} className="text-white/60 hover:text-white p-2">
               <CaretDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
             </button>
           )}
-          <button onClick={() => setEditing(true)} className="text-white/60 hover:text-white p-2">
+          <button aria-label={`Edit ${item.title}`} onClick={() => setEditing(true)} className="text-white/60 hover:text-white p-2">
             <Pencil size={14} />
           </button>
-          <button onClick={remove} className="text-red-400/70 hover:text-red-400 p-2">
+          <button aria-label={`Delete ${item.title}`} onClick={remove} className="text-red-400/70 hover:text-red-400 p-2">
             <Trash size={14} />
           </button>
         </div>
@@ -73,7 +73,7 @@ export default function LinkRow({ item, depth = 0, onChanged, dragHandleProps, i
         <div className="p-3 bg-dark-surface border-t border-dark-border">
           <LinkEditForm
             existing={item}
-            onCancel={() => setEditing(false)}
+            onCancel={() => { setEditing(false); onChanged(); }}
             onSaved={() => { setEditing(false); onChanged(); }}
           />
         </div>
@@ -84,7 +84,7 @@ export default function LinkRow({ item, depth = 0, onChanged, dragHandleProps, i
             <LinkRow key={child.id} item={child} depth={depth + 1} onChanged={onChanged} />
           ))}
           {adding ? (
-            <LinkEditForm parentId={item.id} onCancel={() => setAdding(false)} onSaved={() => { setAdding(false); onChanged(); }} />
+            <LinkEditForm parentId={item.id} onCancel={() => { setAdding(false); onChanged(); }} onSaved={() => { setAdding(false); onChanged(); }} />
           ) : (
             <button
               onClick={() => setAdding(true)}

@@ -1,7 +1,10 @@
 import base64
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +12,7 @@ from database import get_db
 from middleware.auth import require_admin
 from models.link_pack import LinkPack, LinkPackItem
 from schemas.link_pack import ProfileIn, SocialIn, ThemeIn
-from services.link_pack_service import build_snapshot, get_or_create_pack
+from services.link_pack_service import build_snapshot, get_or_create_pack, item_thumbnail_url
 
 router = APIRouter()
 
@@ -138,15 +141,40 @@ async def update_theme(
 
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_THUMBNAIL_UPLOAD_SIZE = 20 * 1024 * 1024
 
 
-async def _read_image(file: UploadFile) -> tuple[bytes, str]:
+async def _read_image(file: UploadFile, max_size: int = MAX_IMAGE_SIZE) -> tuple[bytes, str]:
     if file.content_type not in ALLOWED_IMAGE_MIMES:
         raise HTTPException(400, f"Invalid image type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_MIMES))}")
-    data = await file.read()
-    if len(data) > MAX_IMAGE_SIZE:
-        raise HTTPException(400, "Image too large. Maximum 5MB.")
+    data = await file.read(max_size + 1)
+    if len(data) > max_size:
+        raise HTTPException(400, f"Image too large. Maximum {max_size // (1024 * 1024)}MB.")
     return data, file.content_type
+
+
+def _prepare_thumbnail(data: bytes) -> tuple[bytes, str]:
+    """Validate and downsize listing photos before storing their public image."""
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.width * source.height > 40_000_000:
+                raise HTTPException(400, "Photo resolution too large. Maximum 40 megapixels.")
+            if getattr(source, "is_animated", False):
+                if len(data) > MAX_IMAGE_SIZE:
+                    raise HTTPException(400, "Animated images must be under 5MB. Choose a smaller animation or a still photo.")
+                mime = Image.MIME[source.format]
+                if mime not in ALLOWED_IMAGE_MIMES:
+                    raise HTTPException(400, "Use a JPG, PNG, WebP or GIF image.")
+                source.verify()
+                return data, mime
+            with ImageOps.exif_transpose(source) as image:
+                image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+                mode = "RGBA" if image.has_transparency_data else "RGB"
+                output = BytesIO()
+                image.convert(mode).save(output, format="WEBP", quality=85)
+                return output.getvalue(), "image/webp"
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(400, "Photo could not be read. Try a JPG, PNG, WebP or GIF image.") from exc
 
 
 @router.post("/profile-photo")
@@ -326,13 +354,12 @@ async def upload_item_thumbnail(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    data, mime = await _read_image(file)
-    item.thumbnail_data = data
-    item.thumbnail_mime = mime
+    data, _ = await _read_image(file, max_size=MAX_THUMBNAIL_UPLOAD_SIZE)
+    item.thumbnail_data, item.thumbnail_mime = await run_in_threadpool(_prepare_thumbnail, data)
     pack = await get_or_create_pack(db)
     pack.has_unpublished_changes = True
     await db.flush()
-    return {"ok": True, "url": f"/api/v1/link-pack/images/items/{item_id}/thumbnail"}
+    return {"ok": True, "url": item_thumbnail_url(item)}
 
 
 from datetime import datetime, timezone

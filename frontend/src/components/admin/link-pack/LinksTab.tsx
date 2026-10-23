@@ -34,20 +34,16 @@ interface Props {
 
 export default function LinksTab({ items, onChanged }: Props) {
   const [adding, setAdding] = useState(false);
-  const [localItems, setLocalItems] = useState(items);
+  const [order, setOrder] = useState({ source: items, items });
+  const localItems = order.source === items ? order.items : items;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-
-  // Keep local in sync if parent refreshes
-  if (items !== localItems && items.length !== localItems.length) {
-    setLocalItems(items);
-  }
 
   const onDragEnd = async (e: DragEndEvent) => {
     if (!e.over || e.active.id === e.over.id) return;
     const oldIdx = localItems.findIndex(i => i.id === e.active.id);
     const newIdx = localItems.findIndex(i => i.id === e.over!.id);
     const next = arrayMove(localItems, oldIdx, newIdx);
-    setLocalItems(next);
+    setOrder({ source: items, items: next });
     const token = localStorage.getItem('admin_token');
     await fetch(`${API_URL}/api/v1/link-pack/items/reorder`, {
       method: 'POST',
@@ -68,7 +64,7 @@ export default function LinksTab({ items, onChanged }: Props) {
         </button>
       </div>
       {adding && (
-        <LinkEditForm onCancel={() => setAdding(false)} onSaved={() => { setAdding(false); onChanged(); }} />
+        <LinkEditForm onCancel={() => { setAdding(false); onChanged(); }} onSaved={() => { setAdding(false); onChanged(); }} />
       )}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={localItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
