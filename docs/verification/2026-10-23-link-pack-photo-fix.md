@@ -49,8 +49,18 @@ tests/test_workspace_oauth.py::test_oauth_exchange_and_identity_verification_run
 tests/test_workspace_token_persistence.py::WorkspaceTokenPersistenceTests::test_load_workspace_refresh_token_from_db_sets_runtime_value
 ```
 
-## Release status
+## Production release
 
-Code repair is prepared on `codex/link-pack-photo-fix`; production has not been changed. Install the new Pillow dependency with the backend release, then release the frontend. No database migration is required. Brandon must re-upload the missing listing photo and publish the Link Pack after deployment; the screenshot does not contain the original upload bytes.
+The user authorized deployment. PR #43 merged to `main` at `189f01c58b29b1f7d010921f7b5965ceb6108909`; both production releases succeeded:
+
+- Railway backend deployment `67af036e-d68c-4454-b806-01b4a6ce3227`, service `extraordinary-prosperity` (`37afead7-c55b-4ef2-8071-ca4da1c88992`), project `enchanting-perception`, production environment `201c658b-c25c-488a-8b2e-5f6440f397f4`. The shared integration-worker deployment `7448e42b-75ba-4b09-a989-4a85ad0906cb` also succeeded.
+- Vercel Production deployment `9piiFUTwNL3FokjyLVtyvpu5kfnE`, GitHub deployment `7289053778`, serving `https://soldwithsweeney.com`. Its production script assets contain the new saved-photo preview, 20 MB helper and upload-error handling.
+- Backend health, public `/links` and the admin route return HTTP 200.
+
+An authenticated Chrome check against the actual custom domain and backend passed. The deployed endpoint rejects a 20 MB + 1 byte file with `Maximum 20MB` and rejects an unreadable PNG with `Photo could not be read`; both errors remain visible with the file selected and the editor open. Metadata PATCH requests were intercepted locally during verification, so these checks did not save listing details. Subsequent API reads confirmed unchanged draft content, `has_unpublished_changes=false`, and the identical published snapshot (SHA-256 `e546bb33a7f90861e8d0c7adf502dcf3022c06a84323ea06de51df3c2ec10829`). No page errors occurred.
+
+No database migration or content publication was performed. Item 28 still has no photo because the original upload bytes are unavailable. Brandon can now refresh the editor, re-upload the actual listing photo and publish the Link Pack.
+
+The legacy local Railway wrapper token is unauthorized and the current global CLI login cannot see this project; production release verification used the existing GitHub deployment integration. Neither global login nor environment variables were changed.
 
 The pre-existing behavior whereby draft image replacements can affect existing public image URLs before publishing is outside this repair.

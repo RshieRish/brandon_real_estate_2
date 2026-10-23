@@ -3,6 +3,14 @@
 ## Project: Brandon Real Estate AI Platform
 Last Updated: 2026-10-23
 
+### 2026-10-23 - Link Pack Photo Fix Production Release
+- User authorized deployment. Merged PR #43 at `189f01c58b29b1f7d010921f7b5965ceb6108909` after all PR checks passed, including PostgreSQL migration/runtime, frontend/browser and Hermes checks.
+- Railway backend deployment `67af036e-d68c-4454-b806-01b4a6ce3227`, shared integration-worker deployment `7448e42b-75ba-4b09-a989-4a85ad0906cb`, and Vercel Production deployment `9piiFUTwNL3FokjyLVtyvpu5kfnE` succeeded. The custom domain serves the new editor.
+- Live authenticated Chrome verification passed: the actual backend reports the new 20 MB cap and image-decode error; the editor keeps both errors and selected files visible. Metadata saves were intercepted locally, and subsequent reads confirmed unchanged draft/published content and `has_unpublished_changes=false`.
+- Backend health, public links and admin routes return 200. No migration or content publish occurred. Item 28 still needs Brandon's actual photo, followed by Publish changes.
+- Updated production evidence in `docs/verification/2026-10-23-link-pack-photo-fix.md`. The local Railway wrapper/global login lacks current project access, so existing GitHub deployment receipts were used; no login or env settings were changed.
+- Status: Deployed and verified live.
+
 ### 2026-10-23 - Link Pack Listing Photo Save Repair
 - Confirmed the live second property, item 28 “Dracut Expanded Ranch,” has no stored thumbnail while item 26 has a working image. The original attempted upload's size/format is unknown; the supplied HEIC is a photograph of the page.
 - Fixed silent thumbnail/PDF upload failures, retained new-item IDs for retries, refreshed partially saved drafts on cancel, displayed selected/saved thumbnail previews, and corrected stale same-count item refreshes.
